@@ -70,8 +70,15 @@ DROP POLICY IF EXISTS hypotheses_owner_update ON hypotheses;
 CREATE POLICY hypotheses_owner_update ON hypotheses FOR UPDATE
 USING (
     proposed_by_user_entra_id = current_setting('app.current_user_entra_id', true)
+)
+WITH CHECK (
+    proposed_by_user_entra_id = current_setting('app.current_user_entra_id', true)
 );
 
+-- Citations inherit visibility from their parent hypothesis. PostgreSQL
+-- applies RLS recursively: this policy's EXISTS subquery against
+-- `hypotheses` is evaluated with the caller's RLS rules, so a citation
+-- is visible iff the user can SELECT its parent hypothesis.
 DROP POLICY IF EXISTS hypothesis_citations_via_parent ON hypothesis_citations;
 CREATE POLICY hypothesis_citations_via_parent ON hypothesis_citations FOR ALL
 USING (

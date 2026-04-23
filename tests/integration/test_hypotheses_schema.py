@@ -142,7 +142,12 @@ def test_confidence_bounds_check() -> None:
 
 
 def test_rls_owner_sees_own_cross_portfolio() -> None:
-    """user-a can see their own scope=NULL hypothesis; user-b cannot."""
+    """user-a can see their own scope=NULL hypothesis; user-b cannot.
+
+    RLS is forced on the table (FORCE ROW LEVEL SECURITY) so that even a
+    DB-owner connection cannot bypass it during the SELECT phase.  The
+    FORCE flag is always reset in the finally block.
+    """
     unique_text = f"Cross-portfolio hypothesis by user-a {uuid.uuid4()}"
     hid: uuid.UUID
 
@@ -160,17 +165,38 @@ def test_rls_owner_sees_own_cross_portfolio() -> None:
             hid = cur.fetchone()[0]
         conn.commit()
 
-        # user-a should see it.
+        # Force RLS to apply to ALL roles, including the DB owner, so the
+        # assertions below are never vacuous regardless of connection role.
         with conn.cursor() as cur:
-            _set_user(cur, "user-a")
-            cur.execute("SELECT id FROM hypotheses WHERE id = %s", (hid,))
-            assert cur.fetchone() is not None, "user-a should see their own hypothesis"
+            cur.execute("ALTER TABLE hypotheses FORCE ROW LEVEL SECURITY")
+        conn.commit()
 
-        # user-b should NOT see it (scope is NULL, not in their portfolio).
-        with conn.cursor() as cur:
-            _set_user(cur, "user-b")
-            cur.execute("SELECT id FROM hypotheses WHERE id = %s", (hid,))
-            assert cur.fetchone() is None, "user-b should not see user-a's hypothesis"
+        try:
+            # user-a should see it.
+            with conn.cursor() as cur:
+                _set_user(cur, "user-a")
+                cur.execute("SELECT id FROM hypotheses WHERE id = %s", (hid,))
+                assert cur.fetchone() is not None, "user-a should see their own hypothesis"
+
+            # user-b: count(*) with NO filter — any BYPASSRLS leak returns > 0.
+            with conn.cursor() as cur:
+                _set_user(cur, "user-b")
+                cur.execute("SELECT count(*) FROM hypotheses")
+                total_visible = cur.fetchone()[0]
+                assert total_visible == 0, (
+                    f"user-b should see zero hypotheses but got {total_visible}"
+                )
+
+            # Belt-and-suspenders: explicit id filter also returns nothing.
+            with conn.cursor() as cur:
+                _set_user(cur, "user-b")
+                cur.execute("SELECT id FROM hypotheses WHERE id = %s", (hid,))
+                assert cur.fetchone() is None, "user-b should not see user-a's hypothesis by id"
+        finally:
+            # Always restore the table to its default (no forced RLS).
+            with conn.cursor() as cur:
+                cur.execute("ALTER TABLE hypotheses NO FORCE ROW LEVEL SECURITY")
+            conn.commit()
     finally:
         # Clean up the inserted row.
         with conn.cursor() as cur:
