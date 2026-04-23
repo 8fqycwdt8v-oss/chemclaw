@@ -1,0 +1,42 @@
+# LiteLLM proxy configuration.
+# Models below are illustrative; uncomment and set API keys in .env to enable.
+# Every call routes through litellm_redactor FIRST (see callbacks).
+
+model_list:
+  # --- Anthropic (Claude) ---
+  - model_name: claude-opus-4-7
+    litellm_params:
+      model: anthropic/claude-opus-4-7
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: claude-sonnet-4-6
+    litellm_params:
+      model: anthropic/claude-sonnet-4-6
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # --- OpenAI ---
+  - model_name: gpt-5
+    litellm_params:
+      model: openai/gpt-5
+      api_key: os.environ/OPENAI_API_KEY
+
+  # --- Google ---
+  - model_name: gemini-2.5-pro
+    litellm_params:
+      model: vertex_ai/gemini-2.5-pro
+      api_key: os.environ/GOOGLE_API_KEY
+
+litellm_settings:
+  # Pre-call redaction applied to every request before egress.
+  # The callback is the fully-qualified Python path to our async handler.
+  callbacks: ["services.litellm_redactor.callback.redactor_callback"]
+  drop_params: true
+  set_verbose: false
+  # Conservative cost limits — override via per-team keys in production.
+  budget_duration: "30d"
+  max_budget: 100.0
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  # Write successful request metadata to Postgres for audit (Phase 8).
+  # database_url: os.environ/LITELLM_DATABASE_URL

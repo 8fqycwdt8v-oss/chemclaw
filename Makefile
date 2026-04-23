@@ -1,0 +1,142 @@
+# ChemClaw — developer workflow entry points.
+# Target a single goal per invocation; no multi-target chains.
+
+SHELL := /bin/bash
+.DEFAULT_GOAL := help
+
+# --------------------------------------------------------------------------
+# Environment
+# --------------------------------------------------------------------------
+VENV := .venv
+PYTHON := python3
+PIP := $(VENV)/bin/pip
+
+# --------------------------------------------------------------------------
+# Help
+# --------------------------------------------------------------------------
+.PHONY: help
+help: ## Show this help
+	@awk 'BEGIN {FS = ":.*?## "} /^[a-zA-Z0-9_.-]+:.*?## / {printf "\033[36m%-28s\033[0m %s\n", $$1, $$2}' $(MAKEFILE_LIST)
+
+# --------------------------------------------------------------------------
+# One-time setup
+# --------------------------------------------------------------------------
+.PHONY: setup
+setup: setup.python setup.node ## One-time local setup (venv + node deps)
+
+.PHONY: setup.python
+setup.python: ## Create .venv and install Python deps for all services
+	@test -d $(VENV) || $(PYTHON) -m venv $(VENV)
+	$(PIP) install --upgrade pip
+	$(PIP) install -e ".[dev]"
+	$(PIP) install -r services/frontend/requirements.txt
+	$(PIP) install -r services/ingestion/eln_json_importer/requirements.txt
+	$(PIP) install -r services/mcp_tools/mcp_rdkit/requirements.txt
+	$(PIP) install -r services/mcp_tools/mcp_drfp/requirements.txt
+	$(PIP) install -r services/projectors/reaction_vectorizer/requirements.txt
+	$(PIP) install -r services/litellm_redactor/requirements.txt
+	@echo "Python env ready. Activate with: source $(VENV)/bin/activate"
+
+.PHONY: setup.node
+setup.node: ## Install Node dependencies for agent service
+	npm install
+
+# --------------------------------------------------------------------------
+# Data layer (Docker Compose)
+# --------------------------------------------------------------------------
+.PHONY: up
+up: ## Bring up Postgres + Neo4j + Langfuse
+	docker compose up -d postgres neo4j
+
+.PHONY: up.full
+up.full: ## Bring up all data services (incl. Langfuse)
+	docker compose up -d
+
+.PHONY: down
+down: ## Stop all services (preserves volumes)
+	docker compose down
+
+.PHONY: nuke
+nuke: ## Stop all services AND delete volumes (data loss)
+	docker compose down -v
+
+.PHONY: ps
+ps: ## Show running services
+	docker compose ps
+
+.PHONY: logs
+logs: ## Tail logs from all services
+	docker compose logs -f --tail 100
+
+# --------------------------------------------------------------------------
+# Database
+# --------------------------------------------------------------------------
+.PHONY: db.psql
+db.psql: ## Open psql shell into the app DB
+	docker compose exec postgres psql -U chemclaw -d chemclaw
+
+.PHONY: db.init
+db.init: ## Re-apply schema (idempotent)
+	docker compose exec -T postgres psql -U chemclaw -d chemclaw < db/init/01_schema.sql
+
+.PHONY: db.seed
+db.seed: ## Load sample seed data
+	docker compose exec -T postgres psql -U chemclaw -d chemclaw < db/seed/01_sample_data.sql
+
+# --------------------------------------------------------------------------
+# Services
+# --------------------------------------------------------------------------
+.PHONY: run.agent
+run.agent: ## Run agent service in dev mode (hot-reload)
+	npm run dev:agent
+
+.PHONY: run.frontend
+run.frontend: ## Run Streamlit frontend
+	$(VENV)/bin/streamlit run services/frontend/streamlit_app.py
+
+.PHONY: import.sample
+import.sample: ## Import the sample ELN JSON file
+	$(VENV)/bin/python -m services.ingestion.eln_json_importer.cli \
+	  --input sample-data/eln-experiments-sample.json
+
+.PHONY: run.mcp-rdkit
+run.mcp-rdkit: ## Run mcp-rdkit locally (needs rdkit in .venv)
+	$(VENV)/bin/python -m uvicorn services.mcp_tools.mcp_rdkit.main:app --host 0.0.0.0 --port 8001 --reload
+
+.PHONY: run.mcp-drfp
+run.mcp-drfp: ## Run mcp-drfp locally (needs drfp + rdkit in .venv)
+	$(VENV)/bin/python -m uvicorn services.mcp_tools.mcp_drfp.main:app --host 0.0.0.0 --port 8002 --reload
+
+.PHONY: run.reaction-vectorizer
+run.reaction-vectorizer: ## Run the DRFP projector locally
+	$(VENV)/bin/python -m services.projectors.reaction_vectorizer.main
+
+# --------------------------------------------------------------------------
+# Quality
+# --------------------------------------------------------------------------
+.PHONY: lint
+lint: ## Run all linters
+	$(VENV)/bin/ruff check .
+	npm run lint
+
+.PHONY: format
+format: ## Auto-format Python + TS
+	$(VENV)/bin/ruff format .
+	npm run format --if-present
+
+.PHONY: typecheck
+typecheck: ## Type-check Python + TS
+	$(VENV)/bin/mypy services
+	npm run typecheck
+
+.PHONY: test
+test: ## Run all tests
+	$(VENV)/bin/pytest
+	npm run test
+
+# --------------------------------------------------------------------------
+# Smoke
+# --------------------------------------------------------------------------
+.PHONY: smoke
+smoke: ## End-to-end smoke: up → init → seed → import → health-check
+	@./scripts/smoke.sh

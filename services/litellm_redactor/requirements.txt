@@ -1,0 +1,7 @@
+fastapi>=0.115
+uvicorn[standard]>=0.32
+pydantic>=2.8
+pydantic-settings>=2.4
+# LiteLLM needs to import this module as a callback; providing it as a lib
+# dep makes the redactor testable standalone.
+litellm>=1.60

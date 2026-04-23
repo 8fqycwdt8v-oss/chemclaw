@@ -1,0 +1,297 @@
+"""Base class for Postgres LISTEN/NOTIFY projectors.
+
+Each projector subscribes to the `ingestion_events` channel, deduplicates via
+`projection_acks`, and applies event-specific logic in a subclass. Designed
+to be idempotent — running the same projector twice yields the same result.
+
+Operational model (critical invariants):
+  1. LISTEN is issued FIRST so that any NOTIFY fired during catch-up lands in
+     the buffer and is consumed after catch-up completes. This closes the
+     "lost events in the seam" race.
+  2. Catch-up loops until the backlog is drained (no arbitrary LIMIT truncation).
+  3. The NOTIFY loop races against a shutdown Event so SIGTERM propagates
+     promptly — no indefinite blocking on a quiet channel.
+  4. Handler raises ⇒ event is NOT acked (retries on next NOTIFY). Handlers
+     must be idempotent; see `BaseProjector.handle` docstring.
+
+The module uses two Postgres connections:
+  - `listen_conn` — autocommit, holds the LISTEN subscription
+  - `work_conn`   — transactional, handles SELECT + ack UPSERT
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import signal
+from abc import ABC, abstractmethod
+from typing import Any
+
+import psycopg
+from psycopg.rows import dict_row
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+log = logging.getLogger("projector")
+
+_CATCHUP_BATCH = 1000  # rows per iteration; loop until drained
+_NOTIFY_POLL_TIMEOUT_S = 5.0  # how often we check the shutdown flag while idle
+
+
+class ProjectorSettings(BaseSettings):
+    model_config = SettingsConfigDict(env_file=".env", extra="ignore")
+
+    postgres_host: str = "localhost"
+    postgres_port: int = 5432
+    postgres_db: str = "chemclaw"
+    postgres_user: str = "chemclaw"
+    postgres_password: str = ""
+    projector_log_level: str = "INFO"
+
+    @property
+    def postgres_dsn(self) -> str:
+        # Password injected only at connection time; not echoed into logs.
+        return (
+            f"host={self.postgres_host} port={self.postgres_port} "
+            f"dbname={self.postgres_db} user={self.postgres_user} "
+            f"password={self.postgres_password}"
+        )
+
+
+class PermanentHandlerError(Exception):
+    """Raised by a handler when the event should be acked but no work done.
+
+    Distinct from transient failures (network glitch, upstream 5xx) which
+    should cause a retry. Handlers raising PermanentHandlerError will have
+    their event acked — preventing retry storms on malformed data.
+    """
+
+
+class BaseProjector(ABC):
+    """Subscribe to ingestion_events and project them idempotently.
+
+    Subclasses define:
+      - `name` (unique projector name, used as ack key)
+      - `interested_event_types` (tuple of event_type strings handled)
+      - `async handle(event_id, event_type, source_table, source_row_id, payload)`
+
+    Handlers should:
+      - Be idempotent (assume the same event may arrive twice).
+      - Raise `PermanentHandlerError` for unrecoverable data errors (the
+        event will still be acked).
+      - Raise any other exception for transient failures (the event will be
+        retried on the next NOTIFY).
+    """
+
+    name: str = "base"
+    interested_event_types: tuple[str, ...] = ()
+
+    def __init__(self, settings: ProjectorSettings) -> None:
+        self.settings = settings
+        self._shutdown = asyncio.Event()
+
+    # ----- subclass hook ---------------------------------------------------
+    @abstractmethod
+    async def handle(
+        self,
+        *,
+        event_id: str,
+        event_type: str,
+        source_table: str | None,
+        source_row_id: str | None,
+        payload: dict[str, Any],
+    ) -> None: ...
+
+    # ----- main loop -------------------------------------------------------
+    async def run(self) -> None:
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            try:
+                loop.add_signal_handler(sig, self._shutdown.set)
+            except NotImplementedError:
+                # Windows or restricted envs — ignore; shutdown via the Event
+                # can still be set programmatically.
+                pass
+
+        log.info("[%s] starting", self.name)
+
+        # OPEN LISTEN FIRST so NOTIFYs during catch-up land in the buffer.
+        async with await psycopg.AsyncConnection.connect(
+            self.settings.postgres_dsn,
+            autocommit=True,
+            row_factory=dict_row,
+        ) as listen_conn:
+            async with listen_conn.cursor() as cur:
+                await cur.execute("LISTEN ingestion_events")
+            log.info("[%s] LISTEN established", self.name)
+
+            async with await psycopg.AsyncConnection.connect(
+                self.settings.postgres_dsn,
+                row_factory=dict_row,
+            ) as work_conn:
+                await self._catch_up(work_conn)
+                log.info("[%s] catch-up complete", self.name)
+                await self._listen_loop(listen_conn, work_conn)
+
+        log.info("[%s] stopped", self.name)
+
+    # ----- catch-up --------------------------------------------------------
+    async def _catch_up(self, work_conn: psycopg.AsyncConnection) -> None:
+        """Drain the backlog. Loops until no unprocessed events remain."""
+        while not self._shutdown.is_set():
+            async with work_conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT e.id::text AS id,
+                           e.event_type,
+                           e.source_table,
+                           e.source_row_id::text AS source_row_id,
+                           e.payload
+                      FROM ingestion_events e
+                     WHERE NOT EXISTS (
+                       SELECT 1 FROM projection_acks a
+                        WHERE a.event_id = e.id
+                          AND a.projector_name = %s
+                     )
+                     ORDER BY e.created_at ASC
+                     LIMIT %s
+                    """,
+                    (self.name, _CATCHUP_BATCH),
+                )
+                rows = await cur.fetchall()
+            if not rows:
+                return
+            for row in rows:
+                if self._shutdown.is_set():
+                    return
+                await self._process_row(work_conn, row)
+
+    # ----- live LISTEN -----------------------------------------------------
+    async def _listen_loop(
+        self,
+        listen_conn: psycopg.AsyncConnection,
+        work_conn: psycopg.AsyncConnection,
+    ) -> None:
+        """Consume NOTIFY payloads until shutdown.
+
+        psycopg3's `conn.notifies()` async generator yields notifies as they
+        arrive. We race it against the shutdown event and a periodic timeout
+        so that SIGTERM always wakes the loop within `_NOTIFY_POLL_TIMEOUT_S`.
+        """
+        notify_gen = listen_conn.notifies()
+        # Next-notify task; recreated each iteration.
+        next_notify_task: asyncio.Task | None = None
+        shutdown_task = asyncio.create_task(self._shutdown.wait(), name="shutdown")
+
+        try:
+            while not self._shutdown.is_set():
+                if next_notify_task is None or next_notify_task.done():
+                    next_notify_task = asyncio.create_task(
+                        notify_gen.__anext__(), name="next_notify"
+                    )
+
+                done, _pending = await asyncio.wait(
+                    {next_notify_task, shutdown_task},
+                    timeout=_NOTIFY_POLL_TIMEOUT_S,
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                if shutdown_task in done:
+                    break
+                if next_notify_task in done:
+                    try:
+                        notify = next_notify_task.result()
+                    except StopAsyncIteration:
+                        log.info("[%s] notify stream ended", self.name)
+                        break
+                    next_notify_task = None
+                    await self._handle_notify(work_conn, notify.payload)
+                # else: timeout — loop to re-check shutdown.
+        finally:
+            if next_notify_task and not next_notify_task.done():
+                next_notify_task.cancel()
+            if not shutdown_task.done():
+                shutdown_task.cancel()
+
+    async def _handle_notify(
+        self, work_conn: psycopg.AsyncConnection, raw_payload: str
+    ) -> None:
+        try:
+            msg = json.loads(raw_payload)
+        except json.JSONDecodeError:
+            log.warning("[%s] unparseable NOTIFY payload: %r", self.name, raw_payload)
+            return
+        event_id = msg.get("id")
+        if not event_id:
+            return
+
+        async with work_conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT e.id::text AS id,
+                       e.event_type,
+                       e.source_table,
+                       e.source_row_id::text AS source_row_id,
+                       e.payload
+                  FROM ingestion_events e
+                 WHERE e.id = %s::uuid
+                   AND NOT EXISTS (
+                     SELECT 1 FROM projection_acks a
+                      WHERE a.event_id = e.id AND a.projector_name = %s
+                   )
+                """,
+                (event_id, self.name),
+            )
+            row = await cur.fetchone()
+        await work_conn.commit()
+        if row is None:
+            return
+        await self._process_row(work_conn, row)
+
+    # ----- dispatch --------------------------------------------------------
+    async def _process_row(
+        self, work_conn: psycopg.AsyncConnection, row: dict
+    ) -> None:
+        event_id = row["id"]
+        event_type = row["event_type"]
+        should_ack = True
+
+        try:
+            if (
+                self.interested_event_types
+                and event_type not in self.interested_event_types
+            ):
+                # silent skip; still ack to stop scanning forever
+                pass
+            else:
+                await self.handle(
+                    event_id=event_id,
+                    event_type=event_type,
+                    source_table=row["source_table"],
+                    source_row_id=row["source_row_id"],
+                    payload=row["payload"] or {},
+                )
+        except PermanentHandlerError as exc:
+            log.warning(
+                "[%s] permanent handler error on event %s: %s (acking to stop retries)",
+                self.name, event_id, exc,
+            )
+        except Exception:
+            log.exception(
+                "[%s] transient handler error on event %s; NOT acking", self.name, event_id
+            )
+            should_ack = False
+
+        if not should_ack:
+            return
+
+        async with work_conn.cursor() as cur:
+            await cur.execute(
+                """
+                INSERT INTO projection_acks (event_id, projector_name)
+                VALUES (%s::uuid, %s)
+                ON CONFLICT DO NOTHING
+                """,
+                (event_id, self.name),
+            )
+        await work_conn.commit()
+        log.debug("[%s] acked %s (%s)", self.name, event_id, event_type)

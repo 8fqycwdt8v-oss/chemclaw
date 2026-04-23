@@ -1,0 +1,108 @@
+{
+  "source": "dotmatics_json_export",
+  "exported_at": "2026-04-20T09:12:44Z",
+  "experiments": [
+    {
+      "eln_entry_id": "ELN-NCE001-0042",
+      "project_internal_id": "NCE-001",
+      "step_index": 1,
+      "step_name": "Suzuki coupling of aryl bromide with boronic acid",
+      "target_compound_inchikey": "LFQSCWFLJHTTHZ-UHFFFAOYSA-N",
+      "date_performed": "2026-04-18",
+      "operator_entra_id": "alice.chemist@example.com",
+      "procedure_text": "To a solution of 4-bromobenzonitrile (100 mg, 0.55 mmol) and phenylboronic acid (80 mg, 0.66 mmol) in toluene/ethanol/water (3:1:1, 5 mL) was added Pd(PPh3)4 (32 mg, 5 mol%) and K2CO3 (152 mg, 1.1 mmol). The mixture was degassed and heated at 85 C for 16 h. After cooling, the mixture was partitioned between EtOAc and water. The organic layer was washed with brine, dried over Na2SO4, concentrated, and purified by silica gel chromatography (hexanes:EtOAc, 9:1) to afford 4-cyanobiphenyl as a white solid (72 mg, 73% yield).",
+      "observations": "Clean reaction; no significant homocoupling byproduct by HPLC.",
+      "tabular_data": {
+        "reagents": [
+          { "name": "4-bromobenzonitrile",  "amount_mg": 100, "equiv": 1.0 },
+          { "name": "phenylboronic acid",   "amount_mg": 80,  "equiv": 1.2 },
+          { "name": "Pd(PPh3)4",            "amount_mg": 32,  "mol_pct": 5 },
+          { "name": "K2CO3",                "amount_mg": 152, "equiv": 2.0 }
+        ],
+        "conditions": { "temperature_c": 85, "duration_h": 16, "atmosphere": "N2" }
+      },
+      "yield_pct": 73.0,
+      "scale_mg": 100.0,
+      "outcome_status": "success",
+      "raw_source_file_path": null,
+      "reactions": [
+        {
+          "rxn_smiles": "N#Cc1ccc(Br)cc1.OB(O)c1ccccc1>>N#Cc1ccc(-c2ccccc2)cc1",
+          "rxno_class": "Suzuki-Miyaura",
+          "reagents": [
+            { "name": "4-bromobenzonitrile", "smiles": "N#Cc1ccc(Br)cc1", "role": "reagent", "amount_value": 100, "amount_unit": "mg", "equiv": 1.0 },
+            { "name": "phenylboronic acid",  "smiles": "OB(O)c1ccccc1",   "role": "reagent", "amount_value": 80,  "amount_unit": "mg", "equiv": 1.2 },
+            { "name": "Pd(PPh3)4",           "smiles": null,              "role": "catalyst" },
+            { "name": "K2CO3",               "smiles": null,              "role": "base" },
+            { "name": "toluene",             "smiles": "Cc1ccccc1",       "role": "solvent" },
+            { "name": "4-cyanobiphenyl",     "smiles": "N#Cc1ccc(-c2ccccc2)cc1", "role": "product" }
+          ]
+        }
+      ],
+      "analytical_results": [
+        {
+          "method_class": "HPLC",
+          "instrument": "Agilent 1290 Infinity II",
+          "value": 98.4,
+          "unit": "area_percent_purity",
+          "raw_file_pointer": null,
+          "quality_flag": "ok"
+        }
+      ]
+    },
+    {
+      "eln_entry_id": "ELN-NCE001-0043",
+      "project_internal_id": "NCE-001",
+      "step_index": 1,
+      "step_name": "Suzuki coupling of aryl bromide with boronic acid",
+      "target_compound_inchikey": "LFQSCWFLJHTTHZ-UHFFFAOYSA-N",
+      "date_performed": "2026-04-19",
+      "operator_entra_id": "bob.chemist@example.com",
+      "procedure_text": "Repeat of ELN-NCE001-0042 with Pd(dppf)Cl2 (5 mol%) in place of Pd(PPh3)4. Otherwise identical conditions. Isolated 4-cyanobiphenyl in 58% yield.",
+      "observations": "Lower yield; trace dehalogenation side product observed.",
+      "tabular_data": {
+        "conditions": { "temperature_c": 85, "duration_h": 16, "atmosphere": "N2" }
+      },
+      "yield_pct": 58.0,
+      "scale_mg": 100.0,
+      "outcome_status": "success",
+      "reactions": [
+        {
+          "rxn_smiles": "N#Cc1ccc(Br)cc1.OB(O)c1ccccc1>>N#Cc1ccc(-c2ccccc2)cc1",
+          "rxno_class": "Suzuki-Miyaura",
+          "reagents": [
+            { "name": "Pd(dppf)Cl2", "smiles": null, "role": "catalyst" }
+          ]
+        }
+      ],
+      "analytical_results": []
+    },
+    {
+      "eln_entry_id": "ELN-NCE002-0011",
+      "project_internal_id": "NCE-002",
+      "step_index": 2,
+      "step_name": "Buchwald-Hartwig amination",
+      "target_compound_inchikey": null,
+      "date_performed": "2026-04-15",
+      "operator_entra_id": "alice.chemist@example.com",
+      "procedure_text": "Aryl chloride (200 mg), morpholine (1.2 equiv), Pd2(dba)3 (2 mol%), XPhos (8 mol%), NaO-tBu (2.5 equiv), toluene (4 mL), 100 C, 6 h. Purification by silica chromatography. 64% yield.",
+      "observations": "Reaction complete by TLC in 4 h; extended to 6 h for safety margin.",
+      "tabular_data": { "conditions": { "temperature_c": 100, "duration_h": 6 } },
+      "yield_pct": 64.0,
+      "scale_mg": 200.0,
+      "outcome_status": "success",
+      "reactions": [
+        {
+          "rxn_smiles": null,
+          "rxno_class": "Buchwald-Hartwig",
+          "reagents": [
+            { "name": "morpholine", "smiles": "C1COCCN1", "role": "reagent" },
+            { "name": "Pd2(dba)3",  "smiles": null,       "role": "catalyst" },
+            { "name": "XPhos",      "smiles": null,       "role": "other" }
+          ]
+        }
+      ],
+      "analytical_results": []
+    }
+  ]
+}

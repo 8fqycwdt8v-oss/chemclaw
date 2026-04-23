@@ -92,9 +92,23 @@ lerna-debug.log*
 dist-ssr/
 *.tsbuildinfo
 
-# Node/TS build artifacts (note: /build and /dist already covered under Python packaging above)
+# TypeScript build output
+services/agent/dist/
+services/*/dist/
+
+# ---- Docker ----
+# Local volume data (host-mounted)
+volumes/
+docker-compose.override.yml
 
 # ---- Chem-specific scratch ----
 *.mol.tmp
 *.sdf.tmp
 scratch/
+
+# ---- Sample data eln drop box (keep structure, ignore content in dev) ----
+sample-data/eln-dropbox/*.processed.json
+
+# ---- Logs ----
+logs/
+*.log
