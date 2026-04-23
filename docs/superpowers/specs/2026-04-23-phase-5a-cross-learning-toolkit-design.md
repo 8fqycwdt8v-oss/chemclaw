@@ -23,7 +23,7 @@ As a precondition, collapse the per-mode API surface shipped in Phase 4. The age
 - New internal-tool prompt `tool.synthesize_insights.v1`
 - Deletion of `POST /api/deep_research`, removal of `mode` param on `ChatAgent`, deactivation of the `agent.deep_research_mode.v1` layered prompt (row kept, `active=false`)
 - Streamlit chat page: removal of mode toggle, addition of a minimal fenced-chart renderer and a per-call Hypothesis badge
-- Docker Compose entry for `mcp-tabicl` on port 8003
+- Docker Compose entry for `mcp-tabicl` on port 8005 (8001 rdkit, 8002 drfp, 8003 kg, 8004 embedder are taken)
 - Unit + integration tests; smoke-test addition
 
 **Explicitly out of scope:**
@@ -166,8 +166,8 @@ Dockerfile        # UID 1001, OpenShift-safe
 
 ### 4.4 Docker Compose
 
-- Service name `mcp-tabicl` on port 8003.
-- Healthcheck: `curl -sf http://localhost:8003/readyz`.
+- Service name `mcp-tabicl` on port 8005 (avoids conflict with existing `mcp-kg` on 8003 and `mcp-embedder` on 8004).
+- Healthcheck: `curl -sf http://localhost:8005/readyz`.
 - Volume: `mcp-tabicl-cache:/var/cache/mcp-tabicl`.
 - Depends on nothing at runtime (projectors don't need it; only the agent does).
 
