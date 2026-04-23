@@ -56,3 +56,6 @@ exclude = ["tests/.*", "documentation/.*"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-ra --strict-markers"
+markers = [
+    "integration: tests that require live external services (Postgres, Neo4j, etc.)",
+]
