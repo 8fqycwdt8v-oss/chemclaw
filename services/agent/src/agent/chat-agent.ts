@@ -22,18 +22,10 @@ export const ChatMessageSchema = z.object({
 });
 export type ChatMessage = z.infer<typeof ChatMessageSchema>;
 
-// Retained for backwards compatibility with routes/chat.ts until Task 10
-// removes it. ChatAgent no longer branches on mode — the type is kept so
-// the route file compiles unchanged.
-export type ChatMode = "default" | "deep_research";
-
 export interface ChatInvocation {
   userEntraId: string;
   messages: ChatMessage[];
   agentTraceId?: string;
-  /** @deprecated Retained for routes/chat.ts backwards-compat until Task 10.
-   *  ChatAgent no longer branches on mode — the field is accepted and ignored. */
-  mode?: ChatMode;
 }
 
 export interface ToolCallEvent { type: "tool_call"; toolId: string; input: unknown; }

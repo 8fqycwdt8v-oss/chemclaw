@@ -1,18 +1,12 @@
-// POST /api/chat           — SSE-streaming chat endpoint (default mode).
-// POST /api/deep_research   — SSE-streaming deep-research mode with
-//                             expanded toolkit + longer budget + tighter
-//                             rate-limit.
+// POST /api/chat — SSE-streaming chat endpoint.
 //
 // Request shape:
-//   { "messages": [...], "stream": true|false, "mode": "default"|"deep_research" }
-// The dedicated /api/deep_research route is a convenience that forces
-// mode=deep_research and applies a stricter rate limit; the same
-// functionality is reachable by POSTing {mode:"deep_research"} to /api/chat.
+//   { "messages": [...], "stream": true|false }
 //
 // Budget defences:
-//   - Dedicated low rate limit on both routes (DR uses an even lower bucket)
+//   - Dedicated low rate limit
 //   - Single-message length cap and total-history cap (from config)
-//   - Server-enforced maxSteps on the agent loop (higher for DR)
+//   - Server-enforced maxSteps on the agent loop
 //   - No user input ever enters the system prompt; registered prompts apply
 //     server-side
 //   - SSE frames JSON-encoded with newline escape so model-emitted newlines
@@ -22,7 +16,7 @@ import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 
 import type { Config } from "../config.js";
-import type { ChatAgent, ChatMode, StreamEvent } from "../agent/chat-agent.js";
+import type { ChatAgent, StreamEvent } from "../agent/chat-agent.js";
 import { ChatMessageSchema } from "../agent/chat-agent.js";
 
 export interface ChatRouteDeps {
@@ -34,7 +28,6 @@ export interface ChatRouteDeps {
 const ChatRequestSchema = z.object({
   messages: z.array(ChatMessageSchema).min(1),
   stream: z.boolean().optional(),
-  mode: z.enum(["default", "deep_research"]).optional(),
 });
 
 type ChatRequest = z.infer<typeof ChatRequestSchema>;
@@ -69,7 +62,6 @@ async function _handle(
   req: FastifyRequest,
   reply: FastifyReply,
   deps: ChatRouteDeps,
-  forcedMode: ChatMode | null,
 ): Promise<void> {
   const user = deps.getUser(req);
   const parsed = ChatRequestSchema.safeParse(req.body);
@@ -85,7 +77,6 @@ async function _handle(
     return void reply.code(bounds.status).send(bounds.body);
   }
 
-  const mode: ChatMode = forcedMode ?? body.mode ?? "default";
   const stream = body.stream ?? true;
 
   if (!stream) {
@@ -93,7 +84,6 @@ async function _handle(
       const result = await deps.agent.generate({
         userEntraId: user,
         messages: body.messages,
-        mode,
       });
       return void reply.send(result);
     } catch (err) {
@@ -126,7 +116,6 @@ async function _handle(
     for await (const evt of deps.agent.stream({
       userEntraId: user,
       messages: body.messages,
-      mode,
     })) {
       if (closed) break;
       writeEvent(evt);
@@ -155,20 +144,6 @@ export function registerChatRoute(app: FastifyInstance, deps: ChatRouteDeps): vo
         },
       },
     },
-    (req, reply) => _handle(req, reply, deps, null),
-  );
-
-  app.post(
-    "/api/deep_research",
-    {
-      config: {
-        // Deep research is expensive — quarter the default bucket.
-        rateLimit: {
-          max: Math.max(1, Math.floor(deps.config.AGENT_CHAT_RATE_LIMIT_MAX / 4)),
-          timeWindow: deps.config.AGENT_CHAT_RATE_LIMIT_WINDOW_MS,
-        },
-      },
-    },
-    (req, reply) => _handle(req, reply, deps, "deep_research"),
+    (req, reply) => _handle(req, reply, deps),
   );
 }
