@@ -149,12 +149,18 @@ Every project-scoped query must run in a transaction with `app.current_user_entr
   - Agent — **autonomous ReAct loop via Mastra** with LiteLLM as the model provider. Tools: `find_similar_reactions`, `canonicalize_smiles`. System prompt loaded from the `prompt_registry` table (not hardcoded) with a 60s cache; no runtime fallback — if the active prompt is missing, the agent refuses to start a turn.
   - `POST /api/chat` — SSE streaming chat endpoint. Route-level rate limit, history + per-message caps, terminal-event guarantee. Non-streaming mode available via `stream: false`.
   - `services/frontend/pages/chat.py` — Streamlit chat page consuming the SSE stream with inline tool-call panels and history trimming.
-- **Phases 4–8**: pending. Deep Research toolkit, cross-project reaction learning synthesis, KG correction workflow, GEPA self-improvement, OpenShift Helm, full RBAC hardening.
+- **Phase 4** (Deep Research): **complete**.
+  - `agent.deep_research_mode.v1` system prompt layered on top of `agent.system` when mode is `deep_research`.
+  - Toolkit expansion: `query_kg` (direct Neo4j traversal via `mcp-kg`), `check_contradictions` (explicit CONTRADICTS edges + parallel currently-valid facts), `draft_section` (composition helper with citation-format validation), `mark_research_done` (TERMINAL tool that assembles + persists a report in `research_reports`).
+  - `research_reports` table + RLS (`owner_policy`: a user sees only their own reports).
+  - `ChatAgent` accepts `mode: "default" | "deep_research"`; DR mode raises `maxSteps` (×4, capped at 40) and layers the DR prompt.
+  - `POST /api/deep_research` route — quarters the chat rate limit for the heavier path; same SSE wire format.
+- **Phases 5–8**: pending. Cross-project reaction learning synthesis, KG correction workflow, GEPA self-improvement, OpenShift Helm, full RBAC hardening.
 
 ## Test counts (as of current sprint)
 
 ```
 python3 -m pytest tests/             →  110 passed, 4 skipped (Neo4j integration, gated)
-cd services/agent && npm test        →   36 passed
+cd services/agent && npm test        →   68 passed
 cd services/agent && npm run typecheck →  ok
 ```

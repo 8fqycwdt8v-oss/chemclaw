@@ -15,9 +15,16 @@ import { z } from "zod";
 
 import type { Config } from "../config.js";
 import type { LlmProvider } from "../llm/provider.js";
-import type { McpDrfpClient, McpEmbedderClient, McpRdkitClient } from "../mcp-clients.js";
+import type {
+  McpDrfpClient,
+  McpEmbedderClient,
+  McpKgClient,
+  McpRdkitClient,
+} from "../mcp-clients.js";
 import { PromptRegistry } from "./prompts.js";
-import { buildTools, type ToolContext } from "./tools.js";
+import { buildTools, buildDeepResearchTools, type ToolContext } from "./tools.js";
+
+export type ChatMode = "default" | "deep_research";
 
 // ---- wire-level shapes ----------------------------------------------------
 
@@ -30,6 +37,7 @@ export type ChatMessage = z.infer<typeof ChatMessageSchema>;
 export interface ChatInvocation {
   userEntraId: string;
   messages: ChatMessage[];
+  mode?: ChatMode;
 }
 
 export interface ToolCallEvent {
@@ -72,6 +80,7 @@ export interface ChatAgentDeps {
   drfp: McpDrfpClient;
   rdkit: McpRdkitClient;
   embedder: McpEmbedderClient;
+  kg: McpKgClient;
   prompts: PromptRegistry;
 }
 
@@ -82,15 +91,15 @@ export class ChatAgent {
   async generate(
     invocation: ChatInvocation,
   ): Promise<{ text: string; finishReason: string; promptVersion: number }> {
-    const { systemPrompt, promptVersion, ctx } = await this._prepare(invocation);
-    const agent = this._buildAgent(systemPrompt, ctx);
+    const prepared = await this._prepare(invocation);
+    const agent = this._buildAgent(prepared.systemPrompt, prepared.ctx, prepared.mode);
     const result = await agent.generate(invocation.messages, {
-      maxSteps: this.deps.config.AGENT_CHAT_MAX_STEPS,
+      maxSteps: prepared.maxSteps,
     });
     return {
       text: result.text ?? "",
       finishReason: result.finishReason ?? "unknown",
-      promptVersion,
+      promptVersion: prepared.promptVersion,
     };
   }
 
@@ -101,9 +110,9 @@ export class ChatAgent {
     try {
       const prepared = await this._prepare(invocation);
       promptVersion = prepared.promptVersion;
-      const agent = this._buildAgent(prepared.systemPrompt, prepared.ctx);
+      const agent = this._buildAgent(prepared.systemPrompt, prepared.ctx, prepared.mode);
       const result = await agent.stream(invocation.messages, {
-        maxSteps: this.deps.config.AGENT_CHAT_MAX_STEPS,
+        maxSteps: prepared.maxSteps,
       });
 
       // fullStream emits a unified event sequence. We translate each to our
@@ -176,8 +185,18 @@ export class ChatAgent {
   // ---- internals ----------------------------------------------------------
 
   private async _prepare(invocation: ChatInvocation) {
-    const { template: systemPrompt, version: promptVersion } =
+    const mode: ChatMode = invocation.mode ?? "default";
+
+    const { template: base, version: promptVersion } =
       await this.deps.prompts.getActive("agent.system");
+
+    let systemPrompt = base;
+    if (mode === "deep_research") {
+      const { template: dr } = await this.deps.prompts.getActive(
+        "agent.deep_research_mode",
+      );
+      systemPrompt = `${base}\n\n---\n\n${dr}`;
+    }
 
     const ctx: ToolContext = {
       userEntraId: invocation.userEntraId,
@@ -185,16 +204,33 @@ export class ChatAgent {
       drfp: this.deps.drfp,
       rdkit: this.deps.rdkit,
       embedder: this.deps.embedder,
+      kg: this.deps.kg,
+      promptVersion,
     };
-    return { systemPrompt, promptVersion, ctx };
+
+    // Deep research has a larger tool-call budget — multi-step
+    // investigations need headroom. maxSteps for default mode is
+    // preserved from the original config.
+    const maxSteps =
+      mode === "deep_research"
+        ? Math.min(this.deps.config.AGENT_CHAT_MAX_STEPS * 4, 40)
+        : this.deps.config.AGENT_CHAT_MAX_STEPS;
+
+    return { systemPrompt, promptVersion, ctx, mode, maxSteps };
   }
 
-  private _buildAgent(systemPrompt: string, ctx: ToolContext): Agent {
+  private _buildAgent(
+    systemPrompt: string,
+    ctx: ToolContext,
+    mode: ChatMode,
+  ): Agent {
+    const tools =
+      mode === "deep_research" ? buildDeepResearchTools(ctx) : buildTools(ctx);
     return new Agent({
-      name: "chemclaw",
+      name: mode === "deep_research" ? "chemclaw-deep-research" : "chemclaw",
       instructions: systemPrompt,
       model: this.deps.llm.model(),
-      tools: buildTools(ctx),
+      tools,
     });
   }
 }

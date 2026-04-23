@@ -13,7 +13,12 @@ import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import type { Pool } from "pg";
 
-import type { McpDrfpClient, McpEmbedderClient, McpRdkitClient } from "../mcp-clients.js";
+import type {
+  McpDrfpClient,
+  McpEmbedderClient,
+  McpKgClient,
+  McpRdkitClient,
+} from "../mcp-clients.js";
 import {
   FindSimilarReactionsInput,
   FindSimilarReactionsOutput,
@@ -29,6 +34,26 @@ import {
   FetchFullDocumentOutput,
   fetchFullDocument,
 } from "../tools/fetch-full-document.js";
+import {
+  QueryKgInput,
+  QueryKgOutput,
+  queryKg,
+} from "../tools/query-kg.js";
+import {
+  CheckContradictionsInput,
+  CheckContradictionsOutput,
+  checkContradictions,
+} from "../tools/check-contradictions.js";
+import {
+  DraftSectionInput,
+  DraftSectionOutput,
+  draftSection,
+} from "../tools/draft-section.js";
+import {
+  MarkResearchDoneInput,
+  MarkResearchDoneOutput,
+  markResearchDone,
+} from "../tools/mark-research-done.js";
 
 export interface ToolContext {
   userEntraId: string;
@@ -36,6 +61,13 @@ export interface ToolContext {
   drfp: McpDrfpClient;
   rdkit: McpRdkitClient;
   embedder: McpEmbedderClient;
+  kg: McpKgClient;
+  /** Prompt version at the time of this invocation — used for audit. */
+  promptVersion: number;
+  /** Optional: latest user query, used by mark_research_done for the record. */
+  queryText?: string;
+  /** Optional: Langfuse or OTel trace id for cross-reference. */
+  agentTraceId?: string;
 }
 
 /**
@@ -137,3 +169,92 @@ export function buildTools(ctx: ToolContext) {
 }
 
 export type Tools = ReturnType<typeof buildTools>;
+
+// ---------------------------------------------------------------------------
+// DEEP RESEARCH toolkit — default toolkit plus KG + report composition.
+// ---------------------------------------------------------------------------
+export function buildDeepResearchTools(ctx: ToolContext) {
+  const base = buildTools(ctx);
+
+  const queryKgTool = createTool({
+    id: "query_kg",
+    description:
+      "Direct knowledge-graph traversal. Given an entity reference and " +
+      "optional predicate/direction/time snapshot, returns matching facts " +
+      "with full provenance and confidence. Use this when the user asks " +
+      "about structured relationships (e.g., 'what reagents were used in " +
+      "experiment X?' or 'what did we believe about compound Y last " +
+      "January?'). For text/document questions, prefer search_knowledge.",
+    inputSchema: QueryKgInput,
+    outputSchema: QueryKgOutput,
+    execute: async ({ context }) => {
+      const input = QueryKgInput.parse(context);
+      return queryKg(input, { kg: ctx.kg });
+    },
+  });
+
+  const checkContradictionsTool = createTool({
+    id: "check_contradictions",
+    description:
+      "Surface contradictions for a KG entity: explicit CONTRADICTS edges " +
+      "and parallel currently-valid facts with the same predicate but " +
+      "different objects. Use BEFORE synthesising a claim across multiple " +
+      "sources so you can report conflicts explicitly rather than silently " +
+      "picking a winner.",
+    inputSchema: CheckContradictionsInput,
+    outputSchema: CheckContradictionsOutput,
+    execute: async ({ context }) => {
+      const input = CheckContradictionsInput.parse(context);
+      return checkContradictions(input, { kg: ctx.kg });
+    },
+  });
+
+  const draftSectionTool = createTool({
+    id: "draft_section",
+    description:
+      "Compose one section of the final report from structured inputs. " +
+      "Provide a heading, the list of citation refs you'll use, and the " +
+      "body markdown. The tool validates citation format, flags undeclared " +
+      "refs and unsourced claims, and returns the section markdown. This " +
+      "does NOT save the section — call it to format each section; call " +
+      "mark_research_done when the whole report is ready.",
+    inputSchema: DraftSectionInput,
+    outputSchema: DraftSectionOutput,
+    execute: async ({ context }) => {
+      const input = DraftSectionInput.parse(context);
+      return draftSection(input);
+    },
+  });
+
+  const markResearchDoneTool = createTool({
+    id: "mark_research_done",
+    description:
+      "TERMINAL tool. Call ONCE when the investigation is complete. Pass " +
+      "the final title, executive summary, array of sections, optional " +
+      "open_questions, optional contradictions, and optional citations. " +
+      "The report is assembled into markdown, persisted under the calling " +
+      "user, and its UUID returned. After calling this tool you are done.",
+    inputSchema: MarkResearchDoneInput,
+    outputSchema: MarkResearchDoneOutput,
+    execute: async ({ context }) => {
+      const input = MarkResearchDoneInput.parse(context);
+      return markResearchDone(input, {
+        pool: ctx.pool,
+        userEntraId: ctx.userEntraId,
+        queryText: ctx.queryText ?? "",
+        promptVersion: ctx.promptVersion,
+        agentTraceId: ctx.agentTraceId,
+      });
+    },
+  });
+
+  return {
+    ...base,
+    query_kg: queryKgTool,
+    check_contradictions: checkContradictionsTool,
+    draft_section: draftSectionTool,
+    mark_research_done: markResearchDoneTool,
+  } as const;
+}
+
+export type DeepResearchTools = ReturnType<typeof buildDeepResearchTools>;

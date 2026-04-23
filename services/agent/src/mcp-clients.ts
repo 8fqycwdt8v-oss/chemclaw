@@ -43,6 +43,77 @@ const CanonicalizeOut = z.object({
 });
 export type CanonicalizeOutput = z.infer<typeof CanonicalizeOut>;
 
+// ---------- KG client -------------------------------------------------------
+
+const EntityRef = z.object({
+  label: z
+    .string()
+    .min(1)
+    .max(80)
+    .regex(/^[A-Z][A-Za-z0-9_]*$/, "label must start uppercase and contain only [A-Za-z0-9_]"),
+  id_property: z
+    .string()
+    .min(1)
+    .max(40)
+    .regex(/^[a-z][a-z0-9_]*$/, "id_property must be lowercase [a-z0-9_]"),
+  id_value: z.string().min(1).max(4000),
+});
+
+const Predicate = z
+  .string()
+  .min(1)
+  .max(80)
+  .regex(/^[A-Z][A-Z0-9_]*$/, "predicate must be UPPER_SNAKE_CASE");
+
+const QueryAtTimeIn = z.object({
+  entity: EntityRef,
+  predicate: Predicate.optional(),
+  direction: z.enum(["in", "out", "both"]).default("both"),
+  at_time: z.string().datetime({ offset: true }).optional(),
+  include_invalidated: z.boolean().default(false),
+});
+export type QueryAtTimeInput = z.infer<typeof QueryAtTimeIn>;
+
+const Provenance = z
+  .object({
+    source_type: z.enum([
+      "ELN",
+      "SOP",
+      "literature",
+      "analytical",
+      "user_correction",
+      "agent_inference",
+      "import_tool",
+    ]),
+    source_id: z.string().min(1).max(4000),
+  })
+  .passthrough();
+
+const QueriedFact = z.object({
+  fact_id: z.string().uuid(),
+  subject: EntityRef,
+  predicate: Predicate,
+  object: EntityRef,
+  edge_properties: z.record(z.unknown()),
+  confidence_tier: z.enum([
+    "expert_validated",
+    "multi_source_llm",
+    "single_source_llm",
+    "expert_disputed",
+    "invalidated",
+  ]),
+  confidence_score: z.number(),
+  t_valid_from: z.string(),
+  t_valid_to: z.string().nullable(),
+  recorded_at: z.string(),
+  provenance: Provenance,
+});
+
+const QueryAtTimeOut = z.object({
+  facts: z.array(QueriedFact),
+});
+export type QueryAtTimeOutput = z.infer<typeof QueryAtTimeOut>;
+
 // ---------- Embedder client -------------------------------------------------
 
 const EmbedTextIn = z.object({
@@ -139,6 +210,24 @@ export class McpRdkitClient {
       CanonicalizeOut,
       this.timeoutMs,
       "mcp-rdkit",
+    );
+  }
+}
+
+export class McpKgClient {
+  constructor(
+    private readonly baseUrl: string,
+    private readonly timeoutMs: number = 15_000,
+  ) {}
+
+  async queryAtTime(input: QueryAtTimeInput): Promise<QueryAtTimeOutput> {
+    const validated = QueryAtTimeIn.parse(input);
+    return postJson(
+      `${this.baseUrl}/tools/query_at_time`,
+      validated,
+      QueryAtTimeOut,
+      this.timeoutMs,
+      "mcp-kg",
     );
   }
 }

@@ -1,27 +1,28 @@
-// POST /api/chat — SSE-streaming chat endpoint.
+// POST /api/chat           — SSE-streaming chat endpoint (default mode).
+// POST /api/deep_research   — SSE-streaming deep-research mode with
+//                             expanded toolkit + longer budget + tighter
+//                             rate-limit.
 //
-// Contract:
-//   Request:
-//     { "messages": [{ "role": "user"|"assistant"|"system", "content": "..." }],
-//       "stream": true|false (default true) }
-//   Response (stream=true): text/event-stream with one JSON-encoded StreamEvent
-//     per `data:` line. Terminated by a `finish` or `error` event.
-//   Response (stream=false): JSON { "text": "...", "finishReason": "...",
-//     "promptVersion": N }.
+// Request shape:
+//   { "messages": [...], "stream": true|false, "mode": "default"|"deep_research" }
+// The dedicated /api/deep_research route is a convenience that forces
+// mode=deep_research and applies a stricter rate limit; the same
+// functionality is reachable by POSTing {mode:"deep_research"} to /api/chat.
 //
 // Budget defences:
-//   - Dedicated low rate limit on this route (AGENT_CHAT_RATE_LIMIT_MAX)
-//   - Single-message length cap and total-history cap (both from config)
-//   - Server-enforced maxSteps on the tool-use loop
-//   - No user input is ever mixed into the system prompt — the registered
-//     prompt is applied server-side; the user only provides the conversation
-//     turns.
+//   - Dedicated low rate limit on both routes (DR uses an even lower bucket)
+//   - Single-message length cap and total-history cap (from config)
+//   - Server-enforced maxSteps on the agent loop (higher for DR)
+//   - No user input ever enters the system prompt; registered prompts apply
+//     server-side
+//   - SSE frames JSON-encoded with newline escape so model-emitted newlines
+//     can't corrupt the wire format
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 
 import type { Config } from "../config.js";
-import type { ChatAgent } from "../agent/chat-agent.js";
+import type { ChatAgent, ChatMode, StreamEvent } from "../agent/chat-agent.js";
 import { ChatMessageSchema } from "../agent/chat-agent.js";
 
 export interface ChatRouteDeps {
@@ -33,14 +34,120 @@ export interface ChatRouteDeps {
 const ChatRequestSchema = z.object({
   messages: z.array(ChatMessageSchema).min(1),
   stream: z.boolean().optional(),
+  mode: z.enum(["default", "deep_research"]).optional(),
 });
+
+type ChatRequest = z.infer<typeof ChatRequestSchema>;
+
+function _enforceBounds(
+  req: ChatRequest,
+  config: Config,
+): { ok: true } | { ok: false; status: number; body: Record<string, unknown> } {
+  if (req.messages.length > config.AGENT_CHAT_MAX_HISTORY) {
+    return {
+      ok: false,
+      status: 413,
+      body: { error: "history_too_long", max: config.AGENT_CHAT_MAX_HISTORY },
+    };
+  }
+  for (const m of req.messages) {
+    if (m.content.length > config.AGENT_CHAT_MAX_INPUT_CHARS) {
+      return {
+        ok: false,
+        status: 413,
+        body: {
+          error: "message_too_long",
+          max: config.AGENT_CHAT_MAX_INPUT_CHARS,
+        },
+      };
+    }
+  }
+  return { ok: true };
+}
+
+async function _handle(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  deps: ChatRouteDeps,
+  forcedMode: ChatMode | null,
+): Promise<void> {
+  const user = deps.getUser(req);
+  const parsed = ChatRequestSchema.safeParse(req.body);
+  if (!parsed.success) {
+    return void reply.code(400).send({
+      error: "invalid_input",
+      detail: parsed.error.issues.map((i) => ({ path: i.path, msg: i.message })),
+    });
+  }
+  const body = parsed.data;
+  const bounds = _enforceBounds(body, deps.config);
+  if (!bounds.ok) {
+    return void reply.code(bounds.status).send(bounds.body);
+  }
+
+  const mode: ChatMode = forcedMode ?? body.mode ?? "default";
+  const stream = body.stream ?? true;
+
+  if (!stream) {
+    try {
+      const result = await deps.agent.generate({
+        userEntraId: user,
+        messages: body.messages,
+        mode,
+      });
+      return void reply.send(result);
+    } catch (err) {
+      req.log.error({ err }, "chat generate failed");
+      return void reply.code(500).send({ error: "internal" });
+    }
+  }
+
+  // ---------- SSE response ----------
+  reply.raw.statusCode = 200;
+  reply.raw.setHeader("Content-Type", "text/event-stream; charset=utf-8");
+  reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
+  reply.raw.setHeader("Connection", "keep-alive");
+  reply.raw.setHeader("X-Accel-Buffering", "no");
+  reply.hijack();
+
+  const writeEvent = (payload: StreamEvent): void => {
+    const json = JSON.stringify(payload).replace(/\r?\n/g, "\\n");
+    reply.raw.write(`data: ${json}\n\n`);
+  };
+
+  let closed = false;
+  const onClose = () => {
+    closed = true;
+  };
+  req.raw.on("close", onClose);
+  req.raw.on("aborted", onClose);
+
+  try {
+    for await (const evt of deps.agent.stream({
+      userEntraId: user,
+      messages: body.messages,
+      mode,
+    })) {
+      if (closed) break;
+      writeEvent(evt);
+      if (evt.type === "finish" || evt.type === "error") break;
+    }
+  } catch (err) {
+    req.log.error({ err }, "chat stream failed mid-flight");
+    writeEvent({ type: "error", error: "internal" });
+  } finally {
+    try {
+      reply.raw.end();
+    } catch {
+      // already closed
+    }
+  }
+}
 
 export function registerChatRoute(app: FastifyInstance, deps: ChatRouteDeps): void {
   app.post(
     "/api/chat",
     {
-      // Per-route rate limit override. Leaves the generic limit in place
-      // for other endpoints; chat is more expensive so gets its own bucket.
       config: {
         rateLimit: {
           max: deps.config.AGENT_CHAT_RATE_LIMIT_MAX,
@@ -48,95 +155,20 @@ export function registerChatRoute(app: FastifyInstance, deps: ChatRouteDeps): vo
         },
       },
     },
-    async (req: FastifyRequest, reply: FastifyReply) => {
-      const user = deps.getUser(req);
+    (req, reply) => _handle(req, reply, deps, null),
+  );
 
-      const parsed = ChatRequestSchema.safeParse(req.body);
-      if (!parsed.success) {
-        return reply.code(400).send({
-          error: "invalid_input",
-          detail: parsed.error.issues.map((i) => ({
-            path: i.path,
-            msg: i.message,
-          })),
-        });
-      }
-
-      const { messages, stream = true } = parsed.data;
-
-      // Defensive bounds — Pydantic-equivalent checks in Python.
-      if (messages.length > deps.config.AGENT_CHAT_MAX_HISTORY) {
-        return reply
-          .code(413)
-          .send({ error: "history_too_long", max: deps.config.AGENT_CHAT_MAX_HISTORY });
-      }
-      for (const m of messages) {
-        if (m.content.length > deps.config.AGENT_CHAT_MAX_INPUT_CHARS) {
-          return reply
-            .code(413)
-            .send({
-              error: "message_too_long",
-              max: deps.config.AGENT_CHAT_MAX_INPUT_CHARS,
-            });
-        }
-      }
-
-      if (!stream) {
-        try {
-          const result = await deps.agent.generate({
-            userEntraId: user,
-            messages,
-          });
-          return result;
-        } catch (err) {
-          req.log.error({ err }, "chat generate failed");
-          return reply.code(500).send({ error: "internal" });
-        }
-      }
-
-      // -------- SSE response --------
-      reply.raw.statusCode = 200;
-      reply.raw.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-      reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
-      reply.raw.setHeader("Connection", "keep-alive");
-      reply.raw.setHeader("X-Accel-Buffering", "no"); // nginx passthrough
-      reply.hijack();
-
-      const writeEvent = (payload: unknown): void => {
-        // One JSON-encoded event per SSE frame. Ensure no embedded newlines
-        // corrupt the wire format (SSE uses \n as a record separator).
-        const json = JSON.stringify(payload).replace(/\r?\n/g, "\\n");
-        reply.raw.write(`data: ${json}\n\n`);
-      };
-
-      let closed = false;
-      const onClose = () => {
-        closed = true;
-      };
-      req.raw.on("close", onClose);
-      req.raw.on("aborted", onClose);
-
-      try {
-        for await (const evt of deps.agent.stream({
-          userEntraId: user,
-          messages,
-        })) {
-          if (closed) break;
-          writeEvent(evt);
-          if (evt.type === "finish" || evt.type === "error") {
-            break;
-          }
-        }
-      } catch (err) {
-        req.log.error({ err }, "chat stream failed mid-flight");
-        writeEvent({ type: "error", error: "internal" });
-      } finally {
-        try {
-          reply.raw.end();
-        } catch {
-          // connection already closed
-        }
-      }
+  app.post(
+    "/api/deep_research",
+    {
+      config: {
+        // Deep research is expensive — quarter the default bucket.
+        rateLimit: {
+          max: Math.max(1, Math.floor(deps.config.AGENT_CHAT_RATE_LIMIT_MAX / 4)),
+          timeWindow: deps.config.AGENT_CHAT_RATE_LIMIT_WINDOW_MS,
+        },
+      },
     },
+    (req, reply) => _handle(req, reply, deps, "deep_research"),
   );
 }
