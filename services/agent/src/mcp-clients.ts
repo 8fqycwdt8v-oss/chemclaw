@@ -250,4 +250,83 @@ export class McpEmbedderClient {
   }
 }
 
+// ---------- TabICL client ---------------------------------------------------
+
+const FeaturizeIn = z.object({
+  reaction_rows: z.array(
+    z.object({
+      reaction_id: z.string().min(1).max(64),
+      rxn_smiles: z.string().min(3).max(20_000),
+      rxno_class: z.string().max(200).nullable(),
+      solvent: z.string().max(200).nullable(),
+      temp_c: z.number().nullable(),
+      time_min: z.number().nullable(),
+      catalyst_loading_mol_pct: z.number().nullable(),
+      base: z.string().max(200).nullable(),
+      yield_pct: z.number().nullable(),
+    }),
+  ).min(1).max(1000),
+  include_targets: z.boolean(),
+});
+export type FeaturizeInput = z.infer<typeof FeaturizeIn>;
+
+const FeaturizeOut = z.object({
+  feature_names: z.array(z.string()),
+  categorical_names: z.array(z.string()),
+  rows: z.array(z.array(z.any())),
+  targets: z.array(z.number()).nullable(),
+  skipped: z.array(z.object({
+    reaction_id: z.string(),
+    reason: z.string(),
+  })),
+});
+export type FeaturizeOutput = z.infer<typeof FeaturizeOut>;
+
+const PredictIn = z.object({
+  support_rows: z.array(z.array(z.any())).min(1).max(1000),
+  support_targets: z.array(z.number()).min(1).max(1000),
+  query_rows: z.array(z.array(z.any())).min(1).max(1000),
+  feature_names: z.array(z.string()).min(1).max(512),
+  categorical_names: z.array(z.string()).max(512).default([]),
+  task: z.enum(["regression", "classification"]),
+  return_feature_importance: z.boolean().default(false),
+});
+export type PredictInput = z.infer<typeof PredictIn>;
+
+const PredictOut = z.object({
+  predictions: z.array(z.number()),
+  prediction_std: z.array(z.number()),
+  feature_importance: z.record(z.string(), z.number()).nullable(),
+});
+export type PredictOutput = z.infer<typeof PredictOut>;
+
+export class McpTabiclClient {
+  constructor(
+    private readonly baseUrl: string,
+    private readonly timeoutMs: number = 60_000,
+  ) {}
+
+  async featurize(input: FeaturizeInput): Promise<FeaturizeOutput> {
+    const validated = FeaturizeIn.parse(input);
+    return postJson(
+      `${this.baseUrl}/featurize`,
+      validated,
+      FeaturizeOut,
+      this.timeoutMs,
+      "mcp-tabicl",
+    );
+  }
+
+  async predictAndRank(input: PredictInput): Promise<PredictOutput> {
+    const validated = PredictIn.parse(input);
+    return postJson(
+      `${this.baseUrl}/predict_and_rank`,
+      validated,
+      PredictOut,
+      this.timeoutMs,
+      "mcp-tabicl",
+    );
+  }
+}
+
 export { UpstreamError };

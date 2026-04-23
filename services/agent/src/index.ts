@@ -28,6 +28,7 @@ import {
   McpEmbedderClient,
   McpKgClient,
   McpRdkitClient,
+  McpTabiclClient,
   UpstreamError,
 } from "./mcp-clients.js";
 import {
@@ -95,6 +96,7 @@ const drfpClient = new McpDrfpClient(config.MCP_DRFP_URL);
 const rdkitClient = new McpRdkitClient(config.MCP_RDKIT_URL);
 const embedderClient = new McpEmbedderClient(config.MCP_EMBEDDER_URL);
 const kgClient = new McpKgClient(config.MCP_KG_URL);
+const tabicl = new McpTabiclClient(config.MCP_TABICL_URL);
 const llm = createLlmProvider(config);
 const prompts = new PromptRegistry(pool);
 const chatAgent = new ChatAgent({
