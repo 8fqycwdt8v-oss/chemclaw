@@ -133,6 +133,8 @@ export class ChatAgent {
       tabicl: this.deps.tabicl,
       seenFactIds: new Set<string>(),
       promptVersion,
+      prompts: this.deps.prompts,
+      llm: this.deps.llm,
       agentTraceId: invocation.agentTraceId,
     };
     return { systemPrompt, promptVersion, ctx };

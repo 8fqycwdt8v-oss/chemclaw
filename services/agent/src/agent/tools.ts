@@ -12,6 +12,8 @@ import type {
   McpRdkitClient,
   McpTabiclClient,
 } from "../mcp-clients.js";
+import type { PromptRegistry } from "./prompts.js";
+import type { LlmProvider } from "../llm/provider.js";
 import {
   FindSimilarReactionsInput,
   FindSimilarReactionsOutput,
@@ -80,6 +82,10 @@ export interface ToolContext {
   seenFactIds: Set<string>;
   /** Prompt version at the time of this invocation. */
   promptVersion: number;
+  /** Prompt registry — used by tools that need to load their own prompt. */
+  prompts: PromptRegistry;
+  /** LLM provider — used by tools that need direct model access (e.g. synthesize_insights). */
+  llm: LlmProvider;
   queryText?: string;
   agentTraceId?: string;
 }
@@ -303,6 +309,8 @@ export function buildTools(ctx: ToolContext) {
         embedder: ctx.embedder,
         userEntraId: ctx.userEntraId,
         seenFactIds: ctx.seenFactIds,
+        prompts: ctx.prompts,
+        llm: ctx.llm,
       });
       return out;
     },

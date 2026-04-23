@@ -10,11 +10,17 @@
 //     upstream provider keys never reach this process.
 
 import { createOpenAI } from "@ai-sdk/openai";
+import { generateText } from "ai";
 import type { Config } from "../config.js";
 
 export interface LlmProvider {
   /** Returns a configured language-model handle usable with the AI SDK. */
   model(): ReturnType<ReturnType<typeof createOpenAI>>;
+  /**
+   * Single-turn completion that JSON.parses the response.
+   * Routes through LiteLLM like every other call.
+   */
+  completeJson(opts: { system: string; user: string }): Promise<unknown>;
 }
 
 export function createLlmProvider(cfg: Config): LlmProvider {
@@ -26,7 +32,18 @@ export function createLlmProvider(cfg: Config): LlmProvider {
     compatibility: "compatible",
   });
 
+  const modelFn = () => factory(cfg.AGENT_MODEL);
+
   return {
-    model: () => factory(cfg.AGENT_MODEL),
+    model: modelFn,
+    async completeJson(opts) {
+      const { text } = await generateText({
+        model: modelFn(),
+        system: opts.system,
+        messages: [{ role: "user", content: opts.user }],
+        maxTokens: 4_000,
+      });
+      return JSON.parse(text);
+    },
   };
 }
