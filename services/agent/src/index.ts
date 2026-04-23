@@ -23,11 +23,15 @@ import type { Pool } from "pg";
 
 import { loadConfig } from "./config.js";
 import { createPool, withUserContext } from "./db.js";
-import { McpDrfpClient, UpstreamError } from "./mcp-clients.js";
+import { McpDrfpClient, McpRdkitClient, UpstreamError } from "./mcp-clients.js";
 import {
   findSimilarReactions,
   FindSimilarReactionsInput,
 } from "./tools/find-similar-reactions.js";
+import { createLlmProvider } from "./llm/provider.js";
+import { PromptRegistry } from "./agent/prompts.js";
+import { ChatAgent } from "./agent/chat-agent.js";
+import { registerChatRoute } from "./routes/chat.js";
 
 const config = loadConfig();
 
@@ -82,6 +86,17 @@ await app.register(sensible);
 
 const pool: Pool = createPool(config);
 const drfpClient = new McpDrfpClient(config.MCP_DRFP_URL);
+const rdkitClient = new McpRdkitClient(config.MCP_RDKIT_URL);
+const llm = createLlmProvider(config);
+const prompts = new PromptRegistry(pool);
+const chatAgent = new ChatAgent({
+  config,
+  pool,
+  llm,
+  drfp: drfpClient,
+  rdkit: rdkitClient,
+  prompts,
+});
 
 app.get("/healthz", async () => ({ status: "ok" }));
 
@@ -155,6 +170,12 @@ app.post("/api/tools/find_similar_reactions", async (req, reply) => {
     req.log.error({ err }, "find_similar_reactions failed");
     return reply.code(500).send({ error: "internal" });
   }
+});
+
+registerChatRoute(app, {
+  config,
+  agent: chatAgent,
+  getUser: getUserFromRequest,
 });
 
 // --- Startup ---------------------------------------------------------------

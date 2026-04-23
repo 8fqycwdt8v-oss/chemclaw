@@ -47,6 +47,21 @@ const ConfigSchema = z.object({
   MCP_KG_URL: z.string().url().default("http://localhost:8003"),
   MCP_EMBEDDER_URL: z.string().url().default("http://localhost:8004"),
 
+  // LiteLLM proxy for LLM egress.
+  LITELLM_BASE_URL: z.string().url().default("http://localhost:4000"),
+  LITELLM_API_KEY: z.string().min(1).default("sk-chemclaw-dev-master-change-me"),
+  // Default model name as configured in services/litellm/config.yaml.
+  AGENT_MODEL: z.string().min(1).default("claude-opus-4-7"),
+
+  // Chat-specific budgets (defence against runaway LLM loops).
+  AGENT_CHAT_MAX_STEPS: z.coerce.number().int().positive().max(32).default(12),
+  AGENT_CHAT_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
+  AGENT_CHAT_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+  // Reject messages longer than this (single user turn).
+  AGENT_CHAT_MAX_INPUT_CHARS: z.coerce.number().int().positive().default(40_000),
+  // Reject conversation histories with more than this many messages.
+  AGENT_CHAT_MAX_HISTORY: z.coerce.number().int().positive().max(200).default(40),
+
   CHEMCLAW_DEV_MODE: z
     .string()
     .optional()

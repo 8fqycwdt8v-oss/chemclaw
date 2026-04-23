@@ -111,9 +111,10 @@ Every project-scoped query must run in a transaction with `app.current_user_entr
 
 ## Secrets and egress
 
-- **All LLM calls route through LiteLLM** (`services/litellm/config.yaml`). Never import provider SDKs directly in application code; always go through `litellm`.
+- **All LLM calls route through LiteLLM** (`services/litellm/config.yaml`). Never import provider SDKs directly in application code; always go through `litellm`. The agent uses `@ai-sdk/openai` with `baseURL` pointing at LiteLLM's OpenAI-compatible endpoint — this is the single egress chokepoint.
 - **Every prompt is redacted pre-egress** by the callback at `services/litellm_redactor/callback.py`. When adding new sensitive categories (new project-ID patterns, new compound-code formats), extend `services/litellm_redactor/redaction.py` and add a unit test in `tests/unit/test_redactor.py`.
 - The regex patterns in the redactor are length-bounded by construction — if you add new patterns, bound every quantifier (no unbounded `.*`) to avoid catastrophic backtracking.
+- **System prompts come from `prompt_registry`, not from hardcoded strings.** When adding a new agent mode, insert a new row (see `db/seed/02_prompt_registry.sql` for the canonical pattern) and reference it by name in code. The `PromptRegistry` cache TTL is 60s; call `invalidate()` in long-running processes if you hot-edit a prompt in the DB.
 
 ## When adding a new MCP tool service
 
@@ -141,17 +142,19 @@ Every project-scoped query must run in a transaction with `app.current_user_entr
 - **Phase 0** (infrastructure): complete. Postgres + Neo4j via compose, schema + RLS, Streamlit skeleton, hardened Fastify agent with rate-limit, CORS allowlist, body-size cap, dev/prod user-extraction separation.
 - **Phase 1** (document ingestion): scaffolding only. SMB scraper + Marker + ChemDataExtractor not yet implemented.
 - **Phase 2** (ELN + analytical): ELN JSON importer end-to-end (file-size capped); reaction DRFP vectorizer end-to-end via `mcp-drfp` (SMILES length bounded).
-- **Phase 3** (retrieval & chat): partial.
-  - `mcp-kg` — bi-temporal KG service with confidence tiers, invalidation, temporal-point queries. 48 unit tests. Integration tests for Neo4j (gated `NEO4J_INTEGRATION=1`).
-  - `mcp-embedder` — BGE-M3 text embeddings with stub-encoder for dev/test. 10 unit tests.
-  - `kg-experiments` projector — deterministic UUIDv5 `fact_id`s → idempotent replay safety. Grounds compounds via `mcp-rdkit`; ungrounded names fall back to `ungrounded-<hash>` nodes so provenance chains stay intact.
-  - Agent — typed MCP clients (`McpDrfpClient`, `McpRdkitClient`) with timeouts + response-shape validation; first concrete tool `find_similar_reactions` wired end-to-end (agent → DRFP → pgvector under RLS).
-- **Phases 4–8**: pending. Autonomous Mastra reasoning loop (agent currently has tool endpoints but no LLM-driven loop), Deep Research toolkit, KG correction workflow, GEPA self-improvement, OpenShift Helm, full RBAC hardening.
+- **Phase 3** (retrieval & chat): **complete**.
+  - `mcp-kg` — bi-temporal KG with race-safe MERGE (uniqueness constraint on `fact_id`), confidence tiers, invalidation, temporal-point queries.
+  - `mcp-embedder` — BGE-M3 text embeddings with stub-encoder for dev/test.
+  - `kg-experiments` projector — deterministic UUIDv5 `fact_id`s → idempotent replay. Ungrounded compounds fall back to `ungrounded-<hash>` nodes.
+  - Agent — **autonomous ReAct loop via Mastra** with LiteLLM as the model provider. Tools: `find_similar_reactions`, `canonicalize_smiles`. System prompt loaded from the `prompt_registry` table (not hardcoded) with a 60s cache; no runtime fallback — if the active prompt is missing, the agent refuses to start a turn.
+  - `POST /api/chat` — SSE streaming chat endpoint. Route-level rate limit, history + per-message caps, terminal-event guarantee. Non-streaming mode available via `stream: false`.
+  - `services/frontend/pages/chat.py` — Streamlit chat page consuming the SSE stream with inline tool-call panels and history trimming.
+- **Phases 4–8**: pending. Deep Research toolkit, cross-project reaction learning synthesis, KG correction workflow, GEPA self-improvement, OpenShift Helm, full RBAC hardening.
 
 ## Test counts (as of current sprint)
 
 ```
-python3 -m pytest tests/ -v         →  66 passed, 4 skipped (integration)
-cd services/agent && npm test       →   6 passed
+python3 -m pytest tests/             →  82 passed, 4 skipped (Neo4j integration, gated)
+cd services/agent && npm test        →  21 passed
 cd services/agent && npm run typecheck →  ok
 ```

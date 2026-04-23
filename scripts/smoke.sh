@@ -34,7 +34,8 @@ ok "schema applied"
 
 step "4. Seeding"
 docker compose exec -T postgres psql -U chemclaw -d chemclaw -v ON_ERROR_STOP=1 < db/seed/01_sample_data.sql >/dev/null
-ok "seed applied"
+docker compose exec -T postgres psql -U chemclaw -d chemclaw -v ON_ERROR_STOP=1 < db/seed/02_prompt_registry.sql >/dev/null
+ok "seed + prompts applied"
 
 step "5. Waiting for mcp-drfp"
 for i in $(seq 1 60); do
