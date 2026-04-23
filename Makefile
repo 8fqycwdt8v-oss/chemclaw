@@ -85,6 +85,10 @@ db.init: ## Re-apply schema (idempotent)
 db.seed: ## Load sample seed data
 	docker compose exec -T postgres psql -U chemclaw -d chemclaw < db/seed/01_sample_data.sql
 
+.PHONY: db.init.tabicl-pca
+db.init.tabicl-pca: ## Cold-fit PCA model from all reactions in the database
+	$(VENV)/bin/python scripts/tabicl_pca_coldfit.py --out $${MCP_TABICL_PCA_PATH:-/var/cache/mcp-tabicl/drfp_pca.json}
+
 # --------------------------------------------------------------------------
 # Services
 # --------------------------------------------------------------------------
@@ -108,6 +112,10 @@ run.mcp-rdkit: ## Run mcp-rdkit locally (needs rdkit in .venv)
 .PHONY: run.mcp-drfp
 run.mcp-drfp: ## Run mcp-drfp locally (needs drfp + rdkit in .venv)
 	$(VENV)/bin/python -m uvicorn services.mcp_tools.mcp_drfp.main:app --host 0.0.0.0 --port 8002 --reload
+
+.PHONY: run.mcp-tabicl
+run.mcp-tabicl: ## Run mcp-tabicl locally
+	$(VENV)/bin/python -m uvicorn services.mcp_tools.mcp_tabicl.main:app --host 0.0.0.0 --port 8005
 
 .PHONY: run.reaction-vectorizer
 run.reaction-vectorizer: ## Run the DRFP projector locally
