@@ -13,24 +13,35 @@ import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
 import type { Pool } from "pg";
 
-import type { McpDrfpClient, McpRdkitClient } from "../mcp-clients.js";
+import type { McpDrfpClient, McpEmbedderClient, McpRdkitClient } from "../mcp-clients.js";
 import {
   FindSimilarReactionsInput,
   FindSimilarReactionsOutput,
   findSimilarReactions,
 } from "../tools/find-similar-reactions.js";
+import {
+  SearchKnowledgeInput,
+  SearchKnowledgeOutput,
+  searchKnowledge,
+} from "../tools/search-knowledge.js";
+import {
+  FetchFullDocumentInput,
+  FetchFullDocumentOutput,
+  fetchFullDocument,
+} from "../tools/fetch-full-document.js";
 
 export interface ToolContext {
   userEntraId: string;
   pool: Pool;
   drfp: McpDrfpClient;
   rdkit: McpRdkitClient;
+  embedder: McpEmbedderClient;
 }
 
 /**
  * Build the tool registry for a given request context.
  *
- * We return a fresh registry per chat turn so the ToolContext (particularly
+ * Fresh registry per chat turn so the ToolContext (particularly
  * `userEntraId`) is captured in a closure and cannot leak between users.
  */
 export function buildTools(ctx: ToolContext) {
@@ -77,9 +88,51 @@ export function buildTools(ctx: ToolContext) {
     },
   });
 
+  const searchKnowledgeTool = createTool({
+    id: "search_knowledge",
+    description:
+      "Hybrid retrieval over the document corpus (SOPs, reports, method " +
+      "validations, literature summaries). Default mode is 'hybrid' (dense " +
+      "BGE-M3 + sparse trigram, fused via Reciprocal Rank Fusion). Returns " +
+      "top-K chunks with document metadata for citation. Use this whenever " +
+      "the user's question refers to documented procedures, reports, or " +
+      "textual knowledge; prefer it over answering from memory.",
+    inputSchema: SearchKnowledgeInput,
+    outputSchema: SearchKnowledgeOutput,
+    execute: async ({ context }) => {
+      const input = SearchKnowledgeInput.parse(context);
+      return searchKnowledge(input, {
+        pool: ctx.pool,
+        embedder: ctx.embedder,
+        userEntraId: ctx.userEntraId,
+      });
+    },
+  });
+
+  const fetchFullDocumentTool = createTool({
+    id: "fetch_full_document",
+    description:
+      "Fetch the full parsed Markdown of a document by its UUID. Use this " +
+      "when a chunk from search_knowledge is relevant and you need the " +
+      "complete context (e.g., the entire SOP section, not just the " +
+      "retrieved fragment). Chunks are a finding strategy; documents are a " +
+      "reading strategy.",
+    inputSchema: FetchFullDocumentInput,
+    outputSchema: FetchFullDocumentOutput,
+    execute: async ({ context }) => {
+      const input = FetchFullDocumentInput.parse(context);
+      return fetchFullDocument(input, {
+        pool: ctx.pool,
+        userEntraId: ctx.userEntraId,
+      });
+    },
+  });
+
   return {
     find_similar_reactions: findSimilarReactionsTool,
     canonicalize_smiles: canonicalizeSmilesTool,
+    search_knowledge: searchKnowledgeTool,
+    fetch_full_document: fetchFullDocumentTool,
   } as const;
 }
 

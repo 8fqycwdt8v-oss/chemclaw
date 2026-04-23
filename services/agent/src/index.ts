@@ -23,7 +23,7 @@ import type { Pool } from "pg";
 
 import { loadConfig } from "./config.js";
 import { createPool, withUserContext } from "./db.js";
-import { McpDrfpClient, McpRdkitClient, UpstreamError } from "./mcp-clients.js";
+import { McpDrfpClient, McpEmbedderClient, McpRdkitClient, UpstreamError } from "./mcp-clients.js";
 import {
   findSimilarReactions,
   FindSimilarReactionsInput,
@@ -87,6 +87,7 @@ await app.register(sensible);
 const pool: Pool = createPool(config);
 const drfpClient = new McpDrfpClient(config.MCP_DRFP_URL);
 const rdkitClient = new McpRdkitClient(config.MCP_RDKIT_URL);
+const embedderClient = new McpEmbedderClient(config.MCP_EMBEDDER_URL);
 const llm = createLlmProvider(config);
 const prompts = new PromptRegistry(pool);
 const chatAgent = new ChatAgent({
@@ -95,6 +96,7 @@ const chatAgent = new ChatAgent({
   llm,
   drfp: drfpClient,
   rdkit: rdkitClient,
+  embedder: embedderClient,
   prompts,
 });
 

@@ -15,7 +15,7 @@ import { z } from "zod";
 
 import type { Config } from "../config.js";
 import type { LlmProvider } from "../llm/provider.js";
-import type { McpDrfpClient, McpRdkitClient } from "../mcp-clients.js";
+import type { McpDrfpClient, McpEmbedderClient, McpRdkitClient } from "../mcp-clients.js";
 import { PromptRegistry } from "./prompts.js";
 import { buildTools, type ToolContext } from "./tools.js";
 
@@ -71,6 +71,7 @@ export interface ChatAgentDeps {
   llm: LlmProvider;
   drfp: McpDrfpClient;
   rdkit: McpRdkitClient;
+  embedder: McpEmbedderClient;
   prompts: PromptRegistry;
 }
 
@@ -183,6 +184,7 @@ export class ChatAgent {
       pool: this.deps.pool,
       drfp: this.deps.drfp,
       rdkit: this.deps.rdkit,
+      embedder: this.deps.embedder,
     };
     return { systemPrompt, promptVersion, ctx };
   }

@@ -34,6 +34,8 @@ setup.python: ## Create .venv and install Python deps for all services
 	$(PIP) install -r services/mcp_tools/mcp_rdkit/requirements.txt
 	$(PIP) install -r services/mcp_tools/mcp_drfp/requirements.txt
 	$(PIP) install -r services/projectors/reaction_vectorizer/requirements.txt
+	$(PIP) install -r services/projectors/chunk_embedder/requirements.txt
+	$(PIP) install -r services/ingestion/doc_ingester/requirements.txt
 	$(PIP) install -r services/litellm_redactor/requirements.txt
 	@echo "Python env ready. Activate with: source $(VENV)/bin/activate"
 
@@ -110,6 +112,14 @@ run.mcp-drfp: ## Run mcp-drfp locally (needs drfp + rdkit in .venv)
 .PHONY: run.reaction-vectorizer
 run.reaction-vectorizer: ## Run the DRFP projector locally
 	$(VENV)/bin/python -m services.projectors.reaction_vectorizer.main
+
+.PHONY: run.chunk-embedder
+run.chunk-embedder: ## Run the chunk-embedder projector locally
+	$(VENV)/bin/python -m services.projectors.chunk_embedder.main
+
+.PHONY: ingest.docs
+ingest.docs: ## Scan sample-data/documents and ingest all supported files
+	$(VENV)/bin/python -m services.ingestion.doc_ingester.cli scan
 
 # --------------------------------------------------------------------------
 # Quality

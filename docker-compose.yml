@@ -180,6 +180,57 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # doc_ingester — scans a docs directory, parses, chunks, emits events
+  # (one-shot CLI; schedule via cron or replace CMD with inotify loop)
+  # -------------------------------------------------------------
+  doc-ingester:
+    build:
+      context: .
+      dockerfile: services/ingestion/doc_ingester/Dockerfile
+    container_name: chemclaw-doc-ingester
+    restart: "no"
+    profiles: ["ingest"]  # only starts with `docker compose --profile ingest up`
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${POSTGRES_USER:-chemclaw}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}
+      DOCS_ROOT: /docs
+    volumes:
+      - ./sample-data/documents:/docs:ro
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # chunk_embedder — BGE-M3 embeddings projector
+  # -------------------------------------------------------------
+  chunk-embedder:
+    build:
+      context: .
+      dockerfile: services/projectors/chunk_embedder/Dockerfile
+    container_name: chemclaw-chunk-embedder
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mcp-embedder:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${POSTGRES_USER:-chemclaw}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}
+      MCP_EMBEDDER_URL: http://mcp-embedder:8004
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # reaction_vectorizer — DRFP projector
   # -------------------------------------------------------------
   reaction-vectorizer:

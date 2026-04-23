@@ -140,7 +140,7 @@ Every project-scoped query must run in a transaction with `app.current_user_entr
 ## Status
 
 - **Phase 0** (infrastructure): complete. Postgres + Neo4j via compose, schema + RLS, Streamlit skeleton, hardened Fastify agent with rate-limit, CORS allowlist, body-size cap, dev/prod user-extraction separation.
-- **Phase 1** (document ingestion): scaffolding only. SMB scraper + Marker + ChemDataExtractor not yet implemented.
+- **Phase 1** (document ingestion): core path **complete**. `doc_ingester` parses PDF (pypdf) / DOCX (python-docx + defusedxml preflight) / Markdown / plaintext → `documents` + `document_chunks` rows, emits `document_ingested` events. `chunk_embedder` projector consumes events, calls `mcp-embedder` in batches, writes BGE-M3 vectors. Agent tools `search_knowledge` (hybrid dense+sparse+RRF) and `fetch_full_document` land and are tested. SMB live scraper + inotify daemon mode deferred; current ingester runs one-shot over a mounted directory (`docker compose --profile ingest up`).
 - **Phase 2** (ELN + analytical): ELN JSON importer end-to-end (file-size capped); reaction DRFP vectorizer end-to-end via `mcp-drfp` (SMILES length bounded).
 - **Phase 3** (retrieval & chat): **complete**.
   - `mcp-kg` — bi-temporal KG with race-safe MERGE (uniqueness constraint on `fact_id`), confidence tiers, invalidation, temporal-point queries.
@@ -154,7 +154,7 @@ Every project-scoped query must run in a transaction with `app.current_user_entr
 ## Test counts (as of current sprint)
 
 ```
-python3 -m pytest tests/             →  82 passed, 4 skipped (Neo4j integration, gated)
-cd services/agent && npm test        →  21 passed
+python3 -m pytest tests/             →  110 passed, 4 skipped (Neo4j integration, gated)
+cd services/agent && npm test        →   36 passed
 cd services/agent && npm run typecheck →  ok
 ```

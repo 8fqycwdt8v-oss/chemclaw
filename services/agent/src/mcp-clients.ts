@@ -43,6 +43,21 @@ const CanonicalizeOut = z.object({
 });
 export type CanonicalizeOutput = z.infer<typeof CanonicalizeOut>;
 
+// ---------- Embedder client -------------------------------------------------
+
+const EmbedTextIn = z.object({
+  inputs: z.array(z.string().min(1).max(40_000)).min(1).max(128),
+  normalize: z.boolean().default(true),
+});
+export type EmbedTextInput = z.infer<typeof EmbedTextIn>;
+
+const EmbedTextOut = z.object({
+  model: z.string(),
+  dim: z.number().int().positive(),
+  vectors: z.array(z.array(z.number())),
+});
+export type EmbedTextOutput = z.infer<typeof EmbedTextOut>;
+
 // ---------- shared helpers --------------------------------------------------
 
 class UpstreamError extends Error {
@@ -74,8 +89,6 @@ async function postJson<TReq, TRes>(
     });
     const text = await r.text();
     if (!r.ok) {
-      // Don't surface raw upstream error text to the agent loop — it could
-      // contain user data. Return a short tag; the full error is logged.
       throw new UpstreamError(service, r.status, text.slice(0, 200));
     }
     const parsed = respSchema.safeParse(text.length ? JSON.parse(text) : null);
@@ -126,6 +139,24 @@ export class McpRdkitClient {
       CanonicalizeOut,
       this.timeoutMs,
       "mcp-rdkit",
+    );
+  }
+}
+
+export class McpEmbedderClient {
+  constructor(
+    private readonly baseUrl: string,
+    private readonly timeoutMs: number = 60_000,
+  ) {}
+
+  async embed(inputs: string[], normalize = true): Promise<EmbedTextOutput> {
+    const validated = EmbedTextIn.parse({ inputs, normalize });
+    return postJson(
+      `${this.baseUrl}/tools/embed_text`,
+      validated,
+      EmbedTextOut,
+      this.timeoutMs,
+      "mcp-embedder",
     );
   }
 }
