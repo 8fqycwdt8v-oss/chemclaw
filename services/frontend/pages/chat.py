@@ -6,16 +6,84 @@ inline as expandable panels, and keeps the conversation in session_state.
 
 from __future__ import annotations
 
+import json
+import re
 from typing import Any
 
+import pandas as pd
 import streamlit as st
 
 from services.frontend.chat_client import ChatClientError, stream_chat
+from services.frontend.chart_spec import ChartSpec, parse_chart_spec
 from services.frontend.settings import get_settings
 
 st.set_page_config(page_title="ChemClaw — Chat", page_icon="💬", layout="wide")
 
 settings = get_settings()
+
+# ---------------------------------------------------------------------------
+# Chart rendering helpers
+# ---------------------------------------------------------------------------
+
+# Matches triple-backtick fenced blocks with the "chart" info string, e.g.:
+#   ```chart
+#   {"type": "bar", "x": [...], "y": [...]}
+#   ```
+_CHART_BLOCK_RE = re.compile(
+    r"```chart\s*\n(.*?)\n```",
+    re.DOTALL,
+)
+
+
+def _render_chart(spec: ChartSpec) -> None:
+    """Render a validated ``ChartSpec`` using the appropriate Streamlit chart widget."""
+    if spec.title:
+        st.caption(spec.title)
+
+    # Build a DataFrame: primary y column + any extra series.
+    data: dict[str, list[float]] = {spec.y_label or "y": spec.y}
+    for s in spec.series:
+        data[s.name] = s.values
+    df = pd.DataFrame(data, index=spec.x)
+
+    if spec.type == "bar":
+        st.bar_chart(df)
+    elif spec.type == "line":
+        st.line_chart(df)
+    elif spec.type == "scatter":
+        st.scatter_chart(df)
+
+
+def render_assistant_markdown(text: str) -> None:
+    """Render assistant text, replacing fenced ``chart`` blocks with live charts.
+
+    Any block whose JSON is invalid or whose type is unsupported is rendered as
+    a plain ``code`` block (safe fallback) so no information is lost.
+    """
+    cursor = 0
+    for m in _CHART_BLOCK_RE.finditer(text):
+        # Render any text before this block as normal markdown.
+        before = text[cursor : m.start()]
+        if before.strip():
+            st.markdown(before)
+
+        raw_json = m.group(1).strip()
+        spec = parse_chart_spec(raw_json)
+        if spec is not None:
+            _render_chart(spec)
+        else:
+            # Fallback: render as a plain code block.
+            st.code(raw_json, language="json")
+
+        cursor = m.end()
+
+    # Render any trailing text after the last chart block.
+    remainder = text[cursor:]
+    if remainder.strip():
+        st.markdown(remainder)
+    elif cursor == 0:
+        # No chart blocks were found — render the whole text as markdown.
+        st.markdown(text)
 
 
 def current_user_email() -> str:
@@ -81,7 +149,10 @@ with st.sidebar:
 # Render prior conversation.
 for msg in st.session_state.chat_messages:
     with st.chat_message(msg["role"]):
-        st.markdown(msg["content"])
+        if msg["role"] == "assistant":
+            render_assistant_markdown(msg["content"])
+        else:
+            st.markdown(msg["content"])
         tool_calls: list[dict[str, Any]] = msg.get("tool_calls") or []
         for tc in tool_calls:
             _render_tool_panel(tc)
@@ -144,7 +215,10 @@ if prompt:
             status_holder.update(label=f"Client error: {exc}", state="error")
 
         # Finalise: strip the cursor, render tool-call panels.
-        text_holder.markdown(accumulated_text or "_(no response text)_")
+        # Clear the streaming placeholder, then render the full text (which
+        # may contain fenced chart blocks) via render_assistant_markdown.
+        text_holder.empty()
+        render_assistant_markdown(accumulated_text or "_(no response text)_")
         for tc in tool_entries:
             _render_tool_panel(tc)
 
