@@ -256,6 +256,31 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # mcp-tabicl — TabICL v2 tabular in-context learning on reaction features
+  # -------------------------------------------------------------
+  mcp-tabicl:
+    container_name: chemclaw-mcp-tabicl
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_tabicl/Dockerfile
+    user: "1001:1001"
+    environment:
+      MCP_TABICL_PCA_PATH: /var/cache/mcp-tabicl/drfp_pca.json
+      MCP_TABICL_ADMIN_TOKEN: ${MCP_TABICL_ADMIN_TOKEN:-}
+    ports:
+      - "8005:8005"
+    volumes:
+      - mcp-tabicl-cache:/var/cache/mcp-tabicl
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8005/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    profiles: ["full"]
+
+  # -------------------------------------------------------------
   # LiteLLM — external-LLM egress chokepoint with redactor pre-call
   # Commented by default; uncomment after setting API keys in .env.
   # -------------------------------------------------------------
@@ -280,3 +305,4 @@ volumes:
   neo4j-data:
   neo4j-logs:
   embedder-hf-cache:
+  mcp-tabicl-cache:
