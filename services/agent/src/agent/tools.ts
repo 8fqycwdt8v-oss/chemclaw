@@ -1,13 +1,5 @@
-// Agent tool registry — every tool the autonomous ReAct loop can call.
-//
-// Control-flow philosophy: the agent is autonomous at the reasoning layer;
-// tools are the bounded vocabulary of actions it can take. This file is the
-// single source of truth for what the model can do in a turn.
-//
-// Each tool:
-//   - declares a Zod input + output schema (validates both sides)
-//   - receives per-turn context (user_entra_id etc.) via the `context` arg
-//   - routes through the same RLS / redactor / rate-limit plumbing as HTTP calls
+// Unified agent tool registry. One catalog, no modes — the agent
+// chooses which tools to invoke per request.
 
 import { createTool } from "@mastra/core/tools";
 import { z } from "zod";
@@ -18,6 +10,7 @@ import type {
   McpEmbedderClient,
   McpKgClient,
   McpRdkitClient,
+  McpTabiclClient,
 } from "../mcp-clients.js";
 import {
   FindSimilarReactionsInput,
@@ -54,6 +47,26 @@ import {
   MarkResearchDoneOutput,
   markResearchDone,
 } from "../tools/mark-research-done.js";
+import {
+  ExpandReactionContextInput,
+  ExpandReactionContextOutput,
+  expandReactionContext,
+} from "../tools/expand-reaction-context.js";
+import {
+  StatisticalAnalyzeInput,
+  StatisticalAnalyzeOutput,
+  statisticalAnalyze,
+} from "../tools/statistical-analyze.js";
+import {
+  SynthesizeInsightsInput,
+  SynthesizeInsightsOutput,
+  synthesizeInsights,
+} from "../tools/synthesize-insights.js";
+import {
+  ProposeHypothesisInput,
+  ProposeHypothesisOutput,
+  proposeHypothesis,
+} from "../tools/propose-hypothesis.js";
 
 export interface ToolContext {
   userEntraId: string;
@@ -62,20 +75,29 @@ export interface ToolContext {
   rdkit: McpRdkitClient;
   embedder: McpEmbedderClient;
   kg: McpKgClient;
-  /** Prompt version at the time of this invocation — used for audit. */
+  tabicl: McpTabiclClient;
+  /** Per-turn set of fact_ids surfaced by any tool. Mutated in place. */
+  seenFactIds: Set<string>;
+  /** Prompt version at the time of this invocation. */
   promptVersion: number;
-  /** Optional: latest user query, used by mark_research_done for the record. */
   queryText?: string;
-  /** Optional: Langfuse or OTel trace id for cross-reference. */
   agentTraceId?: string;
 }
 
 /**
- * Build the tool registry for a given request context.
- *
- * Fresh registry per chat turn so the ToolContext (particularly
- * `userEntraId`) is captured in a closure and cannot leak between users.
+ * Add a collection of fact_ids to the seen-set. Tools call this after they
+ * surface fact_ids to the model so that propose_hypothesis can later verify
+ * the agent actually saw them.
  */
+export function recordSeenFactIds(
+  ctx: ToolContext,
+  ids: Iterable<string>,
+): void {
+  for (const id of ids) {
+    if (typeof id === "string" && id.length > 0) ctx.seenFactIds.add(id);
+  }
+}
+
 export function buildTools(ctx: ToolContext) {
   const findSimilarReactionsTool = createTool({
     id: "find_similar_reactions",
@@ -87,11 +109,13 @@ export function buildTools(ctx: ToolContext) {
     outputSchema: FindSimilarReactionsOutput,
     execute: async ({ context }) => {
       const input = FindSimilarReactionsInput.parse(context);
-      return findSimilarReactions(input, {
+      const out = await findSimilarReactions(input, {
         pool: ctx.pool,
         drfp: ctx.drfp,
         userEntraId: ctx.userEntraId,
       });
+      // find_similar_reactions returns reaction_ids, not fact_ids; nothing to seed.
+      return out;
     },
   });
 
@@ -99,9 +123,7 @@ export function buildTools(ctx: ToolContext) {
     id: "canonicalize_smiles",
     description:
       "Canonicalize a SMILES string via RDKit and return its InChIKey, " +
-      "molecular formula, and molecular weight. Use when you need to verify " +
-      "structure identity, compute a canonical form, or derive an InChIKey " +
-      "for KG lookup.",
+      "molecular formula, and molecular weight.",
     inputSchema: z.object({
       smiles: z.string().min(1).max(10_000),
       kekulize: z.boolean().optional(),
@@ -113,9 +135,7 @@ export function buildTools(ctx: ToolContext) {
       mw: z.number(),
     }),
     execute: async ({ context }) => {
-      const input = z
-        .object({ smiles: z.string(), kekulize: z.boolean().optional() })
-        .parse(context);
+      const input = z.object({ smiles: z.string(), kekulize: z.boolean().optional() }).parse(context);
       return ctx.rdkit.canonicalize(input.smiles, input.kekulize ?? false);
     },
   });
@@ -124,11 +144,8 @@ export function buildTools(ctx: ToolContext) {
     id: "search_knowledge",
     description:
       "Hybrid retrieval over the document corpus (SOPs, reports, method " +
-      "validations, literature summaries). Default mode is 'hybrid' (dense " +
-      "BGE-M3 + sparse trigram, fused via Reciprocal Rank Fusion). Returns " +
-      "top-K chunks with document metadata for citation. Use this whenever " +
-      "the user's question refers to documented procedures, reports, or " +
-      "textual knowledge; prefer it over answering from memory.",
+      "validations, literature summaries). Returns top-K chunks with " +
+      "document metadata for citation.",
     inputSchema: SearchKnowledgeInput,
     outputSchema: SearchKnowledgeOutput,
     execute: async ({ context }) => {
@@ -144,11 +161,7 @@ export function buildTools(ctx: ToolContext) {
   const fetchFullDocumentTool = createTool({
     id: "fetch_full_document",
     description:
-      "Fetch the full parsed Markdown of a document by its UUID. Use this " +
-      "when a chunk from search_knowledge is relevant and you need the " +
-      "complete context (e.g., the entire SOP section, not just the " +
-      "retrieved fragment). Chunks are a finding strategy; documents are a " +
-      "reading strategy.",
+      "Fetch the full parsed Markdown of a document by its UUID.",
     inputSchema: FetchFullDocumentInput,
     outputSchema: FetchFullDocumentOutput,
     execute: async ({ context }) => {
@@ -160,36 +173,19 @@ export function buildTools(ctx: ToolContext) {
     },
   });
 
-  return {
-    find_similar_reactions: findSimilarReactionsTool,
-    canonicalize_smiles: canonicalizeSmilesTool,
-    search_knowledge: searchKnowledgeTool,
-    fetch_full_document: fetchFullDocumentTool,
-  } as const;
-}
-
-export type Tools = ReturnType<typeof buildTools>;
-
-// ---------------------------------------------------------------------------
-// DEEP RESEARCH toolkit — default toolkit plus KG + report composition.
-// ---------------------------------------------------------------------------
-export function buildDeepResearchTools(ctx: ToolContext) {
-  const base = buildTools(ctx);
-
   const queryKgTool = createTool({
     id: "query_kg",
     description:
-      "Direct knowledge-graph traversal. Given an entity reference and " +
-      "optional predicate/direction/time snapshot, returns matching facts " +
-      "with full provenance and confidence. Use this when the user asks " +
-      "about structured relationships (e.g., 'what reagents were used in " +
-      "experiment X?' or 'what did we believe about compound Y last " +
-      "January?'). For text/document questions, prefer search_knowledge.",
+      "Direct knowledge-graph traversal. Returns matching facts with full " +
+      "provenance and confidence. Use for structured relationships and " +
+      "temporal snapshots.",
     inputSchema: QueryKgInput,
     outputSchema: QueryKgOutput,
     execute: async ({ context }) => {
       const input = QueryKgInput.parse(context);
-      return queryKg(input, { kg: ctx.kg });
+      const out = await queryKg(input, { kg: ctx.kg });
+      recordSeenFactIds(ctx, (out.facts ?? []).map((f) => f.fact_id));
+      return out;
     },
   });
 
@@ -198,26 +194,34 @@ export function buildDeepResearchTools(ctx: ToolContext) {
     description:
       "Surface contradictions for a KG entity: explicit CONTRADICTS edges " +
       "and parallel currently-valid facts with the same predicate but " +
-      "different objects. Use BEFORE synthesising a claim across multiple " +
-      "sources so you can report conflicts explicitly rather than silently " +
-      "picking a winner.",
+      "different objects.",
     inputSchema: CheckContradictionsInput,
     outputSchema: CheckContradictionsOutput,
     execute: async ({ context }) => {
       const input = CheckContradictionsInput.parse(context);
-      return checkContradictions(input, { kg: ctx.kg });
+      const out = await checkContradictions(input, { kg: ctx.kg });
+      // CheckContradictions surfaces fact_ids inside its output shape.
+      const ids: string[] = [];
+      const walk = (v: unknown) => {
+        if (v && typeof v === "object") {
+          if ("fact_id" in (v as any) && typeof (v as any).fact_id === "string") {
+            ids.push((v as any).fact_id);
+          }
+          Object.values(v as Record<string, unknown>).forEach(walk);
+        }
+      };
+      walk(out);
+      recordSeenFactIds(ctx, ids);
+      return out;
     },
   });
 
   const draftSectionTool = createTool({
     id: "draft_section",
     description:
-      "Compose one section of the final report from structured inputs. " +
-      "Provide a heading, the list of citation refs you'll use, and the " +
-      "body markdown. The tool validates citation format, flags undeclared " +
-      "refs and unsourced claims, and returns the section markdown. This " +
-      "does NOT save the section — call it to format each section; call " +
-      "mark_research_done when the whole report is ready.",
+      "Compose one section of a report from structured inputs; validates " +
+      "citation format. Does NOT persist — call mark_research_done when " +
+      "the whole report is ready.",
     inputSchema: DraftSectionInput,
     outputSchema: DraftSectionOutput,
     execute: async ({ context }) => {
@@ -229,11 +233,8 @@ export function buildDeepResearchTools(ctx: ToolContext) {
   const markResearchDoneTool = createTool({
     id: "mark_research_done",
     description:
-      "TERMINAL tool. Call ONCE when the investigation is complete. Pass " +
-      "the final title, executive summary, array of sections, optional " +
-      "open_questions, optional contradictions, and optional citations. " +
-      "The report is assembled into markdown, persisted under the calling " +
-      "user, and its UUID returned. After calling this tool you are done.",
+      "TERMINAL. Assemble the final report and persist under the calling " +
+      "user. After calling this tool you are done.",
     inputSchema: MarkResearchDoneInput,
     outputSchema: MarkResearchDoneOutput,
     execute: async ({ context }) => {
@@ -248,13 +249,98 @@ export function buildDeepResearchTools(ctx: ToolContext) {
     },
   });
 
+  const expandReactionContextTool = createTool({
+    id: "expand_reaction_context",
+    description:
+      "For a given reaction_id, retrieve reagents, conditions, outcomes, " +
+      "failures (from KG), citations, and (hop_limit=2) predecessors. " +
+      "Surfaces fact_ids usable for citation by propose_hypothesis.",
+    inputSchema: ExpandReactionContextInput,
+    outputSchema: ExpandReactionContextOutput,
+    execute: async ({ context }) => {
+      const input = ExpandReactionContextInput.parse(context);
+      const out = await expandReactionContext(input, {
+        pool: ctx.pool,
+        kg: ctx.kg,
+        embedder: ctx.embedder,
+        userEntraId: ctx.userEntraId,
+      });
+      recordSeenFactIds(ctx, out.surfaced_fact_ids ?? []);
+      return out;
+    },
+  });
+
+  const statisticalAnalyzeTool = createTool({
+    id: "statistical_analyze",
+    description:
+      "Fit TabICL in-context on a supplied reaction set and answer one of: " +
+      "predict_yield_for_similar, rank_feature_importance, compare_conditions " +
+      "(the last is pure SQL aggregation, no ML).",
+    inputSchema: StatisticalAnalyzeInput,
+    outputSchema: StatisticalAnalyzeOutput,
+    execute: async ({ context }) => {
+      const input = StatisticalAnalyzeInput.parse(context);
+      return statisticalAnalyze(input, {
+        pool: ctx.pool,
+        tabicl: ctx.tabicl,
+        userEntraId: ctx.userEntraId,
+      });
+    },
+  });
+
+  const synthesizeInsightsTool = createTool({
+    id: "synthesize_insights",
+    description:
+      "Compose structured cross-project insights over a reaction set. Drops " +
+      "any fact_id the agent has not seen in this turn (hallucination guard).",
+    inputSchema: SynthesizeInsightsInput,
+    outputSchema: SynthesizeInsightsOutput,
+    execute: async ({ context }) => {
+      const input = SynthesizeInsightsInput.parse(context);
+      const out = await synthesizeInsights(input, {
+        pool: ctx.pool,
+        kg: ctx.kg,
+        embedder: ctx.embedder,
+        userEntraId: ctx.userEntraId,
+        seenFactIds: ctx.seenFactIds,
+      });
+      return out;
+    },
+  });
+
+  const proposeHypothesisTool = createTool({
+    id: "propose_hypothesis",
+    description:
+      "Non-terminal. Persist a hypothesis with ≥1 cited fact_ids. Rejects " +
+      "citations that the agent has not seen in this turn. Emits the " +
+      "hypothesis_proposed event for KG projection.",
+    inputSchema: ProposeHypothesisInput,
+    outputSchema: ProposeHypothesisOutput,
+    execute: async ({ context }) => {
+      const input = ProposeHypothesisInput.parse(context);
+      return proposeHypothesis(input, {
+        pool: ctx.pool,
+        userEntraId: ctx.userEntraId,
+        seenFactIds: ctx.seenFactIds,
+        agentTraceId: ctx.agentTraceId,
+      });
+    },
+  });
+
   return {
-    ...base,
+    search_knowledge: searchKnowledgeTool,
+    fetch_full_document: fetchFullDocumentTool,
+    canonicalize_smiles: canonicalizeSmilesTool,
+    find_similar_reactions: findSimilarReactionsTool,
     query_kg: queryKgTool,
     check_contradictions: checkContradictionsTool,
     draft_section: draftSectionTool,
     mark_research_done: markResearchDoneTool,
+    expand_reaction_context: expandReactionContextTool,
+    statistical_analyze: statisticalAnalyzeTool,
+    synthesize_insights: synthesizeInsightsTool,
+    propose_hypothesis: proposeHypothesisTool,
   } as const;
 }
 
-export type DeepResearchTools = ReturnType<typeof buildDeepResearchTools>;
+export type Tools = ReturnType<typeof buildTools>;

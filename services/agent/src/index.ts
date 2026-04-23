@@ -107,6 +107,7 @@ const chatAgent = new ChatAgent({
   rdkit: rdkitClient,
   embedder: embedderClient,
   kg: kgClient,
+  tabicl,
   prompts,
 });
 

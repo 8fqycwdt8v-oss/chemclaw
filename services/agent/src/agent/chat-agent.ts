@@ -1,13 +1,4 @@
-// Mastra-based autonomous reasoning loop.
-//
-// This is the heart of the Control Flow Philosophy: the model picks tools,
-// decides when it's done, and writes a final answer. No DAG. The Agent class
-// handles the ReAct loop internally; we just register tools + system prompt
-// + model, and the framework orchestrates.
-//
-// Streaming is surfaced via AsyncGenerator-of-chunks so the transport layer
-// (Fastify SSE) can forward to the frontend without this module knowing
-// anything about HTTP.
+// Unified autonomous ReAct loop. One prompt, one tool catalog, no modes.
 
 import { Agent } from "@mastra/core/agent";
 import type { Pool } from "pg";
@@ -20,13 +11,10 @@ import type {
   McpEmbedderClient,
   McpKgClient,
   McpRdkitClient,
+  McpTabiclClient,
 } from "../mcp-clients.js";
 import { PromptRegistry } from "./prompts.js";
-import { buildTools, buildDeepResearchTools, type ToolContext } from "./tools.js";
-
-export type ChatMode = "default" | "deep_research";
-
-// ---- wire-level shapes ----------------------------------------------------
+import { buildTools, type ToolContext } from "./tools.js";
 
 export const ChatMessageSchema = z.object({
   role: z.enum(["user", "assistant", "system"]),
@@ -34,44 +22,32 @@ export const ChatMessageSchema = z.object({
 });
 export type ChatMessage = z.infer<typeof ChatMessageSchema>;
 
+// Retained for backwards compatibility with routes/chat.ts until Task 10
+// removes it. ChatAgent no longer branches on mode — the type is kept so
+// the route file compiles unchanged.
+export type ChatMode = "default" | "deep_research";
+
 export interface ChatInvocation {
   userEntraId: string;
   messages: ChatMessage[];
+  agentTraceId?: string;
+  /** @deprecated Retained for routes/chat.ts backwards-compat until Task 10.
+   *  ChatAgent no longer branches on mode — the field is accepted and ignored. */
   mode?: ChatMode;
 }
 
-export interface ToolCallEvent {
-  type: "tool_call";
-  toolId: string;
-  input: unknown;
-}
-export interface ToolResultEvent {
-  type: "tool_result";
-  toolId: string;
-  output: unknown;
-}
-export interface TextDeltaEvent {
-  type: "text_delta";
-  delta: string;
-}
+export interface ToolCallEvent { type: "tool_call"; toolId: string; input: unknown; }
+export interface ToolResultEvent { type: "tool_result"; toolId: string; output: unknown; }
+export interface TextDeltaEvent { type: "text_delta"; delta: string; }
 export interface FinishEvent {
   type: "finish";
   finishReason: string;
   usage: { promptTokens?: number; completionTokens?: number };
   promptVersion: number;
 }
-export interface ErrorEvent {
-  type: "error";
-  error: string;
-}
+export interface ErrorEvent { type: "error"; error: string; }
 export type StreamEvent =
-  | TextDeltaEvent
-  | ToolCallEvent
-  | ToolResultEvent
-  | FinishEvent
-  | ErrorEvent;
-
-// ---- agent factory --------------------------------------------------------
+  | TextDeltaEvent | ToolCallEvent | ToolResultEvent | FinishEvent | ErrorEvent;
 
 export interface ChatAgentDeps {
   config: Config;
@@ -81,20 +57,18 @@ export interface ChatAgentDeps {
   rdkit: McpRdkitClient;
   embedder: McpEmbedderClient;
   kg: McpKgClient;
+  tabicl: McpTabiclClient;
   prompts: PromptRegistry;
 }
 
 export class ChatAgent {
   constructor(private readonly deps: ChatAgentDeps) {}
 
-  /** Non-streaming variant: run the loop to completion and return the text. */
-  async generate(
-    invocation: ChatInvocation,
-  ): Promise<{ text: string; finishReason: string; promptVersion: number }> {
+  async generate(invocation: ChatInvocation) {
     const prepared = await this._prepare(invocation);
-    const agent = this._buildAgent(prepared.systemPrompt, prepared.ctx, prepared.mode);
+    const agent = this._buildAgent(prepared.systemPrompt, prepared.ctx);
     const result = await agent.generate(invocation.messages, {
-      maxSteps: prepared.maxSteps,
+      maxSteps: this.deps.config.AGENT_CHAT_MAX_STEPS,
     });
     return {
       text: result.text ?? "",
@@ -103,43 +77,29 @@ export class ChatAgent {
     };
   }
 
-  /** Streaming variant: yields StreamEvents. Consumer serialises for SSE. */
   async *stream(invocation: ChatInvocation): AsyncGenerator<StreamEvent> {
     let promptVersion = 0;
     let sawFinish = false;
     try {
       const prepared = await this._prepare(invocation);
       promptVersion = prepared.promptVersion;
-      const agent = this._buildAgent(prepared.systemPrompt, prepared.ctx, prepared.mode);
+      const agent = this._buildAgent(prepared.systemPrompt, prepared.ctx);
       const result = await agent.stream(invocation.messages, {
-        maxSteps: prepared.maxSteps,
+        maxSteps: this.deps.config.AGENT_CHAT_MAX_STEPS,
       });
 
-      // fullStream emits a unified event sequence. We translate each to our
-      // own wire-level shape so the frontend doesn't need Mastra/AI-SDK types.
       for await (const part of result.fullStream) {
         switch (part.type) {
-          case "text-delta": {
+          case "text-delta":
             yield { type: "text_delta", delta: part.textDelta };
             break;
-          }
-          case "tool-call": {
-            yield {
-              type: "tool_call",
-              toolId: part.toolName,
-              input: part.args,
-            };
+          case "tool-call":
+            yield { type: "tool_call", toolId: part.toolName, input: part.args };
             break;
-          }
-          case "tool-result": {
-            yield {
-              type: "tool_result",
-              toolId: part.toolName,
-              output: part.result,
-            };
+          case "tool-result":
+            yield { type: "tool_result", toolId: part.toolName, output: part.result };
             break;
-          }
-          case "finish": {
+          case "finish":
             sawFinish = true;
             yield {
               type: "finish",
@@ -151,18 +111,9 @@ export class ChatAgent {
               promptVersion,
             };
             break;
-          }
-          case "error": {
-            yield {
-              type: "error",
-              error: safeErrorString(part.error),
-            };
+          case "error":
+            yield { type: "error", error: safeErrorString(part.error) };
             break;
-          }
-          // Other event types (step-start, step-finish, reasoning, etc.)
-          // are intentionally ignored at this stage — they're valuable for
-          // observability but noisy for the UI. Langfuse will capture them
-          // via OTel instrumentation in a later sprint.
           default:
             break;
         }
@@ -171,32 +122,14 @@ export class ChatAgent {
       yield { type: "error", error: safeErrorString(err) };
     } finally {
       if (!sawFinish) {
-        // Ensure the client always sees a terminal event so UIs can stop spinners.
-        yield {
-          type: "finish",
-          finishReason: "aborted",
-          usage: {},
-          promptVersion,
-        };
+        yield { type: "finish", finishReason: "aborted", usage: {}, promptVersion };
       }
     }
   }
 
-  // ---- internals ----------------------------------------------------------
-
   private async _prepare(invocation: ChatInvocation) {
-    const mode: ChatMode = invocation.mode ?? "default";
-
-    const { template: base, version: promptVersion } =
+    const { template: systemPrompt, version: promptVersion } =
       await this.deps.prompts.getActive("agent.system");
-
-    let systemPrompt = base;
-    if (mode === "deep_research") {
-      const { template: dr } = await this.deps.prompts.getActive(
-        "agent.deep_research_mode",
-      );
-      systemPrompt = `${base}\n\n---\n\n${dr}`;
-    }
 
     const ctx: ToolContext = {
       userEntraId: invocation.userEntraId,
@@ -205,32 +138,20 @@ export class ChatAgent {
       rdkit: this.deps.rdkit,
       embedder: this.deps.embedder,
       kg: this.deps.kg,
+      tabicl: this.deps.tabicl,
+      seenFactIds: new Set<string>(),
       promptVersion,
+      agentTraceId: invocation.agentTraceId,
     };
-
-    // Deep research has a larger tool-call budget — multi-step
-    // investigations need headroom. maxSteps for default mode is
-    // preserved from the original config.
-    const maxSteps =
-      mode === "deep_research"
-        ? Math.min(this.deps.config.AGENT_CHAT_MAX_STEPS * 4, 40)
-        : this.deps.config.AGENT_CHAT_MAX_STEPS;
-
-    return { systemPrompt, promptVersion, ctx, mode, maxSteps };
+    return { systemPrompt, promptVersion, ctx };
   }
 
-  private _buildAgent(
-    systemPrompt: string,
-    ctx: ToolContext,
-    mode: ChatMode,
-  ): Agent {
-    const tools =
-      mode === "deep_research" ? buildDeepResearchTools(ctx) : buildTools(ctx);
+  private _buildAgent(systemPrompt: string, ctx: ToolContext): Agent {
     return new Agent({
-      name: mode === "deep_research" ? "chemclaw-deep-research" : "chemclaw",
+      name: "chemclaw",
       instructions: systemPrompt,
       model: this.deps.llm.model(),
-      tools,
+      tools: buildTools(ctx),
     });
   }
 }
