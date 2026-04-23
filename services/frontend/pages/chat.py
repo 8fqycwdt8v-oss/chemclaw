@@ -6,7 +6,6 @@ inline as expandable panels, and keeps the conversation in session_state.
 
 from __future__ import annotations
 
-import json
 from typing import Any
 
 import streamlit as st
@@ -42,6 +41,29 @@ def _trim_history() -> None:
         ]
 
 
+def _render_tool_panel(tc: dict[str, Any]) -> None:
+    """Render a single tool-call panel, with a Hypothesis badge when applicable."""
+    tool_id: str = tc.get("toolId", "?")
+    inp: dict[str, Any] = tc.get("input") or {}
+    raw_out = tc.get("output")
+    out: dict[str, Any] = raw_out if isinstance(raw_out, dict) else {}
+
+    if tool_id == "propose_hypothesis":
+        hypothesis_id: str = str(out.get("hypothesis_id", ""))
+        short_id = hypothesis_id[:8] if hypothesis_id else "????????"
+        try:
+            confidence = float(inp.get("confidence", 0.0))
+        except (TypeError, ValueError):
+            confidence = 0.0
+        tier: str = str(out.get("confidence_tier", "unknown"))
+        st.markdown(
+            f"**Hypothesis `{short_id}` · conf={confidence:.2f} · tier={tier}**"
+        )
+
+    with st.expander(f"🔧 {tool_id}", expanded=False):
+        st.json({"input": inp, "output": raw_out})
+
+
 # ---------------------------------------------------------------------------
 
 st.title("💬 ChemClaw Chat")
@@ -62,8 +84,7 @@ for msg in st.session_state.chat_messages:
         st.markdown(msg["content"])
         tool_calls: list[dict[str, Any]] = msg.get("tool_calls") or []
         for tc in tool_calls:
-            with st.expander(f"🔧 {tc['toolId']}", expanded=False):
-                st.json({"input": tc.get("input"), "output": tc.get("output")})
+            _render_tool_panel(tc)
 
 prompt = st.chat_input("Ask about your projects, reactions, or experiments…")
 
@@ -125,8 +146,7 @@ if prompt:
         # Finalise: strip the cursor, render tool-call panels.
         text_holder.markdown(accumulated_text or "_(no response text)_")
         for tc in tool_entries:
-            with st.expander(f"🔧 {tc['toolId']}", expanded=False):
-                st.json({"input": tc.get("input"), "output": tc.get("output")})
+            _render_tool_panel(tc)
 
     st.session_state.chat_messages.append(
         {
