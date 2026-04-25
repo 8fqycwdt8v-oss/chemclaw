@@ -24,6 +24,8 @@ import { registerDeepResearchRoute } from "./routes/deep-research.js";
 import { registerSkillsRoutes } from "./routes/skills.js";
 import { registerPlanRoutes } from "./routes/plan.js";
 import { registerDocumentsRoute } from "./routes/documents.js";
+import { registerArtifactsRoutes } from "./routes/artifacts.js";
+import { registerLearnRoute } from "./routes/learn.js";
 import { PromptRegistry } from "./prompts/registry.js";
 import { loadHooks } from "./core/hook-loader.js";
 import { Lifecycle } from "./core/lifecycle.js";
@@ -142,6 +144,8 @@ registerDeepResearchRoute(app, routeDeps);
 registerSkillsRoutes(app, { loader: skillLoader });
 registerPlanRoutes(app, routeDeps);
 registerDocumentsRoute(app, { config: cfg, pool, getUser: getUser as (req: import("fastify").FastifyRequest) => string });
+registerArtifactsRoutes(app, { pool, getUser: getUser as (req: import("fastify").FastifyRequest) => string });
+registerLearnRoute(app, { pool, llm: llmProvider, getUser: getUser as (req: import("fastify").FastifyRequest) => string });
 
 app.get("/readyz", async (_req, reply) => {
   // 1. Postgres ping.
@@ -255,9 +259,17 @@ const start = async () => {
     // Load skill packs (non-fatal).
     try {
       skillLoader.load();
-      app.log.info({ count: skillLoader.size }, "skill packs loaded");
+      app.log.info({ count: skillLoader.size }, "skill packs loaded from filesystem");
     } catch (err) {
       app.log.warn({ err }, "skill loader failed — continuing without skills");
+    }
+
+    // Load DB-backed skills from skill_library (non-fatal).
+    try {
+      const dbSkillResult = await skillLoader.loadFromDb(pool);
+      app.log.info(dbSkillResult, "DB skills loaded from skill_library");
+    } catch (err) {
+      app.log.warn({ err }, "DB skill loader failed — continuing without DB skills");
     }
 
     await app.listen({ host: HOST, port: PORT });

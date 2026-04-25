@@ -1,7 +1,7 @@
 // Tests for the tag-maturity post_tool hook.
 
 import { describe, it, expect } from "vitest";
-import { stampMaturity, tagMaturityHook } from "../../src/core/hooks/tag-maturity.js";
+import { stampMaturity, tagMaturityHook, resolveMaturity } from "../../src/core/hooks/tag-maturity.js";
 import type { PostToolPayload } from "../../src/core/types.js";
 
 // ---------------------------------------------------------------------------
@@ -78,5 +78,58 @@ describe("tagMaturityHook — payload mutation", () => {
     const payload = makePayload(null);
     await tagMaturityHook(payload);
     expect(payload.output).toBeNull();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Phase C: resolveMaturity + artifactMaturity scratchpad population
+// ---------------------------------------------------------------------------
+
+describe("resolveMaturity", () => {
+  it("returns EXPLORATORY for a plain object without a maturity field", () => {
+    expect(resolveMaturity({ result: "data" })).toBe("EXPLORATORY");
+  });
+
+  it("returns WORKING when the output already has maturity=WORKING", () => {
+    expect(resolveMaturity({ maturity: "WORKING" })).toBe("WORKING");
+  });
+
+  it("returns FOUNDATION when the output already has maturity=FOUNDATION", () => {
+    expect(resolveMaturity({ maturity: "FOUNDATION" })).toBe("FOUNDATION");
+  });
+
+  it("returns EXPLORATORY for null", () => {
+    expect(resolveMaturity(null)).toBe("EXPLORATORY");
+  });
+});
+
+describe("tagMaturityHook — Phase C scratchpad population", () => {
+  it("creates the artifactMaturity map in scratchpad if absent", async () => {
+    const seenFactIds = new Set<string>();
+    const scratchpad = new Map<string, unknown>([["seenFactIds", seenFactIds]]);
+    const payload: PostToolPayload = {
+      ctx: { userEntraId: "test@example.com", scratchpad, seenFactIds },
+      toolId: "propose_hypothesis",
+      input: {},
+      output: { hypothesis_id: "h-001", confidence: 0.8 },
+    };
+    // No pool — artifact DB write is skipped; map should still be created.
+    await tagMaturityHook(payload);
+    const maturityMap = scratchpad.get("artifactMaturity");
+    expect(maturityMap).toBeInstanceOf(Map);
+  });
+
+  it("records hypothesis_id in the artifactMaturity map", async () => {
+    const seenFactIds = new Set<string>();
+    const scratchpad = new Map<string, unknown>([["seenFactIds", seenFactIds]]);
+    const payload: PostToolPayload = {
+      ctx: { userEntraId: "test@example.com", scratchpad, seenFactIds },
+      toolId: "propose_hypothesis",
+      input: {},
+      output: { hypothesis_id: "hyp-abc-123", confidence: 0.7 },
+    };
+    await tagMaturityHook(payload);
+    const maturityMap = scratchpad.get("artifactMaturity") as Map<string, string>;
+    expect(maturityMap.get("hyp-abc-123")).toBe("EXPLORATORY");
   });
 });

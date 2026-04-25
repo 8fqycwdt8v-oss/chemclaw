@@ -162,14 +162,14 @@ describe("shortCircuitResponse", () => {
     expect(r).toContain("skills");
   });
 
-  it("/check returns Phase C placeholder", () => {
+  it("/check returns a confidence ensemble message", () => {
     const r = shortCircuitResponse("check");
-    expect(r).toContain("Phase C");
+    expect(r).toContain("confidence");
   });
 
-  it("/learn returns Phase C placeholder", () => {
+  it("/learn returns a skill induction message", () => {
     const r = shortCircuitResponse("learn");
-    expect(r).toContain("Phase C");
+    expect(r).toContain("skill");
   });
 
   it("returns null for feedback (needs DB work)", () => {

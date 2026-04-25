@@ -68,7 +68,7 @@ class ChunkEmbedderProjector(BaseProjector):
             async with conn.cursor() as cur:
                 await cur.execute(
                     """
-                    SELECT id::text AS id, text
+                    SELECT id::text AS id, text, contextual_prefix
                       FROM document_chunks
                      WHERE document_id = %s::uuid
                        AND embedding IS NULL
@@ -85,7 +85,14 @@ class ChunkEmbedderProjector(BaseProjector):
             total = 0
             for batch_start in range(0, len(rows), _BATCH_SIZE):
                 batch = rows[batch_start : batch_start + _BATCH_SIZE]
-                inputs = [r["text"] for r in batch]
+                # Phase C.2: if contextual_prefix is set, prepend it to the chunk text
+                # before embedding. Backward compat: chunks without prefix embed as before.
+                inputs = [
+                    (r["contextual_prefix"] + "\n\n" + r["text"])
+                    if r.get("contextual_prefix")
+                    else r["text"]
+                    for r in batch
+                ]
                 try:
                     vectors = await self._embed(inputs)
                 except _BadChunkError as exc:

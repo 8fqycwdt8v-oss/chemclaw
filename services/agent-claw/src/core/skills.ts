@@ -6,11 +6,16 @@
 //   - prepend active skills' prompt.md bodies to the system prompt.
 //   - filter the tool catalog to the union of active skills' tools + always-on baseline.
 //
+// Phase C: also loads DB-backed skills from skill_library WHERE active=true.
+// Priority: filesystem skills ALWAYS win. DB skills with a conflicting name+version
+// are hidden and logged.
+//
 // If no skills are active, all registered tools remain available (current default).
 
 import { readFileSync, readdirSync, existsSync } from "fs";
 import { join, resolve } from "path";
 import yaml from "js-yaml";
+import type { Pool } from "pg";
 import type { Tool } from "../tools/tool.js";
 
 // ---------------------------------------------------------------------------
@@ -255,6 +260,74 @@ export class SkillLoader {
     }
 
     return allTools.filter((t) => allowed.has(t.id));
+  }
+
+  /**
+   * Load active skills from the skill_library DB table (Phase C.3).
+   *
+   * Rules:
+   *   - Only rows WHERE active=true are loaded.
+   *   - Filesystem skills (from load()) ALWAYS win: if a DB skill has the same
+   *     `name` as a filesystem skill, the DB skill is silently skipped.
+   *   - kind='forged_tool' rows are loaded but have no tools list (Phase D fills them).
+   *
+   * Non-fatal: DB errors are caught and logged; the in-process skill catalog
+   * continues to function with filesystem skills only.
+   */
+  async loadFromDb(pool: Pool): Promise<{ loaded: number; hidden: number }> {
+    let rows: Array<{
+      id: string;
+      name: string;
+      prompt_md: string;
+      kind: string;
+      version: number;
+    }>;
+
+    try {
+      const result = await pool.query<{
+        id: string;
+        name: string;
+        prompt_md: string;
+        kind: string;
+        version: number;
+      }>(
+        `SELECT id::text AS id, name, prompt_md, kind, version
+           FROM skill_library
+          WHERE active = true
+          ORDER BY name, version DESC`,
+      );
+      rows = result.rows;
+    } catch {
+      // DB unavailable — silently return; filesystem skills still work.
+      return { loaded: 0, hidden: 0 };
+    }
+
+    let loaded = 0;
+    let hidden = 0;
+
+    for (const row of rows) {
+      // Sanitize name: lowercase, replace non-alphanumeric with underscore.
+      const safeId = row.name.toLowerCase().replace(/[^a-z0-9_]/g, "_");
+
+      // Filesystem skills win: skip if already registered under this id.
+      if (this._skills.has(safeId)) {
+        hidden++;
+        continue;
+      }
+
+      const skill: Skill = {
+        id: safeId,
+        description: `DB-backed skill: ${row.name} (v${row.version})`,
+        version: row.version,
+        tools: [], // DB skills don't restrict tools unless Phase D sets scripts_path
+        promptBody: row.prompt_md,
+      };
+
+      this._skills.set(safeId, skill);
+      loaded++;
+    }
+
+    return { loaded, hidden };
   }
 
   /**

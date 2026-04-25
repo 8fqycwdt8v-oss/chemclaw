@@ -150,9 +150,13 @@ export function shortCircuitResponse(verb: string): string | null {
       // This fallback fires only if the route doesn't handle it first.
       return "Use /skills list, /skills enable <id>, or /skills disable <id>.";
     case "check":
-      return "(confidence ensemble lands in Phase C)";
+      // Phase C: /check is handled by the route (needs the last artifact_id).
+      // This fallback fires only when the route doesn't intercept first.
+      return "Use /check to run the confidence ensemble on the last response.";
     case "learn":
-      return "(skill induction lands in Phase C)";
+      // Phase C: /learn is handled by the route (needs DB + LLM).
+      // This fallback fires only when the route doesn't intercept first.
+      return "Use /learn <title> to induce a reusable skill from the last turn.";
     default:
       return null;
   }

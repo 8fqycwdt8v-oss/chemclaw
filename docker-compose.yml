@@ -231,6 +231,32 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # contextual_chunker — semantic uplift projector (Phase C.2)
+  # -------------------------------------------------------------
+  contextual-chunker:
+    build:
+      context: .
+      dockerfile: services/projectors/contextual_chunker/Dockerfile
+    container_name: chemclaw-contextual-chunker
+    restart: unless-stopped
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${POSTGRES_USER:-chemclaw}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-chemclaw-dev-master-change-me}
+      CONTEXT_MODEL: ${CONTEXT_MODEL:-claude-haiku-4-5}
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # reaction_vectorizer — DRFP projector
   # -------------------------------------------------------------
   reaction-vectorizer:

@@ -273,6 +273,82 @@ No tool calls execute during plan mode — only after approval.
 
 ---
 
+## Memory tiers (Phase C)
+
+ChemClaw implements the four CoALA memory tiers to maintain coherent long-horizon reasoning.
+
+### Working memory (compactor)
+
+The context window is compacted when the projected token count exceeds **60% of `AGENT_TOKEN_BUDGET`**.
+The system prompt and the **3 most-recent turns** are always preserved intact. Older turns are
+summarized into a single synopsis system message: `"Earlier in this conversation: ..."`.
+The synopsis preserves all entity IDs, fact_ids, reaction IDs, and decisions.
+This fires at the `pre_compact` lifecycle hook; the harness replaces the message window on the next step.
+
+### Episodic memory (session context)
+
+Each turn's `seenFactIds` set accumulates all fact IDs returned by tools. The anti-fabrication
+guard enforces that `propose_hypothesis` only cites IDs the agent has actually seen this turn.
+This guard persists across compaction — the `seenFactIds` scratchpad is independent of the
+compressed message window.
+
+### Semantic memory (contextual chunks)
+
+The `contextual_chunker` projector enriches every document chunk with a **50–100-token
+contextual prefix**: "Given the document title and surrounding sections, write 1-3 sentences
+that situate this chunk." The prefix is stored in `document_chunks.contextual_prefix` and
+prepended to the chunk text before BGE-M3 embedding, improving retrieval precision.
+For PDF documents, `document_chunks.page_number` records the 1-indexed page number for provenance.
+
+### Procedural memory (skill library)
+
+Successful turns can be distilled into reusable skills via `/learn <title>`. The skill is
+persisted to the `skill_library` table as an LLM-induced 200-word Markdown prompt. Skills
+enter a **7-day shadow period** (`shadow_until`) before Phase E's optimizer can promote them
+to `active=true`. Active DB-backed skills are loaded at startup and merged with the filesystem
+skill catalog (filesystem skills always win on name conflicts).
+
+---
+
+## Maturity-tier policy enforcement
+
+Every tool output is tagged `EXPLORATORY` at first stamp. Tiers promote through explicit action:
+
+| Tier | How to reach it |
+|---|---|
+| `EXPLORATORY` | Default — any newly returned tool output. |
+| `WORKING` | User clicks "Promote to WORKING" in the Streamlit UI (or `POST /api/artifacts/:id/maturity`). |
+| `FOUNDATION` | High evidence, contradiction-checked. Promotion via the same endpoint. |
+
+The **foundation-citation-guard** pre_tool hook rejects any tool call that:
+1. Sets `maturity_tier: "FOUNDATION"` in its input, AND
+2. Cites any artifact that is currently tagged `EXPLORATORY`.
+
+This prevents low-evidence claims from being laundered into FOUNDATION-tier assertions in a
+single turn. If the guard fires, re-plan: either gather more evidence (promote existing artifacts
+to WORKING/FOUNDATION first) or lower the claim tier.
+
+Artifact rows are written to the `artifacts` table by the `tag-maturity` post_tool hook for
+the following tools: `propose_hypothesis`, `synthesize_insights`, `draft_section`,
+`mark_research_done`, `dispatch_sub_agent`, `check_contradictions`, `compute_confidence_ensemble`.
+
+---
+
+## Confidence ensemble
+
+Use `/check` to run the confidence ensemble on the most recent artifact. Three signals are composed:
+
+| Signal | Weight | Notes |
+|---|---|---|
+| Verbalized self-uncertainty | 0.4 | Read from the `confidence` field of the tool output. |
+| Cross-model agreement | 0.3 | Jaccard on fact_ids from a second model sample. Off by default (Phase E). |
+| Bayesian posterior | 0.3 | Beta-Binomial posterior from KG prior counts (if provided). |
+
+The `compute_confidence_ensemble` tool computes and persists the ensemble to `artifacts.confidence_ensemble`.
+Use it when evidence quality is uncertain or when the user asks "how confident are you?".
+
+---
+
 ## What the agent must never do
 
 - Fabricate a `fact_id`, `reaction_id`, document UUID, or compound code.
@@ -284,4 +360,4 @@ No tool calls execute during plan mode — only after approval.
 
 ---
 
-*Last updated: Phase B.3. Added Skills section (4 packs: retro, qc, deep_research, cross_learning), sub-agent spawner (`dispatch_sub_agent`), `analyze_csv`, plan-mode SSE events (`plan_step` / `plan_ready`), and `/retro` / `/qc` slash verbs. Phase C next: memory tiers, maturity promotion, confidence ensembles.*
+*Last updated: Phase C. Added Memory tiers section (working/episodic/semantic/procedural), maturity-tier policy enforcement, confidence ensemble documentation. New tools: `compute_confidence_ensemble`. New routes: `POST /api/artifacts/:id/maturity`, `GET /api/artifacts/:id`, `POST /api/learn`. New projector: `contextual_chunker`. Phase D next: E2B sandbox + forged-tool integration (`kind='forged_tool'` column is forward-compat).*

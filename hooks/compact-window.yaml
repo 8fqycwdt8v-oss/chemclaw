@@ -1,0 +1,21 @@
+# compact-window — pre_compact hook (Phase C.1)
+#
+# Fires at the pre_compact lifecycle point. Summarizes older turns in the
+# context window into a single synopsis message when the token estimate
+# exceeds 60% of AGENT_TOKEN_BUDGET.
+#
+# The hook is registered programmatically via registerCompactWindowHook()
+# (services/agent-claw/src/core/hooks/compact-window.ts) rather than via
+# the generic YAML hook loader, because it needs the LLM provider injected.
+# This YAML descriptor documents the hook for operators and monitoring.
+
+point: pre_compact
+name: compact-window
+description: >
+  Haiku-class summarizer that fires when projected token count exceeds
+  60% of AGENT_TOKEN_BUDGET. Leaves the system prompt + 3 most-recent
+  turns intact; summarizes older turns into a synopsis message.
+config:
+  trigger_fraction: 0.60
+  recent_keep: 3
+  synopsis_max_words: 200
