@@ -9,15 +9,22 @@ Phase B.3 additions:
 - "Open original" button on citations that have source_kind in
   {'document_chunk', 'original_doc'} with a document_id.
 - Slash autocomplete hint below the input (static list; Streamlit limitation).
+
+Phase D.2 additions:
+- "View trace" link under each assistant turn → Langfuse UI at LANGFUSE_HOST/trace/<id>.
+- Thumbs-up / thumbs-down feedback buttons under each assistant turn.
+- "Promote to WORKING" button also fires a Langfuse score (best-effort).
 """
 
 from __future__ import annotations
 
 import json
+import logging
 import re
 from typing import Any
 
 import pandas as pd
+import requests
 import streamlit as st
 
 from services.frontend.chat_client import ChatClientError, stream_chat
@@ -30,6 +37,8 @@ from services.frontend.skill_client import (
     list_skills,
     reject_plan,
 )
+
+_log = logging.getLogger(__name__)
 
 st.set_page_config(page_title="ChemClaw — Chat", page_icon="💬", layout="wide")
 
@@ -108,6 +117,46 @@ def current_user_email() -> str:
     if settings.chemclaw_dev_mode:
         return settings.chemclaw_dev_user_email
     return st.session_state.get("user_email", "unknown@local.test")
+
+
+# ---------------------------------------------------------------------------
+# Langfuse trace link helper (Phase D.2)
+# ---------------------------------------------------------------------------
+
+def _langfuse_trace_url(trace_id: str) -> str | None:
+    """Return a Langfuse UI URL for a trace, or None if LANGFUSE_HOST is unset."""
+    host = settings.langfuse_host
+    if not host:
+        return None
+    return f"{host.rstrip('/')}/trace/{trace_id}"
+
+
+# ---------------------------------------------------------------------------
+# Feedback helper (Phase D.2)
+# ---------------------------------------------------------------------------
+
+def _post_feedback(
+    trace_id: str | None,
+    signal: str,
+    reason: str | None = None,
+) -> bool:
+    """POST /api/feedback to the agent service. Returns True on success."""
+    agent_url = settings.resolved_agent_base_url
+    try:
+        payload: dict[str, Any] = {"signal": signal}
+        if trace_id:
+            payload["trace_id"] = trace_id
+        if reason:
+            payload["reason"] = reason
+        resp = requests.post(
+            f"{agent_url}/api/feedback",
+            json=payload,
+            timeout=5,
+        )
+        return resp.ok
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("feedback post failed: %s", exc)
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -194,6 +243,53 @@ def _render_tool_panel(tc: dict[str, Any]) -> None:
                 doc_id = cit.get("source_id") or inp.get("document_id")
                 if doc_id:
                     _render_citation_download(str(doc_id))
+
+
+# ---------------------------------------------------------------------------
+# Trace + feedback footer (Phase D.2)
+# ---------------------------------------------------------------------------
+
+def _render_turn_footer(
+    turn_idx: int,
+    trace_id: str | None,
+) -> None:
+    """Render 'View trace' link and thumbs feedback buttons under an assistant turn."""
+    cols = st.columns([3, 1, 1])
+
+    with cols[0]:
+        if trace_id:
+            trace_url = _langfuse_trace_url(trace_id)
+            if trace_url:
+                st.markdown(
+                    f"[View trace ↗]({trace_url})",
+                    unsafe_allow_html=False,
+                )
+
+    with cols[1]:
+        if st.button(
+            "👍",
+            key=f"fb_up_{turn_idx}",
+            help="This response was helpful",
+            use_container_width=True,
+        ):
+            ok = _post_feedback(trace_id, "up", "user thumbs-up")
+            if ok:
+                st.toast("Feedback recorded (👍)")
+            else:
+                st.toast("Could not reach agent service", icon="⚠️")
+
+    with cols[2]:
+        if st.button(
+            "👎",
+            key=f"fb_down_{turn_idx}",
+            help="This response was not helpful",
+            use_container_width=True,
+        ):
+            ok = _post_feedback(trace_id, "down", "user thumbs-down")
+            if ok:
+                st.toast("Feedback recorded (👎)")
+            else:
+                st.toast("Could not reach agent service", icon="⚠️")
 
 
 # ---------------------------------------------------------------------------
@@ -300,7 +396,7 @@ if st.session_state.active_plan:
     st.divider()
 
 # Render prior conversation.
-for msg in st.session_state.chat_messages:
+for _turn_idx, msg in enumerate(st.session_state.chat_messages):
     with st.chat_message(msg["role"]):
         if msg["role"] == "assistant":
             render_assistant_markdown(msg["content"])
@@ -309,6 +405,11 @@ for msg in st.session_state.chat_messages:
         tool_calls: list[dict[str, Any]] = msg.get("tool_calls") or []
         for tc in tool_calls:
             _render_tool_panel(tc)
+        if msg["role"] == "assistant":
+            _render_turn_footer(
+                turn_idx=_turn_idx,
+                trace_id=msg.get("trace_id"),
+            )
 
 prompt = st.chat_input("Ask about your projects, reactions, or experiments…")
 
@@ -320,6 +421,7 @@ if prompt:
         st.markdown(prompt)
 
     # Prepare the assistant reply placeholder.
+    current_agent_trace_id: str | None = None
     with st.chat_message("assistant"):
         text_holder = st.empty()
         status_holder = st.status("Thinking…", expanded=False)
@@ -371,6 +473,9 @@ if prompt:
                         st.write(f"Plan ready ({len(evt.get('steps', []))} steps).")
                 elif etype == "finish":
                     finish_reason = evt.get("finishReason", "stop")
+                    # Capture trace_id if included in finish event.
+                    if evt.get("trace_id"):
+                        current_agent_trace_id = str(evt["trace_id"])
                     status_holder.update(label=f"Done ({finish_reason}).", state="complete")
                 elif etype == "error":
                     status_holder.update(
@@ -391,11 +496,19 @@ if prompt:
         if plan_ready_payload:
             _render_plan_panel(plan_ready_payload)
 
+        # Phase D.2: trace link + feedback buttons under the current turn.
+        current_turn_idx = len(st.session_state.chat_messages)  # before append
+        _render_turn_footer(
+            turn_idx=current_turn_idx,
+            trace_id=current_agent_trace_id,
+        )
+
     st.session_state.chat_messages.append(
         {
             "role": "assistant",
             "content": accumulated_text,
             "tool_calls": tool_entries,
+            "trace_id": current_agent_trace_id,
         }
     )
     _trim_history()

@@ -415,7 +415,73 @@ propose a name, schemas, and at least 2 test cases before invoking `forge_tool`.
 
 ---
 
-*Last updated: Phase D.1. Added Tool forging section (forge_tool, run_program, E2B sandbox).
-New tools: `run_program`, `forge_tool`. New slash verb: `/forge`. New DB migration: `08_forged_tools.sql`.
-Registry extended with `source='forged'` support. mcp_doc_fetcher extended with `/byte_offset_to_page`.
-Phase D.2 next: Paperclip-lite scope, Langfuse compose entry, multi-model routing.*
+---
+
+## Observability and budgets (Phase D.2)
+
+### Traces → Langfuse
+
+Every chat turn emits an OpenTelemetry root span (`chat_turn:<trace_id>`) via
+`services/agent-claw/src/observability/otel.ts`. Tool calls are child spans of the root.
+Sub-agent spawns are child spans of the parent turn's span. Spans export to
+Langfuse via OTLP HTTP when `LANGFUSE_HOST` is set (`--profile observability`
+in `docker compose`). The Langfuse dashboard is at `LANGFUSE_HOST` (default
+`http://localhost:3000`). Each assistant turn in the Streamlit UI includes a
+"View trace" link.
+
+### Costs → Paperclip-lite
+
+The Paperclip-lite sidecar (`services/paperclip/`, port 3200) enforces:
+- Per-user concurrency limit (default 4 concurrent turns).
+- Per-turn token budget (default 80 000 tokens).
+- Per-day USD budget (default $25/user).
+
+The harness calls `POST /reserve` at turn start and `POST /release` at turn end.
+A `setInterval` heartbeat fires every 30s per active session. When `PAPERCLIP_URL`
+is unset, the harness falls back to local-only budget (`core/budget.ts`).
+Returns 429 with `Retry-After` when any limit is exceeded.
+
+### Feedback → `feedback_events` + Langfuse
+
+`/feedback up|down "<reason>"` (slash verb) and `POST /api/feedback` (Streamlit
+thumbs buttons) write a row to the `feedback_events` table (scoped by RLS to the
+calling user). Each feedback write also emits a Langfuse `user_feedback` score
+(value 1 for up, 0 for down) on the associated trace. Score emission is
+best-effort — failure is logged, not surfaced.
+
+The Phase E DSPy GEPA optimizer consumes `feedback_events` rows nightly to
+generate candidate prompt updates.
+
+### Model routing by role
+
+The LiteLLM provider selects the model based on the call-site role:
+
+| Role | Alias | Model |
+|---|---|---|
+| `planner` | `planner` (LiteLLM alias) | `claude-opus-4-7` |
+| `executor` | `executor` | `claude-sonnet-4-7` |
+| `compactor` | `compactor` | `claude-haiku-4-5` |
+| `judge` | `judge` | `claude-haiku-4-5` |
+
+Roles are set by the harness:
+- Plan-mode generation: `role='planner'`.
+- Normal tool-call steps: `role='executor'`.
+- Working-memory compaction: `role='compactor'`.
+- Cross-model confidence check: `role='judge'`.
+
+Override aliases via `AGENT_MODEL_PLANNER`, `AGENT_MODEL_EXECUTOR`,
+`AGENT_MODEL_COMPACTOR`, `AGENT_MODEL_JUDGE` env vars.
+
+### Cross-model agreement (confidence signal 2)
+
+When `AGENT_CONFIDENCE_CROSS_MODEL=true`, the confidence ensemble calls the
+`judge` role (Haiku-class, temperature 0) to rate the internal consistency of
+each answer on a 0-1 scale. The score is stored as `cross_model` in
+`artifacts.confidence_ensemble`. Off by default in dev to keep costs low.
+
+---
+
+*Last updated: Phase D.2. Paperclip-lite sidecar, Langfuse self-hosted compose
+entry, OTel spans, multi-model routing, cross-model agreement, POST /api/feedback,
+Streamlit feedback buttons + trace links. Phase E next: DSPy GEPA self-improvement
+loop consuming Langfuse traces + feedback_events.*

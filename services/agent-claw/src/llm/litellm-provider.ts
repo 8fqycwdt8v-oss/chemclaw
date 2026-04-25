@@ -15,7 +15,7 @@
 import { createOpenAI } from "@ai-sdk/openai";
 import { generateText, streamText } from "ai";
 import type { Config } from "../config.js";
-import type { LlmProvider, LlmResponse, StreamChunk } from "./provider.js";
+import type { LlmProvider, LlmResponse, ModelRole, StreamChunk } from "./provider.js";
 import type { Message } from "../core/types.js";
 import type { Tool } from "../tools/tool.js";
 import type { CoreMessage, CoreTool } from "ai";
@@ -67,26 +67,50 @@ function toAiSdkTools(tools: Tool[]): Record<string, CoreTool> {
 // LiteLLMProvider
 // ---------------------------------------------------------------------------
 
+// ---------------------------------------------------------------------------
+// Role → model ID mapping
+// ---------------------------------------------------------------------------
+
+type RoleModelMap = {
+  [K in ModelRole]: string;
+};
+
 export class LiteLLMProvider implements LlmProvider {
   private readonly _factory: ReturnType<typeof createOpenAI>;
-  private readonly _modelId: string;
+  private readonly _defaultModelId: string;
+  private readonly _roleMap: RoleModelMap;
 
-  constructor(cfg: Pick<Config, "LITELLM_BASE_URL" | "LITELLM_API_KEY" | "AGENT_MODEL">) {
+  constructor(cfg: Pick<Config,
+    "LITELLM_BASE_URL" | "LITELLM_API_KEY" | "AGENT_MODEL" |
+    "AGENT_MODEL_PLANNER" | "AGENT_MODEL_EXECUTOR" | "AGENT_MODEL_COMPACTOR" | "AGENT_MODEL_JUDGE"
+  >) {
     this._factory = createOpenAI({
       baseURL: `${cfg.LITELLM_BASE_URL.replace(/\/$/, "")}/v1`,
       apiKey: cfg.LITELLM_API_KEY,
       // Avoid sending the optional `OpenAI-Organization` header.
       compatibility: "compatible",
     });
-    this._modelId = cfg.AGENT_MODEL;
+    this._defaultModelId = cfg.AGENT_MODEL;
+    this._roleMap = {
+      planner: cfg.AGENT_MODEL_PLANNER,
+      executor: cfg.AGENT_MODEL_EXECUTOR,
+      compactor: cfg.AGENT_MODEL_COMPACTOR,
+      judge: cfg.AGENT_MODEL_JUDGE,
+    };
   }
 
-  async call(messages: Message[], tools: Tool[]): Promise<LlmResponse> {
+  /** Resolve a model ID from an optional role. Defaults to AGENT_MODEL. */
+  private _resolveModel(role?: ModelRole): string {
+    if (!role) return this._defaultModelId;
+    return this._roleMap[role] ?? this._defaultModelId;
+  }
+
+  async call(messages: Message[], tools: Tool[], role?: ModelRole): Promise<LlmResponse> {
     const sdkMessages = toAiSdkMessages(messages);
     const sdkTools = tools.length > 0 ? toAiSdkTools(tools) : undefined;
 
     const result = await generateText({
-      model: this._factory(this._modelId),
+      model: this._factory(this._resolveModel(role)),
       messages: sdkMessages,
       tools: sdkTools,
       maxTokens: 4_096,
@@ -133,12 +157,13 @@ export class LiteLLMProvider implements LlmProvider {
   async *streamCompletion(
     messages: Message[],
     tools: Tool[],
+    role?: ModelRole,
   ): AsyncIterable<StreamChunk> {
     const sdkMessages = toAiSdkMessages(messages);
     const sdkTools = tools.length > 0 ? toAiSdkTools(tools) : undefined;
 
     const result = streamText({
-      model: this._factory(this._modelId),
+      model: this._factory(this._resolveModel(role)),
       messages: sdkMessages,
       tools: sdkTools,
       maxTokens: 4_096,
@@ -185,9 +210,9 @@ export class LiteLLMProvider implements LlmProvider {
    * Sends system + user messages and JSON.parses the response text.
    * Used for structured-output tasks (plan-mode previews, hypothesis drafts, etc.)
    */
-  async completeJson(opts: { system: string; user: string }): Promise<unknown> {
+  async completeJson(opts: { system: string; user: string; role?: ModelRole }): Promise<unknown> {
     const result = await generateText({
-      model: this._factory(this._modelId),
+      model: this._factory(this._resolveModel(opts.role)),
       system: opts.system,
       messages: [{ role: "user", content: opts.user }],
       maxTokens: 4_000,

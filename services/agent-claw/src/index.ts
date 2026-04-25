@@ -26,7 +26,9 @@ import { registerPlanRoutes } from "./routes/plan.js";
 import { registerDocumentsRoute } from "./routes/documents.js";
 import { registerArtifactsRoutes } from "./routes/artifacts.js";
 import { registerLearnRoute } from "./routes/learn.js";
+import { registerFeedbackRoute } from "./routes/feedback.js";
 import { PromptRegistry } from "./prompts/registry.js";
+import { initTracer } from "./observability/otel.js";
 import { loadHooks } from "./core/hook-loader.js";
 import { Lifecycle } from "./core/lifecycle.js";
 import { SkillLoader } from "./core/skills.js";
@@ -36,6 +38,11 @@ import { SkillLoader } from "./core/skills.js";
 // ---------------------------------------------------------------------------
 
 const cfg = loadConfig();
+
+// Initialize OTel tracer — must be called before any routes.
+initTracer({
+  langfuseHost: cfg.LANGFUSE_HOST,
+});
 
 const PORT = cfg.AGENT_PORT;
 const HOST = cfg.AGENT_HOST;
@@ -100,7 +107,15 @@ await app.register(rateLimit, {
 // ---------------------------------------------------------------------------
 
 const pool = createPool(cfg);
-const llmProvider = new LiteLLMProvider(cfg);
+const llmProvider = new LiteLLMProvider({
+  LITELLM_BASE_URL: cfg.LITELLM_BASE_URL,
+  LITELLM_API_KEY: cfg.LITELLM_API_KEY,
+  AGENT_MODEL: cfg.AGENT_MODEL,
+  AGENT_MODEL_PLANNER: cfg.AGENT_MODEL_PLANNER,
+  AGENT_MODEL_EXECUTOR: cfg.AGENT_MODEL_EXECUTOR,
+  AGENT_MODEL_COMPACTOR: cfg.AGENT_MODEL_COMPACTOR,
+  AGENT_MODEL_JUDGE: cfg.AGENT_MODEL_JUDGE,
+});
 const registry = new ToolRegistry();
 const promptRegistry = new PromptRegistry(pool);
 const lifecycle = new Lifecycle();
@@ -146,6 +161,13 @@ registerPlanRoutes(app, routeDeps);
 registerDocumentsRoute(app, { config: cfg, pool, getUser: getUser as (req: import("fastify").FastifyRequest) => string });
 registerArtifactsRoutes(app, { pool, getUser: getUser as (req: import("fastify").FastifyRequest) => string });
 registerLearnRoute(app, { pool, llm: llmProvider, getUser: getUser as (req: import("fastify").FastifyRequest) => string });
+registerFeedbackRoute(app, {
+  pool,
+  getUser: getUser as (req: import("fastify").FastifyRequest) => string,
+  langfuseHost: cfg.LANGFUSE_HOST,
+  langfusePublicKey: cfg.LANGFUSE_PUBLIC_KEY,
+  langfuseSecretKey: cfg.LANGFUSE_SECRET_KEY,
+});
 
 app.get("/readyz", async (_req, reply) => {
   // 1. Postgres ping.

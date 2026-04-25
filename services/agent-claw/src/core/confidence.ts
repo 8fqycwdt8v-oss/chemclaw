@@ -60,8 +60,56 @@ export function extractVerbalizedConfidence(output: unknown): number | null {
 }
 
 // ---------------------------------------------------------------------------
-// Signal 2: Cross-model agreement
+// Signal 2: Cross-model agreement — Phase D.2 real implementation
 // ---------------------------------------------------------------------------
+
+/**
+ * Cross-model agreement check using the 'judge' role (Haiku-class).
+ *
+ * Sends the answer text to the judge model at temperature 0 and asks it to
+ * rate how well-grounded / internally consistent the answer is on a 0-1 scale.
+ * Returns the numeric agreement score.
+ *
+ * Gate: only called when `AGENT_CONFIDENCE_CROSS_MODEL=true` (off by default).
+ *
+ * @param text - The answer text to evaluate (typically the assistant's last response).
+ * @param llm  - LlmProvider used for the judge call.
+ * @returns agreement score [0,1] or null on failure.
+ */
+export async function crossModelAgreement(
+  text: string,
+  llm: CrossModelLlmProvider,
+): Promise<number | null> {
+  try {
+    const result = await llm.completeJson({
+      system:
+        "You are a scientific accuracy judge. Rate the internal consistency " +
+        "and factual grounding of the provided answer on a scale from 0 to 1. " +
+        "0 means highly inconsistent or fabricated; 1 means well-grounded and consistent. " +
+        'Return ONLY valid JSON: {"agreement": <number between 0 and 1>}',
+      user: `Answer to evaluate:\n${text.slice(0, 2_000)}`,
+      role: "judge",
+    });
+
+    if (
+      result !== null &&
+      typeof result === "object" &&
+      !Array.isArray(result) &&
+      typeof (result as Record<string, unknown>)["agreement"] === "number"
+    ) {
+      const score = (result as Record<string, unknown>)["agreement"] as number;
+      if (score >= 0 && score <= 1) return Math.round(score * 1000) / 1000;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/** Minimal interface the cross-model checker requires from the LLM provider. */
+export interface CrossModelLlmProvider {
+  completeJson(opts: { system: string; user: string; role?: "judge" }): Promise<unknown>;
+}
 
 /**
  * Extract fact_ids from a tool output (top-level `fact_ids` array or

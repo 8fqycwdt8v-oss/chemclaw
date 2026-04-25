@@ -90,6 +90,38 @@ const ConfigSchema = z.object({
 
   // Path on disk where forged tool Python files are written.
   FORGED_TOOLS_DIR: z.string().default("/var/lib/chemclaw/forged_tools"),
+
+  // ---------------------------------------------------------------------------
+  // Paperclip-lite sidecar (Phase D.2).
+  // When unset, the harness falls back to local-only budget (core/budget.ts).
+  // ---------------------------------------------------------------------------
+  PAPERCLIP_URL: z.string().url().optional(),
+
+  // ---------------------------------------------------------------------------
+  // Langfuse observability (Phase D.2).
+  // When unset, spans are no-ops.
+  // ---------------------------------------------------------------------------
+  LANGFUSE_HOST: z.string().url().optional(),
+  LANGFUSE_PUBLIC_KEY: z.string().optional(),
+  LANGFUSE_SECRET_KEY: z.string().optional(),
+
+  // ---------------------------------------------------------------------------
+  // Multi-model routing (Phase D.2).
+  // Each role maps to a LiteLLM model alias.
+  // ---------------------------------------------------------------------------
+  AGENT_MODEL_PLANNER: z.string().default("planner"),
+  AGENT_MODEL_EXECUTOR: z.string().default("executor"),
+  AGENT_MODEL_COMPACTOR: z.string().default("compactor"),
+  AGENT_MODEL_JUDGE: z.string().default("judge"),
+
+  // ---------------------------------------------------------------------------
+  // Cross-model agreement (Phase D.2 / C.5 signal 2).
+  // Off by default to keep dev/test cheap. Set to "true" in production.
+  // ---------------------------------------------------------------------------
+  AGENT_CONFIDENCE_CROSS_MODEL: z
+    .string()
+    .optional()
+    .transform((v) => v === "true"),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

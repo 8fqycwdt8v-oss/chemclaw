@@ -30,6 +30,10 @@ class FrontendSettings(BaseSettings):
     chemclaw_dev_user_email: str = "dev@local.test"
     chemclaw_dev_user_projects: str = "NCE-001,NCE-002"
 
+    # Langfuse — for "View trace" links (Phase D.2).
+    # Set LANGFUSE_HOST to the Langfuse UI base URL (e.g. http://localhost:3000).
+    langfuse_host: str = ""
+
     @property
     def resolved_agent_base_url(self) -> str:
         if self.agent_base_url:

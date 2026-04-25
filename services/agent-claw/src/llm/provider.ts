@@ -1,8 +1,14 @@
 // LlmProvider interface + StubLlmProvider for deterministic tests.
 // Real LiteLLM wiring lands in Phase A.2.
+// Phase D.2: adds ModelRole for multi-model routing.
 
 import type { Message, StepResult } from "../core/types.js";
 import type { Tool } from "../tools/tool.js";
+
+// ---------------------------------------------------------------------------
+// Role type — maps to a LiteLLM model alias in config.yaml.
+// ---------------------------------------------------------------------------
+export type ModelRole = "planner" | "executor" | "compactor" | "judge";
 
 // ---------------------------------------------------------------------------
 // Response returned by one LLM call.
@@ -31,8 +37,11 @@ export interface LlmProvider {
   /**
    * Execute one step: send messages + tool schemas to the model and return
    * a parsed result (text or tool_call) plus token usage.
+   *
+   * @param role - Optional role for multi-model routing (planner/executor/compactor/judge).
+   *               Falls back to the default AGENT_MODEL when unset.
    */
-  call(messages: Message[], tools: Tool[]): Promise<LlmResponse>;
+  call(messages: Message[], tools: Tool[], role?: ModelRole): Promise<LlmResponse>;
 
   /**
    * Token-by-token streaming variant. Yields StreamChunk objects as they
@@ -41,15 +50,19 @@ export interface LlmProvider {
    * The harness calls this when the caller requested stream: true and no
    * tool execution is needed for the current step (text-only path). For
    * tool-call steps the harness falls back to call().
+   *
+   * @param role - Optional role for multi-model routing.
    */
-  streamCompletion(messages: Message[], tools: Tool[]): AsyncIterable<StreamChunk>;
+  streamCompletion(messages: Message[], tools: Tool[], role?: ModelRole): AsyncIterable<StreamChunk>;
 
   /**
    * Single-turn JSON completion helper.
    * Sends system + user content and JSON.parses the response text.
    * Used for structured output: plan previews, hypothesis drafts, etc.
+   *
+   * @param opts.role - Optional role for multi-model routing.
    */
-  completeJson(opts: { system: string; user: string }): Promise<unknown>;
+  completeJson(opts: { system: string; user: string; role?: ModelRole }): Promise<unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -123,7 +136,7 @@ export class StubLlmProvider implements LlmProvider {
     return this._queue.length;
   }
 
-  async call(_messages: Message[], _tools: Tool[]): Promise<LlmResponse> {
+  async call(_messages: Message[], _tools: Tool[], _role?: ModelRole): Promise<LlmResponse> {
     const next = this._queue.shift();
     if (!next) {
       throw new Error(
@@ -141,6 +154,7 @@ export class StubLlmProvider implements LlmProvider {
   async *streamCompletion(
     _messages: Message[],
     _tools: Tool[],
+    _role?: ModelRole,
   ): AsyncIterable<StreamChunk> {
     const batch = this._streamQueue.shift();
     if (batch) {
@@ -166,7 +180,7 @@ export class StubLlmProvider implements LlmProvider {
     return this;
   }
 
-  async completeJson(_opts: { system: string; user: string }): Promise<unknown> {
+  async completeJson(_opts: { system: string; user: string; role?: ModelRole }): Promise<unknown> {
     const next = this._jsonQueue.shift();
     if (next !== undefined) return next;
     // Default: return an empty object so tests that don't care about structured output
