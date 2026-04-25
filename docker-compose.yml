@@ -522,6 +522,78 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # -------------------------------------------------------------
+  # gepa-runner — nightly DSPy GEPA prompt optimiser (Phase E)
+  # Profile: optimizer — `docker compose --profile optimizer up`
+  # Runs at 02:00 UTC nightly.
+  # Exposes /healthz on port 8010.
+  # -------------------------------------------------------------
+  gepa-runner:
+    build:
+      context: .
+      dockerfile: services/optimizer/gepa_runner/Dockerfile
+    container_name: chemclaw-gepa-runner
+    restart: unless-stopped
+    profiles: ["optimizer"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${POSTGRES_USER:-chemclaw}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}
+      LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse:3000}
+      LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
+      LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      GEPA_PORT: "8010"
+      GEPA_GOLDEN_FIXTURE: /app/tests/golden/chem_qa_v1.fixture.jsonl
+    ports:
+      - "${GEPA_PORT:-8010}:8010"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8010/healthz')"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # skill-promoter — nightly skill promotion / demotion (Phase E)
+  # Profile: optimizer — `docker compose --profile optimizer up`
+  # Runs at 02:30 UTC nightly (after gepa-runner).
+  # Exposes /healthz on port 8011.
+  # -------------------------------------------------------------
+  skill-promoter:
+    build:
+      context: .
+      dockerfile: services/optimizer/skill_promoter/Dockerfile
+    container_name: chemclaw-skill-promoter
+    restart: unless-stopped
+    profiles: ["optimizer"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${POSTGRES_USER:-chemclaw}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}
+      SKILL_PROMOTER_PORT: "8011"
+    ports:
+      - "${SKILL_PROMOTER_PORT:-8011}:8011"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8011/healthz')"]
+      interval: 60s
+      timeout: 10s
+      retries: 3
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   postgres-data:
   neo4j-data:

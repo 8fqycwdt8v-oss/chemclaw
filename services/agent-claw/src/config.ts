@@ -122,6 +122,21 @@ const ConfigSchema = z.object({
     .string()
     .optional()
     .transform((v) => v === "true"),
+
+  // ---------------------------------------------------------------------------
+  // Shadow serving (Phase E).
+  // Fraction of traffic for which shadow prompts are evaluated in parallel.
+  // 0.0 = disabled; 1.0 = all traffic. Default 0.1 (10%).
+  // ---------------------------------------------------------------------------
+  AGENT_SHADOW_SAMPLE: z.coerce.number().min(0).max(1).default(0.1),
+
+  // Path to the golden-set fixture for /eval golden.
+  AGENT_GOLDEN_FIXTURE: z
+    .string()
+    .default("tests/golden/chem_qa_v1.fixture.jsonl"),
+  AGENT_HOLDOUT_FIXTURE: z
+    .string()
+    .default("tests/golden/chem_qa_holdout_v1.fixture.jsonl"),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

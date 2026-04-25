@@ -4,7 +4,7 @@
 // structured intent. Slash-only handling (isStreamable=false) short-circuits
 // before the LLM harness is invoked.
 //
-// Supported verbs (Phase B.3 + D.1 + D.5):
+// Supported verbs (Phase B.3 + D.1 + D.5 + E):
 //   /help    — returns the verb list; no LLM call.
 //   /skills [enable|disable|list] <id> — manage skill packs.
 //   /feedback up|down "<reason>" — writes feedback_events row; no LLM call.
@@ -16,6 +16,8 @@
 //   /qc      — QC/analytical skill (activates qc skill for this turn).
 //   /forge <description> — tool forging flow (Phase D.1); agent calls forge_tool first.
 //   /forged [list|show|disable] [<id>] — manage forged tools catalog (Phase D.5).
+//   /eval golden — run active prompts against the held-out fixture (Phase E).
+//   /eval shadow <prompt_name> — show shadow_run_scores summary (Phase E).
 
 // ---------------------------------------------------------------------------
 // Result type returned by parseSlash.
@@ -32,7 +34,7 @@ export interface SlashParseResult {
 }
 
 // Verbs that produce an immediate response without calling the LLM.
-const SHORT_CIRCUIT_VERBS = new Set(["help", "skills", "feedback", "check", "learn", "forged"]);
+const SHORT_CIRCUIT_VERBS = new Set(["help", "skills", "feedback", "check", "learn", "forged", "eval"]);
 
 // Verbs that go through the harness (possibly with special hooks).
 const STREAMABLE_VERBS = new Set(["plan", "dr", "retro", "qc", "forge"]);
@@ -95,7 +97,9 @@ export const HELP_TEXT = `Available commands:
   /forge <description>                — forge a new reusable tool (Phase D.1; agent calls forge_tool first)
   /forged list                        — list all forged tools visible to you (Phase D.5)
   /forged show <id>                   — show code + tests for a forged tool
-  /forged disable <id> <reason>       — disable a forged tool (owner or admin only)`;
+  /forged disable <id> <reason>       — disable a forged tool (owner or admin only)
+  /eval golden                        — run active prompts against held-out fixture; per-class breakdown (Phase E)
+  /eval shadow <prompt_name>          — show shadow_run_scores summary for a shadow prompt (Phase E)`;
 
 // ---------------------------------------------------------------------------
 // /forged sub-command parser (Phase D.5)
@@ -134,6 +138,37 @@ export function parseForgedArgs(args: string): ForgedSubCommand {
     const reason = parts.slice(2).join(" ");
     if (!id || !reason) return { subVerb: "unknown", raw: trimmed };
     return { subVerb: "disable", id, reason };
+  }
+
+  return { subVerb: "unknown", raw: trimmed };
+}
+
+// ---------------------------------------------------------------------------
+// /eval sub-command parser (Phase E)
+// ---------------------------------------------------------------------------
+
+export type EvalSubCommand =
+  | { subVerb: "golden" }
+  | { subVerb: "shadow"; promptName: string }
+  | { subVerb: "unknown"; raw: string };
+
+/**
+ * Parse /eval args:
+ *   /eval golden                — run held-out fixture evaluation
+ *   /eval shadow <prompt_name>  — show shadow score summary
+ */
+export function parseEvalArgs(args: string): EvalSubCommand {
+  const trimmed = args.trim().toLowerCase();
+
+  if (trimmed === "golden") {
+    return { subVerb: "golden" };
+  }
+
+  if (trimmed.startsWith("shadow")) {
+    const parts = trimmed.split(/\s+/);
+    const promptName = parts.slice(1).join(" ").trim();
+    if (!promptName) return { subVerb: "unknown", raw: trimmed };
+    return { subVerb: "shadow", promptName };
   }
 
   return { subVerb: "unknown", raw: trimmed };
@@ -209,6 +244,10 @@ export function shortCircuitResponse(verb: string): string | null {
       // The route handles /forged list|show|disable via the API.
       // This fallback fires only if the route doesn't intercept first.
       return "Use /forged list, /forged show <id>, or /forged disable <id> <reason>.";
+    case "eval":
+      // The route handles /eval golden|shadow via the /api/eval endpoint.
+      // This fallback fires only if the route doesn't intercept first.
+      return "Use /eval golden (held-out fixture) or /eval shadow <prompt_name>.";
     default:
       return null;
   }

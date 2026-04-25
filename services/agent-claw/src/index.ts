@@ -27,6 +27,8 @@ import { registerDocumentsRoute } from "./routes/documents.js";
 import { registerArtifactsRoutes } from "./routes/artifacts.js";
 import { registerLearnRoute } from "./routes/learn.js";
 import { registerFeedbackRoute } from "./routes/feedback.js";
+import { registerEvalRoute } from "./routes/eval.js";
+import { registerOptimizerRoutes } from "./routes/optimizer.js";
 import { PromptRegistry } from "./prompts/registry.js";
 import { initTracer } from "./observability/otel.js";
 import { loadHooks } from "./core/hook-loader.js";
@@ -168,6 +170,13 @@ registerFeedbackRoute(app, {
   langfusePublicKey: cfg.LANGFUSE_PUBLIC_KEY,
   langfuseSecretKey: cfg.LANGFUSE_SECRET_KEY,
 });
+registerEvalRoute(app, {
+  config: cfg,
+  pool,
+  promptRegistry,
+  getUser: getUser as (req: import("fastify").FastifyRequest) => string,
+});
+registerOptimizerRoutes(app, { pool });
 
 app.get("/readyz", async (_req, reply) => {
   // 1. Postgres ping.
