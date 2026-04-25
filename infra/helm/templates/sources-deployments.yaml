@@ -1,0 +1,196 @@
+# Source-system MCP adapter deployments — enabled when sources.enabled=true
+{{- if .Values.sources.enabled }}
+
+# ── mcp-eln-benchling ─────────────────────────────────────────────────────────
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-eln-benchling
+  labels:
+    app: mcp-eln-benchling
+    profile: sources
+spec:
+  replicas: {{ .Values.sources.mcpElnBenchling.replicas }}
+  selector:
+    matchLabels:
+      app: mcp-eln-benchling
+  template:
+    metadata:
+      labels:
+        app: mcp-eln-benchling
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: mcp-eln-benchling
+          image: {{ .Values.sources.mcpElnBenchling.image }}
+          ports:
+            - containerPort: {{ .Values.sources.mcpElnBenchling.port }}
+          env:
+            - name: BENCHLING_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.sources.mcpElnBenchling.apiKeySecret }}
+                  key: {{ .Values.sources.mcpElnBenchling.apiKeySecretKey }}
+            - name: BENCHLING_BASE_URL
+              value: {{ .Values.sources.mcpElnBenchling.baseUrl }}
+          securityContext:
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-eln-benchling
+spec:
+  selector:
+    app: mcp-eln-benchling
+  ports:
+    - port: {{ .Values.sources.mcpElnBenchling.port }}
+      targetPort: {{ .Values.sources.mcpElnBenchling.port }}
+
+# ── mcp-lims-starlims ─────────────────────────────────────────────────────────
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-lims-starlims
+  labels:
+    app: mcp-lims-starlims
+    profile: sources
+spec:
+  replicas: {{ .Values.sources.mcpLimsStarlims.replicas }}
+  selector:
+    matchLabels:
+      app: mcp-lims-starlims
+  template:
+    metadata:
+      labels:
+        app: mcp-lims-starlims
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: mcp-lims-starlims
+          image: {{ .Values.sources.mcpLimsStarlims.image }}
+          ports:
+            - containerPort: {{ .Values.sources.mcpLimsStarlims.port }}
+          env:
+            - name: STARLIMS_USER
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.sources.mcpLimsStarlims.credentialsSecret }}
+                  key: username
+            - name: STARLIMS_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.sources.mcpLimsStarlims.credentialsSecret }}
+                  key: token
+            - name: STARLIMS_BASE_URL
+              value: {{ .Values.sources.mcpLimsStarlims.baseUrl }}
+          securityContext:
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-lims-starlims
+spec:
+  selector:
+    app: mcp-lims-starlims
+  ports:
+    - port: {{ .Values.sources.mcpLimsStarlims.port }}
+      targetPort: {{ .Values.sources.mcpLimsStarlims.port }}
+
+# ── mcp-instrument-waters ─────────────────────────────────────────────────────
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-instrument-waters
+  labels:
+    app: mcp-instrument-waters
+    profile: sources
+spec:
+  replicas: {{ .Values.sources.mcpInstrumentWaters.replicas }}
+  selector:
+    matchLabels:
+      app: mcp-instrument-waters
+  template:
+    metadata:
+      labels:
+        app: mcp-instrument-waters
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: mcp-instrument-waters
+          image: {{ .Values.sources.mcpInstrumentWaters.image }}
+          ports:
+            - containerPort: {{ .Values.sources.mcpInstrumentWaters.port }}
+          env:
+            - name: WATERS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.sources.mcpInstrumentWaters.apiKeySecret }}
+                  key: {{ .Values.sources.mcpInstrumentWaters.apiKeySecretKey }}
+            - name: WATERS_BASE_URL
+              value: {{ .Values.sources.mcpInstrumentWaters.baseUrl }}
+          securityContext:
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-instrument-waters
+spec:
+  selector:
+    app: mcp-instrument-waters
+  ports:
+    - port: {{ .Values.sources.mcpInstrumentWaters.port }}
+      targetPort: {{ .Values.sources.mcpInstrumentWaters.port }}
+
+# ── kg-source-cache projector ─────────────────────────────────────────────────
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kg-source-cache
+  labels:
+    app: kg-source-cache
+    profile: sources
+spec:
+  replicas: {{ .Values.sources.kgSourceCache.replicas }}
+  selector:
+    matchLabels:
+      app: kg-source-cache
+  template:
+    metadata:
+      labels:
+        app: kg-source-cache
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: kg-source-cache
+          image: {{ .Values.sources.kgSourceCache.image }}
+          env:
+            - name: POSTGRES_HOST
+              value: {{ .Values.global.postgres.host }}
+            - name: POSTGRES_DB
+              value: {{ .Values.global.postgres.db }}
+            - name: POSTGRES_USER
+              value: {{ .Values.global.postgres.user }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.postgres.passwordSecret }}
+                  key: {{ .Values.global.postgres.passwordKey }}
+          securityContext:
+            allowPrivilegeEscalation: false
+
+{{- end }}

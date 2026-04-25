@@ -1,0 +1,190 @@
+# Default values for ChemClaw Helm chart.
+# Profile flags (all false by default — enable in prod-values.yaml).
+# Override per environment: helm install -f prod-values.yaml
+
+global:
+  imageRegistry: ""
+  imagePullPolicy: IfNotPresent
+  # Postgres connection shared across all services.
+  postgres:
+    host: postgres
+    port: 5432
+    db: chemclaw
+    user: chemclaw
+    passwordSecret: chemclaw-pg-password
+    passwordKey: password
+
+# ── Core services (always deployed) ──────────────────────────────────────────
+
+agentClaw:
+  enabled: true
+  image: chemclaw/agent-claw:latest
+  port: 3101
+  replicas: 1
+  resources:
+    requests: { cpu: 200m, memory: 256Mi }
+    limits:   { cpu: 1000m, memory: 1Gi }
+
+paperclipLite:
+  enabled: true
+  image: chemclaw/paperclip:latest
+  port: 3200
+  replicas: 1
+  resources:
+    requests: { cpu: 50m, memory: 128Mi }
+    limits:   { cpu: 500m, memory: 512Mi }
+
+frontend:
+  enabled: true
+  image: chemclaw/frontend:latest
+  port: 8501
+  replicas: 1
+
+litellm:
+  enabled: true
+  image: chemclaw/litellm:latest
+  port: 4000
+  replicas: 1
+
+litellmRedactor:
+  enabled: true
+  image: chemclaw/litellm-redactor:latest
+  port: 4001
+  replicas: 1
+
+# Projectors (always-on background workers)
+projectors:
+  chunkEmbedder:
+    enabled: true
+    image: chemclaw/chunk-embedder:latest
+  reactionVectorizer:
+    enabled: true
+    image: chemclaw/reaction-vectorizer:latest
+  kgExperiments:
+    enabled: true
+    image: chemclaw/kg-experiments:latest
+  kgHypotheses:
+    enabled: true
+    image: chemclaw/kg-hypotheses:latest
+
+# ── Profile: chemistry ────────────────────────────────────────────────────────
+# Enable with: --set chemistry.enabled=true
+# or in prod-values.yaml: chemistry: { enabled: true }
+
+chemistry:
+  enabled: false
+  mcpRdkit:
+    image: chemclaw/mcp-rdkit:latest
+    port: 8001
+    replicas: 1
+  mcpDrfp:
+    image: chemclaw/mcp-drfp:latest
+    port: 8002
+    replicas: 1
+  mcpKg:
+    image: chemclaw/mcp-kg:latest
+    port: 8003
+    replicas: 1
+  mcpEmbedder:
+    image: chemclaw/mcp-embedder:latest
+    port: 8004
+    replicas: 1
+  mcpTabicl:
+    image: chemclaw/mcp-tabicl:latest
+    port: 8005
+    replicas: 1
+  mcpDocFetcher:
+    image: chemclaw/mcp-doc-fetcher:latest
+    port: 8006
+    replicas: 1
+  mcpAskcos:
+    image: chemclaw/mcp-askcos:latest
+    port: 8007
+    replicas: 1
+  mcpAizynth:
+    image: chemclaw/mcp-aizynth:latest
+    port: 8008
+    replicas: 1
+  mcpChemprop:
+    image: chemclaw/mcp-chemprop:latest
+    port: 8009
+    replicas: 1
+  mcpXtb:
+    image: chemclaw/mcp-xtb:latest
+    port: 8010
+    replicas: 1
+  mcpAdmetlab:
+    image: chemclaw/mcp-admetlab:latest
+    port: 8011
+    replicas: 1
+  mcpSirius:
+    image: chemclaw/mcp-sirius:latest
+    port: 8012
+    replicas: 1
+
+# ── Profile: sources ──────────────────────────────────────────────────────────
+# Enable with: --set sources.enabled=true
+
+sources:
+  enabled: false
+  mcpElnBenchling:
+    image: chemclaw/mcp-eln-benchling:latest
+    port: 8013
+    replicas: 1
+    apiKeySecret: benchling-api-key
+    apiKeySecretKey: api-key
+    baseUrl: https://your-tenant.benchling.com/api/v2
+  mcpLimsStarlims:
+    image: chemclaw/mcp-lims-starlims:latest
+    port: 8014
+    replicas: 1
+    credentialsSecret: starlims-credentials
+    baseUrl: https://your-starlims-host/starlims/api/v1
+  mcpInstrumentWaters:
+    image: chemclaw/mcp-instrument-waters:latest
+    port: 8015
+    replicas: 1
+    apiKeySecret: waters-api-key
+    apiKeySecretKey: api-key
+    baseUrl: https://your-empower-host/empower/api/v2
+  kgSourceCache:
+    image: chemclaw/kg-source-cache:latest
+    replicas: 1
+
+# ── Profile: optimizer ───────────────────────────────────────────────────────
+# Enable with: --set optimizer.enabled=true
+
+optimizer:
+  enabled: false
+  gepaRunner:
+    image: chemclaw/gepa-runner:latest
+    schedule: "0 2 * * *"  # nightly at 02:00
+    replicas: 1
+  skillPromoter:
+    image: chemclaw/skill-promoter:latest
+    schedule: "30 2 * * *"  # nightly at 02:30
+    replicas: 1
+  forgedToolValidator:
+    image: chemclaw/forged-tool-validator:latest
+    schedule: "0 3 * * *"  # nightly at 03:00
+    replicas: 1
+
+# ── Profile: observability ───────────────────────────────────────────────────
+# Enable with: --set observability.enabled=true
+
+observability:
+  enabled: false
+  langfuse:
+    image: langfuse/langfuse:latest
+    port: 3000
+    replicas: 1
+    secretKey: langfuse-secrets
+  langfuseClickhouse:
+    image: clickhouse/clickhouse-server:latest
+    replicas: 1
+  langfusePostgres:
+    image: postgres:16
+    replicas: 1
+  contextualChunker:
+    image: chemclaw/contextual-chunker:latest
+    replicas: 1

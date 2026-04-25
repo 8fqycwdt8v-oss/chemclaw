@@ -1,0 +1,15 @@
+# Production values for ChemClaw Helm chart.
+# All profiles enabled; resource limits tuned for production load.
+# Apply with: helm install chemclaw . --values prod-values.yaml
+
+chemistry:
+  enabled: true
+
+sources:
+  enabled: true
+
+optimizer:
+  enabled: true
+
+observability:
+  enabled: true

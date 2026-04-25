@@ -760,6 +760,100 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # -----------------------------------------------------------
+  # Source-system MCP adapters — profile: sources
+  # Start with: docker compose --profile sources up
+  # Auth via env vars (see .env.example): BENCHLING_API_KEY,
+  # STARLIMS_USER + STARLIMS_TOKEN, WATERS_API_KEY.
+  # -----------------------------------------------------------
+
+  # mcp-eln-benchling — Benchling ELN adapter (port 8013)
+  mcp-eln-benchling:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_eln_benchling/Dockerfile
+    container_name: chemclaw-mcp-eln-benchling
+    restart: unless-stopped
+    profiles: ["sources"]
+    ports:
+      - "8013:8013"
+    environment:
+      BENCHLING_API_KEY: ${BENCHLING_API_KEY:-}
+      BENCHLING_BASE_URL: ${BENCHLING_BASE_URL:-https://your-tenant.benchling.com/api/v2}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8013/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+
+  # mcp-lims-starlims — STARLIMS LIMS adapter (port 8014)
+  mcp-lims-starlims:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_lims_starlims/Dockerfile
+    container_name: chemclaw-mcp-lims-starlims
+    restart: unless-stopped
+    profiles: ["sources"]
+    ports:
+      - "8014:8014"
+    environment:
+      STARLIMS_USER: ${STARLIMS_USER:-}
+      STARLIMS_TOKEN: ${STARLIMS_TOKEN:-}
+      STARLIMS_BASE_URL: ${STARLIMS_BASE_URL:-https://your-starlims-host/starlims/api/v1}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8014/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+
+  # mcp-instrument-waters — Waters Empower HPLC adapter (port 8015)
+  mcp-instrument-waters:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_instrument_waters/Dockerfile
+    container_name: chemclaw-mcp-instrument-waters
+    restart: unless-stopped
+    profiles: ["sources"]
+    ports:
+      - "8015:8015"
+    environment:
+      WATERS_API_KEY: ${WATERS_API_KEY:-}
+      WATERS_BASE_URL: ${WATERS_BASE_URL:-https://your-empower-host/empower/api/v2}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8015/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+
+  # kg-source-cache — projector: source_fact_observed → :Fact in Neo4j
+  kg-source-cache:
+    build:
+      context: .
+      dockerfile: services/projectors/kg_source_cache/Dockerfile
+    container_name: chemclaw-kg-source-cache
+    restart: unless-stopped
+    profiles: ["sources"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${POSTGRES_USER:-chemclaw}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}
+      MCP_KG_URL: http://mcp-kg:8003
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   postgres-data:
   neo4j-data:

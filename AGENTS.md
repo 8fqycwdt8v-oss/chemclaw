@@ -758,5 +758,44 @@ service has its own `Dockerfile` that pip-installs only its dependencies inside 
 Python tests mock the downstream library imports (no `chemprop`, `askcos2`, etc. in the
 test environment). TypeScript tests mock HTTP calls via `vi.stubGlobal("fetch", ...)`.
 
-*Phase F.2 next: source-system MCP adapters (`mcp_eln_benchling`, `mcp_lims_starlims`) +
-cache-and-project semantics + retire `eln_json_importer` from the live path.*
+---
+
+## Source systems
+
+Three on-demand source-system adapters are available (Phase F.2). These read source
+data directly rather than from a local replica. After each call, the `source-cache`
+post-tool hook writes `ingestion_events` rows so the `kg_source_cache` projector can
+create `:Fact` nodes with provenance (`source_system_id`, `fetched_at`, `valid_until`).
+
+### When to use each
+
+| Tool | Source system | Use when |
+|---|---|---|
+| `query_eln_experiments` | Benchling ELN | Browsing ELN entries for a project or time range |
+| `fetch_eln_entry` | Benchling ELN | Need full detail of a specific notebook entry by ID |
+| `query_lims_results` | STARLIMS | Looking up QC/QA analytical results by sample or method |
+| `fetch_lims_result` | STARLIMS | Need full detail of a specific LIMS result by ID |
+| `query_instrument_runs` | Waters Empower HPLC | Browsing chromatographic runs by sample/method/date |
+| `fetch_instrument_run` | Waters Empower HPLC | Need full peak data for a specific HPLC run by ID |
+
+### Citation discipline
+
+Every source-system tool returns a `citation` field with `source_kind="external_url"`
+and `source_uri` pointing to the entry in the originating system. **Always include
+this citation when reporting a fact from a source system.** Do not present source
+data as internally derived knowledge.
+
+### Freshness and stale facts
+
+Cached source facts have a `valid_until` TTL (default 7 days). When the pre-turn
+hook detects stale facts, it injects a warning into working memory. If freshness
+matters for the current question (e.g., a batch release decision), re-query the
+source system before reporting. If the user is asking a historical question, the
+cached value is sufficient.
+
+### Caching semantics
+
+After a source-system tool call, facts are automatically cached in the KG via the
+`source-cache` hook. Subsequent KG queries (`query_kg`) will find these facts without
+a new external call. The cache is refreshed when the TTL expires or when a source
+webhook fires (if configured).

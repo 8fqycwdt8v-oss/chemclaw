@@ -1,0 +1,61 @@
+# Chemistry MCP service deployments — enabled when chemistry.enabled=true
+{{- if .Values.chemistry.enabled }}
+
+{{- $chemServices := list
+  (dict "name" "mcp-rdkit"     "image" .Values.chemistry.mcpRdkit.image     "port" .Values.chemistry.mcpRdkit.port)
+  (dict "name" "mcp-drfp"      "image" .Values.chemistry.mcpDrfp.image      "port" .Values.chemistry.mcpDrfp.port)
+  (dict "name" "mcp-kg"        "image" .Values.chemistry.mcpKg.image        "port" .Values.chemistry.mcpKg.port)
+  (dict "name" "mcp-embedder"  "image" .Values.chemistry.mcpEmbedder.image  "port" .Values.chemistry.mcpEmbedder.port)
+  (dict "name" "mcp-tabicl"    "image" .Values.chemistry.mcpTabicl.image    "port" .Values.chemistry.mcpTabicl.port)
+  (dict "name" "mcp-doc-fetcher" "image" .Values.chemistry.mcpDocFetcher.image "port" .Values.chemistry.mcpDocFetcher.port)
+  (dict "name" "mcp-askcos"    "image" .Values.chemistry.mcpAskcos.image    "port" .Values.chemistry.mcpAskcos.port)
+  (dict "name" "mcp-aizynth"   "image" .Values.chemistry.mcpAizynth.image   "port" .Values.chemistry.mcpAizynth.port)
+  (dict "name" "mcp-chemprop"  "image" .Values.chemistry.mcpChemprop.image  "port" .Values.chemistry.mcpChemprop.port)
+  (dict "name" "mcp-xtb"       "image" .Values.chemistry.mcpXtb.image       "port" .Values.chemistry.mcpXtb.port)
+  (dict "name" "mcp-admetlab"  "image" .Values.chemistry.mcpAdmetlab.image  "port" .Values.chemistry.mcpAdmetlab.port)
+  (dict "name" "mcp-sirius"    "image" .Values.chemistry.mcpSirius.image    "port" .Values.chemistry.mcpSirius.port)
+}}
+
+{{- range $chemServices }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ .name }}
+  labels:
+    app: {{ .name }}
+    profile: chemistry
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: {{ .name }}
+  template:
+    metadata:
+      labels:
+        app: {{ .name }}
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: {{ .name }}
+          image: {{ .image }}
+          ports:
+            - containerPort: {{ .port }}
+          securityContext:
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ .name }}
+spec:
+  selector:
+    app: {{ .name }}
+  ports:
+    - port: {{ .port }}
+      targetPort: {{ .port }}
+{{- end }}
+
+{{- end }}
