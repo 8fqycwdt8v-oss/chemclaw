@@ -80,4 +80,39 @@ acked=${acked//[$'\t\r\n ']}
 [[ "${acked:-0}" -ge 3 ]] || fail "expected ≥3 acks, got $acked"
 ok "projection_acks for reaction_vectorizer: $acked"
 
-printf "\n\033[32mAll sprint-2 smoke checks passed.\033[0m\n"
+# --- Phase 5A: cross-project learning smoke ------------------------------------
+AGENT_URL="${AGENT_URL:-http://localhost:3100}"
+PG_URL="${PG_URL:-postgresql://chemclaw:chemclaw_dev_password_change_me@localhost:5432/chemclaw}"
+DEV_USER_ENTRA_ID="${DEV_USER_ENTRA_ID:-dev@local.test}"
+
+step "11. Phase 5A smoke: /api/deep_research MUST 404"
+status=$(curl -s -o /dev/null -w "%{http_code}" -X POST "${AGENT_URL}/api/deep_research" \
+  -H "content-type: application/json" -d '{}')
+if [ "$status" != "404" ]; then
+  echo "!! expected 404 from /api/deep_research, got $status"
+  exit 1
+fi
+ok "Deep Research endpoint correctly deprecated (404)"
+
+step "12. Phase 5A smoke: cross-project question lands a hypothesis row"
+before=$(docker compose exec -T postgres psql "$PG_URL" -Atc "SELECT count(*) FROM hypotheses WHERE proposed_by_user_entra_id = '${DEV_USER_ENTRA_ID}'")
+before=${before//[$'\t\r\n ']}
+
+curl -s -N -X POST "${AGENT_URL}/api/chat" \
+  -H "content-type: application/json" \
+  -d '{"messages":[{"role":"user","content":"Across my accessible projects, compare Suzuki coupling yields by solvent and propose one hypothesis with at least three cited fact_ids."}]}' \
+  | tr -d '\0' | grep -q "\"type\":\"finish\"" || { echo "no terminal finish event"; exit 1; }
+
+# Give the projector a moment to ack the event
+sleep 3
+
+after=$(docker compose exec -T postgres psql "$PG_URL" -Atc "SELECT count(*) FROM hypotheses WHERE proposed_by_user_entra_id = '${DEV_USER_ENTRA_ID}'")
+after=${after//[$'\t\r\n ']}
+
+if [ "$after" -le "$before" ]; then
+  echo "!! expected at least one new hypotheses row (before=$before after=$after)"
+  exit 1
+fi
+ok "Phase 5A smoke: hypotheses rows persisted ($before -> $after)"
+
+printf "\n\033[32mAll sprint-2 + Phase 5A smoke checks passed.\033[0m\n"

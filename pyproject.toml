@@ -12,6 +12,18 @@ authors = [{ name = "ChemClaw contributors" }]
 # into a shared .venv for local development via the Makefile.
 dependencies = []
 
+[build-system]
+requires = ["setuptools>=70"]
+build-backend = "setuptools.build_meta"
+
+# Root pyproject is a workspace stub — it ships no importable package.
+# Without this, setuptools auto-discovery trips over multiple top-level
+# directories (services, db, tests, scripts, documentation...) and refuses
+# to build the editable install. Declaring "no modules" fixes
+# `pip install -e ".[dev]"` on any fresh environment.
+[tool.setuptools]
+py-modules = []
+
 [project.optional-dependencies]
 # Aggregate dev-only dependencies usable across services.
 dev = [
@@ -44,3 +56,6 @@ exclude = ["tests/.*", "documentation/.*"]
 testpaths = ["tests"]
 asyncio_mode = "auto"
 addopts = "-ra --strict-markers"
+markers = [
+    "integration: tests that require live external services (Postgres, Neo4j, etc.)",
+]

@@ -256,6 +256,59 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # kg_hypotheses — hypothesis generation projector
+  # -------------------------------------------------------------
+  kg-hypotheses:
+    build:
+      context: .
+      dockerfile: services/projectors/kg_hypotheses/Dockerfile
+    container_name: chemclaw-kg-hypotheses
+    user: "1001:1001"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: chemclaw_service
+      POSTGRES_SERVICE_PASSWORD: ${POSTGRES_SERVICE_PASSWORD:-chemclaw_service_pw}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-chemclaw_dev_neo4j_change_me}
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # mcp-tabicl — TabICL v2 tabular in-context learning on reaction features
+  # -------------------------------------------------------------
+  mcp-tabicl:
+    container_name: chemclaw-mcp-tabicl
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_tabicl/Dockerfile
+    user: "1001:1001"
+    environment:
+      MCP_TABICL_PCA_PATH: /var/cache/mcp-tabicl/drfp_pca.json
+      MCP_TABICL_ADMIN_TOKEN: ${MCP_TABICL_ADMIN_TOKEN:-}
+    ports:
+      - "8005:8005"
+    volumes:
+      - mcp-tabicl-cache:/var/cache/mcp-tabicl
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8005/readyz"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+    profiles: ["full"]
+
+  # -------------------------------------------------------------
   # LiteLLM — external-LLM egress chokepoint with redactor pre-call
   # Commented by default; uncomment after setting API keys in .env.
   # -------------------------------------------------------------
@@ -280,3 +333,4 @@ volumes:
   neo4j-data:
   neo4j-logs:
   embedder-hf-cache:
+  mcp-tabicl-cache:

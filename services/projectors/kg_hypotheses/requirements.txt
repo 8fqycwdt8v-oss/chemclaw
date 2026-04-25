@@ -1,0 +1,5 @@
+psycopg[binary]==3.2.3
+pydantic==2.10.4
+pydantic-settings==2.7.0
+graphiti-core==0.4.7
+neo4j==5.26.0

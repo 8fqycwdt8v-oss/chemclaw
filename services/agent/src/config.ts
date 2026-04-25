@@ -46,6 +46,7 @@ const ConfigSchema = z.object({
   MCP_RDKIT_URL: z.string().url().default("http://localhost:8001"),
   MCP_KG_URL: z.string().url().default("http://localhost:8003"),
   MCP_EMBEDDER_URL: z.string().url().default("http://localhost:8004"),
+  MCP_TABICL_URL: z.string().url().default("http://localhost:8005"),
 
   // LiteLLM proxy for LLM egress.
   LITELLM_BASE_URL: z.string().url().default("http://localhost:4000"),
@@ -54,7 +55,7 @@ const ConfigSchema = z.object({
   AGENT_MODEL: z.string().min(1).default("claude-opus-4-7"),
 
   // Chat-specific budgets (defence against runaway LLM loops).
-  AGENT_CHAT_MAX_STEPS: z.coerce.number().int().positive().max(32).default(12),
+  AGENT_CHAT_MAX_STEPS: z.coerce.number().int().positive().max(40).default(20),
   AGENT_CHAT_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
   AGENT_CHAT_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
   // Reject messages longer than this (single user turn).

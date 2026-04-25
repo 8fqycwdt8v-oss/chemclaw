@@ -149,13 +149,28 @@ Every project-scoped query must run in a transaction with `app.current_user_entr
   - Agent — **autonomous ReAct loop via Mastra** with LiteLLM as the model provider. Tools: `find_similar_reactions`, `canonicalize_smiles`. System prompt loaded from the `prompt_registry` table (not hardcoded) with a 60s cache; no runtime fallback — if the active prompt is missing, the agent refuses to start a turn.
   - `POST /api/chat` — SSE streaming chat endpoint. Route-level rate limit, history + per-message caps, terminal-event guarantee. Non-streaming mode available via `stream: false`.
   - `services/frontend/pages/chat.py` — Streamlit chat page consuming the SSE stream with inline tool-call panels and history trimming.
-- **Phase 4** (Deep Research): **complete**.
-  - `agent.deep_research_mode.v1` system prompt layered on top of `agent.system` when mode is `deep_research`.
-  - Toolkit expansion: `query_kg` (direct Neo4j traversal via `mcp-kg`), `check_contradictions` (explicit CONTRADICTS edges + parallel currently-valid facts), `draft_section` (composition helper with citation-format validation), `mark_research_done` (TERMINAL tool that assembles + persists a report in `research_reports`).
-  - `research_reports` table + RLS (`owner_policy`: a user sees only their own reports).
-  - `ChatAgent` accepts `mode: "default" | "deep_research"`; DR mode raises `maxSteps` (×4, capped at 40) and layers the DR prompt.
-  - `POST /api/deep_research` route — quarters the chat rate limit for the heavier path; same SSE wire format.
-- **Phases 5–8**: pending. Cross-project reaction learning synthesis, KG correction workflow, GEPA self-improvement, OpenShift Helm, full RBAC hardening.
+- **Phase 4** (Deep Research): initial implementation landed in 7d46b1f with a `mode`
+  parameter and dedicated `POST /api/deep_research` route. Phase 5A unwound that
+  surface — the agent is now one unified `/api/chat` endpoint with a single
+  `agent.system` v2 prompt; the Deep Research *tools* (`query_kg`,
+  `check_contradictions`, `draft_section`, `mark_research_done`) remain available
+  as part of the unified catalog and are invoked on demand.
+- **Phase 5A** (cross-project reaction learning — toolkit half): **complete**.
+  - `mcp-tabicl` — TabICL v2 tabular in-context learning on reaction features.
+    JSON-persisted DRFP PCA (loader is pure NumPy; no arbitrary-code-execution
+    path). Runs on port 8005.
+  - New agent tools: `expand_reaction_context`, `statistical_analyze`,
+    `synthesize_insights`, `propose_hypothesis`.
+  - Canonical `hypotheses` + `hypothesis_citations` tables with RLS.
+  - `kg-hypotheses` projector — canonical → Neo4j `:Hypothesis` nodes + `:CITES`
+    edges. Uses uuid5 for race-safe MERGE; replay-idempotent.
+  - Unified `agent.system.v2` + `tool.synthesize_insights.v1` prompts.
+  - Anti-fabrication guard: per-turn `seenFactIds` Set; `propose_hypothesis`
+    rejects citations the agent never surfaced.
+  - Streamlit chat: mode toggle removed; fenced `chart` block rendering;
+    Hypothesis badge per tool call.
+- **Phase 5B** (proactive v1): pending — next sprint.
+- **Phases 6–8**: pending. KG correction workflow, GEPA self-improvement, OpenShift Helm, full RBAC hardening.
 
 ## Test counts (as of current sprint)
 
