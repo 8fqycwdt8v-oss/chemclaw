@@ -95,12 +95,43 @@ class HplcRun(BaseModel):
     raw_fields: dict[str, Any] = Field(default_factory=dict)
 
 
+import re
+from datetime import datetime
+from pydantic import field_validator
+
+# Empower run IDs are typically alphanumeric. Strict regex prevents path
+# traversal / query injection through f-string URL assembly.
+_WATERS_ID_RE = re.compile(r"^[A-Za-z0-9_\-\.]{1,128}$")
+
+
+def _validate_id(value: str, label: str) -> str:
+    if not _WATERS_ID_RE.match(value):
+        raise ValueError(
+            f"{label} must match {_WATERS_ID_RE.pattern} — got {value!r}"
+        )
+    return value
+
+
+def _validate_iso8601(value: str) -> str:
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"timestamp must be ISO-8601 — got {value!r}") from exc
+    return value
+
+
 class SearchRunsRequest(BaseModel):
-    sample_name: str | None = Field(None, description="Filter by sample name (partial match).")
-    method_name: str | None = Field(None, description="Filter by chromatographic method name.")
+    # Sample/method names are free-text up to 200 chars; bounded by Pydantic.
+    sample_name: str | None = Field(None, max_length=200, description="Filter by sample name (partial match).")
+    method_name: str | None = Field(None, max_length=200, description="Filter by chromatographic method name.")
     date_from: str | None = Field(None, description="ISO-8601 date; return runs on or after this date.")
     date_to: str | None = Field(None, description="ISO-8601 date; return runs on or before this date.")
     limit: int = Field(50, ge=1, le=500, description="Max runs to return (1–500).")
+
+    @field_validator("date_from", "date_to")
+    @classmethod
+    def _validate_dates(cls, v: str | None) -> str | None:
+        return v if v is None else _validate_iso8601(v)
 
 
 class SearchRunsResponse(BaseModel):
@@ -143,11 +174,10 @@ def _parse_run(raw: dict[str, Any]) -> HplcRun:
 # --------------------------------------------------------------------------
 @app.get("/run/{run_id}", response_model=HplcRun)
 async def get_run(
-    run_id: Annotated[str, Path(min_length=1, max_length=200)],
+    run_id: Annotated[str, Path(min_length=1, max_length=128)],
 ) -> HplcRun:
     """Retrieve a single HPLC run (with peaks) by its Empower run ID."""
-    if not run_id.strip():
-        raise ValueError("run_id must be a non-empty string")
+    _validate_id(run_id, "run_id")
 
     async with _client_factory() as client:
         resp = await client.get(f"/runs/{run_id}")

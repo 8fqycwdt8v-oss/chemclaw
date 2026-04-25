@@ -22,8 +22,10 @@ Security:
 from __future__ import annotations
 
 import base64
+import ipaddress
 import logging
 import os
+import socket
 import urllib.parse
 from pathlib import Path
 from typing import Annotated
@@ -50,11 +52,90 @@ _DEFAULT_MAX_BYTES = 25_000_000  # 25 MB default
 _MAX_PDF_PAGES = 1000
 _MAX_PDF_PAGES_PER_REQUEST = 50
 
-# Deny list — comma-separated hostnames from env. Prevents SSRF to internal services.
+# SSRF defenses. Two layers:
+#   1. ALLOW_HOSTS — explicit hostname allowlist. If set (non-empty), only these
+#      hosts may be fetched. This is the strong default and the recommended
+#      production posture. The agent supplies a curated list at deploy time.
+#   2. DENY_HOSTS — extra denylist applied on top of the allowlist (defense in depth).
+#   3. Private/loopback/link-local IPs are blocked unconditionally regardless of
+#      what hostnames resolve to, with the only exception being explicitly
+#      allow-listed hosts (some intranet ELN/LIMS adapters legitimately resolve
+#      to RFC1918 addresses).
+#
+# Redirects are followed manually with full re-validation at every hop.
+_RAW_ALLOW = os.environ.get("MCP_DOC_FETCHER_ALLOW_HOSTS", "")
+_ALLOW_HOSTS: frozenset[str] = frozenset(
+    h.strip().lower() for h in _RAW_ALLOW.split(",") if h.strip()
+)
 _RAW_DENY = os.environ.get("MCP_DOC_FETCHER_DENY_HOSTS", "")
 _DENY_HOSTS: frozenset[str] = frozenset(
     h.strip().lower() for h in _RAW_DENY.split(",") if h.strip()
 )
+_MAX_REDIRECTS = 5
+
+# Block fetches that resolve to these networks even if the hostname looks fine.
+# Cloud metadata is the highest-impact target.
+_BLOCKED_NETWORKS = (
+    ipaddress.ip_network("169.254.0.0/16"),     # link-local incl. cloud metadata 169.254.169.254
+    ipaddress.ip_network("127.0.0.0/8"),        # loopback
+    ipaddress.ip_network("10.0.0.0/8"),         # RFC1918
+    ipaddress.ip_network("172.16.0.0/12"),      # RFC1918
+    ipaddress.ip_network("192.168.0.0/16"),     # RFC1918
+    ipaddress.ip_network("0.0.0.0/8"),          # "this network"
+    ipaddress.ip_network("::1/128"),            # IPv6 loopback
+    ipaddress.ip_network("fe80::/10"),          # IPv6 link-local
+    ipaddress.ip_network("fc00::/7"),           # IPv6 unique local
+)
+
+
+def _ip_is_blocked(ip_str: str) -> bool:
+    try:
+        addr = ipaddress.ip_address(ip_str)
+    except ValueError:
+        return True  # not a valid IP — fail closed
+    return any(addr in net for net in _BLOCKED_NETWORKS)
+
+
+def _validate_network_host(host: str) -> None:
+    """Enforce allowlist + denylist + private-IP block on a hostname.
+
+    Raises ValueError if the host is not safe to fetch from. If ALLOW_HOSTS is
+    set, the host MUST be in it. Resolved IPs are checked against the private/
+    loopback/link-local block list — but if the host is explicitly allow-listed,
+    we accept the resolution as intentional (e.g. internal ELN at 10.x).
+    """
+    h = (host or "").lower()
+    if not h:
+        raise ValueError("host is empty")
+    if h in _DENY_HOSTS:
+        raise ValueError(f"host {host!r} is in the deny list")
+    in_allowlist = (not _ALLOW_HOSTS) or (h in _ALLOW_HOSTS)
+    if _ALLOW_HOSTS and not in_allowlist:
+        raise ValueError(f"host {host!r} is not in the allow list")
+
+    # If the host is itself a literal IP, check it directly.
+    try:
+        if _ip_is_blocked(host):
+            if not in_allowlist or not _ALLOW_HOSTS:
+                # Refuse: hostname looked like an IP and lands in a blocked range.
+                raise ValueError(f"host {host!r} resolves to a blocked network")
+        return
+    except ValueError:
+        pass  # not a literal IP; resolve below
+
+    # Resolve and check every returned address.
+    try:
+        infos = socket.getaddrinfo(h, None)
+    except socket.gaierror as exc:
+        raise ValueError(f"host {host!r} did not resolve: {exc}") from exc
+
+    for info in infos:
+        addr = info[4][0]
+        if _ip_is_blocked(addr):
+            if not _ALLOW_HOSTS or h not in _ALLOW_HOSTS:
+                raise ValueError(
+                    f"host {host!r} resolves to blocked network {addr}"
+                )
 
 # --------------------------------------------------------------------------
 # App
@@ -85,11 +166,10 @@ def _parse_and_validate_uri(uri: str) -> urllib.parse.ParseResult:
             f"{sorted(_ALLOWED_SCHEMES)}"
         )
 
-    # Check deny list for network schemes.
+    # Allow/deny + private-IP enforcement for network schemes.
     if scheme in ("http", "https", "smb", "sharepoint", "s3"):
         host = parsed.hostname or ""
-        if host.lower() in _DENY_HOSTS:
-            raise ValueError(f"host {host!r} is in the deny list")
+        _validate_network_host(host)
 
     return parsed
 
@@ -129,29 +209,59 @@ def _fetch_file(parsed: urllib.parse.ParseResult, max_bytes: int) -> tuple[bytes
 
 
 def _fetch_https(parsed: urllib.parse.ParseResult, uri: str, max_bytes: int) -> tuple[bytes, str]:
-    """Fetch via HTTP/HTTPS. Returns (bytes, content_type)."""
-    # Use streaming to enforce max_bytes without loading full response.
-    headers: dict[str, str] = {"User-Agent": "ChemClaw-DocFetcher/0.1"}
-    with httpx.Client(follow_redirects=True, timeout=30) as client:
-        with client.stream("GET", uri, headers=headers) as response:
-            if response.status_code >= 400:
-                raise ValueError(
-                    f"HTTP {response.status_code} fetching URI"
-                )
-            content_type = response.headers.get("content-type", "application/octet-stream")
-            # Strip parameters from content-type.
-            content_type = content_type.split(";")[0].strip()
+    """Fetch via HTTP/HTTPS, manually walking redirects with full re-validation.
 
-            chunks: list[bytes] = []
-            total = 0
-            for chunk in response.iter_bytes(chunk_size=65536):
-                total += len(chunk)
-                if total > max_bytes:
+    Defenses:
+      - SSRF: every hop is re-validated against the allow/deny/IP-block rules.
+      - Redirect-loop bound: at most _MAX_REDIRECTS hops.
+      - Streaming with max_bytes guard.
+    """
+    headers: dict[str, str] = {"User-Agent": "ChemClaw-DocFetcher/0.1"}
+    current_uri = uri
+    redirect_count = 0
+    # follow_redirects=False — we walk redirects ourselves so each hop gets
+    # the full _validate_network_host treatment (an attacker-controlled
+    # redirect to e.g. http://169.254.169.254/ would otherwise slip past).
+    with httpx.Client(follow_redirects=False, timeout=30) as client:
+        while True:
+            with client.stream("GET", current_uri, headers=headers) as response:
+                # Manual redirect handling.
+                if response.status_code in (301, 302, 303, 307, 308):
+                    redirect_count += 1
+                    if redirect_count > _MAX_REDIRECTS:
+                        raise ValueError(
+                            f"too many redirects (>{_MAX_REDIRECTS}) starting from {uri}"
+                        )
+                    location = response.headers.get("location")
+                    if not location:
+                        raise ValueError("redirect response missing Location header")
+                    next_uri = urllib.parse.urljoin(current_uri, location)
+                    next_parsed = urllib.parse.urlparse(next_uri)
+                    if next_parsed.scheme.lower() not in ("http", "https"):
+                        raise ValueError(
+                            f"refusing to follow redirect to non-HTTP scheme: {next_parsed.scheme}"
+                        )
+                    _validate_network_host(next_parsed.hostname or "")
+                    current_uri = next_uri
+                    continue
+
+                if response.status_code >= 400:
                     raise ValueError(
-                        f"response size exceeds max_bytes limit {max_bytes}"
+                        f"HTTP {response.status_code} fetching URI"
                     )
-                chunks.append(chunk)
-    return b"".join(chunks), content_type
+                content_type = response.headers.get("content-type", "application/octet-stream")
+                content_type = content_type.split(";")[0].strip()
+
+                chunks: list[bytes] = []
+                total = 0
+                for chunk in response.iter_bytes(chunk_size=65536):
+                    total += len(chunk)
+                    if total > max_bytes:
+                        raise ValueError(
+                            f"response size exceeds max_bytes limit {max_bytes}"
+                        )
+                    chunks.append(chunk)
+            return b"".join(chunks), content_type
 
 
 # --------------------------------------------------------------------------

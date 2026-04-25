@@ -135,16 +135,51 @@ registry.registerBuiltin("canonicalize_smiles", () =>
 
 registerHealthzRoute(app);
 
-// Dev-mode user extraction: read from header or fall back to config default.
+/**
+ * Thrown when a non-dev request arrives without x-user-entra-id. Mapped to
+ * a 401 by the global error handler below.
+ */
+class MissingUserError extends Error {
+  constructor() {
+    super("missing x-user-entra-id");
+    this.name = "MissingUserError";
+  }
+}
+
+// User extraction:
+//   - dev mode: prefer x-dev-user-entra-id, else CHEMCLAW_DEV_USER_EMAIL.
+//   - production: REQUIRE x-user-entra-id from the auth proxy. Missing header
+//     means the auth proxy was bypassed or misconfigured — fail closed with 401
+//     rather than silently treating the caller as a real user.
 const getUser = (req: { headers: Record<string, string | string[] | undefined> }): string => {
   if (cfg.CHEMCLAW_DEV_MODE) {
     const hdr = req.headers["x-dev-user-entra-id"];
-    return (typeof hdr === "string" ? hdr : undefined) ?? cfg.CHEMCLAW_DEV_USER_EMAIL;
+    return (typeof hdr === "string" && hdr.length > 0 ? hdr : undefined) ??
+      cfg.CHEMCLAW_DEV_USER_EMAIL;
   }
-  // Production: read from validated Entra-ID header set by the auth proxy.
   const hdr = req.headers["x-user-entra-id"];
-  return typeof hdr === "string" ? hdr : cfg.CHEMCLAW_DEV_USER_EMAIL;
+  if (typeof hdr !== "string" || hdr.length === 0) {
+    throw new MissingUserError();
+  }
+  return hdr;
 };
+
+// Map MissingUserError → 401 with the standard envelope so missing-auth-header
+// failures don't surface as opaque 500s.
+app.setErrorHandler((err, req, reply) => {
+  if (err instanceof MissingUserError) {
+    return reply.code(401).send({
+      error: "unauthenticated",
+      detail: "x-user-entra-id header is required",
+    });
+  }
+  // Default Fastify error handler — preserves prior behavior for everything else.
+  req.log.error({ err }, "unhandled error");
+  reply.code(err.statusCode ?? 500).send({
+    error: "internal",
+    detail: cfg.CHEMCLAW_DEV_MODE ? err.message : undefined,
+  });
+});
 
 const routeDeps = {
   config: cfg,

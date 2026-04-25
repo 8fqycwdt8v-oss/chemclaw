@@ -300,8 +300,11 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      # chemclaw_service is created LOGIN BYPASSRLS by db/init/12_security_hardening.sql.
+      # Password defaults to POSTGRES_PASSWORD so the migration's default and the
+      # connecting service's password stay in sync; production must override both.
       POSTGRES_USER: chemclaw_service
-      POSTGRES_SERVICE_PASSWORD: ${POSTGRES_SERVICE_PASSWORD:-chemclaw_service_pw}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}
       NEO4J_URI: bolt://neo4j:7687
       NEO4J_USER: ${NEO4J_USER:-neo4j}
       NEO4J_PASSWORD: ${NEO4J_PASSWORD:-chemclaw_dev_neo4j_change_me}

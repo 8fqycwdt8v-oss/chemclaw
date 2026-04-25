@@ -88,6 +88,33 @@ class TestResult(BaseModel):
     raw_fields: dict[str, Any] = Field(default_factory=dict)
 
 
+import re
+from datetime import datetime
+from pydantic import field_validator
+
+# STARLIMS IDs are typically alphanumeric with hyphens/underscores. Strict
+# regex prevents path-traversal / query injection through f-string URL
+# assembly downstream. If you have IDs that don't match, widen here AFTER
+# verifying the upstream API path-encodes them.
+_STARLIMS_ID_RE = re.compile(r"^[A-Za-z0-9_\-\.]{1,128}$")
+
+
+def _validate_id(value: str, label: str) -> str:
+    if not _STARLIMS_ID_RE.match(value):
+        raise ValueError(
+            f"{label} must match {_STARLIMS_ID_RE.pattern} — got {value!r}"
+        )
+    return value
+
+
+def _validate_iso8601(value: str) -> str:
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"timestamp must be ISO-8601 — got {value!r}") from exc
+    return value
+
+
 class QueryResultsRequest(BaseModel):
     sample_id: str | None = Field(None, description="Filter by sample ID.")
     method_id: str | None = Field(None, description="Filter by analytical method ID.")
@@ -95,6 +122,16 @@ class QueryResultsRequest(BaseModel):
         None, description="ISO-8601 timestamp; return results completed after this time."
     )
     limit: int = Field(50, ge=1, le=500, description="Max results to return (1–500).")
+
+    @field_validator("sample_id", "method_id")
+    @classmethod
+    def _validate_ids(cls, v: str | None) -> str | None:
+        return v if v is None else _validate_id(v, "id")
+
+    @field_validator("since")
+    @classmethod
+    def _validate_since(cls, v: str | None) -> str | None:
+        return v if v is None else _validate_iso8601(v)
 
 
 class QueryResultsResponse(BaseModel):
@@ -126,11 +163,10 @@ def _parse_result(raw: dict[str, Any]) -> TestResult:
 # --------------------------------------------------------------------------
 @app.get("/test_results/{result_id}", response_model=TestResult)
 async def get_test_result(
-    result_id: Annotated[str, Path(min_length=1, max_length=200)],
+    result_id: Annotated[str, Path(min_length=1, max_length=128)],
 ) -> TestResult:
     """Retrieve a single LIMS test result by its STARLIMS ID."""
-    if not result_id.strip():
-        raise ValueError("result_id must be a non-empty string")
+    _validate_id(result_id, "result_id")
 
     async with _client_factory() as client:
         resp = await client.get(f"/results/{result_id}")
