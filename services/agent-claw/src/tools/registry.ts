@@ -5,14 +5,28 @@
 //            from schema_json, and registers each tool.
 //            - source='builtin'  → looks up a hand-registered builtin factory
 //            - source='mcp'      → builds an execute impl that POSTs to mcp_url+mcp_endpoint
+// Phase D.5: weak-from-strong — toolsForRole() surfaces planner-forged tools first
+//            for executor/compactor/judge callers.
 
 import { z } from "zod";
 import { type Pool } from "pg";
 import { readFileSync } from "fs";
 import type { Tool } from "./tool.js";
+import type { ModelRole } from "../llm/provider.js";
 import { postJson } from "../mcp/postJson.js";
 import type { SandboxClient } from "../core/sandbox.js";
 import { wrapCode, parseOutputs, buildStubLibrary } from "./builtins/run_program.js";
+
+// ---------------------------------------------------------------------------
+// Role tier ordering (planner > executor > compactor > judge).
+// A weaker-role caller should see tools forged by stronger roles first.
+// ---------------------------------------------------------------------------
+const ROLE_TIER: Record<ModelRole, number> = {
+  planner: 4,
+  executor: 3,
+  compactor: 2,
+  judge: 1,
+};
 
 // ---------------------------------------------------------------------------
 // Zod-from-JSON schema builder.
@@ -94,14 +108,26 @@ interface ToolRow {
   mcp_endpoint: string | null;
   description: string;
   scripts_path?: string | null;
+  /** Phase D.5: which model role forged this tool. */
+  forged_by_role?: ModelRole | null;
+  /** Phase D.5: which model forged this tool. */
+  forged_by_model?: string | null;
 }
 
 // ---------------------------------------------------------------------------
 // ToolRegistry
 // ---------------------------------------------------------------------------
 
+/** Metadata kept alongside each tool for weak-from-strong ordering. */
+interface ToolMeta {
+  forgedByRole: ModelRole | null;
+  forgedByModel: string | null;
+}
+
 export class ToolRegistry {
   private readonly _tools: Map<string, Tool> = new Map();
+  // Phase D.5: stores role/model metadata for each tool (keyed by tool id).
+  private readonly _meta: Map<string, ToolMeta> = new Map();
 
   // Map of builtin name → factory function.
   // Register factories here before calling loadFromDb() so that DB rows with
@@ -143,15 +169,20 @@ export class ToolRegistry {
 
   /**
    * Register or replace a tool. Use for hot-reload / test scenarios.
+   * Optionally carry role/model metadata for weak-from-strong ordering.
    */
-  upsert(tool: Tool): this {
+  upsert(tool: Tool, meta?: ToolMeta): this {
     this._tools.set(tool.id, tool);
+    if (meta) {
+      this._meta.set(tool.id, meta);
+    }
     return this;
   }
 
   /** Remove a tool by id. No-op if not present. */
   deregister(id: string): this {
     this._tools.delete(id);
+    this._meta.delete(id);
     return this;
   }
 
@@ -174,6 +205,52 @@ export class ToolRegistry {
   /** All registered tools as an array (for passing to LlmProvider). */
   all(): Tool[] {
     return [...this._tools.values()];
+  }
+
+  /**
+   * Phase D.5: weak-from-strong transfer.
+   *
+   * Returns all tools sorted so that tools forged by a STRONGER role appear
+   * first when the caller is a WEAKER role. Their description gets a
+   * "[stronger-model author]" suffix to guide the LLM to prefer them.
+   *
+   * Non-forged tools retain their original order after the forged ones.
+   */
+  toolsForRole(callerRole: ModelRole): Tool[] {
+    const callerTier = ROLE_TIER[callerRole] ?? 0;
+    const all = [...this._tools.values()];
+
+    // Partition: forged-by-stronger vs everything else.
+    const strongerForged: Tool[] = [];
+    const rest: Tool[] = [];
+
+    for (const tool of all) {
+      const meta = this._meta.get(tool.id);
+      const authorTier = meta?.forgedByRole ? (ROLE_TIER[meta.forgedByRole] ?? 0) : 0;
+      if (meta?.forgedByRole && authorTier > callerTier) {
+        // Surface with a hint in the description.
+        const hintedTool: Tool = {
+          ...tool,
+          description:
+            tool.description +
+            ` [stronger-model author: forged by ${meta.forgedByModel ?? meta.forgedByRole}]`,
+        };
+        strongerForged.push(hintedTool);
+      } else {
+        rest.push(tool);
+      }
+    }
+
+    // Stronger-forged tools first; within that group, planner-role forged first.
+    strongerForged.sort((a, b) => {
+      const metaA = this._meta.get(a.id);
+      const metaB = this._meta.get(b.id);
+      const tierA = metaA?.forgedByRole ? (ROLE_TIER[metaA.forgedByRole] ?? 0) : 0;
+      const tierB = metaB?.forgedByRole ? (ROLE_TIER[metaB.forgedByRole] ?? 0) : 0;
+      return tierB - tierA; // descending
+    });
+
+    return [...strongerForged, ...rest];
   }
 
   /** Number of registered tools. */
@@ -211,7 +288,9 @@ export class ToolRegistry {
   async loadFromDb(pool: Pool): Promise<void> {
     const { rows } = await pool.query<ToolRow>(
       `SELECT t.name, t.source, t.schema_json, t.mcp_url, t.mcp_endpoint, t.description,
-              sl.scripts_path
+              sl.scripts_path,
+              sl.forged_by_role,
+              sl.forged_by_model
          FROM tools t
          LEFT JOIN skill_library sl
                ON sl.name = t.name AND sl.kind = 'forged_tool'
@@ -222,7 +301,10 @@ export class ToolRegistry {
     for (const row of rows) {
       const tool = this._buildTool(row);
       if (tool) {
-        this.upsert(tool);
+        this.upsert(tool, {
+          forgedByRole: (row.forged_by_role as ModelRole | null) ?? null,
+          forgedByModel: row.forged_by_model ?? null,
+        });
       }
     }
   }

@@ -4,7 +4,7 @@
 // structured intent. Slash-only handling (isStreamable=false) short-circuits
 // before the LLM harness is invoked.
 //
-// Supported verbs (Phase B.3 + D.1):
+// Supported verbs (Phase B.3 + D.1 + D.5):
 //   /help    — returns the verb list; no LLM call.
 //   /skills [enable|disable|list] <id> — manage skill packs.
 //   /feedback up|down "<reason>" — writes feedback_events row; no LLM call.
@@ -15,6 +15,7 @@
 //   /retro   — retrosynthesis skill (activates retro skill for this turn).
 //   /qc      — QC/analytical skill (activates qc skill for this turn).
 //   /forge <description> — tool forging flow (Phase D.1); agent calls forge_tool first.
+//   /forged [list|show|disable] [<id>] — manage forged tools catalog (Phase D.5).
 
 // ---------------------------------------------------------------------------
 // Result type returned by parseSlash.
@@ -31,7 +32,7 @@ export interface SlashParseResult {
 }
 
 // Verbs that produce an immediate response without calling the LLM.
-const SHORT_CIRCUIT_VERBS = new Set(["help", "skills", "feedback", "check", "learn"]);
+const SHORT_CIRCUIT_VERBS = new Set(["help", "skills", "feedback", "check", "learn", "forged"]);
 
 // Verbs that go through the harness (possibly with special hooks).
 const STREAMABLE_VERBS = new Set(["plan", "dr", "retro", "qc", "forge"]);
@@ -82,16 +83,61 @@ export function parseSlash(text: string): SlashParseResult {
 // Help text — one line per verb.
 // ---------------------------------------------------------------------------
 export const HELP_TEXT = `Available commands:
-  /help                           — show this list
-  /skills [list|enable|disable]   — manage skill packs
-  /feedback up|down "reason"      — submit feedback on the last response
-  /check                          — confidence ensemble for the last response (Phase C)
-  /learn                          — trigger skill induction (Phase C)
-  /plan <question>                — preview a step-by-step plan before execution
-  /dr <question>                  — deep-research mode (full report)
-  /retro <smiles>                 — retrosynthesis route proposal
-  /qc <question>                  — analytical QC question routing
-  /forge <description>            — forge a new reusable tool (Phase D.1; agent calls forge_tool first)`;
+  /help                               — show this list
+  /skills [list|enable|disable]       — manage skill packs
+  /feedback up|down "reason"          — submit feedback on the last response
+  /check                              — confidence ensemble for the last response (Phase C)
+  /learn                              — trigger skill induction (Phase C)
+  /plan <question>                    — preview a step-by-step plan before execution
+  /dr <question>                      — deep-research mode (full report)
+  /retro <smiles>                     — retrosynthesis route proposal
+  /qc <question>                      — analytical QC question routing
+  /forge <description>                — forge a new reusable tool (Phase D.1; agent calls forge_tool first)
+  /forged list                        — list all forged tools visible to you (Phase D.5)
+  /forged show <id>                   — show code + tests for a forged tool
+  /forged disable <id> <reason>       — disable a forged tool (owner or admin only)`;
+
+// ---------------------------------------------------------------------------
+// /forged sub-command parser (Phase D.5)
+// ---------------------------------------------------------------------------
+
+export type ForgedSubCommand =
+  | { subVerb: "list" }
+  | { subVerb: "show"; id: string }
+  | { subVerb: "disable"; id: string; reason: string }
+  | { subVerb: "unknown"; raw: string };
+
+/**
+ * Parse /forged <subVerb> [args...].
+ *
+ *   /forged list
+ *   /forged show <id>
+ *   /forged disable <id> <reason...>
+ */
+export function parseForgedArgs(args: string): ForgedSubCommand {
+  const trimmed = args.trim();
+  if (!trimmed || trimmed === "list") {
+    return { subVerb: "list" };
+  }
+
+  const parts = trimmed.split(/\s+/);
+  const sub = (parts[0] ?? "").toLowerCase();
+
+  if (sub === "show") {
+    const id = parts[1] ?? "";
+    if (!id) return { subVerb: "unknown", raw: trimmed };
+    return { subVerb: "show", id };
+  }
+
+  if (sub === "disable") {
+    const id = parts[1] ?? "";
+    const reason = parts.slice(2).join(" ");
+    if (!id || !reason) return { subVerb: "unknown", raw: trimmed };
+    return { subVerb: "disable", id, reason };
+  }
+
+  return { subVerb: "unknown", raw: trimmed };
+}
 
 // ---------------------------------------------------------------------------
 // Feedback args parser: up|down "reason"
@@ -159,6 +205,10 @@ export function shortCircuitResponse(verb: string): string | null {
       // Phase C: /learn is handled by the route (needs DB + LLM).
       // This fallback fires only when the route doesn't intercept first.
       return "Use /learn <title> to induce a reusable skill from the last turn.";
+    case "forged":
+      // The route handles /forged list|show|disable via the API.
+      // This fallback fires only if the route doesn't intercept first.
+      return "Use /forged list, /forged show <id>, or /forged disable <id> <reason>.";
     default:
       return null;
   }

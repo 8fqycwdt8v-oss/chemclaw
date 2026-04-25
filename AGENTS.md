@@ -481,7 +481,100 @@ each answer on a 0-1 scale. The score is stored as `cross_model` in
 
 ---
 
-*Last updated: Phase D.2. Paperclip-lite sidecar, Langfuse self-hosted compose
-entry, OTel spans, multi-model routing, cross-model agreement, POST /api/feedback,
-Streamlit feedback buttons + trace links. Phase E next: DSPy GEPA self-improvement
-loop consuming Langfuse traces + feedback_events.*
+---
+
+## Tool forging — Phase D.5 maturity
+
+### Promotion lifecycle
+
+Forged tools follow a three-tier scope progression with explicit admin approval at each step:
+
+| Scope | Who can see it | How to reach it |
+|---|---|---|
+| `private` | Tool owner only | Default on creation |
+| `project` | All users sharing a project with the owner | Owner or admin calls `POST /api/forged-tools/:id/scope { scope: "project" }` |
+| `org` | All users (cross-project) | Admin calls `POST /api/forged-tools/:id/scope { scope: "org" }` |
+
+**Demotion** is automatic when the nightly validator marks a tool `failing`. It may
+also be triggered manually via `POST /api/forged-tools/:id/disable { reason }`.
+
+The `scope_promoted_at` and `scope_promoted_by` columns record every promotion for audit.
+Admin gate: `AGENT_ADMIN_USERS` env var (comma-separated Entra IDs). Phase F replaces
+this with a proper RBAC layer.
+
+Slash interface:
+```
+/forged list                  — list visible tools
+/forged show <id>             — code + tests + last validation
+/forged disable <id> <reason> — disable (owner or admin)
+```
+
+### Validation harness
+
+The `forged-tool-validator` service (profile `optimizer`) runs nightly at 02:00 UTC.
+
+For every `kind='forged_tool'` row with `active=true` it:
+1. Loads all rows from `forged_tool_tests` for the tool.
+2. Runs **functional** and **contract** tests in an E2B sandbox.
+3. Runs **property-based** tests (3 or 10 synthetic inputs, fixed seed=42 for reproducibility).
+4. Computes status:
+   - `passing`  — 100% pass rate.
+   - `degraded` — ≥80%, <100%. Tool stays active; registry surfaces a warning in the tool description.
+   - `failing`  — <80%. Tool is auto-disabled (`active=false`). Corrective re-forge required.
+5. Writes a row to `forged_tool_validation_runs` with full error details.
+
+Results are visible in the Streamlit Forged Tools page (sparkline + last-status badge).
+
+### Weak-from-strong transfer
+
+Every forged-tool row carries `forged_by_model` (e.g., `claude-opus-4-7`) and
+`forged_by_role` (`planner | executor | compactor | judge`).
+
+The registry's `toolsForRole(callerRole)` API sorts the tool list so that tools
+forged by a **stronger role** appear first for a **weaker-role** caller. Their
+description gets a `[stronger-model author: forged by <model>]` suffix to guide
+the LLM to prefer them. Tier ordering: `planner > executor > compactor > judge`.
+
+Cost rationale: a Haiku-class executor re-uses an Opus-forged tool without ever
+paying the Opus synthesis cost again.
+
+### Trace induction (`induce_forged_tool_from_trace`)
+
+```
+induce_forged_tool_from_trace(
+  trace_id="<langfuse-trace-id>",
+  name="my_new_tool",
+  description="..."
+)
+```
+
+Reads the Langfuse trace, extracts the tool-call sequence, and asks the planner
+(Opus-class) to generalize the trajectory into a Python function with declared
+input/output schemas and ≥3 test cases. Delegates to the standard 4-stage Forjador
+validate. On all-pass the tool is persisted as `forged_by_role='planner'`.
+
+In tests: the Langfuse trace reader is injected as a mock (see `LangfuseTraceReader`
+type in `induce_forged_tool_from_trace.ts`). Live integration is verified manually.
+
+### Template forking (`forge_tool(parent_tool_id=...)`)
+
+```
+forge_tool(
+  name="improved_yield_extractor",
+  description="Like the original but handles HTML tables",
+  ...
+  parent_tool_id="<uuid-of-existing-forged-tool>"
+)
+```
+
+Loads the parent tool's Python code from disk, includes it in the generation prompt
+as a starting point. The new row's `parent_tool_id` is set; `version` is
+`parent.version + 1`; `name` may match the parent (the `(name, version)` UNIQUE
+constraint allows multiple versions of the same tool name).
+
+---
+
+*Last updated: Phase D.5. Scope/RLS for forged tools, validation harness (passing/
+degraded/failing), weak-from-strong transfer, trace induction, template forking,
+Streamlit Forged Tools page, /forged slash verb, CI gate (npm run test:forged).
+Phase E next: DSPy GEPA self-improvement loop consuming Langfuse traces + feedback_events.*

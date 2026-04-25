@@ -24,7 +24,7 @@ import { promises as fsp } from "fs";
 import { join } from "path";
 import { randomUUID } from "crypto";
 import { defineTool } from "../tool.js";
-import type { LlmProvider } from "../../llm/provider.js";
+import type { LlmProvider, ModelRole } from "../../llm/provider.js";
 import type { SandboxClient } from "../../core/sandbox.js";
 import { wrapCode, parseOutputs } from "./run_program.js";
 
@@ -52,6 +52,8 @@ export const ForgeToolIn = z.object({
     .min(2, "at least 2 test cases required")
     .max(10, "at most 10 test cases allowed"),
   implementation_hint: z.string().max(2000).optional(),
+  /** Phase D.5: fork from an existing forged tool. */
+  parent_tool_id: z.string().uuid().optional(),
 });
 export type ForgeToolInput = z.infer<typeof ForgeToolIn>;
 
@@ -70,6 +72,8 @@ export const ForgeToolOut = z.object({
   }),
   persisted: z.boolean(),
   skill_library_row_id: z.string().uuid().optional(),
+  /** Version of the newly created tool (1 for new tools, parent.version+1 for forks). */
+  version: z.number().int().optional(),
 });
 export type ForgeToolOutput = z.infer<typeof ForgeToolOut>;
 
@@ -131,6 +135,7 @@ export function valuesMatch(
 export function buildGenerationPrompt(
   input: ForgeToolInput,
   availableHelpers: string[],
+  parentCode?: string,
 ): { system: string; user: string } {
   const system = `You are an expert Python programmer generating a reusable tool for the ChemClaw chemistry intelligence platform.
 You will be given a tool specification and must produce valid Python code that implements it.
@@ -141,6 +146,10 @@ Return a JSON object with exactly two keys:
   "explanation": string -- brief rationale (1-2 sentences).
 The code must NOT import external packages beyond the Python standard library and the chemclaw stub.
 Do NOT use any shell-execution functions.`;
+
+  const parentSection = parentCode
+    ? `\nParent tool code (use as starting point; modify where needed):\n\`\`\`python\n${parentCode}\n\`\`\`\n`
+    : "";
 
   const user = `Tool name: ${input.name}
 Description: ${input.description}
@@ -153,7 +162,7 @@ ${JSON.stringify(input.output_schema_json, null, 2)}
 
 Test cases (${input.test_cases.length}):
 ${input.test_cases.map((tc, i) => `  [${i}] input=${JSON.stringify(tc.input)} expected_output=${JSON.stringify(tc.expected_output)}`).join("\n")}
-
+${parentSection}
 ${input.implementation_hint ? `Implementation hint: ${input.implementation_hint}` : ""}
 
 Write the Python implementation. The output variables must match the keys in the output schema.`;
@@ -191,6 +200,9 @@ export function buildForgeToolTool(
   llm: LlmProvider,
   forgedToolsDir: string,
   userEntraId: string,
+  /** Which model role forged the tool (Phase D.5: weak-from-strong). */
+  forgedByModel?: string,
+  forgedByRole?: ModelRole,
 ) {
   return defineTool({
     id: "forge_tool",
@@ -225,30 +237,68 @@ export function buildForgeToolTool(
         throw new Error(`forge_tool: schema validation failed: ${(err as Error).message}`);
       }
 
-      // Check name conflict.
-      const [toolConflict, skillConflict] = await Promise.all([
-        toolNameExists(pool, input.name),
-        skillLibraryNameExists(pool, input.name),
-      ]);
-      if (toolConflict || skillConflict) {
-        throw new Error(
-          `forge_tool: tool name '${input.name}' already exists in the registry. ` +
-            `Choose a different name or delete the existing tool first.`,
+      // Phase D.5: resolve parent tool if forking.
+      let parentVersion = 0;
+      let parentCode: string | null = null;
+
+      if (input.parent_tool_id) {
+        const { rows: parentRows } = await pool.query<{
+          id: string;
+          version: number;
+          scripts_path: string | null;
+        }>(
+          `SELECT id::text, version, scripts_path
+             FROM skill_library
+            WHERE id = $1::uuid AND kind = 'forged_tool'`,
+          [input.parent_tool_id],
         );
+        const parent = parentRows[0];
+        if (!parent) {
+          throw new Error(
+            `forge_tool: parent_tool_id '${input.parent_tool_id}' not found in skill_library.`,
+          );
+        }
+        parentVersion = parent.version;
+        if (parent.scripts_path) {
+          try {
+            parentCode = await fsp.readFile(parent.scripts_path, "utf-8");
+          } catch {
+            // Non-fatal: parent code not readable — proceed without it.
+            parentCode = null;
+          }
+        }
+      }
+
+      // Check name conflict only for NEW tools (forks share the same name + bump version).
+      if (!input.parent_tool_id) {
+        const [toolConflict, skillConflict] = await Promise.all([
+          toolNameExists(pool, input.name),
+          skillLibraryNameExists(pool, input.name),
+        ]);
+        if (toolConflict || skillConflict) {
+          throw new Error(
+            `forge_tool: tool name '${input.name}' already exists in the registry. ` +
+              `Choose a different name or delete the existing tool first.`,
+          );
+        }
       }
 
       // ---- Stage 2: Generate -----------------------------------------------
 
-      const { system, user } = buildGenerationPrompt(input, [
-        "fetch_document",
-        "query_kg",
-        "find_similar_reactions",
-        "canonicalize_smiles",
-        "embed_text",
-        "compute_drfp",
-      ]);
+      const { system, user } = buildGenerationPrompt(
+        input,
+        [
+          "fetch_document",
+          "query_kg",
+          "find_similar_reactions",
+          "canonicalize_smiles",
+          "embed_text",
+          "compute_drfp",
+        ],
+        parentCode ?? undefined,
+      );
 
-      const raw = await llm.completeJson({ system, user });
+      const raw = await llm.completeJson({ system, user, role: forgedByRole });
       const rawObj = raw as Record<string, unknown>;
 
       let pythonCode: string;
@@ -323,6 +373,7 @@ export function buildForgeToolTool(
 
       let persisted = false;
       let skillLibraryRowId: string | undefined;
+      const newVersion = parentVersion + 1;
 
       if (failed === 0) {
         // Ensure directory exists.
@@ -343,13 +394,25 @@ export function buildForgeToolTool(
           required: (input.input_schema_json as Record<string, unknown>)["required"] ?? [],
         };
 
-        // Insert skill_library row.
+        // Insert skill_library row (Phase D.5: includes scope, forged_by_model/role, parent_tool_id, version).
         const skillResult = await pool.query<{ id: string }>(
           `INSERT INTO skill_library
-             (name, prompt_md, scripts_path, kind, active, shadow_until, proposed_by_user_entra_id)
-           VALUES ($1, $2, $3, 'forged_tool', false, NOW() + INTERVAL '14 days', $4)
+             (name, prompt_md, scripts_path, kind, active, shadow_until,
+              proposed_by_user_entra_id, scope, forged_by_model, forged_by_role,
+              parent_tool_id, version)
+           VALUES ($1, $2, $3, 'forged_tool', false, NOW() + INTERVAL '14 days', $4,
+                   'private', $5, $6, $7, $8)
            RETURNING id::text AS id`,
-          [input.name, promptMd, scriptsPath, userEntraId],
+          [
+            input.name,
+            promptMd,
+            scriptsPath,
+            userEntraId,
+            forgedByModel ?? null,
+            forgedByRole ?? null,
+            input.parent_tool_id ?? null,
+            newVersion,
+          ],
         );
         skillLibraryRowId = skillResult.rows[0]?.id;
 
@@ -361,6 +424,23 @@ export function buildForgeToolTool(
           [toolId, input.name, JSON.stringify(schemaJson), input.description],
         );
 
+        // Phase D.5: persist supplied test cases in forged_tool_tests.
+        if (skillLibraryRowId) {
+          for (const tc of input.test_cases) {
+            await pool.query(
+              `INSERT INTO forged_tool_tests
+                 (forged_tool_id, input_json, expected_output_json, tolerance_json, kind)
+               VALUES ($1::uuid, $2::jsonb, $3::jsonb, $4::jsonb, 'functional')`,
+              [
+                skillLibraryRowId,
+                JSON.stringify(tc.input),
+                JSON.stringify(tc.expected_output),
+                tc.tolerance !== undefined ? JSON.stringify({ _global: tc.tolerance }) : null,
+              ],
+            );
+          }
+        }
+
         persisted = true;
       }
 
@@ -369,6 +449,7 @@ export function buildForgeToolTool(
         validation: { passed, failed, failures },
         persisted,
         skill_library_row_id: skillLibraryRowId,
+        version: newVersion,
       };
     },
   });
