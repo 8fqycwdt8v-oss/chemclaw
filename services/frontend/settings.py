@@ -19,14 +19,24 @@ class FrontendSettings(BaseSettings):
     postgres_password: str = ""
 
     agent_host: str = "localhost"
-    agent_port: int = 3100
+    # Phase F.2: default port is now 3101 (agent-claw). Legacy services/agent/ deleted.
+    agent_port: int = 3101
+
+    # AGENT_BASE_URL overrides agent_host + agent_port when set.
+    agent_base_url: str = ""
 
     chemclaw_dev_mode: bool = True
     chemclaw_dev_user_email: str = "dev@local.test"
     chemclaw_dev_user_projects: str = "NCE-001,NCE-002"
 
+    # Langfuse — for "View trace" links (Phase D.2).
+    # Set LANGFUSE_HOST to the Langfuse UI base URL (e.g. http://localhost:3000).
+    langfuse_host: str = ""
+
     @property
-    def agent_base_url(self) -> str:
+    def resolved_agent_base_url(self) -> str:
+        if self.agent_base_url:
+            return self.agent_base_url.rstrip("/")
         return f"http://{self.agent_host}:{self.agent_port}"
 
     @property

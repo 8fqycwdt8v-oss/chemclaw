@@ -1,77 +1,104 @@
-# ChemClaw
+# ChemClaw — Claw Code for Chemistry
 
-**Autonomous Knowledge Intelligence Agent for chemical & analytical development.**
+**Autonomous knowledge-intelligence agent for pharmaceutical chemical & analytical development.**  
+**v1.0.0-claw** — full Claw Code harness redesign complete.
 
-ChemClaw ingests heterogeneous scientific data (ELN entries, analytical
-results, SOPs, project reports), maintains a **bi-temporal knowledge graph**
-with confidence-scored edges and contradiction handling, and serves
-scientists through a chat UI with deep-research and cross-project-learning
-modes. It is designed to **act proactively** — new data triggers
-investigation, correlation discovery, and outbound notifications — and to
-**use scientific tools autonomously** (RDKit, DFT, GFN2-xTB, TabPFN, etc.).
+ChemClaw ingests heterogeneous scientific data (ELN entries, analytical results,
+SOPs, project reports), maintains a **bi-temporal knowledge graph** with
+confidence-scored edges, and serves scientists through a slash-driven chat interface.
+It uses scientific tools autonomously (RDKit, DFT, GFN2-xTB, TabPFN, ASKCOS, etc.)
+and reads source systems on-demand (Benchling ELN, STARLIMS LIMS, Waters Empower).
 
-## Status
-
-Phase 0 — infrastructure skeleton. The local stack brings up Postgres (with
-pgvector + pgvectorscale), Neo4j (for Graphiti-based bi-temporal KG), a
-TypeScript/Fastify agent service, and a Streamlit frontend. An ELN JSON
-importer writes canonical records into Postgres and emits events for
-downstream projectors.
-
-See the full implementation plan at
-`~/.claude/plans/chemos-knowledge-intelligence-tranquil-marshmallow.md`.
-
-## Architecture (one-line summary)
+## Architecture
 
 ```
-Streamlit  →  Fastify/Mastra agent  →  MCP tool servers (Python)
-                    │                          ├── Graphiti/Neo4j KG
-                    └── LiteLLM (+redactor)    ├── RDKit, DRFP, DFT, etc.
-                          │                    └── (Phase 2+)
-                          ↓
-                     External LLM APIs
+┌─────────────────────────────────────────────────────────────┐
+│  Streamlit (port 8501)  ·  slash palette  ·  plan-mode      │
+└──────────────────────────────┬──────────────────────────────┘
+                               │ SSE (port 3101)
+┌──────────────────────────────▼──────────────────────────────┐
+│  agent-claw (custom ~500-LOC harness)                        │
+│                                                             │
+│  Slash router → Hook dispatcher → ReAct loop               │
+│  pre_turn  →  pre_tool  →  exec  →  post_tool  →  compact  │
+│                                                             │
+│  Tools: 30+ builtins · Forged tools · Skill packs (8 max)   │
+│  Skills: retro / qc / cross_learning / deep_research /       │
+│          askcos / aizynth / chemprop / xtb / admet / sirius  │
+└────┬──────────────────┬────────────────────┬────────────────┘
+     │ MCP (Python)     │ MCP (Python)       │ MCP (Python)
+     ▼                  ▼                    ▼
+Chemistry tools    Source-system adapters    KG + retrieval
+rdkit · drfp       benchling (8013)         mcp-kg (8003)
+askcos · aizynth   starlims (8014)          mcp-embedder (8004)
+chemprop · xtb     waters-empower (8015)    mcp-tabicl (8005)
+admetlab · sirius                           mcp-doc-fetcher (8006)
 
-                Postgres (app DB + pgvector + event log)
-                          ↑
-             ELN JSON importer · SMB scraper · KG projector
+     │ all MCP calls route through
+     ▼
+LiteLLM gateway + PII redactor  →  Anthropic / OpenAI / ...
+
+Data layer (unchanged):
+  Postgres canonical → NOTIFY → projectors → Neo4j / pgvector
+  chunk_embedder · reaction_vectorizer · kg_experiments
+  kg_hypotheses · contextual_chunker · kg_source_cache
 ```
-
-- **Orchestration**: Paperclip (MIT, Node.js) — issues, approvals, budgets,
-  heartbeats.
-- **Agent runtime**: Mastra (TypeScript) — autonomous ReAct loop; tools
-  registered; model controls flow.
-- **Durable execution**: Temporal.io (for long-horizon investigations).
-- **Data**: Postgres + pgvector + pgvectorscale; Neo4j Community + Graphiti.
-- **Scientific tools**: Python MCP servers (RDKit, Marker, ChemDataExtractor,
-  DRFP, xtb, PySCF, TabPFN, Chemprop, AiZynthFinder, NMR/MS parsers).
-- **UI**: Streamlit — chat, KG explorer, feedback widgets, admin dashboard.
-- **Egress**: LiteLLM proxy with a PII/IP redactor plugin; single outbound
-  path for LLM inference.
-- **Deployment target**: OpenShift via Helm (infra/helm/).
 
 ## Quickstart
 
 ```bash
 cp .env.example .env
-make setup      # one-time — .venv + node deps
-make up         # Postgres + Neo4j
-make db.seed    # sample projects + dev user access
-source .venv/bin/activate
-make import.sample
+make setup          # one-time — .venv + node deps
+make up             # Postgres + Neo4j
+make db.seed        # sample projects + dev user
 
 # In separate terminals:
-make run.agent      # http://localhost:3100
-make run.frontend   # http://localhost:8501
+make run.agent      # agent-claw on http://localhost:3101
+make run.frontend   # Streamlit on http://localhost:8501
 ```
 
-Full step-by-step: [docs/runbooks/local-dev.md](docs/runbooks/local-dev.md).
+### Slash commands
+
+| Verb | What it does |
+|---|---|
+| `/help` | List all verbs |
+| `/skills` | Show available skill packs |
+| `/plan <Q>` | Preview a multi-step plan before execution |
+| `/route <SMILES>` | Retrosynthesis via ASKCOS or AiZynthFinder |
+| `/screen <SMILES>` | ADMET screen + multi-step plan via PTC |
+| `/dr <question>` | Deep research — KG traversal + report composition |
+| `/feedback up\|down "<reason>"` | Send feedback on the last turn |
+| `/eval` | Run the chemistry golden set for ad-hoc regression |
+| `/learn` | Persist the last successful turn as a new skill |
+| `/forged list` | Show forged tools catalog |
+
+### With source systems (requires credentials in .env)
+
+```bash
+make up.full   # all services + sources profile
+# Then in chat:
+# "query ELN entries for project proj_001"
+# "fetch HPLC run run_W001 and show purity"
+```
+
+## Test counts (v1.0.0-claw)
+
+```
+cd services/agent-claw && npm test          → 634 passed
+python3 -m pytest services/mcp_tools/      → 47+ passed (chemistry) + 29 (new sources)
+python3 -m pytest services/projectors/kg_source_cache/tests/ → 7 passed
+```
+
+## Further reading
+
+- Harness redesign plan: `~/.claude/plans/go-through-the-three-vivid-sunset.md`
+- ADR 004 — Harness engineering: [docs/adr/004-harness-engineering.md](docs/adr/004-harness-engineering.md)
+- ADR 005 — Data layer revision: [docs/adr/005-data-layer-revision.md](docs/adr/005-data-layer-revision.md)
+- Rollback runbook: [docs/runbooks/harness-rollback.md](docs/runbooks/harness-rollback.md)
+- Local development: [docs/runbooks/local-dev.md](docs/runbooks/local-dev.md)
+- Architecture Decision Record: [docs/adr/001-architecture.md](docs/adr/001-architecture.md)
+- Instrument adapter template: [services/mcp_tools/mcp_instrument_template/README.md](services/mcp_tools/mcp_instrument_template/README.md)
 
 ## License
 
 MIT — see [LICENSE](./LICENSE).
-
-## Further reading
-
-- Full architectural spec: `~/.claude/plans/chemos-knowledge-intelligence-tranquil-marshmallow.md`
-- Local development runbook: [docs/runbooks/local-dev.md](docs/runbooks/local-dev.md)
-- Architecture Decision Record: [docs/adr/001-architecture.md](docs/adr/001-architecture.md)

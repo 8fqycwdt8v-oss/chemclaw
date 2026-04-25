@@ -71,7 +71,7 @@ def stream_chat(
     UI accordingly. We do not interpret text content — that's the UI's job.
     """
     settings = get_settings()
-    url = f"{settings.agent_base_url}/api/chat"
+    url = f"{settings.resolved_agent_base_url}/api/chat"
     body = {"messages": messages, "stream": True}
 
     headers = {"Accept": "text/event-stream", "X-Forwarded-User": user_email}

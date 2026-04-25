@@ -1,0 +1,230 @@
+# Core deployments — always deployed regardless of profile flags.
+# Includes: agent-claw, paperclip-lite, frontend, litellm, litellm-redactor,
+# and always-on projectors.
+
+# ── agent-claw ────────────────────────────────────────────────────────────────
+{{- if .Values.agentClaw.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agent-claw
+  labels:
+    app: agent-claw
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.agentClaw.replicas }}
+  selector:
+    matchLabels:
+      app: agent-claw
+  template:
+    metadata:
+      labels:
+        app: agent-claw
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: agent-claw
+          image: {{ .Values.agentClaw.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ .Values.agentClaw.port }}
+          env:
+            - name: POSTGRES_HOST
+              value: {{ .Values.global.postgres.host }}
+            - name: POSTGRES_DB
+              value: {{ .Values.global.postgres.db }}
+            - name: POSTGRES_USER
+              value: {{ .Values.global.postgres.user }}
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.postgres.passwordSecret }}
+                  key: {{ .Values.global.postgres.passwordKey }}
+          resources:
+            requests: {{ .Values.agentClaw.resources.requests | toYaml | nindent 14 }}
+            limits:   {{ .Values.agentClaw.resources.limits | toYaml | nindent 14 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: agent-claw
+spec:
+  selector:
+    app: agent-claw
+  ports:
+    - port: {{ .Values.agentClaw.port }}
+      targetPort: {{ .Values.agentClaw.port }}
+{{- end }}
+
+# ── paperclip-lite ────────────────────────────────────────────────────────────
+{{- if .Values.paperclipLite.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: paperclip-lite
+  labels:
+    app: paperclip-lite
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: {{ .Values.paperclipLite.replicas }}
+  selector:
+    matchLabels:
+      app: paperclip-lite
+  template:
+    metadata:
+      labels:
+        app: paperclip-lite
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: paperclip-lite
+          image: {{ .Values.paperclipLite.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          ports:
+            - containerPort: {{ .Values.paperclipLite.port }}
+          resources:
+            requests: {{ .Values.paperclipLite.resources.requests | toYaml | nindent 14 }}
+            limits:   {{ .Values.paperclipLite.resources.limits | toYaml | nindent 14 }}
+          securityContext:
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: paperclip-lite
+spec:
+  selector:
+    app: paperclip-lite
+  ports:
+    - port: {{ .Values.paperclipLite.port }}
+      targetPort: {{ .Values.paperclipLite.port }}
+{{- end }}
+
+# ── projectors (always-on) ────────────────────────────────────────────────────
+{{- if .Values.projectors.chunkEmbedder.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: chunk-embedder
+  labels:
+    app: chunk-embedder
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: chunk-embedder
+  template:
+    metadata:
+      labels:
+        app: chunk-embedder
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: chunk-embedder
+          image: {{ .Values.projectors.chunkEmbedder.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+{{- end }}
+
+{{- if .Values.projectors.reactionVectorizer.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: reaction-vectorizer
+  labels:
+    app: reaction-vectorizer
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: reaction-vectorizer
+  template:
+    metadata:
+      labels:
+        app: reaction-vectorizer
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: reaction-vectorizer
+          image: {{ .Values.projectors.reactionVectorizer.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+{{- end }}
+
+{{- if .Values.projectors.kgExperiments.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kg-experiments
+  labels:
+    app: kg-experiments
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kg-experiments
+  template:
+    metadata:
+      labels:
+        app: kg-experiments
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: kg-experiments
+          image: {{ .Values.projectors.kgExperiments.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+{{- end }}
+
+{{- if .Values.projectors.kgHypotheses.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kg-hypotheses
+  labels:
+    app: kg-hypotheses
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kg-hypotheses
+  template:
+    metadata:
+      labels:
+        app: kg-hypotheses
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: kg-hypotheses
+          image: {{ .Values.projectors.kgHypotheses.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+{{- end }}

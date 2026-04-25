@@ -1,0 +1,6 @@
+fastapi>=0.115
+uvicorn[standard]>=0.32
+pydantic>=2.8
+pydantic-settings>=2.4
+rdkit>=2024.9
+# xTB and CREST are installed as system binaries in the Dockerfile via conda-forge.

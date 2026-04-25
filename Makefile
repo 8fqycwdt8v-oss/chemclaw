@@ -30,7 +30,7 @@ setup.python: ## Create .venv and install Python deps for all services
 	$(PIP) install --upgrade pip
 	$(PIP) install -e ".[dev]"
 	$(PIP) install -r services/frontend/requirements.txt
-	$(PIP) install -r services/ingestion/eln_json_importer/requirements.txt
+	$(PIP) install -r services/ingestion/eln_json_importer.legacy/requirements.txt
 	$(PIP) install -r services/mcp_tools/mcp_rdkit/requirements.txt
 	$(PIP) install -r services/mcp_tools/mcp_drfp/requirements.txt
 	$(PIP) install -r services/projectors/reaction_vectorizer/requirements.txt
@@ -53,6 +53,10 @@ up: ## Bring up Postgres + Neo4j + Langfuse
 .PHONY: up.full
 up.full: ## Bring up all data services (incl. Langfuse)
 	docker compose up -d
+
+.PHONY: up.chemistry
+up.chemistry: ## Bring up chemistry MCP services (profile=chemistry; requires model checkpoints)
+	docker compose --profile chemistry up -d
 
 .PHONY: down
 down: ## Stop all services (preserves volumes)
@@ -100,9 +104,11 @@ run.agent: ## Run agent service in dev mode (hot-reload)
 run.frontend: ## Run Streamlit frontend
 	$(VENV)/bin/streamlit run services/frontend/streamlit_app.py
 
-.PHONY: import.sample
-import.sample: ## Import the sample ELN JSON file
-	$(VENV)/bin/python -m services.ingestion.eln_json_importer.cli \
+.PHONY: import.sample.legacy
+import.sample.legacy: ## [DEPRECATED] One-shot bulk import via legacy eln_json_importer.
+	@echo "WARNING: eln_json_importer is retired from the live path (Phase F.2)."
+	@echo "New ELN entries flow through mcp_eln_benchling. Use this only for one-shot bulk migrations."
+	$(VENV)/bin/python -m services.ingestion.eln_json_importer.legacy.cli \
 	  --input sample-data/eln-experiments-sample.json
 
 .PHONY: run.mcp-rdkit

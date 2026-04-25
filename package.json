@@ -1,15 +1,16 @@
 {
   "name": "chemclaw",
-  "version": "0.0.1",
+  "version": "1.0.0-claw",
   "private": true,
-  "description": "ChemOS Knowledge Intelligence Agent — workspace root (TypeScript services)",
+  "description": "ChemClaw Claw Code — autonomous chemistry knowledge-intelligence agent (v1.0.0-claw)",
   "license": "MIT",
   "workspaces": [
-    "services/agent"
+    "services/agent-claw",
+    "services/paperclip"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
-    "dev:agent": "npm run dev --workspace services/agent",
+    "dev:agent": "npm run dev --workspace services/agent-claw",
     "lint": "npm run lint --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "npm run test --workspaces --if-present"

@@ -1,0 +1,6 @@
+fastapi>=0.115
+uvicorn[standard]>=0.32
+pydantic>=2.8
+pydantic-settings>=2.4
+# SIRIUS 6 is a JVM tool installed as a system binary in the Dockerfile.
+# Download from https://github.com/sirius-ms/sirius/releases

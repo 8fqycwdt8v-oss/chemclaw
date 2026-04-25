@@ -1,0 +1,30 @@
+{
+  "name": "@chemclaw/paperclip-lite",
+  "version": "0.0.1",
+  "private": true,
+  "description": "Paperclip-lite sidecar — heartbeat + budget + concurrency control. GxP-stripped.",
+  "license": "MIT",
+  "type": "module",
+  "main": "dist/index.js",
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "dev": "tsx watch src/index.ts",
+    "start": "node dist/index.js",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "fastify": "^5.1.0",
+    "@fastify/cors": "^10.1.0",
+    "@fastify/rate-limit": "^10.3.0",
+    "pg": "^8.20.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@types/node": "^22.9.0",
+    "@types/pg": "^8.20.0",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.5"
+  }
+}

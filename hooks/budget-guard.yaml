@@ -1,0 +1,15 @@
+name: budget-guard
+lifecycle: pre_tool
+enabled: true
+# No script — uses the built-in TypeScript implementation in
+# services/agent-claw/src/core/hooks/budget-guard.ts
+definition:
+  description: >
+    Check the per-turn token budget BEFORE each tool executes. Projects
+    expected usage (current usage + tool overhead) and throws
+    BudgetExceededError if the projection would exceed AGENT_TOKEN_BUDGET.
+    Reads ctx.scratchpad.budget for current usage figures.
+  tool_overhead_tokens: 500
+  note: >
+    Phase D replaces this with a Paperclip-lite call that has real USD
+    accounting and per-user daily caps.

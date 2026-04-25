@@ -1,0 +1,6 @@
+fastapi>=0.115
+uvicorn[standard]>=0.32
+pydantic>=2.8
+pydantic-settings>=2.4
+# askcos2 is installed from the ASKCOS v2 release wheel inside the Dockerfile.
+# It is NOT installed in the dev .venv because it requires heavy ML deps.

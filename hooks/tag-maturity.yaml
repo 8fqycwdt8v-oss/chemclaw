@@ -1,0 +1,15 @@
+name: tag-maturity
+lifecycle: post_tool
+enabled: true
+# No script — uses the built-in TypeScript implementation in
+# services/agent-claw/src/core/hooks/tag-maturity.ts
+definition:
+  description: >
+    Stamp a maturity: "EXPLORATORY" field on every tool output object.
+    No-op for primitives and arrays. Phase C will upgrade this to consult
+    the artifacts table and apply WORKING / FOUNDATION tiers based on
+    evidence strength.
+  default_maturity: EXPLORATORY
+  note: >
+    The harness rejects citing an EXPLORATORY fact in a FOUNDATION claim
+    (Phase C). For now the tag is informational only.

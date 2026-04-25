@@ -1,0 +1,6 @@
+fastapi>=0.115
+uvicorn[standard]>=0.32
+pydantic>=2.8
+pydantic-settings>=2.4
+# chemprop v2 (MIT) is installed inside the Docker image.
+# pip install chemprop>=2.0

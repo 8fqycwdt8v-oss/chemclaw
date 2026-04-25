@@ -1,0 +1,10 @@
+fastapi>=0.115
+uvicorn[standard]>=0.32
+pydantic>=2.8
+pydantic-settings>=2.4
+httpx>=0.27
+pypdf>=4.3
+# pdf2image requires poppler system package (apt: poppler-utils).
+# Install this for production image rendering; tests fall back gracefully.
+pdf2image>=1.17
+Pillow>=10.0

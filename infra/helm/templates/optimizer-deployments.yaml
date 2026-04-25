@@ -1,0 +1,77 @@
+# Optimizer deployments — enabled when optimizer.enabled=true
+# GEPA runner, skill promoter, forged-tool validator run as CronJobs.
+{{- if .Values.optimizer.enabled }}
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: gepa-runner
+  labels:
+    app: gepa-runner
+    profile: optimizer
+spec:
+  schedule: {{ .Values.optimizer.gepaRunner.schedule | quote }}
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+          restartPolicy: OnFailure
+          containers:
+            - name: gepa-runner
+              image: {{ .Values.optimizer.gepaRunner.image }}
+              securityContext:
+                allowPrivilegeEscalation: false
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: skill-promoter
+  labels:
+    app: skill-promoter
+    profile: optimizer
+spec:
+  schedule: {{ .Values.optimizer.skillPromoter.schedule | quote }}
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+          restartPolicy: OnFailure
+          containers:
+            - name: skill-promoter
+              image: {{ .Values.optimizer.skillPromoter.image }}
+              securityContext:
+                allowPrivilegeEscalation: false
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: forged-tool-validator
+  labels:
+    app: forged-tool-validator
+    profile: optimizer
+spec:
+  schedule: {{ .Values.optimizer.forgedToolValidator.schedule | quote }}
+  jobTemplate:
+    spec:
+      template:
+        spec:
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+          restartPolicy: OnFailure
+          containers:
+            - name: forged-tool-validator
+              image: {{ .Values.optimizer.forgedToolValidator.image }}
+              securityContext:
+                allowPrivilegeEscalation: false
+
+{{- end }}

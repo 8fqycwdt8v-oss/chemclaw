@@ -14,6 +14,42 @@ model_list:
       model: anthropic/claude-sonnet-4-6
       api_key: os.environ/ANTHROPIC_API_KEY
 
+  - model_name: claude-sonnet-4-7
+    litellm_params:
+      model: anthropic/claude-sonnet-4-7
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: claude-haiku-4-5
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  # --- Role-keyed aliases (Phase D.2 multi-model routing) ---
+  # planner  → Opus 4.7  (high-quality plan generation)
+  # executor → Sonnet 4.7 (balanced speed + quality for tool calls)
+  # compactor → Haiku-class (cheap working-memory summarization)
+  # judge    → Haiku-class (confidence cross-model agreement check)
+
+  - model_name: planner
+    litellm_params:
+      model: anthropic/claude-opus-4-7
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: executor
+    litellm_params:
+      model: anthropic/claude-sonnet-4-7
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: compactor
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+
+  - model_name: judge
+    litellm_params:
+      model: anthropic/claude-haiku-4-5
+      api_key: os.environ/ANTHROPIC_API_KEY
+
   # --- OpenAI ---
   - model_name: gpt-5
     litellm_params:

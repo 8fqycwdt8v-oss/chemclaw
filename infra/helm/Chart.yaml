@@ -1,0 +1,14 @@
+apiVersion: v2
+name: chemclaw
+description: ChemClaw Claw Code — autonomous chemistry knowledge-intelligence agent
+type: application
+version: 1.0.0-claw
+appVersion: "1.0.0-claw"
+keywords:
+  - chemistry
+  - ai-agent
+  - knowledge-graph
+  - pharma
+maintainers:
+  - name: ChemClaw maintainer
+    email: robertmoeckel@me.com

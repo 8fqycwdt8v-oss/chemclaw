@@ -1,0 +1,194 @@
+"""DSPy GEPA optimizer wrapper for ChemClaw prompt evolution.
+
+Algorithm (per prompt_registry row):
+  1. Build DSPy Examples from Langfuse traces + feedback_events.
+  2. Stratify; skip if any class has < 30 examples.
+  3. Run dspy.GEPA for 30 generations, population 8.
+  4. Score best candidate on golden-set fixture.
+  5. INSERT new prompt_registry row (active=false, shadow_until=NOW()+7d).
+
+This module is kept pure-function / mockable for testing.
+Only the runner.py touches the DB and scheduler.
+"""
+
+from __future__ import annotations
+
+import json
+import logging
+from dataclasses import dataclass
+from typing import Any
+
+import dspy
+
+from .examples import stratify, check_class_minimums
+from .metric import GepaMetric, _golden_score
+
+logger = logging.getLogger(__name__)
+
+# ---------------------------------------------------------------------------
+# DSPy Signature
+# ---------------------------------------------------------------------------
+
+class ChemClawQA(dspy.Signature):
+    """Answer a chemistry / pharmaceutical development question precisely and
+    with full citations to fact IDs from the knowledge graph."""
+
+    question: str = dspy.InputField(desc="The user's chemistry or analytical development question.")
+    answer: str = dspy.OutputField(desc="Detailed answer with citations (fact IDs as UUIDs).")
+
+
+# ---------------------------------------------------------------------------
+# Result dataclass
+# ---------------------------------------------------------------------------
+
+@dataclass
+class GepaResult:
+    prompt_name: str
+    new_template: str
+    golden_score: float
+    feedback_rate: float
+    per_class_breakdown: dict[str, int]
+    gepa_metadata: dict[str, Any]
+    skipped: bool = False
+    skip_reason: str = ""
+
+
+# ---------------------------------------------------------------------------
+# Core optimizer call
+# ---------------------------------------------------------------------------
+
+def run_gepa(
+    prompt_name: str,
+    current_template: str,
+    examples: list[dspy.Example],
+    golden_examples: list[dspy.Example],
+    *,
+    generations: int = 30,
+    population_size: int = 8,
+    dspy_lm: Any = None,
+) -> GepaResult:
+    """Run GEPA optimisation for a single prompt.
+
+    Parameters
+    ----------
+    prompt_name:
+        The name key in prompt_registry.
+    current_template:
+        The current active prompt text (used as GEPA seed).
+    examples:
+        Training examples (traces + feedback from Langfuse).
+    golden_examples:
+        Golden-set fixture examples for scoring.
+    generations / population_size:
+        GEPA hyperparameters.
+    dspy_lm:
+        Configured DSPy LM instance.  Injected so tests can stub it.
+    """
+    # Stratify + check minimums.
+    groups = stratify(examples)
+    minimums = check_class_minimums(groups)
+    per_class_breakdown = {cls: len(exs) for cls, exs in groups.items()}
+
+    if not any(minimums.values()):
+        return GepaResult(
+            prompt_name=prompt_name,
+            new_template=current_template,
+            golden_score=0.0,
+            feedback_rate=0.0,
+            per_class_breakdown=per_class_breakdown,
+            gepa_metadata={},
+            skipped=True,
+            skip_reason="no class met minimum example count (30)",
+        )
+
+    # Configure DSPy LM if not injected (used in production).
+    if dspy_lm is not None:
+        dspy.settings.configure(lm=dspy_lm)
+
+    metric = GepaMetric(golden_examples=golden_examples)
+
+    # Build the trainset from classes that meet the minimum.
+    trainset: list[dspy.Example] = []
+    for cls, exs in groups.items():
+        if minimums.get(cls):
+            trainset.extend(exs)
+
+    # Build baseline module.
+    baseline = dspy.Predict(ChemClawQA)
+
+    # Run GEPA.
+    try:
+        gepa_optimizer = dspy.GEPA(
+            metric=metric,
+            num_generations=generations,
+            population_size=population_size,
+        )
+        optimized: dspy.Module = gepa_optimizer.compile(
+            student=baseline,
+            trainset=trainset,
+        )
+    except AttributeError:
+        # dspy.GEPA may not exist in all versions — fall back to BootstrapFewShotWithRandomSearch.
+        logger.warning(
+            "dspy.GEPA not available; falling back to BootstrapFewShotWithRandomSearch"
+        )
+        gepa_optimizer = dspy.BootstrapFewShotWithRandomSearch(
+            metric=metric,
+            num_candidates=population_size,
+            num_threads=1,
+        )
+        optimized = gepa_optimizer.compile(
+            student=baseline,
+            trainset=trainset,
+        )
+
+    # Score on golden set.
+    golden_score = _golden_score(optimized, golden_examples)
+
+    # Compute feedback rate.
+    positive_feedback = sum(
+        1 for ex in examples
+        if getattr(ex, "feedback", "") in ("up", "thumbs_up", "+1")
+    )
+    feedback_rate = positive_feedback / len(examples) if examples else 0.0
+
+    # Extract the optimised prompt text from the module's predictors.
+    new_template = _extract_template(optimized, current_template)
+
+    gepa_metadata: dict[str, Any] = {
+        "generations": generations,
+        "population_size": population_size,
+        "golden_score": golden_score,
+        "feedback_rate": feedback_rate,
+        "per_class_breakdown": per_class_breakdown,
+        "training_examples": len(trainset),
+        "classes_met_minimum": [cls for cls, ok in minimums.items() if ok],
+    }
+
+    return GepaResult(
+        prompt_name=prompt_name,
+        new_template=new_template,
+        golden_score=golden_score,
+        feedback_rate=feedback_rate,
+        per_class_breakdown=per_class_breakdown,
+        gepa_metadata=gepa_metadata,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Template extraction
+# ---------------------------------------------------------------------------
+
+def _extract_template(module: dspy.Module, fallback: str) -> str:
+    """Pull the first system instruction from an optimised DSPy module."""
+    try:
+        for pred in module.predictors():
+            # dspy.Predict stores demos + instructions.
+            instructions = getattr(pred, "instructions", None) or getattr(
+                getattr(pred, "extended_signature", None), "instructions", None
+            )
+            if instructions and isinstance(instructions, str):
+                return instructions
+    except Exception:
+        pass
+    return fallback

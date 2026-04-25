@@ -22,17 +22,17 @@ This pattern is load-bearing — follow it when adding new data types:
 
 ## Control flow philosophy: autonomous by default, graph-coded where reproducibility is non-negotiable
 
-- **Agent reasoning loop**: pure ReAct. Model picks tools. No DAG. The agent lives in `services/agent/` (TypeScript/Mastra — Mastra not yet wired, placeholder Fastify server).
-- **Tools** (retrieval, KG ops, scientific compute): exposed as MCP/REST endpoints the agent calls. Sprint 2 uses plain REST for simplicity; the MCP wrapper lands in sprint 3.
-- **Plumbing** (ingestion, projectors, correction propagation, approval gates): deterministic, rule-based. Never put LLM reasoning into these paths.
-- **Deep Research** and **cross-project learning** are *toolkits* the agent chooses to invoke, not fixed pipelines. Avoid adding new hard-coded "step 1 → step 2 → step 3" logic at the reasoning layer.
+- **Agent reasoning loop**: pure ReAct. Model picks tools. No DAG. The agent lives in `services/agent-claw/` (TypeScript, custom ~500-LOC harness — Mastra dropped under greenfield permission in Phase A). Port 3101.
+- **Tools** (retrieval, KG ops, scientific compute, source systems): exposed as MCP/REST endpoints the agent calls. All Python services; TypeScript builtins wrap them via typed McpClient.
+- **Plumbing** (ingestion, projectors, correction propagation): deterministic, rule-based. Never put LLM reasoning into these paths.
+- **Skills, DR, and cross-project learning** are skill packs the agent chooses to invoke, not fixed pipelines. See `skills/` at repo root.
 
 ## Backend stack — why it looks the way it does
 
 - **Python for scientific tools** (every MCP tool is Python): RDKit, Marker, ChemDataExtractor, DRFP, TabPFN, nmrglue, pyopenms have no TypeScript equivalents of comparable quality.
-- **Node.js/TypeScript for orchestration** (agent service, Paperclip): better async model, cleaner tool schema typing, Mastra.
+- **Node.js/TypeScript for orchestration** (agent-claw, Paperclip-lite): better async model, cleaner tool schema typing. Mastra dropped — replaced by ~500-LOC custom harness.
 - **MCP is the cross-language boundary** — tools never import each other's code directly; everything is JSON over HTTP.
-- **Paperclip** (Node.js, MIT) is adopted as the orchestration/approval/budget/heartbeat layer. Cap concurrent issues below 250/company (pino OOM mitigation documented in the plan).
+- **Paperclip-lite** (Node.js, ~500 LOC) handles heartbeat + budget + per-user concurrency. No GxP features.
 - **Graphiti + Neo4j Community** for the bi-temporal KG. GPL-3.0 server-side only, no binary redistribution.
 - **pgvector + pgvectorscale on the app Postgres** — one DB for state + vectors.
 
@@ -137,45 +137,56 @@ Every project-scoped query must run in a transaction with `app.current_user_entr
 - The plan file at `~/.claude/plans/chemos-knowledge-intelligence-tranquil-marshmallow.md` — architectural spec.
 - Two reference whitepapers in `documentation/` (tracked in git): the pharma autonomous-agents whitepaper and the NemoClaw / Paperclip / Hermes technical review. These informed every decision and are the canonical source for rationale.
 
-## Status
+## Status — Claw Code v1.0.0-claw (all phases complete)
 
-- **Phase 0** (infrastructure): complete. Postgres + Neo4j via compose, schema + RLS, Streamlit skeleton, hardened Fastify agent with rate-limit, CORS allowlist, body-size cap, dev/prod user-extraction separation.
-- **Phase 1** (document ingestion): core path **complete**. `doc_ingester` parses PDF (pypdf) / DOCX (python-docx + defusedxml preflight) / Markdown / plaintext → `documents` + `document_chunks` rows, emits `document_ingested` events. `chunk_embedder` projector consumes events, calls `mcp-embedder` in batches, writes BGE-M3 vectors. Agent tools `search_knowledge` (hybrid dense+sparse+RRF) and `fetch_full_document` land and are tested. SMB live scraper + inotify daemon mode deferred; current ingester runs one-shot over a mounted directory (`docker compose --profile ingest up`).
-- **Phase 2** (ELN + analytical): ELN JSON importer end-to-end (file-size capped); reaction DRFP vectorizer end-to-end via `mcp-drfp` (SMILES length bounded).
-- **Phase 3** (retrieval & chat): **complete**.
-  - `mcp-kg` — bi-temporal KG with race-safe MERGE (uniqueness constraint on `fact_id`), confidence tiers, invalidation, temporal-point queries.
-  - `mcp-embedder` — BGE-M3 text embeddings with stub-encoder for dev/test.
-  - `kg-experiments` projector — deterministic UUIDv5 `fact_id`s → idempotent replay. Ungrounded compounds fall back to `ungrounded-<hash>` nodes.
-  - Agent — **autonomous ReAct loop via Mastra** with LiteLLM as the model provider. Tools: `find_similar_reactions`, `canonicalize_smiles`. System prompt loaded from the `prompt_registry` table (not hardcoded) with a 60s cache; no runtime fallback — if the active prompt is missing, the agent refuses to start a turn.
-  - `POST /api/chat` — SSE streaming chat endpoint. Route-level rate limit, history + per-message caps, terminal-event guarantee. Non-streaming mode available via `stream: false`.
-  - `services/frontend/pages/chat.py` — Streamlit chat page consuming the SSE stream with inline tool-call panels and history trimming.
-- **Phase 4** (Deep Research): initial implementation landed in 7d46b1f with a `mode`
-  parameter and dedicated `POST /api/deep_research` route. Phase 5A unwound that
-  surface — the agent is now one unified `/api/chat` endpoint with a single
-  `agent.system` v2 prompt; the Deep Research *tools* (`query_kg`,
-  `check_contradictions`, `draft_section`, `mark_research_done`) remain available
-  as part of the unified catalog and are invoked on demand.
-- **Phase 5A** (cross-project reaction learning — toolkit half): **complete**.
-  - `mcp-tabicl` — TabICL v2 tabular in-context learning on reaction features.
-    JSON-persisted DRFP PCA (loader is pure NumPy; no arbitrary-code-execution
-    path). Runs on port 8005.
-  - New agent tools: `expand_reaction_context`, `statistical_analyze`,
-    `synthesize_insights`, `propose_hypothesis`.
-  - Canonical `hypotheses` + `hypothesis_citations` tables with RLS.
-  - `kg-hypotheses` projector — canonical → Neo4j `:Hypothesis` nodes + `:CITES`
-    edges. Uses uuid5 for race-safe MERGE; replay-idempotent.
-  - Unified `agent.system.v2` + `tool.synthesize_insights.v1` prompts.
-  - Anti-fabrication guard: per-turn `seenFactIds` Set; `propose_hypothesis`
-    rejects citations the agent never surfaced.
-  - Streamlit chat: mode toggle removed; fenced `chart` block rendering;
-    Hypothesis badge per tool call.
-- **Phase 5B** (proactive v1): pending — next sprint.
-- **Phases 6–8**: pending. KG correction workflow, GEPA self-improvement, OpenShift Helm, full RBAC hardening.
+All phases A through F.2 of the Claw Code harness redesign are complete.
+The plan document is at `~/.claude/plans/go-through-the-three-vivid-sunset.md`.
 
-## Test counts (as of current sprint)
+- **Phase A** (greenfield harness skeleton): custom ~500-LOC while-loop harness, slash parser, YAML hooks, tool registry, `AGENTS.md`. Port 3101.
+- **Phase B** (tool migration + skills + original-doc access): 12 tools ported; `mcp_doc_fetcher`; `fetch_original_document`; 4 skill packs; sub-agent spawner; plan-mode preview.
+- **Phase C** (memory tiers + maturity + confidence): working-memory compactor; `contextual_chunker` projector; `skill_library` table; maturity tiers (`EXPLORATORY/WORKING/FOUNDATION`); 3-signal confidence ensemble.
+- **Phase D** (PTC + Paperclip-lite + Langfuse + feedback): E2B PTC sandbox; `run_program`; Paperclip-lite sidecar; Langfuse OTel tracing; `/feedback` wired to DB; multi-model routing.
+- **Phase D.5** (tool forging): `forge_tool`, `induce_forged_tool_from_trace`, `add_forged_tool_test`; `forged_tool_validation_runs` table; weak-from-strong transfer; scope promotion (private → project → org).
+- **Phase E** (self-improvement): DSPy GEPA nightly optimizer; golden set + held-out promotion gate; skill promotion loop; shadow serving (`shadow_until` column); `/eval` slash verb.
+- **Phase F.1** (chemistry MCPs): 6 new chemistry services: askcos (8007), aizynth (8008), chemprop (8009), xtb (8010), admetlab (8011), sirius (8012). 6 skill packs.
+- **Phase F.2** (source-system MCPs + retire legacy): **complete**.
+  - `mcp_eln_benchling` (8013) — Benchling ELN adapter; `GET /experiments/{id}` + `POST /query_runs`.
+  - `mcp_lims_starlims` (8014) — STARLIMS LIMS adapter; `GET /test_results/{id}` + `POST /query_results`.
+  - `mcp_instrument_waters` (8015) — Waters Empower HPLC adapter; `GET /run/{id}` + `POST /search_runs`. Template in `mcp_instrument_template/README.md`.
+  - 6 agent-claw builtins: `query/fetch_eln_*`, `query/fetch_lims_*`, `query/fetch_instrument_*`.
+  - `source-cache` post-tool hook + `kg_source_cache` projector — source facts → `:Fact` nodes with `(source_system_id, fetched_at, valid_until)` provenance.
+  - `eln_json_importer` retired from live path; preserved as `services/ingestion/eln_json_importer.legacy/`.
+  - Helm chart: `infra/helm/` with profile flags (chemistry/sources/optimizer/observability); 26 Deployments in prod config.
+  - `services/agent/` deleted; Streamlit `AGENT_BASE_URL` defaults to port 3101.
+  - `docs/adr/004-harness-engineering.md`, `docs/adr/005-data-layer-revision.md`, `docs/runbooks/harness-rollback.md`.
+  - Tagged `v1.0.0-claw`.
+
+## Test counts (v1.0.0-claw)
 
 ```
-python3 -m pytest tests/             →  110 passed, 4 skipped (Neo4j integration, gated)
-cd services/agent && npm test        →   68 passed
-cd services/agent && npm run typecheck →  ok
+cd services/agent-claw && npm test   →  634 passed
+cd services/agent-claw && npm run typecheck → ok
+python3 -m pytest services/mcp_tools/mcp_eln_benchling/tests/ \
+  services/mcp_tools/mcp_lims_starlims/tests/ \
+  services/mcp_tools/mcp_instrument_waters/tests/ \
+  services/projectors/kg_source_cache/tests/   →  35 passed
+services/agent/  →  0 (deleted)
 ```
+
+## Harness Primitives
+
+The agent harness (`services/agent-claw/`) has five lifecycle hook points:
+
+| Hook point | When it fires | Current hooks |
+|---|---|---|
+| `pre_turn` | Before LLM call; after slash parsing | `init-scratch`, `apply-skills`, stale-fact check |
+| `pre_tool` | Before a tool executes | `anti-fabrication`, `budget-guard`, `foundation-citation-guard` |
+| `post_tool` | After a tool returns | `tag-maturity`, `source-cache`, `compact-window` |
+| `pre_compact` | When context > 60% of budget | `compact-window` (invokes Haiku compactor) |
+| `post_turn` | After SSE stream closes | `redact-secrets` |
+
+Hook files: `hooks/*.yaml` (definition) + `services/agent-claw/src/core/hooks/*.ts` (implementation).
+
+To add a hook: create both files; register in `lifecycle.ts`; write a vitest test. No harness changes needed.
+
+To replay a projector: `DELETE FROM projection_acks WHERE projector_name='<name>';` then restart the container.

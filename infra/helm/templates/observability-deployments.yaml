@@ -1,0 +1,116 @@
+# Observability deployments — enabled when observability.enabled=true
+# Langfuse (with ClickHouse + Postgres), contextual chunker projector.
+{{- if .Values.observability.enabled }}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: langfuse
+  labels:
+    app: langfuse
+    profile: observability
+spec:
+  replicas: {{ .Values.observability.langfuse.replicas }}
+  selector:
+    matchLabels:
+      app: langfuse
+  template:
+    metadata:
+      labels:
+        app: langfuse
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: langfuse
+          image: {{ .Values.observability.langfuse.image }}
+          ports:
+            - containerPort: {{ .Values.observability.langfuse.port }}
+          securityContext:
+            allowPrivilegeEscalation: false
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: langfuse
+spec:
+  selector:
+    app: langfuse
+  ports:
+    - port: {{ .Values.observability.langfuse.port }}
+      targetPort: {{ .Values.observability.langfuse.port }}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: langfuse-clickhouse
+  labels:
+    app: langfuse-clickhouse
+    profile: observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: langfuse-clickhouse
+  template:
+    metadata:
+      labels:
+        app: langfuse-clickhouse
+    spec:
+      containers:
+        - name: langfuse-clickhouse
+          image: {{ .Values.observability.langfuseClickhouse.image }}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: langfuse-postgres
+  labels:
+    app: langfuse-postgres
+    profile: observability
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: langfuse-postgres
+  template:
+    metadata:
+      labels:
+        app: langfuse-postgres
+    spec:
+      containers:
+        - name: langfuse-postgres
+          image: {{ .Values.observability.langfusePostgres.image }}
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: contextual-chunker
+  labels:
+    app: contextual-chunker
+    profile: observability
+spec:
+  replicas: {{ .Values.observability.contextualChunker.replicas }}
+  selector:
+    matchLabels:
+      app: contextual-chunker
+  template:
+    metadata:
+      labels:
+        app: contextual-chunker
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: contextual-chunker
+          image: {{ .Values.observability.contextualChunker.image }}
+          securityContext:
+            allowPrivilegeEscalation: false
+
+{{- end }}
