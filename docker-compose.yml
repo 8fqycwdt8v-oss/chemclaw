@@ -309,6 +309,37 @@ services:
     profiles: ["full"]
 
   # -------------------------------------------------------------
+  # mcp-doc-fetcher — fidelity-preserving original-document access
+  # file:// + https:// wired; smb/sharepoint/s3 stubbed (Phase F).
+  # Poppler (pdf2image) installed in the image; falls back to pypdf text
+  # extraction if poppler binary is missing at runtime.
+  # -------------------------------------------------------------
+  mcp-doc-fetcher:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_doc_fetcher/Dockerfile
+    container_name: chemclaw-mcp-doc-fetcher
+    restart: unless-stopped
+    environment:
+      # Comma-separated hostnames to block (SSRF deny list).
+      MCP_DOC_FETCHER_DENY_HOSTS: ${MCP_DOC_FETCHER_DENY_HOSTS:-}
+      LOG_LEVEL: ${MCP_DOC_FETCHER_LOG_LEVEL:-INFO}
+    ports:
+      - "8006:8006"
+    volumes:
+      # Tmp space for pdf2image intermediate files (poppler writes here).
+      - mcp-doc-fetcher-tmp:/tmp
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:8006/healthz"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    security_opt:
+      - no-new-privileges:true
+    profiles: ["full"]
+
+  # -------------------------------------------------------------
   # LiteLLM — external-LLM egress chokepoint with redactor pre-call
   # Commented by default; uncomment after setting API keys in .env.
   # -------------------------------------------------------------
@@ -334,3 +365,4 @@ volumes:
   neo4j-logs:
   embedder-hf-cache:
   mcp-tabicl-cache:
+  mcp-doc-fetcher-tmp:

@@ -47,4 +47,52 @@ ON CONFLICT (name) DO UPDATE SET
   enabled      = EXCLUDED.enabled,
   version      = EXCLUDED.version;
 
+-- ── mcp-doc-fetcher service (Phase B.1) ───────────────────────────────────────
+
+INSERT INTO mcp_tools (service_name, base_url, enabled, health_status)
+VALUES ('mcp-doc-fetcher', 'http://localhost:8006', true, 'unknown')
+ON CONFLICT (service_name) DO UPDATE SET
+  base_url      = EXCLUDED.base_url,
+  enabled       = EXCLUDED.enabled;
+
+-- ── fetch_original_document builtin (Phase B.1) ───────────────────────────────
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'fetch_original_document',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "document_id": {
+        "type": "string",
+        "format": "uuid",
+        "description": "UUID of the document to retrieve."
+      },
+      "format": {
+        "type": "string",
+        "enum": ["bytes", "markdown", "pdf_pages"],
+        "default": "markdown",
+        "description": "Output format. markdown=parsed text (cheap), bytes=raw original file, pdf_pages=PNG renders of specified pages."
+      },
+      "pages": {
+        "type": "array",
+        "items": {"type": "integer", "minimum": 0},
+        "maxItems": 50,
+        "description": "0-based page indices to render. Only used when format=pdf_pages."
+      }
+    },
+    "required": ["document_id"]
+  }',
+  'Retrieve a document by UUID. Use format=markdown (default) for text-only questions; format=bytes for the raw original file (PDF/DOCX/PPTX); format=pdf_pages to render specific pages as PNG images.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source       = EXCLUDED.source,
+  schema_json  = EXCLUDED.schema_json,
+  description  = EXCLUDED.description,
+  enabled      = EXCLUDED.enabled,
+  version      = EXCLUDED.version;
+
 COMMIT;

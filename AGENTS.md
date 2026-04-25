@@ -58,9 +58,23 @@ The following tools are available. The harness loads the live catalog from the
 | `draft_section` | Compose one report section with citation-format validation. Call once per section. |
 | `mark_research_done` | TERMINAL. Persists a final report in `research_reports`. Use only when the user explicitly asked for a formal written report. |
 
+### Original-document access (Phase B.1)
+
+| Tool | What it does |
+|---|---|
+| `fetch_original_document` | Retrieve a document in three formats: `markdown` (parsed text, cheap — default), `bytes` (raw original file as base64), or `pdf_pages` (base64 PNG renders of specific pages). |
+
+**Policy — when to use which format:**
+
+- **Prefer `format="markdown"`** for any text-only question: searching prose, reading procedures, checking instructions, summarizing. Markdown is faster and cheaper.
+- **Use `format="bytes"`** when the user explicitly asks "what does the original file say / show?" or when the document is a DOCX/PPTX where layout or embedded objects may matter.
+- **Use `format="pdf_pages"`** when the question references a figure, chart, table, or specific page ("what is on page 3?", "show me the chromatogram on page 7"). Provide the 0-based page indices in the `pages` parameter.
+- A `Citation` with `source_kind="original_doc"` and `source_uri` pointing at the storage location is returned for `bytes` and `pdf_pages` outputs — surface it in the response so the user can click through to the source.
+- If `original_uri` is NULL for a document (ingested before Phase B.1 backfill), fall back to `format="markdown"` and note that the original file location is not recorded.
+
 ### Phase B additions (placeholders)
 
-The following tools are defined in the plan and will land in Phase B. Do not
+The following tools are defined in the plan and will land in later Phase B slices. Do not
 fabricate calls to these before they are registered.
 
 - `run_program` — programmatic tool calling via E2B sandbox.
@@ -232,5 +246,4 @@ or edit the plan before proceeding.
 
 ---
 
-*Last updated: Phase A.3. Phase B will add skill packs, sub-agents, and
-`run_program`. Phase C will add maturity promotion and confidence ensembles.*
+*Last updated: Phase B.1. Added `fetch_original_document` with original-vs-markdown policy. Phase B.2 will port the remaining 12 tools. Phase C will add maturity promotion and confidence ensembles.*
