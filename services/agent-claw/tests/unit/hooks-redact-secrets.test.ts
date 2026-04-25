@@ -62,10 +62,13 @@ describe("redactString — pattern matching", () => {
 
 describe("redactSecretsHook — payload mutation", () => {
   function makePayload(input: unknown): PreToolPayload {
+    const seenFactIds = new Set<string>();
+    const scratchpad = new Map<string, unknown>([["seenFactIds", seenFactIds]]);
     return {
       ctx: {
         userEntraId: "test@example.com",
-        scratchpad: new Map(),
+        scratchpad,
+        seenFactIds,
       },
       toolId: "test_tool",
       input,

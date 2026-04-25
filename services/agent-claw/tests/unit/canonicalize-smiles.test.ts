@@ -16,7 +16,9 @@ const VALID_RESPONSE = {
 };
 
 function makeCtx() {
-  return { userEntraId: "test@example.com", scratchpad: new Map() };
+  const seenFactIds = new Set<string>();
+  const scratchpad = new Map<string, unknown>([["seenFactIds", seenFactIds]]);
+  return { userEntraId: "test@example.com", scratchpad, seenFactIds };
 }
 
 function mockFetchOk(body: unknown) {

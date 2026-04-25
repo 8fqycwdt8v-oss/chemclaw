@@ -322,18 +322,20 @@ async function handleChat(
     })),
   ];
 
+  // seenFactIds starts empty — init-scratch pre_turn hook and the harness
+  // will wire it through the scratchpad before the first tool call.
+  const _initialSeenFactIds = new Set<string>();
+  const _scratchpad = new Map<string, unknown>();
+  _scratchpad.set("budget", {
+    promptTokensUsed: 0,
+    completionTokensUsed: 0,
+    tokenBudget: deps.config.AGENT_TOKEN_BUDGET,
+  });
+  _scratchpad.set("seenFactIds", _initialSeenFactIds);
   const ctx: ToolContext = {
     userEntraId: user,
-    scratchpad: new Map([
-      [
-        "budget",
-        {
-          promptTokensUsed: 0,
-          completionTokensUsed: 0,
-          tokenBudget: deps.config.AGENT_TOKEN_BUDGET,
-        },
-      ],
-    ]),
+    seenFactIds: _initialSeenFactIds,
+    scratchpad: _scratchpad,
   };
 
   const lifecycle = isPlanMode ? buildPlanModeLifecycle() : buildDefaultLifecycle();

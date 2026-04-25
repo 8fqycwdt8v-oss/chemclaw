@@ -5,7 +5,9 @@ import { Lifecycle } from "../../src/core/lifecycle.js";
 import type { ToolContext } from "../../src/core/types.js";
 
 function makeCtx(): ToolContext {
-  return { userEntraId: "test@example.com", scratchpad: new Map() };
+  const seenFactIds = new Set<string>();
+  const scratchpad = new Map<string, unknown>([["seenFactIds", seenFactIds]]);
+  return { userEntraId: "test@example.com", scratchpad, seenFactIds };
 }
 
 describe("Lifecycle hook dispatcher", () => {

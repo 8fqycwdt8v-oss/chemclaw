@@ -15,7 +15,9 @@ import type { HarnessOptions, Message, ToolContext } from "../../src/core/types.
 // ---------------------------------------------------------------------------
 
 function makeCtx(): ToolContext {
-  return { userEntraId: "test@example.com", scratchpad: new Map() };
+  const seenFactIds = new Set<string>();
+  const scratchpad = new Map<string, unknown>([["seenFactIds", seenFactIds]]);
+  return { userEntraId: "test@example.com", scratchpad, seenFactIds };
 }
 
 function makeMessages(userText = "Hello"): Message[] {

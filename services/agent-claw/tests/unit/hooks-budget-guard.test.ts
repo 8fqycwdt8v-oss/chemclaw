@@ -11,7 +11,8 @@ import type { BudgetScratch } from "../../src/core/hooks/budget-guard.js";
 // ---------------------------------------------------------------------------
 
 function makePayload(budget?: BudgetScratch): PreToolPayload {
-  const scratchpad = new Map<string, unknown>();
+  const seenFactIds = new Set<string>();
+  const scratchpad = new Map<string, unknown>([["seenFactIds", seenFactIds]]);
   if (budget) {
     scratchpad.set("budget", budget);
   }
@@ -19,6 +20,7 @@ function makePayload(budget?: BudgetScratch): PreToolPayload {
     ctx: {
       userEntraId: "test@example.com",
       scratchpad,
+      seenFactIds,
     },
     toolId: "some_tool",
     input: {},

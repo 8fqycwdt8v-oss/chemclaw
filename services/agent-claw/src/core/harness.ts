@@ -33,8 +33,22 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
 
   // -------------------------------------------------------------------------
   // pre_turn — fires once before any LLM call this turn.
+  // The init-scratch hook initialises ctx.scratchpad.seenFactIds here.
   // -------------------------------------------------------------------------
   await lifecycle.dispatch("pre_turn", { ctx, messages });
+
+  // Wire seenFactIds from scratch into ctx after pre_turn so that tools
+  // can access it via the typed accessor. The init-scratch hook must have
+  // run first (registered before anti-fabrication).
+  const _seenFromScratch = ctx.scratchpad.get("seenFactIds");
+  if (_seenFromScratch instanceof Set) {
+    ctx.seenFactIds = _seenFromScratch as Set<string>;
+  } else if (!ctx.seenFactIds) {
+    // Fallback: if init-scratch wasn't registered, initialise here.
+    const _fresh = new Set<string>();
+    ctx.scratchpad.set("seenFactIds", _fresh);
+    ctx.seenFactIds = _fresh;
+  }
 
   // -------------------------------------------------------------------------
   // Main loop.

@@ -15,6 +15,21 @@ export interface ToolContext {
   userEntraId: string;
   /** Per-turn scratch space for hooks and tools to share state. */
   scratchpad: Map<string, unknown>;
+  /**
+   * Fact-IDs seen this turn — harvested by the anti-fabrication post_tool hook
+   * from every tool output that contains fact_id fields.
+   *
+   * This is a VIEW into scratchpad.get("seenFactIds") provided by the harness
+   * for convenient typed access. The init-scratch pre_turn hook initialises it
+   * to an empty Set at the start of every turn, so it is always defined.
+   *
+   * Tools READ this (e.g. propose_hypothesis enforces a hard guard).
+   * The anti-fabrication hook WRITES to it after each tool call.
+   *
+   * NOTE: tools may also read from ctx.scratchpad.get("seenFactIds") directly
+   * for backward compatibility, but the typed accessor is preferred.
+   */
+  seenFactIds: Set<string>;
 }
 
 // ---------------------------------------------------------------------------
