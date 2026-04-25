@@ -681,3 +681,82 @@ full history.
 
 *Last updated: Phase E — DSPy GEPA self-improvement, skill promotion gates, shadow
 serving, /eval slash verb, Streamlit Optimizer page.*
+
+---
+
+## Heavy chemistry compute (Phase F.1)
+
+Six chemistry MCP services are available on Docker Compose profile `chemistry`.
+Start with `make up.chemistry`. They require pretrained model checkpoints and/or
+system binaries that are **not installed in the dev `.venv`**; they run inside
+their own Docker images.
+
+### Service overview
+
+| Service | Port | Tool | Latency | Checkpoint required |
+|---|---|---|---|---|
+| `mcp-askcos` | 8007 | `propose_retrosynthesis` | ~10 s | `/var/lib/mcp-askcos/models/` |
+| `mcp-aizynth` | 8008 | `propose_retrosynthesis` (fallback) | ~20–40 s | `/var/lib/mcp-aizynth/configs/config.yml` |
+| `mcp-chemprop` | 8009 | `predict_reaction_yield`, `predict_molecular_property` | ~5–15 s | `/var/lib/mcp-chemprop/models/` |
+| `mcp-xtb` | 8010 | `compute_conformer_ensemble` | ~30–60 s | `xtb` + `crest` binary on PATH |
+| `mcp-admetlab` | 8011 | `screen_admet` | ~5–15 s (API) / ~30–60 s (local) | `ADMETLAB_API_KEY` or local model dir |
+| `mcp-sirius` | 8012 | `identify_unknown_from_ms` | ~60–120 s | `sirius` binary on PATH |
+
+### Readiness policy
+
+Each service exposes `/readyz` returning 503 when its model checkpoint or binary is
+missing. The tool registry marks the tool as `health_status='degraded'` and the
+harness surfaces a clear error rather than calling the tool blindly.
+
+### When to use which tool
+
+| Question type | Primary tool | Notes |
+|---|---|---|
+| "How do I make X?" | `propose_retrosynthesis` | ASKCOS preferred; aizynth if ASKCOS unavailable |
+| "What yield will this reaction give?" | `predict_reaction_yield` | chemprop v2 MPNN |
+| "What is the logP / logS of this compound?" | `predict_molecular_property` | chemprop v2 |
+| "What are the stable conformers of X?" | `compute_conformer_ensemble` | GFN2-xTB + CREST; ~30–60 s |
+| "Is this compound safe to advance?" | `screen_admet` | ADMETlab 3.0; 119 endpoints |
+| "What is this unknown impurity?" | `identify_unknown_from_ms` | SIRIUS 6 + CSI:FingerID; ~60–120 s |
+
+### Skill packs
+
+| Skill | Directory | Primary tool | Slash verb |
+|---|---|---|---|
+| `askcos_route` | `skills/askcos_route/` | `propose_retrosynthesis` | `/route` |
+| `aizynth_route` | `skills/aizynth_route/` | `propose_retrosynthesis` (prefer_aizynth) | `/aizynth` |
+| `chemprop_yield` | `skills/chemprop_yield/` | `predict_reaction_yield` | `/yield` |
+| `xtb_conformer` | `skills/xtb_conformer/` | `compute_conformer_ensemble` | `/conformer` |
+| `admet_screen` | `skills/admet_screen/` | `screen_admet` | `/admet`, `/screen` |
+| `sirius_id` | `skills/sirius_id/` | `identify_unknown_from_ms` | `/identify`, `/ms-id` |
+
+### Environment variables
+
+Set in `.env` before running `make up.chemistry`:
+
+```
+ASKCOS_MODEL_DIR=/path/to/askcos/models
+AIZYNTH_MODEL_DIR=/path/to/aizynth
+AIZYNTH_CONFIG=/path/to/aizynth/configs/config.yml
+CHEMPROP_MODEL_DIR=/path/to/chemprop/models
+ADMETLAB_API_KEY=<your-api-key>     # or leave blank to use local model
+ADMETLAB_API_URL=https://admetlab3.scbdd.com/api
+```
+
+### Latency guidance
+
+- `compute_conformer_ensemble` (~30–60 s for MW < 500; 2–5 min for macrocycles): always inform
+  the user before invoking this tool.
+- `identify_unknown_from_ms` (~60–120 s): same — inform the user that SIRIUS requires time.
+- All other chemistry tools complete in < 60 s per batch; no special latency notice needed.
+
+### Bounded compromises
+
+The heavy ML packages (`askcos2`, `aizynthfinder`, `chemprop`, `rdkit` for xTB, `admetlab3`)
+cannot be installed in the dev `.venv` because of conflicting transitive dependencies. Each
+service has its own `Dockerfile` that pip-installs only its dependencies inside the image.
+Python tests mock the downstream library imports (no `chemprop`, `askcos2`, etc. in the
+test environment). TypeScript tests mock HTTP calls via `vi.stubGlobal("fetch", ...)`.
+
+*Phase F.2 next: source-system MCP adapters (`mcp_eln_benchling`, `mcp_lims_starlims`) +
+cache-and-project semantics + retire `eln_json_importer` from the live path.*

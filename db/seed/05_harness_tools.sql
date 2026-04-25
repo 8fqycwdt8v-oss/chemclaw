@@ -473,4 +473,253 @@ ON CONFLICT (name) DO UPDATE SET
   source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
   description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
 
+-- ── Phase F.1: Chemistry MCP services ────────────────────────────────────────
+
+INSERT INTO mcp_tools (service_name, base_url, enabled, health_status)
+VALUES ('mcp-askcos', 'http://localhost:8007', true, 'unknown')
+ON CONFLICT (service_name) DO UPDATE SET
+  base_url = EXCLUDED.base_url,
+  enabled  = EXCLUDED.enabled;
+
+INSERT INTO mcp_tools (service_name, base_url, enabled, health_status)
+VALUES ('mcp-aizynth', 'http://localhost:8008', true, 'unknown')
+ON CONFLICT (service_name) DO UPDATE SET
+  base_url = EXCLUDED.base_url,
+  enabled  = EXCLUDED.enabled;
+
+INSERT INTO mcp_tools (service_name, base_url, enabled, health_status)
+VALUES ('mcp-chemprop', 'http://localhost:8009', true, 'unknown')
+ON CONFLICT (service_name) DO UPDATE SET
+  base_url = EXCLUDED.base_url,
+  enabled  = EXCLUDED.enabled;
+
+INSERT INTO mcp_tools (service_name, base_url, enabled, health_status)
+VALUES ('mcp-xtb', 'http://localhost:8010', true, 'unknown')
+ON CONFLICT (service_name) DO UPDATE SET
+  base_url = EXCLUDED.base_url,
+  enabled  = EXCLUDED.enabled;
+
+INSERT INTO mcp_tools (service_name, base_url, enabled, health_status)
+VALUES ('mcp-admetlab', 'http://localhost:8011', true, 'unknown')
+ON CONFLICT (service_name) DO UPDATE SET
+  base_url = EXCLUDED.base_url,
+  enabled  = EXCLUDED.enabled;
+
+INSERT INTO mcp_tools (service_name, base_url, enabled, health_status)
+VALUES ('mcp-sirius', 'http://localhost:8012', true, 'unknown')
+ON CONFLICT (service_name) DO UPDATE SET
+  base_url = EXCLUDED.base_url,
+  enabled  = EXCLUDED.enabled;
+
+-- ── Phase F.1: Chemistry builtin tools ───────────────────────────────────────
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'propose_retrosynthesis',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "smiles": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 10000,
+        "description": "Target molecule SMILES."
+      },
+      "max_depth": {
+        "type": "integer",
+        "default": 3,
+        "minimum": 1,
+        "maximum": 6,
+        "description": "Maximum retrosynthesis depth."
+      },
+      "max_branches": {
+        "type": "integer",
+        "default": 4,
+        "minimum": 1,
+        "maximum": 10,
+        "description": "Maximum branches per step."
+      },
+      "prefer_aizynth": {
+        "type": "boolean",
+        "default": false,
+        "description": "If true, skip ASKCOS and go directly to AiZynthFinder."
+      }
+    },
+    "required": ["smiles"]
+  }',
+  'Propose multi-step retrosynthesis routes via ASKCOS v2. Falls back to AiZynthFinder on timeout or 503. Returns ranked routes with step-level scores.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'predict_reaction_yield',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "rxn_smiles_list": {
+        "type": "array",
+        "items": {"type": "string", "minLength": 1},
+        "minItems": 1,
+        "maxItems": 100,
+        "description": "List of reaction SMILES to predict yield for (max 100)."
+      }
+    },
+    "required": ["rxn_smiles_list"]
+  }',
+  'Predict expected yield for a list of reaction SMILES using chemprop v2 MPNN. Returns predicted_yield (0-100) and uncertainty std per reaction.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'predict_molecular_property',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "smiles_list": {
+        "type": "array",
+        "items": {"type": "string", "minLength": 1},
+        "minItems": 1,
+        "maxItems": 100,
+        "description": "List of SMILES to predict a property for (max 100)."
+      },
+      "property": {
+        "type": "string",
+        "enum": ["logP", "logS", "mp", "bp"],
+        "description": "Molecular property to predict."
+      }
+    },
+    "required": ["smiles_list", "property"]
+  }',
+  'Predict a molecular property (logP, logS, melting point, or boiling point) for a list of SMILES using chemprop v2 MPNN.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'compute_conformer_ensemble',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "smiles": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 10000,
+        "description": "SMILES of the molecule."
+      },
+      "n_conformers": {
+        "type": "integer",
+        "default": 20,
+        "minimum": 1,
+        "maximum": 100,
+        "description": "Maximum number of conformers to return."
+      },
+      "method": {
+        "type": "string",
+        "enum": ["GFN2-xTB", "GFN-FF"],
+        "default": "GFN2-xTB",
+        "description": "Semi-empirical method. GFN2-xTB for drug-like molecules; GFN-FF for macrocycles."
+      },
+      "optimize_first": {
+        "type": "boolean",
+        "default": true,
+        "description": "Run geometry optimization before conformer search."
+      }
+    },
+    "required": ["smiles"]
+  }',
+  'Generate a Boltzmann-weighted conformer ensemble via GFN2-xTB + CREST. Use for stereo, atropisomerism, or ring-flip questions. Latency ~30-60 s.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'screen_admet',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "smiles_list": {
+        "type": "array",
+        "items": {"type": "string", "minLength": 1},
+        "minItems": 1,
+        "maxItems": 50,
+        "description": "List of SMILES to screen for ADMET liabilities (max 50)."
+      }
+    },
+    "required": ["smiles_list"]
+  }',
+  'Screen up to 50 compounds for ADMET liabilities using ADMETlab 3.0 (119 endpoints: absorption, distribution, metabolism, excretion, toxicity). Returns structural alerts.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'identify_unknown_from_ms',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "ms2_peaks": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "m_z": {"type": "number", "exclusiveMinimum": 0},
+            "intensity": {"type": "number", "exclusiveMinimum": 0}
+          },
+          "required": ["m_z", "intensity"]
+        },
+        "minItems": 1,
+        "maxItems": 5000,
+        "description": "MS2 peak list as [{m_z, intensity}] pairs."
+      },
+      "precursor_mz": {
+        "type": "number",
+        "exclusiveMinimum": 0,
+        "maximum": 10000,
+        "description": "Precursor m/z (monoisotopic)."
+      },
+      "ionization": {
+        "type": "string",
+        "enum": ["positive", "negative"],
+        "default": "positive",
+        "description": "Electrospray ionization mode."
+      }
+    },
+    "required": ["ms2_peaks", "precursor_mz"]
+  }',
+  'Identify an unknown compound from MS2 spectra using SIRIUS 6 + CSI:FingerID + CANOPUS. Returns ranked structural candidates with ClassyFire classification. Latency ~60-120 s.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
 COMMIT;

@@ -54,6 +54,10 @@ up: ## Bring up Postgres + Neo4j + Langfuse
 up.full: ## Bring up all data services (incl. Langfuse)
 	docker compose up -d
 
+.PHONY: up.chemistry
+up.chemistry: ## Bring up chemistry MCP services (profile=chemistry; requires model checkpoints)
+	docker compose --profile chemistry up -d
+
 .PHONY: down
 down: ## Stop all services (preserves volumes)
 	docker compose down
