@@ -16,8 +16,8 @@ export interface LlmResponse {
 
 // ---------------------------------------------------------------------------
 // The interface every provider must implement.
-// Phase A.2 will add LiteLLMProvider that calls the gateway at the configured
-// baseURL with the model role (planner / executor / compactor).
+// LiteLLMProvider (litellm-provider.ts) is the real implementation.
+// StubLlmProvider below is for deterministic tests.
 // ---------------------------------------------------------------------------
 export interface LlmProvider {
   /**
@@ -25,6 +25,13 @@ export interface LlmProvider {
    * a parsed result (text or tool_call) plus token usage.
    */
   call(messages: Message[], tools: Tool[]): Promise<LlmResponse>;
+
+  /**
+   * Single-turn JSON completion helper.
+   * Sends system + user content and JSON.parses the response text.
+   * Used for structured output: plan previews, hypothesis drafts, etc.
+   */
+  completeJson(opts: { system: string; user: string }): Promise<unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -78,5 +85,21 @@ export class StubLlmProvider implements LlmProvider {
       );
     }
     return next;
+  }
+
+  // completeJson stub — returns a pre-enqueued JSON value for structured output tests.
+  private readonly _jsonQueue: unknown[] = [];
+
+  enqueueJson(value: unknown): this {
+    this._jsonQueue.push(value);
+    return this;
+  }
+
+  async completeJson(_opts: { system: string; user: string }): Promise<unknown> {
+    const next = this._jsonQueue.shift();
+    if (next !== undefined) return next;
+    // Default: return an empty object so tests that don't care about structured output
+    // don't need to enqueue anything.
+    return {};
   }
 }

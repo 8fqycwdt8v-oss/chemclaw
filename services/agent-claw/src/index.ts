@@ -1,24 +1,36 @@
 // ChemClaw agent-claw service — Fastify HTTP entrypoint.
-// Phase A.1: minimal bootstrap. Port 3101 (legacy agent is 3100).
+// Phase A.2: LiteLLM provider, Postgres pool, DB-backed tool registry.
 //
-// Exposes:
-//   GET /healthz  — liveness (no deps)
+// Port 3101 (legacy agent is 3100 — running in parallel during Phase A–E).
 //
-// Phase A.2 will add:
-//   GET  /readyz       — readiness (Postgres ping)
-//   POST /api/chat     — SSE streaming chat
-//   POST /api/slash    — slash command router
+// Routes:
+//   GET /healthz  — liveness (no external deps)
+//   GET /readyz   — readiness (Postgres ping + mcp_tools health check)
+//
+// Phase A.3 will add:
+//   POST /api/chat   — SSE streaming chat
+//   POST /api/slash  — slash command router
 
 import Fastify from "fastify";
+import { loadConfig } from "./config.js";
+import { createPool } from "./db/pool.js";
+import { LiteLLMProvider } from "./llm/litellm-provider.js";
+import { ToolRegistry } from "./tools/registry.js";
+import { buildCanonicalizeSmilesTool } from "./tools/builtins/canonicalize_smiles.js";
 import { registerHealthzRoute } from "./routes/healthz.js";
 
-const PORT = parseInt(process.env["AGENT_CLAW_PORT"] ?? "3101", 10);
-const HOST = process.env["AGENT_CLAW_HOST"] ?? "0.0.0.0";
-const LOG_LEVEL = process.env["AGENT_CLAW_LOG_LEVEL"] ?? "info";
+// ---------------------------------------------------------------------------
+// Bootstrap
+// ---------------------------------------------------------------------------
+
+const cfg = loadConfig();
+
+const PORT = cfg.AGENT_PORT;
+const HOST = cfg.AGENT_HOST;
 
 const app = Fastify({
   logger: {
-    level: LOG_LEVEL,
+    level: cfg.AGENT_LOG_LEVEL,
     redact: {
       paths: ["req.headers.authorization", "req.headers.cookie"],
       censor: "***",
@@ -32,14 +44,71 @@ const app = Fastify({
   },
 });
 
+// ---------------------------------------------------------------------------
+// Dependencies
+// ---------------------------------------------------------------------------
+
+const pool = createPool(cfg);
+const llmProvider = new LiteLLMProvider(cfg);
+const registry = new ToolRegistry();
+
+// Register builtin factories so loadFromDb() can find them.
+// Cast through Tool (unknown) to satisfy the registry's covariant Tool<unknown,unknown> map.
+registry.registerBuiltin("canonicalize_smiles", () =>
+  buildCanonicalizeSmilesTool(cfg.MCP_RDKIT_URL) as import("./tools/tool.js").Tool,
+);
+
+// ---------------------------------------------------------------------------
+// Routes
+// ---------------------------------------------------------------------------
+
 registerHealthzRoute(app);
+
+app.get("/readyz", async (_req, reply) => {
+  // 1. Postgres ping.
+  try {
+    await pool.query("SELECT 1");
+  } catch (err) {
+    app.log.warn({ err }, "readyz: Postgres not reachable");
+    return reply.code(503).send({ status: "not_ready", reason: "postgres_unreachable" });
+  }
+
+  // 2. At least one mcp_tools row must be healthy.
+  try {
+    const { rowCount } = await pool.query(
+      "SELECT 1 FROM mcp_tools WHERE health_status = 'healthy' AND enabled = true LIMIT 1",
+    );
+    if (!rowCount || rowCount === 0) {
+      return reply
+        .code(503)
+        .send({ status: "not_ready", reason: "no_healthy_mcp_tools" });
+    }
+  } catch (err) {
+    app.log.warn({ err }, "readyz: mcp_tools query failed");
+    return reply
+      .code(503)
+      .send({ status: "not_ready", reason: "mcp_tools_query_failed" });
+  }
+
+  return { status: "ready" };
+});
 
 // ---------------------------------------------------------------------------
 // Startup
 // ---------------------------------------------------------------------------
+
 const start = async () => {
   try {
+    // Load tools from DB (non-fatal if DB is unavailable during dev startup).
+    try {
+      await registry.loadFromDb(pool);
+      app.log.info({ toolCount: registry.size }, "tool registry hydrated from DB");
+    } catch (err) {
+      app.log.warn({ err }, "could not hydrate tool registry from DB — continuing with empty registry");
+    }
+
     await app.listen({ host: HOST, port: PORT });
+    app.log.info({ llmProvider: cfg.AGENT_MODEL, port: PORT }, "agent-claw started");
   } catch (err) {
     app.log.error(err);
     process.exit(1);
@@ -53,11 +122,15 @@ const shutdown = async (signal: string) => {
   app.log.info({ signal }, "shutting down agent-claw");
   try {
     await app.close();
+    await pool.end();
   } finally {
     process.exit(0);
   }
 };
 process.on("SIGINT", () => void shutdown("SIGINT"));
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
+
+// Export for test harness access (Phase A.3+ tests may need the pool/registry).
+export { pool, registry, llmProvider };
 
 await start();

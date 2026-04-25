@@ -1,14 +1,115 @@
-// In-memory ToolRegistry for Phase A.1.
-// Phase A.2 will add DB-backed persistence (tools table from db/init/02_harness.sql).
+// In-memory ToolRegistry with DB-backed hydration.
+//
+// Phase A.1: in-memory register/deregister.
+// Phase A.2: loadFromDb() reads `tools WHERE enabled=true`, builds Zod schemas
+//            from schema_json, and registers each tool.
+//            - source='builtin'  → looks up a hand-registered builtin factory
+//            - source='mcp'      → builds an execute impl that POSTs to mcp_url+mcp_endpoint
 
+import { z } from "zod";
+import { type Pool } from "pg";
 import type { Tool } from "./tool.js";
+import { postJson } from "../mcp/postJson.js";
+
+// ---------------------------------------------------------------------------
+// Zod-from-JSON schema builder.
+// Supports: string, number, boolean, object (one level deep), array.
+// ---------------------------------------------------------------------------
+
+type JsonSchemaProperty = {
+  type: string;
+  description?: string;
+  minLength?: number;
+  maxLength?: number;
+  properties?: Record<string, JsonSchemaProperty>;
+  items?: JsonSchemaProperty;
+  required?: string[];
+};
+
+type JsonSchema = {
+  type: string;
+  properties?: Record<string, JsonSchemaProperty>;
+  required?: string[];
+};
+
+function zodFromJsonSchema(schema: JsonSchema): z.ZodTypeAny {
+  if (schema.type !== "object") {
+    throw new Error(`Top-level schema must be 'object', got '${schema.type}'`);
+  }
+  return buildObjectSchema(schema);
+}
+
+function buildPropertySchema(prop: JsonSchemaProperty): z.ZodTypeAny {
+  switch (prop.type) {
+    case "string": {
+      let s = z.string();
+      if (prop.minLength !== undefined) s = s.min(prop.minLength);
+      if (prop.maxLength !== undefined) s = s.max(prop.maxLength);
+      return s;
+    }
+    case "number":
+      return z.number();
+    case "boolean":
+      return z.boolean();
+    case "object":
+      return buildObjectSchema(prop);
+    case "array": {
+      const itemSchema = prop.items
+        ? buildPropertySchema(prop.items)
+        : z.unknown();
+      return z.array(itemSchema);
+    }
+    default:
+      return z.unknown();
+  }
+}
+
+function buildObjectSchema(
+  schema: JsonSchemaProperty | JsonSchema,
+): z.ZodObject<z.ZodRawShape> {
+  const shape: z.ZodRawShape = {};
+  const required = new Set(schema.required ?? []);
+  for (const [key, prop] of Object.entries(schema.properties ?? {})) {
+    let fieldSchema = buildPropertySchema(prop);
+    if (!required.has(key)) {
+      fieldSchema = fieldSchema.optional();
+    }
+    shape[key] = fieldSchema;
+  }
+  return z.object(shape);
+}
+
+// ---------------------------------------------------------------------------
+// DB row shape returned by the tools query.
+// ---------------------------------------------------------------------------
+
+interface ToolRow {
+  name: string;
+  source: "builtin" | "mcp" | "skill";
+  schema_json: JsonSchema;
+  mcp_url: string | null;
+  mcp_endpoint: string | null;
+  description: string;
+}
+
+// ---------------------------------------------------------------------------
+// ToolRegistry
+// ---------------------------------------------------------------------------
 
 export class ToolRegistry {
   private readonly _tools: Map<string, Tool> = new Map();
 
+  // Map of builtin name → factory function.
+  // Register factories here before calling loadFromDb() so that DB rows with
+  // source='builtin' can find their implementation.
+  private readonly _builtinFactories: Map<string, () => Tool> = new Map();
+
+  // ---------------------------------------------------------------------------
+  // Static registration (Phase A.1 API — kept intact)
+  // ---------------------------------------------------------------------------
+
   /**
-   * Register a tool. Throws if a tool with the same id is already registered
-   * (prevents accidental double-registration silently overwriting a tool).
+   * Register a tool. Throws if a tool with the same id is already registered.
    */
   register(tool: Tool): this {
     if (this._tools.has(tool.id)) {
@@ -21,8 +122,7 @@ export class ToolRegistry {
   }
 
   /**
-   * Register or replace a tool. Use this for hot-reload scenarios (tests,
-   * skill loading). Prefer register() for static boot-time registration.
+   * Register or replace a tool. Use for hot-reload / test scenarios.
    */
   upsert(tool: Tool): this {
     this._tools.set(tool.id, tool);
@@ -35,17 +135,12 @@ export class ToolRegistry {
     return this;
   }
 
-  /**
-   * Resolve a tool by id. Returns undefined if not found.
-   */
+  /** Resolve a tool by id. Returns undefined if not found. */
   get(id: string): Tool | undefined {
     return this._tools.get(id);
   }
 
-  /**
-   * Resolve a tool by id and throw if not found.
-   * Used by the harness where a missing tool is a logic error.
-   */
+  /** Resolve a tool by id; throw if not found. */
   getOrThrow(id: string): Tool {
     const tool = this._tools.get(id);
     if (!tool) {
@@ -64,5 +159,96 @@ export class ToolRegistry {
   /** Number of registered tools. */
   get size(): number {
     return this._tools.size;
+  }
+
+  // ---------------------------------------------------------------------------
+  // Builtin factory registry (Phase A.2)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Register a factory function for a named builtin tool.
+   * Call this before loadFromDb() so DB rows with source='builtin' can resolve.
+   */
+  registerBuiltin(name: string, factory: () => Tool): this {
+    this._builtinFactories.set(name, factory);
+    return this;
+  }
+
+  // ---------------------------------------------------------------------------
+  // DB-backed hydration (Phase A.2)
+  // ---------------------------------------------------------------------------
+
+  /**
+   * Read `tools WHERE enabled=true` from Postgres, build Zod schemas from
+   * schema_json, and register each tool.
+   *
+   * - source='builtin': looks up the factory registered via registerBuiltin().
+   * - source='mcp':     builds an execute impl that POSTs to mcp_url+mcp_endpoint.
+   * - source='skill':   skipped (Phase B+).
+   *
+   * Idempotent: calling twice replaces existing registrations (uses upsert).
+   */
+  async loadFromDb(pool: Pool): Promise<void> {
+    const { rows } = await pool.query<ToolRow>(
+      `SELECT name, source, schema_json, mcp_url, mcp_endpoint, description
+       FROM tools
+       WHERE enabled = true
+       ORDER BY name`,
+    );
+
+    for (const row of rows) {
+      const tool = this._buildTool(row);
+      if (tool) {
+        this.upsert(tool);
+      }
+    }
+  }
+
+  private _buildTool(row: ToolRow): Tool | null {
+    let inputSchema: z.ZodTypeAny;
+    try {
+      inputSchema = zodFromJsonSchema(row.schema_json);
+    } catch {
+      // Malformed schema_json — skip rather than crash.
+      return null;
+    }
+
+    const outputSchema = z.unknown();
+
+    if (row.source === "builtin") {
+      const factory = this._builtinFactories.get(row.name);
+      if (!factory) {
+        // Builtin factory not registered — skip.
+        return null;
+      }
+      const impl = factory();
+      // Use the DB description but preserve the impl's execute + output schema.
+      return {
+        ...impl,
+        description: row.description,
+        inputSchema,
+      };
+    }
+
+    if (row.source === "mcp") {
+      if (!row.mcp_url || !row.mcp_endpoint) {
+        return null;
+      }
+      const url = `${row.mcp_url.replace(/\/$/, "")}${row.mcp_endpoint}`;
+      const name = row.name;
+
+      return {
+        id: name,
+        description: row.description,
+        inputSchema,
+        outputSchema,
+        execute: async (_ctx, input) => {
+          return postJson(url, input, outputSchema, 15_000, name);
+        },
+      };
+    }
+
+    // source='skill' — deferred to Phase B.
+    return null;
   }
 }
