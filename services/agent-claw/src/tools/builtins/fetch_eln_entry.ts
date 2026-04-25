@@ -6,7 +6,7 @@
 import { z } from "zod";
 import type { Pool } from "pg";
 import { defineTool } from "../tool.js";
-import { postJson } from "../../mcp/postJson.js";
+import { getJson } from "../../mcp/postJson.js";
 import type { Citation } from "../../core/types.js";
 
 // ---------- Schemas ----------------------------------------------------------
@@ -16,7 +16,9 @@ export const FetchElnEntryIn = z.object({
 });
 export type FetchElnEntryInput = z.infer<typeof FetchElnEntryIn>;
 
-export const FetchElnEntryOut = z.object({
+// Raw shape returned by mcp-eln-benchling — does NOT include citation /
+// source_system; those are added by this wrapper.
+const FetchElnEntryRaw = z.object({
   id: z.string(),
   schema_id: z.string(),
   fields: z.record(z.unknown()),
@@ -26,6 +28,9 @@ export const FetchElnEntryOut = z.object({
   })).default([]),
   created_at: z.string().nullable().optional(),
   modified_at: z.string().nullable().optional(),
+});
+
+export const FetchElnEntryOut = FetchElnEntryRaw.extend({
   citation: z.custom<Citation>(),
   source_system: z.literal("benchling"),
 });
@@ -54,20 +59,12 @@ export function buildFetchElnEntryTool(
     outputSchema: FetchElnEntryOut,
 
     execute: async (ctx, input) => {
-      // mcp-eln-benchling exposes GET /experiments/{id} — we simulate via a
-      // fetch to the REST endpoint using postJson's underlying fetch mechanism.
-      const resp = await fetch(`${base}/experiments/${encodeURIComponent(input.entry_id)}`, {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
-
-      if (!resp.ok) {
-        const detail = await resp.text().catch(() => resp.statusText);
-        throw new Error(`mcp-eln-benchling GET /experiments/${input.entry_id} → ${resp.status}: ${detail}`);
-      }
-
-      const raw = (await resp.json()) as FetchElnEntryOutput;
+      const raw = await getJson(
+        `${base}/experiments/${encodeURIComponent(input.entry_id)}`,
+        FetchElnEntryRaw,
+        TIMEOUT_MS,
+        "mcp-eln-benchling",
+      );
 
       const citation: Citation = {
         source_id: raw.id,

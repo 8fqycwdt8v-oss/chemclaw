@@ -5,6 +5,7 @@
 import { z } from "zod";
 import type { Pool } from "pg";
 import { defineTool } from "../tool.js";
+import { getJson } from "../../mcp/postJson.js";
 import type { Citation } from "../../core/types.js";
 
 // ---------- Schemas ----------------------------------------------------------
@@ -23,7 +24,7 @@ const ChromatographicPeak = z.object({
   resolution: z.number().nullable().optional(),
 });
 
-export const FetchInstrumentRunOut = z.object({
+const FetchInstrumentRunRaw = z.object({
   id: z.string(),
   sample_name: z.string().nullable().optional(),
   method_name: z.string().nullable().optional(),
@@ -31,6 +32,9 @@ export const FetchInstrumentRunOut = z.object({
   run_date: z.string().nullable().optional(),
   peaks: z.array(ChromatographicPeak).default([]),
   total_area: z.number().nullable().optional(),
+});
+
+export const FetchInstrumentRunOut = FetchInstrumentRunRaw.extend({
   citation: z.custom<Citation>(),
   source_system: z.literal("waters"),
 });
@@ -59,18 +63,12 @@ export function buildFetchInstrumentRunTool(
     outputSchema: FetchInstrumentRunOut,
 
     execute: async (ctx, input) => {
-      const resp = await fetch(`${base}/run/${encodeURIComponent(input.run_id)}`, {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
-
-      if (!resp.ok) {
-        const detail = await resp.text().catch(() => resp.statusText);
-        throw new Error(`mcp-instrument-waters GET /run/${input.run_id} → ${resp.status}: ${detail}`);
-      }
-
-      const raw = (await resp.json()) as FetchInstrumentRunOutput;
+      const raw = await getJson(
+        `${base}/run/${encodeURIComponent(input.run_id)}`,
+        FetchInstrumentRunRaw,
+        TIMEOUT_MS,
+        "mcp-instrument-waters",
+      );
 
       const citation: Citation = {
         source_id: raw.id,

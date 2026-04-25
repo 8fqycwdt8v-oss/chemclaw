@@ -6,6 +6,7 @@
 import { z } from "zod";
 import type { Pool } from "pg";
 import { defineTool } from "../tool.js";
+import { getJson } from "../../mcp/postJson.js";
 import type { Citation } from "../../core/types.js";
 
 // ---------- Schemas ----------------------------------------------------------
@@ -15,7 +16,7 @@ export const FetchLimsResultIn = z.object({
 });
 export type FetchLimsResultInput = z.infer<typeof FetchLimsResultIn>;
 
-export const FetchLimsResultOut = z.object({
+const FetchLimsResultRaw = z.object({
   id: z.string(),
   sample_id: z.string().nullable().optional(),
   method_id: z.string().nullable().optional(),
@@ -25,6 +26,9 @@ export const FetchLimsResultOut = z.object({
   status: z.string().nullable().optional(),
   analyst: z.string().nullable().optional(),
   completed_at: z.string().nullable().optional(),
+});
+
+export const FetchLimsResultOut = FetchLimsResultRaw.extend({
   citation: z.custom<Citation>(),
   source_system: z.literal("starlims"),
 });
@@ -53,18 +57,12 @@ export function buildFetchLimsResultTool(
     outputSchema: FetchLimsResultOut,
 
     execute: async (ctx, input) => {
-      const resp = await fetch(`${base}/test_results/${encodeURIComponent(input.result_id)}`, {
-        method: "GET",
-        headers: { "Content-Type": "application/json" },
-        signal: AbortSignal.timeout(TIMEOUT_MS),
-      });
-
-      if (!resp.ok) {
-        const detail = await resp.text().catch(() => resp.statusText);
-        throw new Error(`mcp-lims-starlims GET /test_results/${input.result_id} → ${resp.status}: ${detail}`);
-      }
-
-      const raw = (await resp.json()) as FetchLimsResultOutput;
+      const raw = await getJson(
+        `${base}/test_results/${encodeURIComponent(input.result_id)}`,
+        FetchLimsResultRaw,
+        TIMEOUT_MS,
+        "mcp-lims-starlims",
+      );
 
       const citation: Citation = {
         source_id: raw.id,

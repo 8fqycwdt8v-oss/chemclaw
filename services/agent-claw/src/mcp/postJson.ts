@@ -53,3 +53,42 @@ export async function postJson<TReq, TRes>(
     clearTimeout(t);
   }
 }
+
+/**
+ * Typed HTTP GET helper for MCP tool services.
+ *
+ * Same defenses as postJson: bounded timeout, response validated via Zod
+ * before returning. Use this for fetch-style endpoints where the request
+ * has no body (e.g. mcp-eln-benchling GET /experiments/{id}).
+ */
+export async function getJson<TRes>(
+  url: string,
+  respSchema: z.ZodType<TRes>,
+  timeoutMs: number,
+  service: string,
+): Promise<TRes> {
+  const ctl = new AbortController();
+  const t = setTimeout(() => ctl.abort(), timeoutMs);
+  try {
+    const r = await fetch(url, {
+      method: "GET",
+      headers: { "content-type": "application/json" },
+      signal: ctl.signal,
+    });
+    const text = await r.text();
+    if (!r.ok) {
+      throw new UpstreamError(service, r.status, text.slice(0, 200));
+    }
+    const parsed = respSchema.safeParse(text.length ? JSON.parse(text) : null);
+    if (!parsed.success) {
+      throw new UpstreamError(
+        service,
+        502,
+        `invalid response shape: ${parsed.error.issues[0]?.message ?? "?"}`,
+      );
+    }
+    return parsed.data;
+  } finally {
+    clearTimeout(t);
+  }
+}
