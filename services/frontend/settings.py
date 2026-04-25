@@ -21,12 +21,19 @@ class FrontendSettings(BaseSettings):
     agent_host: str = "localhost"
     agent_port: int = 3100
 
+    # AGENT_BASE_URL overrides agent_host + agent_port when set.
+    # Flip to point at agent-claw (Phase A.4+):
+    #   AGENT_BASE_URL=http://localhost:3101 streamlit run services/frontend/streamlit_app.py
+    agent_base_url: str = ""
+
     chemclaw_dev_mode: bool = True
     chemclaw_dev_user_email: str = "dev@local.test"
     chemclaw_dev_user_projects: str = "NCE-001,NCE-002"
 
     @property
-    def agent_base_url(self) -> str:
+    def resolved_agent_base_url(self) -> str:
+        if self.agent_base_url:
+            return self.agent_base_url.rstrip("/")
         return f"http://{self.agent_host}:{self.agent_port}"
 
     @property

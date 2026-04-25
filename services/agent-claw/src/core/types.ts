@@ -109,3 +109,43 @@ export type HookPoint =
   | "post_tool"
   | "pre_compact"
   | "post_turn";
+
+// ---------------------------------------------------------------------------
+// Citation — typed provenance record surfaced in tool-result events.
+//
+// Forward-compatible design:
+//   - source_kind "original_doc" is reserved for Phase B's fetch_original_document
+//     tool; `source_uri` will carry the signed URL returned by that tool.
+//   - All fields except source_id and source_kind are optional so that tools
+//     that don't have page numbers / snippets can still produce citations.
+//   - Existing tools (canonicalize_smiles etc.) do NOT produce citations;
+//     the field is present on the tool-result wire type but always undefined.
+// ---------------------------------------------------------------------------
+export interface Citation {
+  /** Stable identifier for the source (chunk UUID, fact UUID, reaction UUID, URL…). */
+  source_id: string;
+
+  /** Kind of source — determines how source_uri should be interpreted. */
+  source_kind:
+    | "document_chunk"   // pgvector document_chunks row
+    | "kg_fact"          // Neo4j bi-temporal fact node
+    | "reaction"         // reactions table row (with DRFP)
+    | "external_url"     // arbitrary HTTPS URL
+    | "original_doc";    // Phase B: fetch_original_document return — signed URI to raw file
+
+  /**
+   * URI pointing to the source:
+   *   - document_chunk:  internal chunk ID (Phase B adds /api/chunks/:id endpoint)
+   *   - kg_fact:         internal fact_id
+   *   - reaction:        internal reaction UUID
+   *   - external_url:    the URL itself
+   *   - original_doc:    signed storage URI (Phase B)
+   */
+  source_uri?: string;
+
+  /** Short excerpt from the source (≤500 chars). */
+  snippet?: string;
+
+  /** Page number within a document (1-indexed). Only for document_chunk / original_doc. */
+  page?: number;
+}

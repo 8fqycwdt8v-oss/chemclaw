@@ -13,9 +13,9 @@
 // and hypothesis drafting.
 
 import { createOpenAI } from "@ai-sdk/openai";
-import { generateText } from "ai";
+import { generateText, streamText } from "ai";
 import type { Config } from "../config.js";
-import type { LlmProvider, LlmResponse } from "./provider.js";
+import type { LlmProvider, LlmResponse, StreamChunk } from "./provider.js";
 import type { Message } from "../core/types.js";
 import type { Tool } from "../tools/tool.js";
 import type { CoreMessage, CoreTool } from "ai";
@@ -114,6 +114,69 @@ export class LiteLLMProvider implements LlmProvider {
     return {
       result: { kind: "text", text: result.text },
       usage,
+    };
+  }
+
+  /**
+   * Token-by-token streaming variant. Uses AI SDK's streamText().
+   *
+   * Yields:
+   *   - text_delta  for each text chunk the model streams
+   *   - tool_call   if the model's first tool call appears (streaming stops)
+   *   - finish      always as the last chunk (with usage totals)
+   *
+   * Note on granularity: AI SDK's streamText emits chunks roughly per-token
+   * for most providers. Some providers batch tokens into larger chunks (e.g.
+   * Claude may emit per-sentence). The harness surfaces whatever the provider
+   * sends — no artificial splitting is done.
+   */
+  async *streamCompletion(
+    messages: Message[],
+    tools: Tool[],
+  ): AsyncIterable<StreamChunk> {
+    const sdkMessages = toAiSdkMessages(messages);
+    const sdkTools = tools.length > 0 ? toAiSdkTools(tools) : undefined;
+
+    const result = streamText({
+      model: this._factory(this._modelId),
+      messages: sdkMessages,
+      tools: sdkTools,
+      maxTokens: 4_096,
+    });
+
+    // Stream text deltas token-by-token.
+    // AI SDK's textStream yields string chunks (empty strings are skipped).
+    for await (const chunk of result.textStream) {
+      if (chunk) {
+        yield { type: "text_delta", delta: chunk };
+      }
+    }
+
+    // After the text stream completes, resolve the async fields.
+    // These are Promises on the StreamTextResult (not on a "finalResult" object).
+    const [toolCalls, usage, finishReason] = await Promise.all([
+      result.toolCalls,
+      result.usage,
+      result.finishReason,
+    ]);
+
+    // Emit tool_call if the model switched to tool use during streaming.
+    if (toolCalls && toolCalls.length > 0) {
+      const first = toolCalls[0]!;
+      yield {
+        type: "tool_call",
+        toolId: first.toolName,
+        input: first.args,
+      };
+    }
+
+    yield {
+      type: "finish",
+      finishReason: finishReason ?? "stop",
+      usage: {
+        promptTokens: usage.promptTokens,
+        completionTokens: usage.completionTokens,
+      },
     };
   }
 

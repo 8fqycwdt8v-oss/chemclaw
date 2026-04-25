@@ -1,17 +1,18 @@
 // ChemClaw agent-claw service — Fastify HTTP entrypoint.
-// Phase A.2: LiteLLM provider, Postgres pool, DB-backed tool registry.
+// Phase A.4: token streaming, DR alias, helmet/cors/rate-limit parity, health probe.
 //
 // Port 3101 (legacy agent is 3100 — running in parallel during Phase A–E).
 //
 // Routes:
-//   GET /healthz  — liveness (no external deps)
-//   GET /readyz   — readiness (Postgres ping + mcp_tools health check)
-//
-// Phase A.3 will add:
-//   POST /api/chat   — SSE streaming chat
-//   POST /api/slash  — slash command router
+//   GET  /healthz              — liveness (no external deps)
+//   GET  /readyz               — readiness (Postgres ping + mcp_tools health check)
+//   POST /api/chat             — SSE streaming chat (token-by-token)
+//   POST /api/deep_research    — Deep Research alias (DR mode marker)
 
 import Fastify from "fastify";
+import helmet from "@fastify/helmet";
+import cors from "@fastify/cors";
+import rateLimit from "@fastify/rate-limit";
 import { loadConfig } from "./config.js";
 import { createPool } from "./db/pool.js";
 import { LiteLLMProvider } from "./llm/litellm-provider.js";
@@ -19,6 +20,7 @@ import { ToolRegistry } from "./tools/registry.js";
 import { buildCanonicalizeSmilesTool } from "./tools/builtins/canonicalize_smiles.js";
 import { registerHealthzRoute } from "./routes/healthz.js";
 import { registerChatRoute } from "./routes/chat.js";
+import { registerDeepResearchRoute } from "./routes/deep-research.js";
 import { PromptRegistry } from "./prompts/registry.js";
 import { loadHooks } from "./core/hook-loader.js";
 import { Lifecycle } from "./core/lifecycle.js";
@@ -40,12 +42,51 @@ const app = Fastify({
       censor: "***",
     },
   },
+  // Body size cap matches legacy agent (Phase A.4 parity).
+  bodyLimit: cfg.AGENT_BODY_LIMIT_BYTES,
   disableRequestLogging: false,
   trustProxy: 1,
   genReqId: (req) => {
     const rid = req.headers["x-request-id"];
     return (typeof rid === "string" ? rid : undefined) ?? crypto.randomUUID();
   },
+});
+
+// ---------------------------------------------------------------------------
+// Security plugins (parity with services/agent/src/index.ts).
+// ---------------------------------------------------------------------------
+
+// Helmet: HTTP security headers. CSP is off for a JSON API.
+await app.register(helmet, {
+  contentSecurityPolicy: false,
+  crossOriginResourcePolicy: { policy: "same-site" },
+});
+
+// CORS: explicit allowlist from config.
+const allowedOrigins = cfg.AGENT_CORS_ORIGINS.split(",")
+  .map((s) => s.trim())
+  .filter((s) => s.length > 0);
+
+await app.register(cors, {
+  origin: (origin, cb) => {
+    if (!origin) return cb(null, true); // curl / server-to-server
+    if (allowedOrigins.includes(origin)) return cb(null, true);
+    return cb(new Error("origin not allowed"), false);
+  },
+  credentials: true,
+});
+
+// Global rate limit (per IP / user header). Probes are always exempt.
+await app.register(rateLimit, {
+  max: cfg.AGENT_RATE_LIMIT_MAX,
+  timeWindow: cfg.AGENT_RATE_LIMIT_WINDOW_MS,
+  keyGenerator: (req) => {
+    const u = req.headers["x-user-entra-id"] ?? req.headers["x-forwarded-user"];
+    if (typeof u === "string" && u.length > 0) return `user:${u}`;
+    return `ip:${req.ip}`;
+  },
+  // Probes must stay cheap — never rate-limit them.
+  allowList: (req) => req.url === "/healthz" || req.url === "/readyz",
 });
 
 // ---------------------------------------------------------------------------
@@ -81,14 +122,17 @@ const getUser = (req: { headers: Record<string, string | string[] | undefined> }
   return typeof hdr === "string" ? hdr : cfg.CHEMCLAW_DEV_USER_EMAIL;
 };
 
-registerChatRoute(app, {
+const routeDeps = {
   config: cfg,
   pool,
   llm: llmProvider,
   registry,
   promptRegistry,
   getUser: getUser as (req: import("fastify").FastifyRequest) => string,
-});
+};
+
+registerChatRoute(app, routeDeps);
+registerDeepResearchRoute(app, routeDeps);
 
 app.get("/readyz", async (_req, reply) => {
   // 1. Postgres ping.
@@ -120,6 +164,64 @@ app.get("/readyz", async (_req, reply) => {
 });
 
 // ---------------------------------------------------------------------------
+// mcp_tools health probe loop.
+//
+// Every 60 seconds, ping each enabled mcp_tools row's /readyz endpoint and
+// update health_status + last_health_check in Postgres. This ensures /readyz
+// has fresh data and prevents the "no_healthy_mcp_tools" gate from blocking
+// indefinitely after seeding.
+//
+// The loop starts AFTER the server is listening (non-blocking).
+// Uses native fetch (Node 18+ built-in); no external deps.
+// ---------------------------------------------------------------------------
+
+const MCP_HEALTH_PROBE_INTERVAL_MS = 60_000;
+
+interface McpToolRow {
+  name: string;
+  base_url: string;
+}
+
+async function probeMcpTools(): Promise<void> {
+  let rows: McpToolRow[];
+  try {
+    const result = await pool.query<McpToolRow>(
+      "SELECT name, base_url FROM mcp_tools WHERE enabled = true",
+    );
+    rows = result.rows;
+  } catch (err) {
+    app.log.warn({ err }, "mcp-probe: could not read mcp_tools");
+    return;
+  }
+
+  for (const row of rows) {
+    const probeUrl = `${row.base_url.replace(/\/$/, "")}/readyz`;
+    let newStatus: "healthy" | "unhealthy";
+    try {
+      const resp = await fetch(probeUrl, { signal: AbortSignal.timeout(5_000) });
+      newStatus = resp.ok ? "healthy" : "unhealthy";
+    } catch {
+      newStatus = "unhealthy";
+    }
+
+    try {
+      await pool.query(
+        `UPDATE mcp_tools
+            SET health_status = $1, last_health_check = NOW()
+          WHERE name = $2`,
+        [newStatus, row.name],
+      );
+      app.log.debug({ tool: row.name, status: newStatus }, "mcp-probe: updated");
+    } catch (err) {
+      app.log.warn({ err, tool: row.name }, "mcp-probe: update failed");
+    }
+  }
+}
+
+// Export for tests.
+export { pool, registry, llmProvider, promptRegistry, lifecycle, probeMcpTools };
+
+// ---------------------------------------------------------------------------
 // Startup
 // ---------------------------------------------------------------------------
 
@@ -143,6 +245,13 @@ const start = async () => {
 
     await app.listen({ host: HOST, port: PORT });
     app.log.info({ llmProvider: cfg.AGENT_MODEL, port: PORT }, "agent-claw started");
+
+    // Start the mcp_tools health probe loop (non-blocking).
+    const runProbeLoop = async () => {
+      await probeMcpTools();
+      setTimeout(() => void runProbeLoop(), MCP_HEALTH_PROBE_INTERVAL_MS);
+    };
+    setTimeout(() => void runProbeLoop(), MCP_HEALTH_PROBE_INTERVAL_MS);
   } catch (err) {
     app.log.error(err);
     process.exit(1);
@@ -163,8 +272,5 @@ const shutdown = async (signal: string) => {
 };
 process.on("SIGINT", () => void shutdown("SIGINT"));
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
-
-// Export for test harness access.
-export { pool, registry, llmProvider, promptRegistry, lifecycle };
 
 await start();

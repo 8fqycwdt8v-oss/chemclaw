@@ -377,20 +377,123 @@ async function handleChat(
       });
     }
 
-    // Run the harness. For streaming we collect result and emit as text_delta.
-    const result = await agent.run({ messages, ctx });
+    // Token-by-token streaming path.
+    // We run the harness loop manually, using streamCompletion() for the final
+    // text step so tokens flow to the client as they arrive. Tool-call steps
+    // still use call() (blocking) because we need the result before continuing.
+    //
+    // Strategy:
+    //   1. Build a Budget + Lifecycle as normal.
+    //   2. Fire pre_turn.
+    //   3. Loop: call the LLM with call(). If it returns tool_call, emit
+    //      tool_call + tool_result events, push to messages, continue.
+    //   4. When the model produces a text response, switch to streamCompletion()
+    //      to emit token-by-token text_delta events.
+    //   5. Emit finish.
+    //
+    // This gives real streaming for the text portion while keeping the harness
+    // semantics (hooks, budget, tool execution) intact.
 
-    if (closed) return;
+    await lifecycle.dispatch("pre_turn", { ctx, messages });
 
-    let finalText = result.text;
-    if (isPlanMode) finalText = `**PLAN PREVIEW**\n\n${finalText}`;
-
-    writeEvent(reply, { type: "text_delta", delta: finalText });
-    writeEvent(reply, {
-      type: "finish",
-      finishReason: result.finishReason,
-      usage: result.usage,
+    const budget = new Budget({
+      maxSteps: deps.config.AGENT_CHAT_MAX_STEPS,
+      maxPromptTokens: deps.config.AGENT_TOKEN_BUDGET,
     });
+
+    let finishReason = "stop";
+    let finalText = "";
+    let stepsUsed = 0;
+
+    streaming: while (true) {
+      if (closed) break;
+      if (budget.isStepCapReached()) {
+        finishReason = "max_steps";
+        break;
+      }
+
+      // Peek at what the LLM wants to do next.
+      const { result: stepResult, usage } = await deps.llm.call(messages, tools);
+      budget.consumeStep(usage);
+      stepsUsed++;
+
+      if (stepResult.kind === "tool_call") {
+        // Tool-call step — execute the tool, emit events, push to messages.
+        const { toolId, input } = stepResult;
+
+        // pre_tool hook.
+        const prePayload: PreToolPayload = { ctx, toolId, input };
+        await lifecycle.dispatch("pre_tool", prePayload);
+        const effectiveInput = prePayload.input;
+
+        const tool = tools.find((t) => t.id === toolId);
+        if (!tool) {
+          writeEvent(reply, { type: "error", error: `unknown_tool:${toolId}` });
+          break streaming;
+        }
+
+        const parsedInput = tool.inputSchema.parse(effectiveInput);
+        writeEvent(reply, { type: "tool_call", toolId, input: parsedInput });
+
+        const rawOutput = await tool.execute(ctx, parsedInput);
+        const parsedOutput = tool.outputSchema.parse(rawOutput);
+
+        const postPayload = { ctx, toolId, input: effectiveInput, output: parsedOutput };
+        await lifecycle.dispatch("post_tool", postPayload);
+        const effectiveOutput = postPayload.output;
+
+        writeEvent(reply, { type: "tool_result", toolId, output: effectiveOutput });
+
+        const toolResultContent = effectiveOutput !== undefined
+          ? JSON.stringify(effectiveOutput)
+          : `{"error":"no_output"}`;
+
+        messages.push({ role: "tool", content: toolResultContent, toolId });
+        continue;
+      }
+
+      // Text step — stream token-by-token using streamCompletion().
+      // We already used call() to determine this is a text step; we now switch
+      // to streamCompletion() so tokens flow to the client as they arrive.
+      // Fall back to a single text_delta if streaming throws.
+      finalText = stepResult.text;
+      if (isPlanMode) finalText = `**PLAN PREVIEW**\n\n${finalText}`;
+
+      if (!closed) {
+        try {
+          let streamed = "";
+          for await (const chunk of deps.llm.streamCompletion(messages, tools)) {
+            if (closed) break;
+            if (chunk.type === "text_delta") {
+              streamed += chunk.delta;
+              writeEvent(reply, { type: "text_delta", delta: chunk.delta });
+            }
+            // finish/tool_call chunks from the stream are not re-emitted here;
+            // the harness emits its own finish event below.
+          }
+          // If the stream yielded text, use it as the canonical final text.
+          if (streamed) {
+            finalText = isPlanMode ? `**PLAN PREVIEW**\n\n${streamed}` : streamed;
+          }
+        } catch {
+          // Stream failed — fall back to the complete text we got from call().
+          writeEvent(reply, { type: "text_delta", delta: finalText });
+        }
+      }
+
+      messages.push({ role: "assistant", content: finalText });
+      break streaming;
+    }
+
+    await lifecycle.dispatch("post_turn", { ctx, finalText, stepsUsed });
+
+    if (!closed) {
+      writeEvent(reply, {
+        type: "finish",
+        finishReason,
+        usage: budget.summary(),
+      });
+    }
   } catch (err) {
     req.log.error({ err }, "chat stream failed");
     // Terminal-event guarantee: always emit error before closing.
