@@ -4,7 +4,7 @@
 // structured intent. Slash-only handling (isStreamable=false) short-circuits
 // before the LLM harness is invoked.
 //
-// Supported verbs (Phase B.3):
+// Supported verbs (Phase B.3 + D.1):
 //   /help    — returns the verb list; no LLM call.
 //   /skills [enable|disable|list] <id> — manage skill packs.
 //   /feedback up|down "<reason>" — writes feedback_events row; no LLM call.
@@ -14,6 +14,7 @@
 //   /dr      — deep-research skill (activates deep_research skill for this turn).
 //   /retro   — retrosynthesis skill (activates retro skill for this turn).
 //   /qc      — QC/analytical skill (activates qc skill for this turn).
+//   /forge <description> — tool forging flow (Phase D.1); agent calls forge_tool first.
 
 // ---------------------------------------------------------------------------
 // Result type returned by parseSlash.
@@ -33,7 +34,7 @@ export interface SlashParseResult {
 const SHORT_CIRCUIT_VERBS = new Set(["help", "skills", "feedback", "check", "learn"]);
 
 // Verbs that go through the harness (possibly with special hooks).
-const STREAMABLE_VERBS = new Set(["plan", "dr", "retro", "qc"]);
+const STREAMABLE_VERBS = new Set(["plan", "dr", "retro", "qc", "forge"]);
 
 // All known verbs.
 const ALL_VERBS = new Set([...SHORT_CIRCUIT_VERBS, ...STREAMABLE_VERBS]);
@@ -89,7 +90,8 @@ export const HELP_TEXT = `Available commands:
   /plan <question>                — preview a step-by-step plan before execution
   /dr <question>                  — deep-research mode (full report)
   /retro <smiles>                 — retrosynthesis route proposal
-  /qc <question>                  — analytical QC question routing`;
+  /qc <question>                  — analytical QC question routing
+  /forge <description>            — forge a new reusable tool (Phase D.1; agent calls forge_tool first)`;
 
 // ---------------------------------------------------------------------------
 // Feedback args parser: up|down "reason"

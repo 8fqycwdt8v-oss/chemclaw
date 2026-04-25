@@ -82,6 +82,20 @@ describe("parseSlash — streamable verbs", () => {
     expect(r.args).toBe("what yields are best for amide coupling?");
     expect(r.isStreamable).toBe(true);
   });
+
+  it("/forge returns isStreamable=true with description as args", () => {
+    const r = parseSlash("/forge compute molecular weight from SMILES");
+    expect(r.verb).toBe("forge");
+    expect(r.args).toBe("compute molecular weight from SMILES");
+    expect(r.isStreamable).toBe(true);
+  });
+
+  it("/forge with no description parses correctly (empty args)", () => {
+    const r = parseSlash("/forge");
+    expect(r.verb).toBe("forge");
+    expect(r.args).toBe("");
+    expect(r.isStreamable).toBe(true);
+  });
 });
 
 describe("parseSlash — unknown verbs", () => {
@@ -174,5 +188,11 @@ describe("shortCircuitResponse", () => {
 
   it("returns null for feedback (needs DB work)", () => {
     expect(shortCircuitResponse("feedback")).toBeNull();
+  });
+});
+
+describe("HELP_TEXT — /forge verb listed", () => {
+  it("includes /forge in the HELP_TEXT", () => {
+    expect(HELP_TEXT).toContain("/forge");
   });
 });

@@ -81,6 +81,15 @@ const ConfigSchema = z.object({
     .optional()
     .transform((v) => v === "true"),
   CHEMCLAW_DEV_USER_EMAIL: z.string().default("dev@local.test"),
+
+  // E2B sandbox — programmatic tool calling (Phase D.1).
+  // E2B_API_KEY must be set to a real key in production; in dev/test the sandbox is mocked.
+  E2B_API_KEY: z.string().default("e2b-dev-mock-key"),
+  // E2B template ID — defaults to a Python 3.11 base image.
+  E2B_TEMPLATE_ID: z.string().default("python-3-11"),
+
+  // Path on disk where forged tool Python files are written.
+  FORGED_TOOLS_DIR: z.string().default("/var/lib/chemclaw/forged_tools"),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

@@ -313,3 +313,61 @@ def test_smb_scheme_is_in_allowed_but_not_wired() -> None:
 
     assert "smb" in _ALLOWED_SCHEMES
     assert "smb" not in _WIRED_SCHEMES
+
+
+# ---------------------------------------------------------------------------
+# 9. /byte_offset_to_page — canonical PDF page mapping (Phase D.1)
+# ---------------------------------------------------------------------------
+
+
+def test_byte_offset_to_page_returns_correct_pages(tmp_pdf_file: Path) -> None:
+    """_offset_to_page returns 1 for offset 0 in a single-page PDF."""
+    from services.mcp_tools.mcp_doc_fetcher.main import (
+        _build_page_offset_table,
+        _offset_to_page,
+        _get_pdf_bytes,
+        _parse_and_validate_uri,
+    )
+
+    uri = f"file://{tmp_pdf_file}"
+    parsed = _parse_and_validate_uri(uri)
+    pdf_bytes = _get_pdf_bytes(uri, parsed)
+
+    page_starts = _build_page_offset_table(pdf_bytes)
+    # Single-page PDF — page_starts should have at least one entry.
+    assert len(page_starts) >= 1
+
+    # Offset 0 is always page 1.
+    page = _offset_to_page(0, page_starts)
+    assert page == 1
+
+
+def test_byte_offset_to_page_heuristic_fallback() -> None:
+    """_offset_to_page falls back gracefully to page 1 for an empty offset table."""
+    from services.mcp_tools.mcp_doc_fetcher.main import _offset_to_page
+
+    # Empty table — should default to page 1.
+    assert _offset_to_page(0, []) == 1
+    assert _offset_to_page(9999, []) == 1
+
+
+def test_byte_offset_to_page_multi_page_ordering(small_pdf_bytes: bytes) -> None:
+    """_build_page_offset_table returns non-empty list for a valid PDF."""
+    from services.mcp_tools.mcp_doc_fetcher.main import _build_page_offset_table
+
+    page_starts = _build_page_offset_table(small_pdf_bytes)
+    # Must be a list of ints.
+    assert isinstance(page_starts, list)
+    assert len(page_starts) >= 1
+    for ps in page_starts:
+        assert isinstance(ps, int)
+        assert ps >= 0
+
+
+def test_byte_offset_nonnegative_validator() -> None:
+    """ByteOffsetToPageIn rejects negative byte_offsets."""
+    from services.mcp_tools.mcp_doc_fetcher.main import ByteOffsetToPageIn
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError, match="non-negative"):
+        ByteOffsetToPageIn(uri="file:///tmp/f.pdf", byte_offsets=[-1, 0, 1])

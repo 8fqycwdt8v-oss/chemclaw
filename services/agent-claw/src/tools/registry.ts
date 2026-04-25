@@ -8,8 +8,11 @@
 
 import { z } from "zod";
 import { type Pool } from "pg";
+import { readFileSync } from "fs";
 import type { Tool } from "./tool.js";
 import { postJson } from "../mcp/postJson.js";
+import type { SandboxClient } from "../core/sandbox.js";
+import { wrapCode, parseOutputs, buildStubLibrary } from "./builtins/run_program.js";
 
 // ---------------------------------------------------------------------------
 // Zod-from-JSON schema builder.
@@ -85,11 +88,12 @@ function buildObjectSchema(
 
 interface ToolRow {
   name: string;
-  source: "builtin" | "mcp" | "skill";
+  source: "builtin" | "mcp" | "skill" | "forged";
   schema_json: JsonSchema;
   mcp_url: string | null;
   mcp_endpoint: string | null;
   description: string;
+  scripts_path?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -103,6 +107,22 @@ export class ToolRegistry {
   // Register factories here before calling loadFromDb() so that DB rows with
   // source='builtin' can find their implementation.
   private readonly _builtinFactories: Map<string, () => Tool> = new Map();
+
+  // Sandbox client injected for source='forged' tool execution.
+  // Set via setSandboxClient() before loadFromDb() if forged tools are in use.
+  private _sandboxClient: SandboxClient | null = null;
+
+  // In-process code cache for forged tools (read once per process startup).
+  private readonly _forgedCodeCache: Map<string, string> = new Map();
+
+  /**
+   * Inject a SandboxClient so the registry can execute forged tools.
+   * Must be called before loadFromDb() if the tools table contains source='forged' rows.
+   */
+  setSandboxClient(client: SandboxClient): this {
+    this._sandboxClient = client;
+    return this;
+  }
 
   // ---------------------------------------------------------------------------
   // Static registration (Phase A.1 API — kept intact)
@@ -190,10 +210,13 @@ export class ToolRegistry {
    */
   async loadFromDb(pool: Pool): Promise<void> {
     const { rows } = await pool.query<ToolRow>(
-      `SELECT name, source, schema_json, mcp_url, mcp_endpoint, description
-       FROM tools
-       WHERE enabled = true
-       ORDER BY name`,
+      `SELECT t.name, t.source, t.schema_json, t.mcp_url, t.mcp_endpoint, t.description,
+              sl.scripts_path
+         FROM tools t
+         LEFT JOIN skill_library sl
+               ON sl.name = t.name AND sl.kind = 'forged_tool'
+        WHERE t.enabled = true
+        ORDER BY t.name`,
     );
 
     for (const row of rows) {
@@ -248,7 +271,81 @@ export class ToolRegistry {
       };
     }
 
-    // source='skill' — deferred to Phase B.
+    // source='forged' -- execute via E2B sandbox using the stored Python code.
+    if (row.source === "forged") {
+      if (!row.scripts_path) {
+        // No scripts_path — cannot execute; skip.
+        return null;
+      }
+      if (!this._sandboxClient) {
+        // SandboxClient not injected — log and skip.
+        // eslint-disable-next-line no-console
+        console.warn(
+          `ToolRegistry: skipping forged tool '${row.name}' — setSandboxClient() was not called.`,
+        );
+        return null;
+      }
+
+      const sandboxClient = this._sandboxClient;
+      const scriptsPath = row.scripts_path;
+      const name = row.name;
+      const codeCache = this._forgedCodeCache;
+
+      // Build the stub library using default localhost URLs
+      // (registry does not have DB access at call time; caller can inject URLs).
+      const defaultStub = buildStubLibrary({});
+
+      return {
+        id: name,
+        description: row.description,
+        inputSchema,
+        outputSchema,
+        execute: async (_ctx, input) => {
+          // Load code from disk on first call (cached in memory thereafter).
+          let code = codeCache.get(name);
+          if (!code) {
+            try {
+              code = readFileSync(scriptsPath, "utf-8");
+              codeCache.set(name, code);
+            } catch (err) {
+              throw new Error(
+                `ToolRegistry: failed to read forged tool code from '${scriptsPath}': ${(err as Error).message}`,
+              );
+            }
+          }
+
+          const inputRecord = input as Record<string, unknown>;
+          const expectedOutputs = Object.keys(
+            (row.schema_json as Record<string, unknown>)["properties"] ?? {},
+          );
+
+          const handle = await sandboxClient.createSandbox();
+          try {
+            // Mount stub.
+            await sandboxClient.mountReadOnlyFile(
+              handle,
+              Buffer.from(defaultStub, "utf-8"),
+              "/sandbox/chemclaw/__init__.py",
+            );
+
+            const wrappedCode = wrapCode(code, inputRecord, expectedOutputs);
+            const result = await sandboxClient.executePython(handle, wrappedCode, {});
+
+            if (result.exit_code !== 0) {
+              throw new Error(
+                `forged tool '${name}' exited ${result.exit_code}: ${result.stderr.slice(0, 500)}`,
+              );
+            }
+
+            return parseOutputs(result.stdout) ?? {};
+          } finally {
+            await sandboxClient.closeSandbox(handle);
+          }
+        },
+      };
+    }
+
+    // source='skill' -- deferred to Phase B.
     return null;
   }
 }

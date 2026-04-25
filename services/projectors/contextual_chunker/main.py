@@ -46,6 +46,8 @@ class Settings(ProjectorSettings):
     litellm_api_key: str = "sk-chemclaw-dev-master-change-me"
     # Haiku-class model for cheap prefix generation.
     context_model: str = "claude-haiku-4-5"
+    # mcp-doc-fetcher URL for canonical PDF byte-offset -> page mapping.
+    mcp_doc_fetcher_url: str = "http://localhost:8006"
 
 
 class _PermanentChunkError(Exception):
@@ -154,13 +156,25 @@ class ContextualChunkerProjector(BaseProjector):
                         )
                         prefix = ""  # write empty string to mark as processed
 
-                    # Determine page number for PDFs using byte offset heuristic.
+                    # Determine page number for PDFs using canonical byte-offset mapping.
                     page_number: int | None = None
                     if is_pdf and row.get("byte_start") is not None:
-                        # Approximate: each PDF page averages ~2000 bytes of text.
-                        # The canonical mapping lives in mcp_doc_fetcher; this is
-                        # a bootstrap approximation until full PDF metadata is stored.
-                        page_number = max(1, (row["byte_start"] or 0) // 2000 + 1)
+                        original_uri = doc.get("original_uri")
+                        if original_uri:
+                            try:
+                                page_number = await self._byte_offset_to_page(
+                                    original_uri, int(row["byte_start"])
+                                )
+                            except Exception as exc:
+                                log.debug(
+                                    "event %s: byte_offset_to_page failed for chunk %s: %s",
+                                    event_id, row["id"], exc,
+                                )
+                                # Fall back to heuristic.
+                                page_number = max(1, (row["byte_start"] or 0) // 2000 + 1)
+                        else:
+                            # No original_uri -- use heuristic approximation.
+                            page_number = max(1, (row["byte_start"] or 0) // 2000 + 1)
 
                     async with conn.cursor() as cur:
                         await cur.execute(
@@ -180,6 +194,23 @@ class ContextualChunkerProjector(BaseProjector):
                 "event %s: contextual prefix added to %d chunks of document %s",
                 event_id, total, source_row_id,
             )
+
+    async def _byte_offset_to_page(self, original_uri: str, byte_offset: int) -> int:
+        """Call mcp_doc_fetcher /byte_offset_to_page for canonical page mapping.
+
+        Returns a 1-indexed page number. Raises on any error (caller should fall back).
+        """
+        r = await self._client.post(
+            f"{self._s.mcp_doc_fetcher_url}/byte_offset_to_page",
+            headers={"Content-Type": "application/json"},
+            json={"uri": original_uri, "byte_offsets": [byte_offset]},
+        )
+        r.raise_for_status()
+        body = r.json()
+        pages: list[int] = body.get("pages", [])
+        if not pages:
+            raise ValueError("mcp_doc_fetcher returned empty pages list")
+        return pages[0]
 
     async def _generate_prefix(
         self,

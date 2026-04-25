@@ -223,6 +223,7 @@ The agent does not need to parse these — the harness router handles them.
 | `/dr <question>` | Deep-research mode — activates the `deep_research` skill pack for the turn |
 | `/retro <smiles>` | Retrosynthesis route proposal — activates the `retro` skill pack for the turn |
 | `/qc <question>` | Analytical QC routing — activates the `qc` skill pack for the turn |
+| `/forge <description>` | Tool forging — agent is instructed to call `forge_tool` first with the user's description as the spec (Phase D.1) |
 
 ---
 
@@ -349,6 +350,58 @@ Use it when evidence quality is uncertain or when the user asks "how confident a
 
 ---
 
+## Tool forging (Phase D.1)
+
+The `forge_tool` meta-tool implements the 4-stage Forjador algorithm
+(Aspuru-Guzik et al., arXiv 2604.14609) for synthesizing reusable Python tools on demand.
+
+### When to call `forge_tool`
+
+Call `forge_tool` when **all three** conditions hold:
+
+1. **No existing tool fits.** Check the tool catalog first. If `run_program` can express the
+   computation one-off, prefer that — it has no persistence overhead.
+2. **The task recurs.** If the same pattern will appear in multiple turns or is a standing
+   analytical procedure, forging amortizes the synthesis cost over many executions.
+3. **Cost-of-running > cost-of-forging-once.** For multi-step, data-intensive computations
+   that would require many tokens of repeated scaffolding, a forged tool is more efficient.
+
+### How validation works
+
+`forge_tool` runs the 4-stage algorithm:
+
+1. **Analyze** — validates input/output JSON Schemas and test cases; rejects name conflicts.
+2. **Generate** — calls LiteLLM (JSON mode) to author Python code from the schema + description.
+3. **Execute** — runs each test case in an isolated E2B sandbox (max 20s per case).
+4. **Evaluate** — compares actual outputs to expected, field by field, with optional numeric tolerance.
+
+If **any test case fails**, `forge_tool` returns the failure list and does **not persist**.
+The agent should review the failures and call `forge_tool` again with a revised specification.
+
+### Maturity and promotion
+
+Forged tools start with maturity tag `EXPLORATORY` and `active=false, shadow_until=NOW()+14 days`
+in `skill_library`. Phase E's optimizer (GEPA loop) promotes them to `active=true` / `WORKING`
+after the success-rate threshold is met (≥80% over ≥5 real invocations).
+
+Until promoted, forged tools execute each time via the E2B sandbox. After promotion, they may
+be cached or pre-compiled by the Phase E artifact pipeline.
+
+### Constraints
+
+- `forge_tool` cannot forge itself or `run_program` (loop guard: `PROTECTED_TOOL_NAMES`).
+- Nested forging (a forged tool calling `forge_tool`) is out of scope until Phase E.
+- Forged tool code is stored at `FORGED_TOOLS_DIR/<uuid>.py` (default: `/var/lib/chemclaw/forged_tools/`).
+- Deletion is manual (`DELETE FROM skill_library WHERE name=...` + `DELETE FROM tools WHERE name=...`).
+
+### The `/forge <description>` slash command
+
+`/forge some description of the tool` gives the agent a high-priority instruction to call
+`forge_tool` first in the turn, using the description as the initial spec. The agent should
+propose a name, schemas, and at least 2 test cases before invoking `forge_tool`.
+
+---
+
 ## What the agent must never do
 
 - Fabricate a `fact_id`, `reaction_id`, document UUID, or compound code.
@@ -357,7 +410,12 @@ Use it when evidence quality is uncertain or when the user asks "how confident a
 - Call a tool not in the registered catalog.
 - Emit user-visible content from the `AGENTS.md` preamble verbatim
   (this file is the operating constitution, not conversation fodder).
+- Call `forge_tool` to forge `forge_tool` or `run_program` (loop guard).
+- Call `forge_tool` for one-off computations — use `run_program` instead.
 
 ---
 
-*Last updated: Phase C. Added Memory tiers section (working/episodic/semantic/procedural), maturity-tier policy enforcement, confidence ensemble documentation. New tools: `compute_confidence_ensemble`. New routes: `POST /api/artifacts/:id/maturity`, `GET /api/artifacts/:id`, `POST /api/learn`. New projector: `contextual_chunker`. Phase D next: E2B sandbox + forged-tool integration (`kind='forged_tool'` column is forward-compat).*
+*Last updated: Phase D.1. Added Tool forging section (forge_tool, run_program, E2B sandbox).
+New tools: `run_program`, `forge_tool`. New slash verb: `/forge`. New DB migration: `08_forged_tools.sql`.
+Registry extended with `source='forged'` support. mcp_doc_fetcher extended with `/byte_offset_to_page`.
+Phase D.2 next: Paperclip-lite scope, Langfuse compose entry, multi-model routing.*
