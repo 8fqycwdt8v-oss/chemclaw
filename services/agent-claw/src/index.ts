@@ -18,6 +18,10 @@ import { LiteLLMProvider } from "./llm/litellm-provider.js";
 import { ToolRegistry } from "./tools/registry.js";
 import { buildCanonicalizeSmilesTool } from "./tools/builtins/canonicalize_smiles.js";
 import { registerHealthzRoute } from "./routes/healthz.js";
+import { registerChatRoute } from "./routes/chat.js";
+import { PromptRegistry } from "./prompts/registry.js";
+import { loadHooks } from "./core/hook-loader.js";
+import { Lifecycle } from "./core/lifecycle.js";
 
 // ---------------------------------------------------------------------------
 // Bootstrap
@@ -51,6 +55,8 @@ const app = Fastify({
 const pool = createPool(cfg);
 const llmProvider = new LiteLLMProvider(cfg);
 const registry = new ToolRegistry();
+const promptRegistry = new PromptRegistry(pool);
+const lifecycle = new Lifecycle();
 
 // Register builtin factories so loadFromDb() can find them.
 // Cast through Tool (unknown) to satisfy the registry's covariant Tool<unknown,unknown> map.
@@ -63,6 +69,26 @@ registry.registerBuiltin("canonicalize_smiles", () =>
 // ---------------------------------------------------------------------------
 
 registerHealthzRoute(app);
+
+// Dev-mode user extraction: read from header or fall back to config default.
+const getUser = (req: { headers: Record<string, string | string[] | undefined> }): string => {
+  if (cfg.CHEMCLAW_DEV_MODE) {
+    const hdr = req.headers["x-dev-user-entra-id"];
+    return (typeof hdr === "string" ? hdr : undefined) ?? cfg.CHEMCLAW_DEV_USER_EMAIL;
+  }
+  // Production: read from validated Entra-ID header set by the auth proxy.
+  const hdr = req.headers["x-user-entra-id"];
+  return typeof hdr === "string" ? hdr : cfg.CHEMCLAW_DEV_USER_EMAIL;
+};
+
+registerChatRoute(app, {
+  config: cfg,
+  pool,
+  llm: llmProvider,
+  registry,
+  promptRegistry,
+  getUser: getUser as (req: import("fastify").FastifyRequest) => string,
+});
 
 app.get("/readyz", async (_req, reply) => {
   // 1. Postgres ping.
@@ -107,6 +133,14 @@ const start = async () => {
       app.log.warn({ err }, "could not hydrate tool registry from DB — continuing with empty registry");
     }
 
+    // Load YAML hooks (non-fatal).
+    try {
+      const hookResult = await loadHooks(lifecycle);
+      app.log.info(hookResult, "lifecycle hooks loaded");
+    } catch (err) {
+      app.log.warn({ err }, "hook loader failed — continuing without YAML hooks");
+    }
+
     await app.listen({ host: HOST, port: PORT });
     app.log.info({ llmProvider: cfg.AGENT_MODEL, port: PORT }, "agent-claw started");
   } catch (err) {
@@ -130,7 +164,7 @@ const shutdown = async (signal: string) => {
 process.on("SIGINT", () => void shutdown("SIGINT"));
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
 
-// Export for test harness access (Phase A.3+ tests may need the pool/registry).
-export { pool, registry, llmProvider };
+// Export for test harness access.
+export { pool, registry, llmProvider, promptRegistry, lifecycle };
 
 await start();

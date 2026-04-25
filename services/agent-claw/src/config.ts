@@ -33,6 +33,14 @@ const ConfigSchema = z.object({
   // Token budget per turn. Guards against runaway loops consuming the context window.
   AGENT_TOKEN_BUDGET: z.coerce.number().int().positive().default(120_000),
 
+  // Chat-specific rate limit (lower than the global rate limit).
+  AGENT_CHAT_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
+  AGENT_CHAT_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),
+
+  // Per-message character cap and total history cap.
+  AGENT_CHAT_MAX_INPUT_CHARS: z.coerce.number().int().positive().default(40_000),
+  AGENT_CHAT_MAX_HISTORY: z.coerce.number().int().positive().max(200).default(40),
+
   POSTGRES_HOST: z.string().default("localhost"),
   POSTGRES_PORT: z.coerce.number().int().default(5432),
   POSTGRES_DB: z.string().default("chemclaw"),
