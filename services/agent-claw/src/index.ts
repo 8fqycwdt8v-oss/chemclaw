@@ -175,9 +175,12 @@ app.setErrorHandler((err, req, reply) => {
   }
   // Default Fastify error handler — preserves prior behavior for everything else.
   req.log.error({ err }, "unhandled error");
-  reply.code(err.statusCode ?? 500).send({
+  // err is typed as FastifyError | Error | unknown across Fastify versions;
+  // narrow defensively before reading statusCode/message.
+  const e = err as { statusCode?: number; message?: string };
+  reply.code(e.statusCode ?? 500).send({
     error: "internal",
-    detail: cfg.CHEMCLAW_DEV_MODE ? err.message : undefined,
+    detail: cfg.CHEMCLAW_DEV_MODE ? e.message : undefined,
   });
 });
 
