@@ -72,14 +72,16 @@ The following tools are available. The harness loads the live catalog from the
 - A `Citation` with `source_kind="original_doc"` and `source_uri` pointing at the storage location is returned for `bytes` and `pdf_pages` outputs — surface it in the response so the user can click through to the source.
 - If `original_uri` is NULL for a document (ingested before Phase B.1 backfill), fall back to `format="markdown"` and note that the original file location is not recorded.
 
-### Phase B additions (placeholders)
+### Phase B additions
 
-The following tools are defined in the plan and will land in later Phase B slices. Do not
-fabricate calls to these before they are registered.
+| Tool | What it does |
+|---|---|
+| `analyze_csv` | Parse and summarize tabular CSV data. Accepts `document_id` (fetched via mcp-doc-fetcher) or `csv_text` (raw string, max 1 MB). Returns row count, per-column summary, and `answer_to_query`. If `answer_to_query` is `__llm_judgement_required__`, call `synthesize_insights` next. |
+| `dispatch_sub_agent` | Spawn a specialized sub-agent (chemist / analyst / reader) for a focused sub-task. Returns the sub-agent's answer, citations, and budget summary. |
 
-- `run_program` — programmatic tool calling via E2B sandbox.
-- `analyze_csv` — parse and summarize tabular analytical data.
-- `skill_invoke` — invoke a named skill pack.
+**Deferred to later phases:**
+- `run_program` — programmatic tool calling via E2B sandbox (Phase D).
+- `skill_invoke` — invoke a named skill pack (Phase E).
 
 ---
 
@@ -217,21 +219,57 @@ The agent does not need to parse these — the harness router handles them.
 | `/feedback up\|down "reason"` | Submit feedback on the last response |
 | `/check` | Confidence ensemble for the last response (Phase C) |
 | `/learn` | Trigger skill induction from the last turn (Phase C) |
-| `/plan` | Preview a step-by-step plan before execution |
-| `/dr <question>` | Deep-research mode with extended tool use |
+| `/plan <question>` | Preview a step-by-step plan before execution; emits `plan_step` + `plan_ready` SSE events |
+| `/dr <question>` | Deep-research mode — activates the `deep_research` skill pack for the turn |
+| `/retro <smiles>` | Retrosynthesis route proposal — activates the `retro` skill pack for the turn |
+| `/qc <question>` | Analytical QC routing — activates the `qc` skill pack for the turn |
+
+---
+
+## Skills
+
+Skill packs extend the agent with domain-specific prompts and a curated tool subset.
+They live in `skills/<id>/` (a `SKILL.md` with YAML frontmatter + a `prompt.md`).
+
+### Available packs
+
+| Pack ID | Description | Slash verb |
+|---|---|---|
+| `retro` | Retrosynthesis route proposal — canonicalize, portfolio search, expand top hits, route table. | `/retro <smiles>` |
+| `qc` | Analytical QC routing — HPLC / NMR / MS / KF triage, spec lookup, contradiction check. | `/qc <question>` |
+| `deep_research` | Multi-section research reports with full retrieval, KG traversal, and citation discipline. | `/dr <question>` |
+| `cross_learning` | Cross-project reaction learning — portfolio mining, statistical analysis, transferable insights. | `/skills enable cross_learning` |
+
+### Activation
+
+- **Per-turn implicit**: `/dr`, `/retro`, `/qc` activate the corresponding skill for that turn only.
+- **Persistent**: `/skills enable <id>` activates a skill for the session; `/skills disable <id>` removes it.
+- **List all packs**: `/skills list` (or `GET /api/skills/list`).
+- **Max 8 active skills simultaneously** (context management).
+
+### How skills change the turn
+
+When a skill is active, the harness:
+1. Prepends the skill's `prompt.md` body to the system prompt under `## Active skill: <id>`.
+2. Restricts the tool catalog to the union of the active skills' `tools:` lists plus the always-on baseline (`canonicalize_smiles`, `fetch_original_document`).
+3. Uses the highest `max_steps_override` across active skills (if set).
 
 ---
 
 ## Plan mode
 
-When a turn is tagged as plan mode (`/plan`), the harness adds a `pre_tool`
-intercept that replaces each actual tool call with a no-op preview:
+When a turn is tagged as plan mode (`/plan`), the harness asks the LLM to produce
+a JSON array of planned steps (no tool execution). The response is a `plan_ready`
+SSE event containing the plan ID and step list. The user can Approve or Reject:
 
-    (plan mode — would call <tool_name> with <input_summary>)
+SSE events emitted:
+- `plan_step` — `{ step_number, tool, args, rationale }` — one per anticipated tool call.
+- `plan_ready` — `{ plan_id, steps, created_at }` — plan complete and saved (5-minute TTL).
 
-The final assistant response is preceded by `**PLAN PREVIEW**` and does not
-commit any writes (no KG nodes, no report rows). The user can approve execution
-or edit the plan before proceeding.
+`POST /api/chat/plan/approve { plan_id }` resumes execution.
+`POST /api/chat/plan/reject { plan_id }` discards the plan.
+
+No tool calls execute during plan mode — only after approval.
 
 ---
 
@@ -246,4 +284,4 @@ or edit the plan before proceeding.
 
 ---
 
-*Last updated: Phase B.1. Added `fetch_original_document` with original-vs-markdown policy. Phase B.2 will port the remaining 12 tools. Phase C will add maturity promotion and confidence ensembles.*
+*Last updated: Phase B.3. Added Skills section (4 packs: retro, qc, deep_research, cross_learning), sub-agent spawner (`dispatch_sub_agent`), `analyze_csv`, plan-mode SSE events (`plan_step` / `plan_ready`), and `/retro` / `/qc` slash verbs. Phase C next: memory tiers, maturity promotion, confidence ensembles.*

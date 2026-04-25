@@ -10,14 +10,14 @@
 // Pre-pass: the slash router is checked first. isStreamable=false verbs emit
 // a single text-completion + finish event without invoking the harness.
 //
-// SSE event types: text_delta | tool_call | tool_result | finish | error
+// SSE event types: text_delta | tool_call | tool_result | plan_step | plan_ready | finish | error
 //
 // Defences:
 //   - Dedicated lower rate limit (AGENT_CHAT_RATE_LIMIT_MAX).
 //   - History cap (AGENT_CHAT_MAX_HISTORY) + per-message cap (AGENT_CHAT_MAX_INPUT_CHARS).
 //   - Server-enforced maxSteps on the agent loop.
 //   - Terminal-event guarantee: finish or error always emitted.
-//   - Plan mode: pre_tool hook intercepts tool calls with no-op previews.
+//   - Plan mode: LLM asked to produce JSON plan; plan_step + plan_ready events emitted; no tools execute.
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
@@ -41,6 +41,15 @@ import { withUserContext } from "../db/with-user-context.js";
 import { PromptRegistry } from "../prompts/registry.js";
 import type { Message, ToolContext } from "../core/types.js";
 import type { PreToolPayload } from "../core/types.js";
+import {
+  planStore,
+  createPlan,
+  parsePlanSteps,
+  PLAN_MODE_SYSTEM_SUFFIX,
+  type PlanStep,
+} from "../core/plan-mode.js";
+import type { SkillLoader } from "../core/skills.js";
+import { VERB_TO_SKILL } from "../core/skills.js";
 
 // ---------------------------------------------------------------------------
 // Wire types
@@ -50,6 +59,8 @@ export type StreamEvent =
   | { type: "text_delta"; delta: string }
   | { type: "tool_call"; toolId: string; input: unknown }
   | { type: "tool_result"; toolId: string; output: unknown }
+  | { type: "plan_step"; step_number: number; tool: string; args: unknown; rationale: string }
+  | { type: "plan_ready"; plan_id: string; steps: PlanStep[]; created_at: number }
   | { type: "finish"; finishReason: string; usage: { promptTokens: number; completionTokens: number } }
   | { type: "error"; error: string };
 
@@ -79,6 +90,8 @@ export interface ChatRouteDeps {
   promptRegistry: PromptRegistry;
   /** Extract the user's Entra-ID (or dev email) from the request. */
   getUser: (req: FastifyRequest) => string;
+  /** Skill loader — optional; if absent, skill filtering is skipped. */
+  skillLoader?: SkillLoader;
 }
 
 // ---------------------------------------------------------------------------
@@ -127,27 +140,8 @@ function setupSse(reply: FastifyReply): void {
 }
 
 // ---------------------------------------------------------------------------
-// Plan-mode hook: intercepts tool calls and returns a no-op preview.
-// Registered programmatically (not from YAML) per turn when verb === "plan".
+// Lifecycle builders.
 // ---------------------------------------------------------------------------
-
-function buildPlanModeLifecycle(): Lifecycle {
-  const lc = new Lifecycle();
-  registerRedactSecretsHook(lc);
-  registerTagMaturityHook(lc);
-  registerBudgetGuardHook(lc);
-
-  // Plan-mode pre_tool: abort actual execution with a preview message.
-  lc.on("pre_tool", "plan-mode-intercept", async (payload: PreToolPayload) => {
-    const inputSummary = JSON.stringify(payload.input).slice(0, 200);
-    throw Object.assign(
-      new Error(`(plan mode — would call ${payload.toolId} with ${inputSummary})`),
-      { isPlanMode: true },
-    );
-  });
-
-  return lc;
-}
 
 function buildDefaultLifecycle(): Lifecycle {
   const lc = new Lifecycle();
@@ -293,11 +287,22 @@ async function handleChat(
   // ------- Harness path -------
   const isPlanMode = slashResult.verb === "plan";
 
-  // Build system prompt: AGENTS.md preamble + active prompt_registry row.
+  // ── Skill activation for this turn ──────────────────────────────────────
+  // If the slash verb implies a skill (e.g. /dr → deep_research), activate it
+  // for this turn only (non-persistent). Persistent enable/disable goes through
+  // POST /api/skills/enable|disable.
+  const loader = deps.skillLoader;
+  let cleanupSkillForTurn: (() => void) | undefined;
+  if (loader && slashResult.verb) {
+    const impliedSkill = VERB_TO_SKILL[slashResult.verb];
+    if (impliedSkill && loader.has(impliedSkill)) {
+      cleanupSkillForTurn = loader.enableForTurn(impliedSkill);
+    }
+  }
+
+  // Build system prompt: base + active-skill prompts + plan-mode suffix.
   let systemPrompt = "";
   try {
-    // Load AGENTS.md preamble from the prompt registry.
-    // If not seeded yet, fall back gracefully (don't crash).
     try {
       const { template } = await deps.promptRegistry.getActive("agent.system");
       systemPrompt = template;
@@ -310,14 +315,21 @@ async function handleChat(
     systemPrompt = "You are ChemClaw, an autonomous chemistry knowledge agent.";
   }
 
+  // Prepend active-skill prompts.
+  if (loader && loader.activeIds.size > 0) {
+    systemPrompt = loader.buildSystemPrompt(systemPrompt);
+  }
+
+  // Append plan-mode instructions.
+  if (isPlanMode) {
+    systemPrompt = systemPrompt + PLAN_MODE_SYSTEM_SUFFIX;
+  }
+
   const messages: Message[] = [
     { role: "system", content: systemPrompt },
     ...body.messages.map((m) => ({
       role: m.role as Message["role"],
-      content:
-        isPlanMode && m.role === "user" && m === lastUserMessage
-          ? `[PLAN MODE] ${slashResult.remainingText || m.content}`
-          : m.content,
+      content: m.content,
       toolId: m.toolId,
     })),
   ];
@@ -338,26 +350,49 @@ async function handleChat(
     scratchpad: _scratchpad,
   };
 
-  const lifecycle = isPlanMode ? buildPlanModeLifecycle() : buildDefaultLifecycle();
-  const tools = deps.registry.all();
+  const lifecycle = buildDefaultLifecycle();
+
+  // Filter tools by active skills (if any skills are active).
+  const allTools = deps.registry.all();
+  const tools = loader ? loader.filterTools(allTools) : allTools;
+
+  // Use max_steps_override from active skills if set.
+  const skillMaxSteps = loader?.maxStepsOverride();
+  const effectiveMaxSteps = skillMaxSteps ?? deps.config.AGENT_CHAT_MAX_STEPS;
 
   const agent = buildAgent({
     llm: deps.llm,
     tools,
     lifecycle,
-    maxSteps: deps.config.AGENT_CHAT_MAX_STEPS,
+    maxSteps: effectiveMaxSteps,
     maxPromptTokens: deps.config.AGENT_TOKEN_BUDGET,
   });
 
   if (!doStream) {
     // Non-streaming path.
     try {
+      if (isPlanMode) {
+        // Plan mode: ask LLM to produce a JSON plan; no tool execution.
+        const planJson = await deps.llm.completeJson({
+          system: systemPrompt,
+          user: lastUserMessage?.content ?? "",
+        });
+        const steps = parsePlanSteps(planJson);
+        const plan = createPlan(steps, messages);
+        planStore.save(plan);
+        cleanupSkillForTurn?.();
+        return void reply.send({
+          plan_id: plan.plan_id,
+          steps: plan.steps,
+          created_at: plan.created_at,
+        });
+      }
       const result = await agent.run({ messages, ctx });
-      let text = result.text;
-      if (isPlanMode) text = `**PLAN PREVIEW**\n\n${text}`;
-      return void reply.send({ text, finishReason: result.finishReason, usage: result.usage });
+      cleanupSkillForTurn?.();
+      return void reply.send({ text: result.text, finishReason: result.finishReason, usage: result.usage });
     } catch (err) {
       req.log.error({ err }, "chat generate failed");
+      cleanupSkillForTurn?.();
       return void reply.code(500).send({ error: "internal" });
     }
   }
@@ -371,12 +406,52 @@ async function handleChat(
   req.raw.on("aborted", onClose);
 
   try {
-    // Collect plan-mode intercept messages as text_delta events.
+    // Plan mode: ask LLM for a JSON plan; emit plan_step + plan_ready; no tool execution.
     if (isPlanMode) {
-      writeEvent(reply, {
-        type: "text_delta",
-        delta: "**PLAN PREVIEW**\n\nAnalyzing your request...\n\n",
-      });
+      try {
+        const planJson = await deps.llm.completeJson({
+          system: systemPrompt,
+          user: lastUserMessage?.content ?? "",
+        });
+        const steps = parsePlanSteps(planJson);
+
+        // Emit plan_step events.
+        for (const step of steps) {
+          if (closed) break;
+          writeEvent(reply, {
+            type: "plan_step",
+            step_number: step.step_number,
+            tool: step.tool,
+            args: step.args,
+            rationale: step.rationale,
+          });
+        }
+
+        // Save and emit plan_ready.
+        const plan = createPlan(steps, messages);
+        planStore.save(plan);
+
+        if (!closed) {
+          writeEvent(reply, {
+            type: "plan_ready",
+            plan_id: plan.plan_id,
+            steps: plan.steps,
+            created_at: plan.created_at,
+          });
+          writeEvent(reply, {
+            type: "finish",
+            finishReason: "plan_ready",
+            usage: { promptTokens: 0, completionTokens: 0 },
+          });
+        }
+      } catch (err) {
+        req.log.error({ err }, "plan-mode failed");
+        if (!closed) writeEvent(reply, { type: "error", error: "plan_mode_failed" });
+      } finally {
+        cleanupSkillForTurn?.();
+        try { reply.raw.end(); } catch { /* already closed */ }
+      }
+      return;
     }
 
     // Token-by-token streaming path.
@@ -399,7 +474,7 @@ async function handleChat(
     await lifecycle.dispatch("pre_turn", { ctx, messages });
 
     const budget = new Budget({
-      maxSteps: deps.config.AGENT_CHAT_MAX_STEPS,
+      maxSteps: effectiveMaxSteps,
       maxPromptTokens: deps.config.AGENT_TOKEN_BUDGET,
     });
 
@@ -459,7 +534,6 @@ async function handleChat(
       // to streamCompletion() so tokens flow to the client as they arrive.
       // Fall back to a single text_delta if streaming throws.
       finalText = stepResult.text;
-      if (isPlanMode) finalText = `**PLAN PREVIEW**\n\n${finalText}`;
 
       if (!closed) {
         try {
@@ -475,7 +549,7 @@ async function handleChat(
           }
           // If the stream yielded text, use it as the canonical final text.
           if (streamed) {
-            finalText = isPlanMode ? `**PLAN PREVIEW**\n\n${streamed}` : streamed;
+            finalText = streamed;
           }
         } catch {
           // Stream failed — fall back to the complete text we got from call().
@@ -503,6 +577,7 @@ async function handleChat(
       writeEvent(reply, { type: "error", error: "internal" });
     }
   } finally {
+    cleanupSkillForTurn?.();
     try {
       reply.raw.end();
     } catch {

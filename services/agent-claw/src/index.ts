@@ -21,9 +21,13 @@ import { buildCanonicalizeSmilesTool } from "./tools/builtins/canonicalize_smile
 import { registerHealthzRoute } from "./routes/healthz.js";
 import { registerChatRoute } from "./routes/chat.js";
 import { registerDeepResearchRoute } from "./routes/deep-research.js";
+import { registerSkillsRoutes } from "./routes/skills.js";
+import { registerPlanRoutes } from "./routes/plan.js";
+import { registerDocumentsRoute } from "./routes/documents.js";
 import { PromptRegistry } from "./prompts/registry.js";
 import { loadHooks } from "./core/hook-loader.js";
 import { Lifecycle } from "./core/lifecycle.js";
+import { SkillLoader } from "./core/skills.js";
 
 // ---------------------------------------------------------------------------
 // Bootstrap
@@ -98,6 +102,7 @@ const llmProvider = new LiteLLMProvider(cfg);
 const registry = new ToolRegistry();
 const promptRegistry = new PromptRegistry(pool);
 const lifecycle = new Lifecycle();
+const skillLoader = new SkillLoader();
 
 // Register builtin factories so loadFromDb() can find them.
 // Cast through Tool (unknown) to satisfy the registry's covariant Tool<unknown,unknown> map.
@@ -128,11 +133,15 @@ const routeDeps = {
   llm: llmProvider,
   registry,
   promptRegistry,
+  skillLoader,
   getUser: getUser as (req: import("fastify").FastifyRequest) => string,
 };
 
 registerChatRoute(app, routeDeps);
 registerDeepResearchRoute(app, routeDeps);
+registerSkillsRoutes(app, { loader: skillLoader });
+registerPlanRoutes(app, routeDeps);
+registerDocumentsRoute(app, { config: cfg, pool, getUser: getUser as (req: import("fastify").FastifyRequest) => string });
 
 app.get("/readyz", async (_req, reply) => {
   // 1. Postgres ping.
@@ -219,7 +228,7 @@ async function probeMcpTools(): Promise<void> {
 }
 
 // Export for tests.
-export { pool, registry, llmProvider, promptRegistry, lifecycle, probeMcpTools };
+export { pool, registry, llmProvider, promptRegistry, lifecycle, skillLoader, probeMcpTools };
 
 // ---------------------------------------------------------------------------
 // Startup
@@ -241,6 +250,14 @@ const start = async () => {
       app.log.info(hookResult, "lifecycle hooks loaded");
     } catch (err) {
       app.log.warn({ err }, "hook loader failed — continuing without YAML hooks");
+    }
+
+    // Load skill packs (non-fatal).
+    try {
+      skillLoader.load();
+      app.log.info({ count: skillLoader.size }, "skill packs loaded");
+    } catch (err) {
+      app.log.warn({ err }, "skill loader failed — continuing without skills");
     }
 
     await app.listen({ host: HOST, port: PORT });

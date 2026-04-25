@@ -157,9 +157,9 @@ describe("shortCircuitResponse", () => {
     expect(shortCircuitResponse("help")).toBe(HELP_TEXT);
   });
 
-  it("/skills returns Phase B placeholder", () => {
+  it("/skills returns a usage message", () => {
     const r = shortCircuitResponse("skills");
-    expect(r).toContain("Phase B");
+    expect(r).toContain("skills");
   });
 
   it("/check returns Phase C placeholder", () => {

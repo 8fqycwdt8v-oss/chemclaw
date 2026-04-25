@@ -65,6 +65,7 @@ const ConfigSchema = z.object({
   MCP_KG_URL: z.string().url().default("http://localhost:8003"),
   MCP_EMBEDDER_URL: z.string().url().default("http://localhost:8004"),
   MCP_TABICL_URL: z.string().url().default("http://localhost:8005"),
+  MCP_DOC_FETCHER_URL: z.string().url().default("http://localhost:8006"),
 
   // LiteLLM proxy — single egress chokepoint for all LLM traffic.
   LITELLM_BASE_URL: z.string().url().default("http://localhost:4000"),

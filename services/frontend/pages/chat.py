@@ -2,6 +2,13 @@
 
 Streams tokens from the agent service as they arrive, renders tool calls
 inline as expandable panels, and keeps the conversation in session_state.
+
+Phase B.3 additions:
+- Skill chips — toggleable row of skill-pack buttons above the input.
+- Plan-mode preview panel — shows plan_step events + Approve / Reject buttons.
+- "Open original" button on citations that have source_kind in
+  {'document_chunk', 'original_doc'} with a document_id.
+- Slash autocomplete hint below the input (static list; Streamlit limitation).
 """
 
 from __future__ import annotations
@@ -16,19 +23,39 @@ import streamlit as st
 from services.frontend.chat_client import ChatClientError, stream_chat
 from services.frontend.chart_spec import ChartSpec, parse_chart_spec
 from services.frontend.settings import get_settings
+from services.frontend.skill_client import (
+    disable_skill,
+    enable_skill,
+    fetch_original_document_url,
+    list_skills,
+    reject_plan,
+)
 
 st.set_page_config(page_title="ChemClaw — Chat", page_icon="💬", layout="wide")
 
 settings = get_settings()
 
 # ---------------------------------------------------------------------------
+# Slash-verb autocomplete list (static — matches core/slash.ts verbs).
+# ---------------------------------------------------------------------------
+_SLASH_VERBS = [
+    "/help",
+    "/skills list",
+    "/skills enable <id>",
+    "/skills disable <id>",
+    "/feedback up|down <reason>",
+    "/check",
+    "/learn",
+    "/plan <question>",
+    "/dr <question>",
+    "/retro <smiles>",
+    "/qc <question>",
+]
+
+# ---------------------------------------------------------------------------
 # Chart rendering helpers
 # ---------------------------------------------------------------------------
 
-# Matches triple-backtick fenced blocks with the "chart" info string, e.g.:
-#   ```chart
-#   {"type": "bar", "x": [...], "y": [...]}
-#   ```
 _CHART_BLOCK_RE = re.compile(
     r"```chart\s*\n(.*?)\n```",
     re.DOTALL,
@@ -40,7 +67,6 @@ def _render_chart(spec: ChartSpec) -> None:
     if spec.title:
         st.caption(spec.title)
 
-    # Build a DataFrame: primary y column + any extra series.
     data: dict[str, list[float]] = {spec.y_label or "y": spec.y}
     for s in spec.series:
         data[s.name] = s.values
@@ -55,14 +81,9 @@ def _render_chart(spec: ChartSpec) -> None:
 
 
 def render_assistant_markdown(text: str) -> None:
-    """Render assistant text, replacing fenced ``chart`` blocks with live charts.
-
-    Any block whose JSON is invalid or whose type is unsupported is rendered as
-    a plain ``code`` block (safe fallback) so no information is lost.
-    """
+    """Render assistant text, replacing fenced ``chart`` blocks with live charts."""
     cursor = 0
     for m in _CHART_BLOCK_RE.finditer(text):
-        # Render any text before this block as normal markdown.
         before = text[cursor : m.start()]
         if before.strip():
             st.markdown(before)
@@ -72,17 +93,14 @@ def render_assistant_markdown(text: str) -> None:
         if spec is not None:
             _render_chart(spec)
         else:
-            # Fallback: render as a plain code block.
             st.code(raw_json, language="json")
 
         cursor = m.end()
 
-    # Render any trailing text after the last chart block.
     remainder = text[cursor:]
     if remainder.strip():
         st.markdown(remainder)
     elif cursor == 0:
-        # No chart blocks were found — render the whole text as markdown.
         st.markdown(text)
 
 
@@ -92,13 +110,16 @@ def current_user_email() -> str:
     return st.session_state.get("user_email", "unknown@local.test")
 
 
-# --- Session state ---------------------------------------------------------
+# ---------------------------------------------------------------------------
+# Session state
+# ---------------------------------------------------------------------------
 if "chat_messages" not in st.session_state:
-    st.session_state.chat_messages = []  # list[{"role", "content"}]
+    st.session_state.chat_messages = []
 
-# Defence against unbounded session growth. The agent also caps history
-# server-side; this is a belt-and-braces measure so the UI never sends
-# oversize payloads.
+if "active_plan" not in st.session_state:
+    # Holds the most recent plan_ready payload, cleared after approve/reject.
+    st.session_state.active_plan = None  # dict | None
+
 _MAX_UI_HISTORY = 30
 
 
@@ -109,8 +130,23 @@ def _trim_history() -> None:
         ]
 
 
+# ---------------------------------------------------------------------------
+# Citation rendering helpers
+# ---------------------------------------------------------------------------
+
+def _render_citation_download(doc_id: str, label: str = "Open original") -> None:
+    """Render a download link for the original document bytes."""
+    url = fetch_original_document_url(doc_id)
+    st.markdown(f"[{label}]({url})", unsafe_allow_html=False)
+
+
 def _render_tool_panel(tc: dict[str, Any]) -> None:
-    """Render a single tool-call panel, with a Hypothesis badge when applicable."""
+    """Render a single tool-call panel.
+
+    Additions in B.3:
+    - Hypothesis badge (existing).
+    - "Open original" button on citations with a document_id.
+    """
     tool_id: str = tc.get("toolId", "?")
     inp: dict[str, Any] = tc.get("input") or {}
     raw_out = tc.get("output")
@@ -131,7 +167,110 @@ def _render_tool_panel(tc: dict[str, Any]) -> None:
     with st.expander(f"🔧 {tool_id}", expanded=False):
         st.json({"input": inp, "output": raw_out})
 
+        # ── "Open original" button ──────────────────────────────────────────
+        # Surface when the output contains a citation with source_kind in
+        # {'document_chunk', 'original_doc'} and a resolvable document_id.
+        citations_to_show: list[dict[str, Any]] = []
+        # Direct citation on the output object.
+        if isinstance(out.get("citation"), dict):
+            citations_to_show.append(out["citation"])
+        # Array of citations.
+        if isinstance(out.get("citations"), list):
+            citations_to_show.extend(
+                c for c in out["citations"] if isinstance(c, dict)
+            )
+        # fetch_original_document returns document_id at root.
+        if tool_id == "fetch_original_document" and inp.get("document_id"):
+            citations_to_show.append(
+                {
+                    "source_kind": "original_doc",
+                    "source_id": inp["document_id"],
+                }
+            )
 
+        for cit in citations_to_show:
+            kind = cit.get("source_kind", "")
+            if kind in ("document_chunk", "original_doc"):
+                doc_id = cit.get("source_id") or inp.get("document_id")
+                if doc_id:
+                    _render_citation_download(str(doc_id))
+
+
+# ---------------------------------------------------------------------------
+# Plan-mode preview panel
+# ---------------------------------------------------------------------------
+
+def _render_plan_panel(plan: dict[str, Any]) -> None:
+    """Render the plan_ready payload as a numbered list with Approve / Reject."""
+    plan_id: str = plan.get("plan_id", "")
+    steps: list[dict[str, Any]] = plan.get("steps", [])
+
+    st.markdown("### Plan preview")
+    for step in steps:
+        step_num = step.get("step_number", "?")
+        tool = step.get("tool", "?")
+        rationale = step.get("rationale", "")
+        args_str = json.dumps(step.get("args", {}), indent=2)
+        st.markdown(
+            f"**Step {step_num}** — `{tool}`  \n"
+            f"_{rationale}_  \n"
+            f"```json\n{args_str}\n```"
+        )
+
+    col_approve, col_reject = st.columns(2)
+    with col_approve:
+        if st.button("✅ Approve", key=f"approve_{plan_id}", use_container_width=True):
+            # POST to approve; the response SSE stream is not re-rendered here
+            # because Streamlit can't handle nested SSE in a button callback.
+            # Instead we send a synthetic user message "/plan approve <plan_id>"
+            # that the chat route will pick up on the next submission.
+            st.session_state.chat_messages.append(
+                {
+                    "role": "user",
+                    "content": f"/plan approve {plan_id}",
+                }
+            )
+            st.session_state.active_plan = None
+            st.rerun()
+    with col_reject:
+        if st.button("❌ Reject", key=f"reject_{plan_id}", use_container_width=True):
+            reject_plan(plan_id)
+            st.session_state.active_plan = None
+            st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Skill chips
+# ---------------------------------------------------------------------------
+
+def _render_skill_chips() -> None:
+    """Render a row of toggleable skill chips above the input."""
+    skills = list_skills()
+    if not skills:
+        return
+
+    st.caption("Active skills:")
+    cols = st.columns(min(len(skills), 6))
+    for i, skill in enumerate(skills):
+        skill_id: str = skill.get("id", "?")
+        is_active: bool = skill.get("active", False)
+        label = f"{'✓ ' if is_active else ''}{skill_id}"
+        with cols[i % len(cols)]:
+            if st.button(
+                label,
+                key=f"skill_chip_{skill_id}",
+                use_container_width=True,
+                type="primary" if is_active else "secondary",
+            ):
+                if is_active:
+                    disable_skill(skill_id)
+                else:
+                    enable_skill(skill_id)
+                st.rerun()
+
+
+# ---------------------------------------------------------------------------
+# Page layout
 # ---------------------------------------------------------------------------
 
 st.title("💬 ChemClaw Chat")
@@ -141,10 +280,24 @@ with st.sidebar:
     st.header("Session")
     if st.button("🧹 Clear conversation", use_container_width=True):
         st.session_state.chat_messages = []
+        st.session_state.active_plan = None
         st.rerun()
 
     st.caption(f"Model: `{st.secrets.get('AGENT_MODEL', 'configured-in-agent')}`")
     st.caption(f"{len(st.session_state.chat_messages)} messages in history.")
+
+    st.divider()
+    st.subheader("Slash commands")
+    for verb in _SLASH_VERBS:
+        st.caption(f"`{verb}`")
+
+# Skill chips row.
+_render_skill_chips()
+
+# Active plan preview (if a /plan turn returned plan_ready).
+if st.session_state.active_plan:
+    _render_plan_panel(st.session_state.active_plan)
+    st.divider()
 
 # Render prior conversation.
 for msg in st.session_state.chat_messages:
@@ -171,6 +324,8 @@ if prompt:
         text_holder = st.empty()
         status_holder = st.status("Thinking…", expanded=False)
         tool_entries: list[dict[str, Any]] = []
+        plan_steps: list[dict[str, Any]] = []
+        plan_ready_payload: dict[str, Any] | None = None
         accumulated_text = ""
         finish_reason = "incomplete"
 
@@ -195,13 +350,25 @@ if prompt:
                     with status_holder:
                         st.write(f"Calling tool `{evt.get('toolId')}`…")
                 elif etype == "tool_result":
-                    # Attach the result to the most recent matching call.
                     for entry in reversed(tool_entries):
                         if entry["toolId"] == evt.get("toolId") and entry["output"] is None:
                             entry["output"] = evt.get("output")
                             break
                     with status_holder:
                         st.write(f"Got result for `{evt.get('toolId')}`.")
+                elif etype == "plan_step":
+                    plan_steps.append(evt)
+                    with status_holder:
+                        st.write(f"Planning step {evt.get('step_number')}: `{evt.get('tool')}`…")
+                elif etype == "plan_ready":
+                    plan_ready_payload = {
+                        "plan_id": evt.get("plan_id"),
+                        "steps": evt.get("steps", []),
+                        "created_at": evt.get("created_at"),
+                    }
+                    st.session_state.active_plan = plan_ready_payload
+                    with status_holder:
+                        st.write(f"Plan ready ({len(evt.get('steps', []))} steps).")
                 elif etype == "finish":
                     finish_reason = evt.get("finishReason", "stop")
                     status_holder.update(label=f"Done ({finish_reason}).", state="complete")
@@ -211,16 +378,18 @@ if prompt:
                     )
         except ChatClientError as exc:
             status_holder.update(label=f"Agent unreachable: {exc}", state="error")
-        except Exception as exc:  # noqa: BLE001 — surface any client error to the user
+        except Exception as exc:  # noqa: BLE001
             status_holder.update(label=f"Client error: {exc}", state="error")
 
-        # Finalise: strip the cursor, render tool-call panels.
-        # Clear the streaming placeholder, then render the full text (which
-        # may contain fenced chart blocks) via render_assistant_markdown.
+        # Finalise.
         text_holder.empty()
         render_assistant_markdown(accumulated_text or "_(no response text)_")
         for tc in tool_entries:
             _render_tool_panel(tc)
+
+        # Show plan preview inline if plan_ready arrived.
+        if plan_ready_payload:
+            _render_plan_panel(plan_ready_payload)
 
     st.session_state.chat_messages.append(
         {

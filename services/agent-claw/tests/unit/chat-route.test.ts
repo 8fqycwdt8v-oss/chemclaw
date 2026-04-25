@@ -319,9 +319,13 @@ describe("POST /api/chat — terminal-event guarantee", () => {
 });
 
 describe("POST /api/chat — plan mode", () => {
-  it("prepends PLAN PREVIEW to the response for /plan messages (stream=false)", async () => {
+  it("returns a plan_id and steps for /plan messages (stream=false)", async () => {
     const llm = new StubLlmProvider();
-    llm.enqueueText("Here are the steps: 1. Search reactions.");
+    // completeJson is called by plan mode — enqueue a valid plan JSON.
+    llm.enqueueJson([
+      { tool: "canonicalize_smiles", args: { smiles: "CCO" }, rationale: "normalize" },
+      { tool: "find_similar_reactions", args: { smiles: "canonical" }, rationale: "search" },
+    ]);
     const app = buildApp(llm);
 
     const res = await app.inject({
@@ -334,7 +338,9 @@ describe("POST /api/chat — plan mode", () => {
     });
 
     expect(res.statusCode).toBe(200);
-    const body = JSON.parse(res.body) as { text: string };
-    expect(body.text).toContain("PLAN PREVIEW");
+    const body = JSON.parse(res.body) as { plan_id: string; steps: unknown[]; created_at: number };
+    expect(typeof body.plan_id).toBe("string");
+    expect(Array.isArray(body.steps)).toBe(true);
+    expect(typeof body.created_at).toBe("number");
   });
 });

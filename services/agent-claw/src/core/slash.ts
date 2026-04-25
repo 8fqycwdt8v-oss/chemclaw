@@ -4,14 +4,16 @@
 // structured intent. Slash-only handling (isStreamable=false) short-circuits
 // before the LLM harness is invoked.
 //
-// Supported verbs in Phase A.3:
+// Supported verbs (Phase B.3):
 //   /help    — returns the verb list; no LLM call.
-//   /skills  — placeholder; returns "(skill packs land in Phase B)".
+//   /skills [enable|disable|list] <id> — manage skill packs.
 //   /feedback up|down "<reason>" — writes feedback_events row; no LLM call.
 //   /check   — placeholder; "(confidence ensemble lands in Phase C)".
 //   /learn   — placeholder; "(skill induction lands in Phase C)".
-//   /plan    — flips request to plan mode; calls harness with plan hook.
-//   /dr      — treats remainder as normal input tagged for future skill resolution.
+//   /plan    — preview a step-by-step plan; emits plan_step + plan_ready SSE events.
+//   /dr      — deep-research skill (activates deep_research skill for this turn).
+//   /retro   — retrosynthesis skill (activates retro skill for this turn).
+//   /qc      — QC/analytical skill (activates qc skill for this turn).
 
 // ---------------------------------------------------------------------------
 // Result type returned by parseSlash.
@@ -31,7 +33,7 @@ export interface SlashParseResult {
 const SHORT_CIRCUIT_VERBS = new Set(["help", "skills", "feedback", "check", "learn"]);
 
 // Verbs that go through the harness (possibly with special hooks).
-const STREAMABLE_VERBS = new Set(["plan", "dr"]);
+const STREAMABLE_VERBS = new Set(["plan", "dr", "retro", "qc"]);
 
 // All known verbs.
 const ALL_VERBS = new Set([...SHORT_CIRCUIT_VERBS, ...STREAMABLE_VERBS]);
@@ -79,13 +81,15 @@ export function parseSlash(text: string): SlashParseResult {
 // Help text — one line per verb.
 // ---------------------------------------------------------------------------
 export const HELP_TEXT = `Available commands:
-  /help              — show this list
-  /skills            — list available skill packs (Phase B)
-  /feedback up|down "reason" — submit feedback on the last response
-  /check             — confidence ensemble for the last response (Phase C)
-  /learn             — trigger skill induction from the last turn (Phase C)
-  /plan              — preview a step-by-step plan before execution
-  /dr <question>     — deep-research mode (extended tool use)`;
+  /help                           — show this list
+  /skills [list|enable|disable]   — manage skill packs
+  /feedback up|down "reason"      — submit feedback on the last response
+  /check                          — confidence ensemble for the last response (Phase C)
+  /learn                          — trigger skill induction (Phase C)
+  /plan <question>                — preview a step-by-step plan before execution
+  /dr <question>                  — deep-research mode (full report)
+  /retro <smiles>                 — retrosynthesis route proposal
+  /qc <question>                  — analytical QC question routing`;
 
 // ---------------------------------------------------------------------------
 // Feedback args parser: up|down "reason"
@@ -134,14 +138,17 @@ export function parseFeedbackArgs(args: string): FeedbackArgs | null {
 // ---------------------------------------------------------------------------
 // Dispatch responses for short-circuit verbs.
 // Returns the text to emit as the assistant turn, or null if it needs
-// DB work (feedback — the route handles that path).
+// DB work (feedback — the route handles that path) or skill-loader access
+// (skills — the route handles that path).
 // ---------------------------------------------------------------------------
 export function shortCircuitResponse(verb: string): string | null {
   switch (verb) {
     case "help":
       return HELP_TEXT;
     case "skills":
-      return "(skill packs land in Phase B)\n\nRegistered skill packs: []";
+      // The route handles /skills enable|disable|list via the SkillLoader.
+      // This fallback fires only if the route doesn't handle it first.
+      return "Use /skills list, /skills enable <id>, or /skills disable <id>.";
     case "check":
       return "(confidence ensemble lands in Phase C)";
     case "learn":
