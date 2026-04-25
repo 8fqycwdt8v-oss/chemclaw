@@ -299,6 +299,23 @@ export class ToolRegistry {
     );
 
     for (const row of rows) {
+      // Precedence: programmatically-registered builtins win over DB rows
+      // with the same name. The DB row may be stale (a forged tool that
+      // was renamed, or a leftover row pointing at a removed MCP endpoint),
+      // and the in-memory builtin registration is the source of truth for
+      // the running process. Skip + warn rather than silently overwrite.
+      const existing = this._tools.get(row.name);
+      const isProgrammaticBuiltin =
+        existing !== undefined && row.source !== "builtin";
+      if (isProgrammaticBuiltin) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[ToolRegistry] DB row source="${row.source}" for "${row.name}" ` +
+            `would overwrite a programmatically-registered tool — skipping.`,
+        );
+        continue;
+      }
+
       const tool = this._buildTool(row);
       if (tool) {
         this.upsert(tool, {

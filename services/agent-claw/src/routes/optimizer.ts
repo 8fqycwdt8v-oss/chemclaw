@@ -1,26 +1,68 @@
-// GET /api/optimizer/runs — Streamlit Optimizer page backend (Phase E).
+// GET /api/optimizer/* — Streamlit Optimizer page backend (Phase E).
 //
 // Returns GEPA run history from prompt_registry (gepa_metadata),
 // skill promotion events, shadow comparisons, and golden-set score history.
 //
-// All responses are JSON; the Streamlit page renders them.
+// AUTH: every route requires the caller's user to have role='admin' in any
+// project (or the special wildcard project_id 00000000-0000-0000-0000-000000000000
+// used by the seed for org-wide admin). Optimizer data includes prompt
+// versions and shadow scores derived from real chats — must not be exposed
+// to non-admin callers.
 
-import type { FastifyInstance } from "fastify";
+import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Pool } from "pg";
+import { withUserContext } from "../db/with-user-context.js";
 
 interface OptimizerRouteDeps {
   pool: Pool;
+  /** Resolves the calling user's Entra-ID. Throws (→ 401) if missing. */
+  getUser: (req: FastifyRequest) => string;
+}
+
+async function requireAdmin(
+  pool: Pool,
+  user: string,
+): Promise<boolean> {
+  return withUserContext(pool, user, async (client) => {
+    const r = await client.query<{ has_admin: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM user_project_access
+          WHERE user_entra_id = $1
+            AND role = 'admin'
+       ) AS has_admin`,
+      [user],
+    );
+    return r.rows[0]?.has_admin === true;
+  });
+}
+
+async function gateAdmin(
+  pool: Pool,
+  getUser: (req: FastifyRequest) => string,
+  req: FastifyRequest,
+  reply: FastifyReply,
+): Promise<string | null> {
+  const user = getUser(req);
+  const ok = await requireAdmin(pool, user);
+  if (!ok) {
+    reply.code(403).send({
+      error: "forbidden",
+      detail: "optimizer routes require admin role on any project",
+    });
+    return null;
+  }
+  return user;
 }
 
 export function registerOptimizerRoutes(
   app: FastifyInstance,
-  { pool }: OptimizerRouteDeps,
+  { pool, getUser }: OptimizerRouteDeps,
 ): void {
   // -----------------------------------------------------------------------
   // GET /api/optimizer/runs
-  // Returns: list of GEPA candidate rows (inactive, with gepa_metadata).
   // -----------------------------------------------------------------------
-  app.get("/api/optimizer/runs", async (_req, reply) => {
+  app.get("/api/optimizer/runs", async (req, reply) => {
+    if (!(await gateAdmin(pool, getUser, req, reply))) return;
     const r = await pool.query<{
       name: string;
       version: number;
@@ -40,9 +82,9 @@ export function registerOptimizerRoutes(
 
   // -----------------------------------------------------------------------
   // GET /api/optimizer/promotions
-  // Returns: skill_promotion_events.
   // -----------------------------------------------------------------------
-  app.get("/api/optimizer/promotions", async (_req, reply) => {
+  app.get("/api/optimizer/promotions", async (req, reply) => {
+    if (!(await gateAdmin(pool, getUser, req, reply))) return;
     const r = await pool.query(
       `SELECT skill_name, version, event_type, reason, metadata, created_at
          FROM skill_promotion_events
@@ -55,7 +97,8 @@ export function registerOptimizerRoutes(
   // -----------------------------------------------------------------------
   // GET /api/optimizer/shadow — shadow_run_scores aggregated by prompt.
   // -----------------------------------------------------------------------
-  app.get("/api/optimizer/shadow", async (_req, reply) => {
+  app.get("/api/optimizer/shadow", async (req, reply) => {
+    if (!(await gateAdmin(pool, getUser, req, reply))) return;
     const r = await pool.query(
       `SELECT prompt_name, version,
               AVG(score) AS mean_score,
@@ -72,7 +115,8 @@ export function registerOptimizerRoutes(
   // -----------------------------------------------------------------------
   // GET /api/optimizer/golden — last 30 shadow_run_scores for sparkline.
   // -----------------------------------------------------------------------
-  app.get("/api/optimizer/golden", async (_req, reply) => {
+  app.get("/api/optimizer/golden", async (req, reply) => {
+    if (!(await gateAdmin(pool, getUser, req, reply))) return;
     const r = await pool.query(
       `SELECT prompt_name, version, score, per_class_scores, run_at
          FROM shadow_run_scores

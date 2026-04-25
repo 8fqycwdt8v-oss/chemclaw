@@ -93,10 +93,16 @@ export function buildComputeConfidenceEnsembleTool(pool: Pool) {
         // Signal 1: verbalized confidence.
         const verbalized = extractVerbalizedConfidence(row.payload);
 
-        // Signal 2: cross-model agreement — stubbed off (Phase E wiring).
-        const cross_model: number | null = input.cross_model_enabled ? null : null;
-        // NOTE: cross_model_enabled=true is wired but the second-model call
-        // is deferred to Phase E. The column is reserved for that integration.
+        // Signal 2: cross-model agreement.
+        //
+        // The signal slot is wired through the ensemble composer but the
+        // second-model call is intentionally not invoked from this builtin —
+        // the GEPA optimizer (Phase E) drives cross-model evaluations on a
+        // batch-job cadence rather than on every confidence computation.
+        // Leaving cross_model=null here means the ensemble falls back to
+        // verbalized + bayesian, which is the documented runtime shape.
+        const cross_model: number | null = null;
+        void input.cross_model_enabled; // accepted for API stability
 
         // Signal 3: Bayesian posterior.
         let bayesian: ReturnType<typeof computeBayesianPosterior> | null = null;

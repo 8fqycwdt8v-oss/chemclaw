@@ -211,7 +211,10 @@ registerEvalRoute(app, {
   promptRegistry,
   getUser: getUser as (req: import("fastify").FastifyRequest) => string,
 });
-registerOptimizerRoutes(app, { pool });
+registerOptimizerRoutes(app, {
+  pool,
+  getUser: getUser as (req: import("fastify").FastifyRequest) => string,
+});
 
 app.get("/readyz", async (_req, reply) => {
   // 1. Postgres ping.

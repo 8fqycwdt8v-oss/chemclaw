@@ -15,6 +15,7 @@ import { Budget } from "./budget.js";
 import { Lifecycle } from "./lifecycle.js";
 import { registerTagMaturityHook } from "./hooks/tag-maturity.js";
 import { registerBudgetGuardHook } from "./hooks/budget-guard.js";
+import { registerRedactSecretsHook } from "./hooks/redact-secrets.js";
 import type { HarnessResult, Message, ToolContext } from "./types.js";
 import type { Tool } from "../tools/tool.js";
 import type { LlmProvider } from "../llm/provider.js";
@@ -150,8 +151,14 @@ export async function spawnSubAgent(
     { role: "user", content: userContent },
   ];
 
-  // ── 4. Build lifecycle (minimal — tag-maturity + budget-guard only). ───────
+  // ── 4. Build lifecycle — mirror parent buildDefaultLifecycle in chat.ts.
+  // Parent registers redact-secrets (post_turn), tag-maturity, budget-guard;
+  // sub-agent inherits the same set so its outbound text gets the same
+  // defense-in-depth scrub. Other hooks (anti-fabrication, citation-guard,
+  // source-cache) are not currently wired into either lifecycle by default —
+  // when they are, register them in BOTH places to avoid sub-agent drift.
   const lifecycle = new Lifecycle();
+  registerRedactSecretsHook(lifecycle);
   registerTagMaturityHook(lifecycle);
   registerBudgetGuardHook(lifecycle);
 

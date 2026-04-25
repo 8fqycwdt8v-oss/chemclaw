@@ -1,3 +1,6 @@
+-c ../../_constraints.txt
 apscheduler>=3.10,<4
-psycopg2-binary>=2.9
+# Migrated from psycopg2-binary to psycopg3 (the rest of the fleet uses
+# psycopg3 — having one outlier in psycopg2 doubles the surface area).
+psycopg[binary]
 hypothesis>=6.100

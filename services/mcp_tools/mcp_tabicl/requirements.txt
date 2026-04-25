@@ -1,9 +1,13 @@
-fastapi==0.115.6
-uvicorn[standard]==0.32.1
-pydantic==2.10.4
+-c ../../_constraints.txt
+fastapi
+uvicorn[standard]
+pydantic
 numpy>=1.26,<3.0
 scikit-learn>=1.5,<2.0
-rdkit-pypi==2022.9.5
-drfp==0.3.6
+# Migrated from rdkit-pypi (last release 2022.9.5) to rdkit (active fork) so
+# every chemistry service uses the same canonicalization and we don't get
+# duplicate :Compound nodes in the KG. Version pinned via _constraints.txt.
+rdkit
+drfp
 tabicl>=2.0.0,<3.0
 # Shared MCP tool app factory lives in services.mcp_tools.common — no extra dep.
