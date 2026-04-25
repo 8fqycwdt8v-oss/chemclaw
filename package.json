@@ -5,7 +5,8 @@
   "description": "ChemOS Knowledge Intelligence Agent — workspace root (TypeScript services)",
   "license": "MIT",
   "workspaces": [
-    "services/agent"
+    "services/agent",
+    "services/agent-claw"
   ],
   "scripts": {
     "build": "npm run build --workspaces --if-present",
