@@ -39,4 +39,19 @@ CREATE TABLE IF NOT EXISTS mcp_tools (
   created_at        timestamptz NOT NULL DEFAULT NOW()
 );
 
+-- Explicit grants so this migration is self-contained. The global GRANT ALL
+-- in 12_security_hardening.sql also covers these tables, but ONLY if 12 has
+-- already been applied. When init is replayed piecemeal (operator forgot 12
+-- the first time, or someone DROP'd the role and recreated it), the global
+-- grant misses and the agent's `loadFromDb` crashes with permission_denied
+-- on `tools`. Granting here makes the migration resilient to ordering.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'chemclaw_app') THEN
+    GRANT SELECT, INSERT, UPDATE, DELETE ON tools, mcp_tools TO chemclaw_app;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'chemclaw_service') THEN
+    GRANT ALL ON tools, mcp_tools TO chemclaw_service;
+  END IF;
+END $$;
+
 COMMIT;

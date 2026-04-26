@@ -44,6 +44,7 @@ import { buildFetchElnEntryTool } from "./tools/builtins/fetch_eln_entry.js";
 import { buildQueryElnCanonicalReactionsTool } from "./tools/builtins/query_eln_canonical_reactions.js";
 import { buildFetchElnCanonicalReactionTool } from "./tools/builtins/fetch_eln_canonical_reaction.js";
 import { buildFetchElnSampleTool } from "./tools/builtins/fetch_eln_sample.js";
+import { buildQueryElnSamplesByEntryTool } from "./tools/builtins/query_eln_samples_by_entry.js";
 // Source-system wrappers — LOGS-by-SciY analytical SDMS (Phase F.2 reboot).
 import { buildQueryInstrumentRunsTool } from "./tools/builtins/query_instrument_runs.js";
 import { buildFetchInstrumentRunTool } from "./tools/builtins/fetch_instrument_run.js";
@@ -206,6 +207,9 @@ registry.registerBuiltin("fetch_eln_canonical_reaction", () =>
 );
 registry.registerBuiltin("fetch_eln_sample", () =>
   asTool(buildFetchElnSampleTool(cfg.MCP_ELN_LOCAL_URL)),
+);
+registry.registerBuiltin("query_eln_samples_by_entry", () =>
+  asTool(buildQueryElnSamplesByEntryTool(cfg.MCP_ELN_LOCAL_URL)),
 );
 
 // Source-system wrappers — LOGS-by-SciY analytical SDMS (Phase F.2 reboot).
@@ -387,7 +391,7 @@ app.get("/readyz", async (_req, reply) => {
 const MCP_HEALTH_PROBE_INTERVAL_MS = 60_000;
 
 interface McpToolRow {
-  name: string;
+  service_name: string;
   base_url: string;
 }
 
@@ -395,7 +399,7 @@ async function probeMcpTools(): Promise<void> {
   let rows: McpToolRow[];
   try {
     const result = await pool.query<McpToolRow>(
-      "SELECT name, base_url FROM mcp_tools WHERE enabled = true",
+      "SELECT service_name, base_url FROM mcp_tools WHERE enabled = true",
     );
     rows = result.rows;
   } catch (err) {
@@ -417,12 +421,12 @@ async function probeMcpTools(): Promise<void> {
       await pool.query(
         `UPDATE mcp_tools
             SET health_status = $1, last_health_check = NOW()
-          WHERE name = $2`,
-        [newStatus, row.name],
+          WHERE service_name = $2`,
+        [newStatus, row.service_name],
       );
-      app.log.debug({ tool: row.name, status: newStatus }, "mcp-probe: updated");
+      app.log.debug({ tool: row.service_name, status: newStatus }, "mcp-probe: updated");
     } catch (err) {
-      app.log.warn({ err, tool: row.name }, "mcp-probe: update failed");
+      app.log.warn({ err, tool: row.service_name }, "mcp-probe: update failed");
     }
   }
 }

@@ -64,4 +64,14 @@ CREATE POLICY skill_library_owner_update ON skill_library FOR UPDATE
     proposed_by_user_entra_id = current_setting('app.current_user_entra_id', true)
   );
 
+-- Explicit grants — see note in db/init/02_harness.sql for the rationale.
+DO $$ BEGIN
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'chemclaw_app') THEN
+    GRANT SELECT, INSERT, UPDATE, DELETE ON skill_library TO chemclaw_app;
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'chemclaw_service') THEN
+    GRANT ALL ON skill_library TO chemclaw_service;
+  END IF;
+END $$;
+
 COMMIT;

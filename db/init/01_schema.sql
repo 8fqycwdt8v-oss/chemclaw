@@ -129,10 +129,13 @@ CREATE TABLE IF NOT EXISTS reactions (
 );
 CREATE INDEX IF NOT EXISTS idx_reactions_experiment ON reactions (experiment_id);
 CREATE INDEX IF NOT EXISTS idx_reactions_class ON reactions (rxno_class);
--- DRFP HNSW index (cosine). Built lazily when data lands.
-CREATE INDEX IF NOT EXISTS idx_reactions_drfp_hnsw
-  ON reactions USING hnsw (drfp_vector vector_cosine_ops)
-  WITH (m = 16, ef_construction = 200);
+-- DRFP cosine index. pgvector's HNSW caps at 2000 dimensions (we have 2048),
+-- so we use ivfflat which has no dimension limit. Slight throughput cost vs
+-- HNSW but unblocks fresh-DB applies. If a future pgvector release lifts the
+-- HNSW cap (or we move to halfvec/bit indexing), this can be swapped back.
+CREATE INDEX IF NOT EXISTS idx_reactions_drfp_ivfflat
+  ON reactions USING ivfflat (drfp_vector vector_cosine_ops)
+  WITH (lists = 100);
 
 -- --------------------------------------------------------------------
 -- Documents + chunks (Phase 1 — SMB scraping + Marker parse)

@@ -427,6 +427,20 @@ class AttachmentsMetadataOut(BaseModel):
     attachments: list[Attachment]
 
 
+class SamplesByEntryIn(BaseModel):
+    entry_id: str = Field(min_length=1, max_length=128)
+
+    @field_validator("entry_id")
+    @classmethod
+    def _check(cls, v: str) -> str:
+        return _validate_id(v, "entry_id")
+
+
+class SamplesByEntryOut(BaseModel):
+    entry_id: str
+    samples: list[Sample]
+
+
 # --------------------------------------------------------------------------
 # Helpers
 # --------------------------------------------------------------------------
@@ -872,6 +886,49 @@ async def attachments_metadata(
             )
         attachments = await _fetch_attachments(conn, req.entry_id)
         return AttachmentsMetadataOut(entry_id=req.entry_id, attachments=attachments)
+
+
+@app.post("/samples/by_entry", response_model=SamplesByEntryOut, tags=["eln"])
+async def samples_by_entry(
+    req: Annotated[SamplesByEntryIn, Body(...)],
+) -> SamplesByEntryOut:
+    """Return all samples linked to one ELN entry.
+
+    The cross-source path (ELN entry → samples → fake_logs.datasets) was
+    blocked without this endpoint: clients had to know sample IDs upfront.
+    Now `query_eln_canonical_reactions` → `fetch_eln_canonical_reaction`
+    (gives entry IDs) → `query_eln_samples_by_entry` (gives sample codes)
+    → `query_instrument_datasets` (cross-source linkage by sample_id)
+    works end to end.
+    """
+    async with _acquire() as conn:
+        # 404 on unknown entry — same idiom as /attachments/metadata so
+        # downstream cache layers can distinguish "no samples" from "no entry".
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT 1 FROM mock_eln.entries WHERE id = %(entry_id)s::uuid LIMIT 1",
+                {"entry_id": req.entry_id},
+            )
+            exists = await cur.fetchone()
+        if exists is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "detail": f"entry {req.entry_id!r} not found"},
+            )
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT id, entry_id, sample_code, compound_id, amount_mg,
+                       purity_pct, notes, created_at
+                FROM mock_eln.samples
+                WHERE entry_id = %(entry_id)s::uuid
+                ORDER BY sample_code ASC
+                """,
+                {"entry_id": req.entry_id},
+            )
+            sample_rows = await cur.fetchall()
+        samples = [_row_to_sample(r) for r in sample_rows]
+        return SamplesByEntryOut(entry_id=req.entry_id, samples=samples)
 
 
 # --------------------------------------------------------------------------
