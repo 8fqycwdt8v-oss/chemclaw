@@ -52,6 +52,7 @@ describe("POST /api/chat/plan/reject", () => {
     const plan = createPlan(
       [{ step_number: 1, tool: "search_knowledge", args: {}, rationale: "find" }],
       [{ role: "user", content: "test" }],
+      "test@example.com",
     );
     planStore.save(plan);
 
@@ -135,6 +136,7 @@ describe("POST /api/chat/plan/approve", () => {
     const plan = createPlan(
       [{ step_number: 1, tool: "canonicalize_smiles", args: { smiles: "CCO" }, rationale: "normalize" }],
       [{ role: "system", content: "sys" }, { role: "user", content: "do it" }],
+      "test@example.com",
     );
     planStore.save(plan);
     expect(planStore.get(plan.plan_id)).toBeTruthy();

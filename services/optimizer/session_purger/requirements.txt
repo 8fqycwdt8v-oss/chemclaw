@@ -1,0 +1,4 @@
+-c ../../_constraints.txt
+psycopg[binary]
+pydantic
+pydantic-settings

@@ -5,7 +5,7 @@
 // Phase D will persist these in Paperclip-lite; for now they live in the
 // in-process planStore (5-minute TTL).
 
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Config } from "../config.js";
 import type { LlmProvider } from "../llm/provider.js";
@@ -14,8 +14,9 @@ import type { PromptRegistry } from "../prompts/registry.js";
 import { Budget } from "../core/budget.js";
 import { runHarness } from "../core/harness.js";
 import { planStore } from "../core/plan-mode.js";
-import { buildDefaultLifecycle } from "../core/harness-builders.js";
+import { buildDefaultLifecycle, hydrateScratchpad } from "../core/harness-builders.js";
 import { runWithRequestContext } from "../core/request-context.js";
+import { writeEvent, setupSse } from "../streaming/sse.js";
 import type { ToolContext } from "../core/types.js";
 import type { Pool } from "pg";
 
@@ -30,21 +31,6 @@ export interface PlanRouteDeps {
 
 const PlanActionSchema = z.object({ plan_id: z.string().uuid() });
 
-// SSE helper.
-function writeEvent(reply: FastifyReply, payload: unknown): void {
-  const json = JSON.stringify(payload).replace(/\r?\n/g, "\\n");
-  reply.raw.write(`data: ${json}\n\n`);
-}
-
-function setupSse(reply: FastifyReply): void {
-  reply.raw.statusCode = 200;
-  reply.raw.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-  reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
-  reply.raw.setHeader("Connection", "keep-alive");
-  reply.raw.setHeader("X-Accel-Buffering", "no");
-  reply.hijack();
-}
-
 export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): void {
   // POST /api/chat/plan/approve
   app.post("/api/chat/plan/approve", async (req, reply) => {
@@ -58,21 +44,25 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
       return reply.code(404).send({ error: "plan_not_found" });
     }
 
+    // Owner check: a leaked plan_id mustn't let user A run user B's plan.
+    const user = deps.getUser(req);
+    if (plan.user_entra_id !== user) {
+      // 404 (not 403) so we don't leak the existence of plans across users.
+      return reply.code(404).send({ error: "plan_not_found" });
+    }
+
     // Remove plan from store (consumed).
     planStore.delete(parsed.data.plan_id);
 
-    const user = deps.getUser(req);
     const tools = deps.registry.all();
 
-    const seenFactIds = new Set<string>();
-    const scratchpad = new Map<string, unknown>();
-    scratchpad.set("seenFactIds", seenFactIds);
-    scratchpad.set("budget", {
-      promptTokensUsed: 0,
-      completionTokensUsed: 0,
-      tokenBudget: deps.config.AGENT_TOKEN_BUDGET,
-    });
-
+    // Resume from a freshly-approved plan: prior scratchpad is empty since
+    // plan-mode itself runs without invoking tools.
+    const { scratchpad, seenFactIds } = hydrateScratchpad(
+      {},
+      null,
+      deps.config.AGENT_TOKEN_BUDGET,
+    );
     const ctx: ToolContext = {
       userEntraId: user,
       seenFactIds,
@@ -131,19 +121,30 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
       return reply.code(400).send({ error: "invalid_input", detail: parsed.error.issues });
     }
 
-    const existed = planStore.delete(parsed.data.plan_id);
-    if (!existed) {
+    // Owner check before delete.
+    const plan = planStore.get(parsed.data.plan_id);
+    if (!plan) {
+      return reply.code(404).send({ error: "plan_not_found" });
+    }
+    const user = deps.getUser(req);
+    if (plan.user_entra_id !== user) {
       return reply.code(404).send({ error: "plan_not_found" });
     }
 
+    planStore.delete(parsed.data.plan_id);
     return reply.send({ ok: true, message: "Plan rejected and discarded." });
   });
 
-  // GET /api/chat/plan/:plan_id — retrieve plan details (for testing).
+  // GET /api/chat/plan/:plan_id — retrieve plan details (for testing + UI preview).
   app.get("/api/chat/plan/:plan_id", async (req, reply) => {
     const { plan_id } = req.params as { plan_id: string };
     const plan = planStore.get(plan_id);
     if (!plan) {
+      return reply.code(404).send({ error: "plan_not_found" });
+    }
+    // Owner check.
+    const user = deps.getUser(req);
+    if (plan.user_entra_id !== user) {
       return reply.code(404).send({ error: "plan_not_found" });
     }
     return reply.send({

@@ -72,6 +72,15 @@ export function signMcpToken(opts: {
       "MCP_AUTH_SIGNING_KEY is empty; refusing to mint an unsigned token",
     );
   }
+  // 32 bytes (256 bits) is the recommended HS256 minimum; refusing weak
+  // keys at sign-time is cheaper than catching them in a post-incident
+  // review. Generate via `openssl rand -hex 32`.
+  if (key.length < 32) {
+    throw new McpAuthError(
+      `MCP_AUTH_SIGNING_KEY too short (${key.length} chars); ` +
+        "HS256 requires >=32 characters of entropy",
+    );
+  }
   const ttlSeconds = opts.ttlSeconds ?? 300;
   const issuedAt = opts.now ?? Math.floor(Date.now() / 1000);
   const header = { alg: "HS256", typ: "JWT" };

@@ -289,7 +289,11 @@ const routeDeps = {
 
 registerChatRoute(app, routeDeps);
 registerDeepResearchRoute(app, routeDeps);
-registerSkillsRoutes(app, { loader: skillLoader });
+registerSkillsRoutes(app, {
+  loader: skillLoader,
+  pool,
+  getUser: getUser as (req: import("fastify").FastifyRequest) => string,
+});
 registerPlanRoutes(app, routeDeps);
 registerDocumentsRoute(app, { config: cfg, pool, getUser: getUser as (req: import("fastify").FastifyRequest) => string });
 registerArtifactsRoutes(app, { pool, getUser: getUser as (req: import("fastify").FastifyRequest) => string });
@@ -475,5 +479,19 @@ const shutdown = async (signal: string) => {
 };
 process.on("SIGINT", () => void shutdown("SIGINT"));
 process.on("SIGTERM", () => void shutdown("SIGTERM"));
+
+// Catch fire-and-forget promise rejections so a single bad probe / hook /
+// background task doesn't crash the agent. Log structurally so the operator
+// can see what went wrong; do NOT swallow silently — that just moves the
+// bug somewhere harder to find.
+process.on("unhandledRejection", (err) => {
+  app.log.error({ err }, "unhandledRejection — investigate the offending await");
+});
+process.on("uncaughtException", (err) => {
+  app.log.fatal({ err }, "uncaughtException — process state may be corrupt");
+  // Best-effort graceful shutdown then exit; if the process state really
+  // is corrupt, it should be restarted by the orchestrator anyway.
+  void shutdown("uncaughtException");
+});
 
 await start();

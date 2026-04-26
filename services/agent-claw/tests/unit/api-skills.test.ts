@@ -2,8 +2,10 @@
 
 import { describe, it, expect, beforeEach } from "vitest";
 import Fastify from "fastify";
+import type { Pool } from "pg";
 import { registerSkillsRoutes } from "../../src/routes/skills.js";
 import { SkillLoader } from "../../src/core/skills.js";
+import { createMockPool } from "../helpers/mock-pool.js";
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -20,9 +22,26 @@ function writeSkill(dir: string, id: string, tools: string[] = ["search_knowledg
   writeFileSync(join(skillDir, "prompt.md"), `## Active skill: ${id}\n\nPrompt.`);
 }
 
+// Mock pool that always reports the test user as having admin role.
+function buildAdminPool(): Pool {
+  const { pool } = createMockPool({
+    dataHandler: async (sql) => {
+      if (sql.includes("user_project_access") && sql.includes("admin")) {
+        return { rows: [{ has_admin: true }], rowCount: 1 } as never;
+      }
+      return { rows: [], rowCount: 0 } as never;
+    },
+  });
+  return pool;
+}
+
 async function buildApp(loader: SkillLoader) {
   const app = Fastify({ logger: false });
-  registerSkillsRoutes(app, { loader });
+  registerSkillsRoutes(app, {
+    loader,
+    pool: buildAdminPool(),
+    getUser: () => "test@local.test",
+  });
   await app.ready();
   return app;
 }

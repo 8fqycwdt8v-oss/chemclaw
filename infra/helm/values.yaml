@@ -168,6 +168,13 @@ optimizer:
     image: chemclaw/forged-tool-validator:latest
     schedule: "0 3 * * *"  # nightly at 03:00
     replicas: 1
+  # session-purger is a long-running Deployment, not a CronJob — it ticks
+  # internally on POLL_INTERVAL_SECONDS so we save the cold-start overhead.
+  sessionPurger:
+    image: chemclaw/session-purger:latest
+    pollIntervalSeconds: 3600
+    batchSize: 1000
+    minAgeHours: 1
 
 # ── Profile: observability ───────────────────────────────────────────────────
 # Enable with: --set observability.enabled=true
