@@ -36,6 +36,8 @@ import {
   buildDefaultLifecycle,
   hydrateScratchpad,
 } from "../core/harness-builders.js";
+import { runWithRequestContext } from "../core/request-context.js";
+import { verifyBearerHeader, McpAuthError } from "../security/mcp-tokens.js";
 import type { Message, ToolContext } from "../core/types.js";
 
 interface SessionsRouteDeps {
@@ -164,14 +166,34 @@ export function registerSessionsRoute(
       llm,
       registry,
       log: req.log,
+      // Phase F4: pass the plan so the runner can advance current_step_index
+      // as tool calls match planned steps.
+      planForProgress: {
+        id: plan.id,
+        steps: plan.steps,
+        initialIndex: plan.currentStepIndex,
+      },
     });
 
     // Mark plan as completed if the harness reported "stop", otherwise leave
     // it running for the next iteration.
+    const finalIndex = result.planFinalStepIndex ?? plan.currentStepIndex;
     if (result.finalFinishReason === "stop") {
-      await advancePlan(pool, user, plan.id, { status: "completed" });
+      // If we actually walked to the last step, mark completed; otherwise
+      // the model "stopped" early — keep it running for a future call.
+      const status = finalIndex >= plan.steps.length ? "completed" : "running";
+      await advancePlan(pool, user, plan.id, {
+        currentStepIndex: finalIndex,
+        status,
+      });
     } else if (result.finalFinishReason === "session_budget_exceeded") {
-      await advancePlan(pool, user, plan.id, { status: "failed" });
+      await advancePlan(pool, user, plan.id, {
+        currentStepIndex: finalIndex,
+        status: "failed",
+      });
+    } else {
+      // max_steps / awaiting_user_input / etc — persist progress, keep open.
+      await advancePlan(pool, user, plan.id, { currentStepIndex: finalIndex });
     }
 
     return reply.code(200).send({
@@ -180,6 +202,11 @@ export function registerSessionsRoute(
       auto_turns_used: result.autoTurns,
       final_finish_reason: result.finalFinishReason,
       total_steps_used: result.totalSteps,
+      // Plan progress info — clients render this as a "X of N steps" badge.
+      plan_progress: {
+        current_step_index: finalIndex,
+        total_steps: plan.steps.length,
+      },
     });
   });
 
@@ -259,6 +286,100 @@ export function registerSessionsRoute(
       auto_resume_count: state.autoResumeCount + 1,
     });
   });
+
+  // -----------------------------------------------------------------------
+  // POST /api/internal/sessions/:id/resume — JWT-authenticated auto-resume.
+  //
+  // The reanimator daemon (services/optimizer/session_reanimator/) calls
+  // this with a Bearer JWT signed by MCP_AUTH_SIGNING_KEY. The token's
+  // `user` claim names the session's owning user — that becomes the RLS
+  // scope for this turn. No header trust: we read user identity from the
+  // signed claims, not from x-user-entra-id.
+  //
+  // Required scope: "agent:resume". Other internal callers can be added
+  // later by minting tokens with different scopes (e.g. "agent:summarize"
+  // for a future summary daemon).
+  // -----------------------------------------------------------------------
+  app.post<{ Params: { id: string } }>("/api/internal/sessions/:id/resume", async (req, reply) => {
+    if (!deps.config || !deps.llm || !deps.registry) {
+      return reply.code(500).send({ error: "harness_deps_missing" });
+    }
+    const cfg = deps.config;
+    const llm = deps.llm;
+    const registry = deps.registry;
+
+    // Verify the JWT.
+    const authz = req.headers["authorization"];
+    let claimedUser: string;
+    try {
+      const claims = verifyBearerHeader(typeof authz === "string" ? authz : undefined, {
+        requiredScope: "agent:resume",
+      });
+      if (!claims) {
+        return reply.code(401).send({
+          error: "unauthenticated",
+          detail: "Authorization: Bearer <jwt> required",
+        });
+      }
+      claimedUser = claims.user;
+    } catch (err) {
+      if (err instanceof McpAuthError) {
+        return reply.code(401).send({
+          error: "unauthenticated",
+          detail: err.message,
+        });
+      }
+      throw err;
+    }
+
+    const sessionId = req.params.id;
+    if (!/^[0-9a-f-]{36}$/i.test(sessionId)) {
+      return reply.code(400).send({ error: "invalid_input", detail: "session id must be a UUID" });
+    }
+    const state = await loadSession(pool, claimedUser, sessionId);
+    if (!state) {
+      return reply.code(404).send({ error: "not_found" });
+    }
+    if (state.lastFinishReason === "awaiting_user_input") {
+      return reply.code(409).send({
+        error: "awaiting_user_input",
+        detail: "session is paused on a clarifying question; needs a real user reply",
+      });
+    }
+    if (state.autoResumeCount >= state.autoResumeCap) {
+      return reply.code(409).send({
+        error: "auto_resume_cap_reached",
+        cap: state.autoResumeCap,
+      });
+    }
+
+    const continueMessages: Message[] = [
+      { role: "user", content: "Continue with the next step on your todo list. If everything is done, summarize and stop." },
+    ];
+
+    const result = await runChainedHarness({
+      pool,
+      user: claimedUser,
+      sessionId,
+      messages: continueMessages,
+      cfg,
+      llm,
+      registry,
+      log: req.log,
+      maxAutoTurns: 1,
+    });
+
+    await saveSession(pool, claimedUser, sessionId, {
+      autoResumeCount: state.autoResumeCount + 1,
+    });
+
+    return reply.code(200).send({
+      session_id: sessionId,
+      final_finish_reason: result.finalFinishReason,
+      total_steps_used: result.totalSteps,
+      auto_resume_count: state.autoResumeCount + 1,
+    });
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -276,15 +397,36 @@ interface ChainedHarnessOptions {
   registry: ToolRegistry;
   log: { warn: (...args: unknown[]) => void; error: (...args: unknown[]) => void };
   maxAutoTurns?: number;
+  /** Phase F4 — when set, the runner advances `current_step_index` as tool
+   * calls match planned step.tool names. Result includes the final index. */
+  planForProgress?: {
+    id: string;
+    steps: ReadonlyArray<{ readonly tool: string }>;
+    initialIndex: number;
+  };
 }
 
 interface ChainedHarnessResult {
   autoTurns: number;
   totalSteps: number;
   finalFinishReason: string;
+  /** Phase F4 — final current_step_index when planForProgress was supplied. */
+  planFinalStepIndex?: number;
 }
 
 async function runChainedHarness(
+  opts: ChainedHarnessOptions,
+): Promise<ChainedHarnessResult> {
+  // Establish the AsyncLocalStorage context so every outbound MCP call
+  // tags itself with the right user's identity. The chained-execution and
+  // resume endpoints both call this helper, so doing it here covers both.
+  return runWithRequestContext(
+    { userEntraId: opts.user, sessionId: opts.sessionId },
+    () => _runChainedHarnessInner(opts),
+  );
+}
+
+async function _runChainedHarnessInner(
   opts: ChainedHarnessOptions,
 ): Promise<ChainedHarnessResult> {
   const { pool, user, sessionId, cfg, llm, registry, log } = opts;
@@ -295,6 +437,14 @@ async function runChainedHarness(
   let totalSteps = 0;
   let finalFinishReason = "stop";
   let currentMessages = opts.messages;
+  // Plan progress tracking: walk through the recorded tool messages added
+  // by each iteration and advance current_step_index when the toolId
+  // matches plan.steps[currentStepIndex].tool. Exact-match for first cut;
+  // semantic matching is a follow-up.
+  let planStepIndex = opts.planForProgress?.initialIndex ?? 0;
+  // Track which messages we've already inspected so re-iteration doesn't
+  // double-count tool calls (the harness mutates `currentMessages` in place).
+  let inspectedUpTo = 0;
 
   while (autoTurns < cap) {
     autoTurns++;
@@ -338,6 +488,25 @@ async function runChainedHarness(
       });
       totalSteps += r.stepsUsed;
       finalFinishReason = r.finishReason;
+
+      // Plan progress: walk the new tool messages added by this iteration.
+      // Each tool message has role="tool" + toolId. We compare in order
+      // against plan.steps[planStepIndex].tool and advance on each match.
+      if (opts.planForProgress) {
+        const steps = opts.planForProgress.steps;
+        for (let i = inspectedUpTo; i < currentMessages.length; i++) {
+          const m = currentMessages[i];
+          if (
+            m?.role === "tool" &&
+            typeof m.toolId === "string" &&
+            planStepIndex < steps.length &&
+            m.toolId === steps[planStepIndex]?.tool
+          ) {
+            planStepIndex++;
+          }
+        }
+        inspectedUpTo = currentMessages.length;
+      }
 
       // Persist updated session state.
       const sessTotals = budget.sessionTotals();
@@ -389,7 +558,12 @@ async function runChainedHarness(
     }
   }
 
-  return { autoTurns, totalSteps, finalFinishReason };
+  return {
+    autoTurns,
+    totalSteps,
+    finalFinishReason,
+    planFinalStepIndex: opts.planForProgress ? planStepIndex : undefined,
+  };
 }
 
 // hydrateScratchpad lives in core/harness-builders.ts so chat.ts and this

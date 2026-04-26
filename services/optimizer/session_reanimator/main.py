@@ -38,6 +38,8 @@ import psycopg
 from psycopg.rows import dict_row
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from services.mcp_tools.common.auth import McpAuthError, sign_mcp_token
+
 log = logging.getLogger("session-reanimator")
 
 
@@ -54,10 +56,15 @@ class Settings(BaseSettings):
 
     # Agent service.
     agent_base_url: str = "http://agent-claw:3101"
-    # Header the agent reads for the calling user's identity. The daemon
-    # must impersonate the session's owning user so RLS scopes correctly
-    # at the agent boundary.
-    agent_user_header: str = "x-user-entra-id"
+
+    # MCP signing key shared with the agent. The daemon mints a per-call JWT
+    # carrying the session's owning user as the `user` claim and the
+    # `agent:resume` scope; the agent's /api/internal/sessions/:id/resume
+    # route verifies and trusts only the signed claim (no x-user-entra-id
+    # forgery surface). When unset, the daemon falls back to the legacy
+    # x-user-entra-id header for the public /api/sessions/:id/resume route
+    # — useful in dev where MCP_AUTH_SIGNING_KEY isn't configured.
+    mcp_auth_signing_key: str = ""
 
     # Polling cadence.
     poll_interval_seconds: int = 300  # 5 min
@@ -126,11 +133,42 @@ async def resume_session(
     session_id: str,
     user_entra_id: str,
 ) -> dict[str, Any]:
-    headers = {settings.agent_user_header: user_entra_id}
-    url = f"{settings.agent_base_url.rstrip('/')}/api/sessions/{session_id}/resume"
+    """POST the agent's resume endpoint for one session.
+
+    Auth strategy:
+      - When MCP_AUTH_SIGNING_KEY is configured: mint a JWT with the
+        session's owning user as `user` and scope `agent:resume`, send to
+        /api/internal/sessions/:id/resume (which trusts ONLY the signed
+        claim — no header forgery surface). This is the production path.
+      - Otherwise: fall back to the legacy x-user-entra-id header against
+        the public /api/sessions/:id/resume route. This is the dev-mode
+        path (and also acceptable for one-off ops use behind the auth
+        proxy where header forgery isn't a concern).
+    """
+    base = settings.agent_base_url.rstrip("/")
+    headers: dict[str, str] = {}
+    url: str
+
+    if settings.mcp_auth_signing_key:
+        try:
+            token = sign_mcp_token(
+                sandbox_id="reanimator",
+                user_entra_id=user_entra_id,
+                scopes=["agent:resume"],
+                ttl_seconds=300,
+                signing_key=settings.mcp_auth_signing_key,
+            )
+            headers["Authorization"] = f"Bearer {token}"
+            url = f"{base}/api/internal/sessions/{session_id}/resume"
+        except McpAuthError as exc:
+            log.error("failed to mint resume token for session %s: %s", session_id, exc)
+            return {"ok": False, "status": 0, "body": f"token-mint-failed: {exc}"}
+    else:
+        headers["x-user-entra-id"] = user_entra_id
+        url = f"{base}/api/sessions/{session_id}/resume"
+
     r = await client.post(url, headers=headers, timeout=120.0)
     if r.status_code == 409:
-        # Expected for awaiting_user_input or auto_resume_cap_reached.
         return {"ok": False, "status": 409, "body": r.json()}
     if r.status_code >= 400:
         return {"ok": False, "status": r.status_code, "body": r.text[:500]}

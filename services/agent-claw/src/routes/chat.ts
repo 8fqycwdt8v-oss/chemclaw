@@ -46,6 +46,7 @@ import {
 import type { SessionFinishReason } from "../core/session-store.js";
 import { savePlanForSession } from "../core/plan-store-db.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
+import { runWithRequestContext } from "../core/request-context.js";
 import { withUserContext } from "../db/with-user-context.js";
 import { PromptRegistry } from "../prompts/registry.js";
 import type { Message, ToolContext } from "../core/types.js";
@@ -890,6 +891,12 @@ export function registerChatRoute(app: FastifyInstance, deps: ChatRouteDeps): vo
         },
       },
     },
-    (req, reply) => handleChat(req, reply, deps),
+    // Wrap the entire handler in an AsyncLocalStorage context so every
+    // outbound MCP call can read the calling user's identity transparently
+    // (see core/request-context.ts and mcp/postJson.ts:authHeaders).
+    (req, reply) =>
+      runWithRequestContext({ userEntraId: deps.getUser(req) }, () =>
+        handleChat(req, reply, deps),
+      ),
   );
 }

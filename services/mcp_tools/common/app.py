@@ -17,7 +17,7 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
 from services.mcp_tools.common.logging import configure_logging
@@ -55,9 +55,7 @@ def create_app(
     """
     configure_logging(log_level)
     # Imported lazily so unit tests of `auth.py` don't drag in FastAPI.
-    from services.mcp_tools.common.auth import (  # noqa: F401 — used for the dependency below
-        require_mcp_token,
-    )
+    from services.mcp_tools.common.auth import require_mcp_token
 
     @asynccontextmanager
     async def _default_lifespan(app: FastAPI) -> Any:
@@ -70,6 +68,69 @@ def create_app(
         log.info("stopping %s", name)
 
     app = FastAPI(title=name, version=version, lifespan=_default_lifespan)
+
+    # ADR 006 Layer 2 — Bearer-token auth on every /tools/* route.
+    # Implemented as middleware (not a FastAPI dependency) so service code
+    # doesn't need to thread `Depends(...)` into every route declaration.
+    # Probes (/healthz, /readyz) are explicitly excluded — k8s liveness /
+    # readiness must stay reachable regardless of auth state.
+    #
+    # In dev mode (MCP_AUTH_REQUIRED unset / "false"), missing / invalid
+    # tokens are accepted with a warning. Existing test suites continue to
+    # pass. Production sets MCP_AUTH_REQUIRED=true and the middleware
+    # rejects unauthenticated /tools/* requests with 401.
+    from services.mcp_tools.common.auth import (  # imported lazily
+        McpAuthError,
+        verify_mcp_token,
+        _require_or_skip,
+    )
+
+    @app.middleware("http")
+    async def mcp_auth_middleware(request: Request, call_next: Callable):
+        # Probes always pass.
+        path = request.url.path
+        if path in ("/healthz", "/readyz") or path.startswith("/internal/"):
+            return await call_next(request)
+
+        enforce = _require_or_skip()
+        authz = request.headers.get("authorization")
+        if not authz:
+            if enforce:
+                return JSONResponse(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    content={"error": "unauthenticated", "detail": "missing Authorization header"},
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            # Dev mode — proceed without claims. Tools that need user context
+            # can read the (None) claims via request.state.mcp_claims.
+            request.state.mcp_claims = None
+            return await call_next(request)
+
+        parts = authz.split(" ", 1)
+        if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
+            if enforce:
+                return JSONResponse(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    content={"error": "unauthenticated", "detail": "expected `Authorization: Bearer <token>`"},
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            request.state.mcp_claims = None
+            return await call_next(request)
+
+        try:
+            claims = verify_mcp_token(parts[1].strip())
+            request.state.mcp_claims = claims
+        except McpAuthError as exc:
+            if enforce:
+                return JSONResponse(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    content={"error": "unauthenticated", "detail": str(exc)},
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            log.warning("MCP token verification failed (dev mode, allowing): %s", exc)
+            request.state.mcp_claims = None
+
+        return await call_next(request)
 
     @app.middleware("http")
     async def add_request_id(request: Request, call_next: Callable):

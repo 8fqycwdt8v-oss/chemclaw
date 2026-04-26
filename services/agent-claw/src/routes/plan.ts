@@ -15,6 +15,7 @@ import { Budget } from "../core/budget.js";
 import { runHarness } from "../core/harness.js";
 import { planStore } from "../core/plan-mode.js";
 import { buildDefaultLifecycle } from "../core/harness-builders.js";
+import { runWithRequestContext } from "../core/request-context.js";
 import type { ToolContext } from "../core/types.js";
 import type { Pool } from "pg";
 
@@ -93,14 +94,17 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     try {
       writeEvent(reply, { type: "text_delta", delta: "Plan approved — executing…\n\n" });
 
-      const result = await runHarness({
-        messages: plan.messages,
-        tools,
-        llm: deps.llm,
-        budget,
-        lifecycle,
-        ctx,
-      });
+      // Wrap in AsyncLocalStorage so outbound MCP calls inherit the user.
+      const result = await runWithRequestContext({ userEntraId: user }, () =>
+        runHarness({
+          messages: plan.messages,
+          tools,
+          llm: deps.llm,
+          budget,
+          lifecycle,
+          ctx,
+        }),
+      );
 
       if (!closed) {
         writeEvent(reply, { type: "text_delta", delta: result.text });
