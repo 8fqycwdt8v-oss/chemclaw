@@ -245,6 +245,12 @@ CREATE TABLE IF NOT EXISTS mock_eln.methods (
 CREATE TABLE IF NOT EXISTS mock_eln.samples (
   id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   entry_id      UUID NOT NULL REFERENCES mock_eln.entries(id) ON DELETE CASCADE,
+  -- Globally unique — `fake_logs.datasets.sample_id` resolves a bare
+  -- text key to one row in this table, so duplicates would silently
+  -- ambiguate the cross-source lookup. The seed generator is already
+  -- careful to keep codes unique across projects (S-{PROJECT}-{NNNNN});
+  -- this constraint catches any future regenerator regression at load
+  -- time rather than at agent-query time.
   sample_code   TEXT NOT NULL,
   compound_id   UUID REFERENCES mock_eln.compounds(id) ON DELETE RESTRICT,
   amount_mg     NUMERIC,
@@ -254,12 +260,29 @@ CREATE TABLE IF NOT EXISTS mock_eln.samples (
   UNIQUE (entry_id, sample_code)
 );
 
+-- Add the global UNIQUE(sample_code) defensively, idempotently (Postgres
+-- ADD CONSTRAINT has no IF NOT EXISTS for non-PK constraints).
+DO $$
+BEGIN
+  IF NOT EXISTS (
+    SELECT 1 FROM pg_constraint
+     WHERE conname = 'samples_sample_code_unique'
+       AND conrelid = 'mock_eln.samples'::regclass
+  ) THEN
+    ALTER TABLE mock_eln.samples
+      ADD CONSTRAINT samples_sample_code_unique UNIQUE (sample_code);
+  END IF;
+END $$;
+
+-- The non-unique idx_mock_eln_samples_code is now redundant with the
+-- implicit index from the UNIQUE constraint above; drop it on a fresh
+-- apply (DROP IF EXISTS keeps re-runs harmless).
+DROP INDEX IF EXISTS mock_eln.idx_mock_eln_samples_code;
+
 CREATE INDEX IF NOT EXISTS idx_mock_eln_samples_entry
   ON mock_eln.samples (entry_id);
 CREATE INDEX IF NOT EXISTS idx_mock_eln_samples_compound
   ON mock_eln.samples (compound_id);
-CREATE INDEX IF NOT EXISTS idx_mock_eln_samples_code
-  ON mock_eln.samples (sample_code);
 
 -- --------------------------------------------------------------------
 -- results (~5000 in seed) — analytical results per sample.

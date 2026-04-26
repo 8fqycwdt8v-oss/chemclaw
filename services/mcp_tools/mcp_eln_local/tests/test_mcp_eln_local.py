@@ -180,7 +180,7 @@ def _sample_row(sample_id: UUID = SAMPLE_ID) -> dict[str, Any]:
     return {
         "id": sample_id,
         "entry_id": ENTRY_ID,
-        "sample_code": "S-001",
+        "sample_code": "S-NCE-1234-00001",
         "compound_id": COMPOUND_ID,
         "amount_mg": 12.4,
         "purity_pct": 98.7,

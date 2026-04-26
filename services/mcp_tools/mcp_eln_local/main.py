@@ -42,6 +42,7 @@ from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import SettingsConfigDict
 
 from services.mcp_tools.common.app import create_app
+from services.mcp_tools.common.payload_caps import cap_jsonb
 from services.mcp_tools.common.settings import ToolSettings
 
 
@@ -298,6 +299,7 @@ class ExperimentsQueryIn(BaseModel):
     limit: int = Field(default=50, ge=1, le=200)
     cursor: str | None = Field(
         default=None,
+        max_length=1024,
         description=(
             "Opaque cursor returned by the previous page. Format: "
             "'<modified_at_iso>|<id>'."
@@ -459,7 +461,9 @@ def _row_to_entry(row: dict[str, Any]) -> ElnEntry:
         status=row["status"],
         entry_shape=row["entry_shape"],
         data_quality_tier=row["data_quality_tier"],
-        fields_jsonb=row.get("fields_jsonb") or {},
+        fields_jsonb=cap_jsonb(
+            row.get("fields_jsonb") or {}, field_name="fields_jsonb"
+        ),
         freetext=row.get("freetext"),
         freetext_length_chars=row.get("freetext_length_chars") or 0,
         created_at=row["created_at"],
