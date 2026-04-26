@@ -17,6 +17,7 @@ import { z } from "zod";
 import type { Pool } from "pg";
 import type { Config } from "../config.js";
 import type { PromptRegistry } from "../prompts/registry.js";
+import { withSystemContext } from "../db/with-user-context.js";
 import { parseEvalArgs } from "./eval-parser.js";
 
 // ---------------------------------------------------------------------------
@@ -121,11 +122,13 @@ export function registerEvalRoute(
         Object.values(perClass).reduce((sum, v) => sum + v.rate, 0) /
         Math.max(1, Object.keys(perClass).length);
 
-      // Previous run delta — fetch last shadow_run_scores mean.
-      const prevRow = await pool.query<{ mean_score: number }>(
-        `SELECT AVG(score) AS mean_score FROM shadow_run_scores
-          WHERE run_at < NOW() - INTERVAL '24 hours'
-          ORDER BY run_at DESC LIMIT 1`,
+      // Previous run delta — fetch last shadow_run_scores mean. Catalog read.
+      const prevRow = await withSystemContext(pool, (client) =>
+        client.query<{ mean_score: number }>(
+          `SELECT AVG(score) AS mean_score FROM shadow_run_scores
+            WHERE run_at < NOW() - INTERVAL '24 hours'
+            ORDER BY run_at DESC LIMIT 1`,
+        ),
       );
       const prevScore = prevRow.rows[0]?.mean_score ?? null;
       const delta = prevScore != null ? overall - prevScore : null;
@@ -154,18 +157,20 @@ export function registerEvalRoute(
     if (parsed.subVerb === "shadow") {
       const { promptName } = parsed;
 
-      const r = await pool.query<{
-        version: number;
-        mean_score: number;
-        run_count: string;
-        latest_run_at: Date | null;
-      }>(
-        `SELECT version, AVG(score) AS mean_score, COUNT(*) AS run_count, MAX(run_at) AS latest_run_at
-           FROM shadow_run_scores
-          WHERE prompt_name = $1
-          GROUP BY version
-          ORDER BY version DESC`,
-        [promptName],
+      const r = await withSystemContext(pool, (client) =>
+        client.query<{
+          version: number;
+          mean_score: number;
+          run_count: string;
+          latest_run_at: Date | null;
+        }>(
+          `SELECT version, AVG(score) AS mean_score, COUNT(*) AS run_count, MAX(run_at) AS latest_run_at
+             FROM shadow_run_scores
+            WHERE prompt_name = $1
+            GROUP BY version
+            ORDER BY version DESC`,
+          [promptName],
+        ),
       );
 
       if (r.rows.length === 0) {

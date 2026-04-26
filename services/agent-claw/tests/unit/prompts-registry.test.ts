@@ -8,9 +8,27 @@ import type { Pool, QueryResult } from "pg";
 // Helpers — mock Pool
 // ---------------------------------------------------------------------------
 
+// PromptRegistry now wraps reads in withSystemContext (pool.connect → client.query).
+// `pool.query` is a vi.fn() spy used by tests to assert call counts; BEGIN/SET/
+// COMMIT issued by the transaction wrapper bypass the spy and return silently.
 function makeMockPool(rows: { template: string; version: number }[]): Pool {
-  const mockQuery = vi.fn().mockResolvedValue({ rows, rowCount: rows.length } as QueryResult);
-  return { query: mockQuery } as unknown as Pool;
+  const dataResult = { rows, rowCount: rows.length } as QueryResult;
+  const dataSpy = vi.fn(async () => dataResult);
+  const isTxControl = (sql: unknown): boolean => {
+    if (typeof sql !== "string") return false;
+    const s = sql.toUpperCase().trim();
+    return s.startsWith("BEGIN") || s.startsWith("COMMIT") ||
+           s.startsWith("ROLLBACK") || s.includes("SET_CONFIG");
+  };
+  const queryDispatch = async (sql: unknown, ...args: unknown[]) => {
+    if (isTxControl(sql)) return { rows: [], rowCount: 0 } as QueryResult;
+    return dataSpy(sql as never, ...(args as never[]));
+  };
+  const client = { query: queryDispatch, release: vi.fn() };
+  return {
+    query: dataSpy,
+    connect: vi.fn(async () => client),
+  } as unknown as Pool;
 }
 
 // ---------------------------------------------------------------------------

@@ -42,3 +42,32 @@ export async function withUserContext<T>(
     client.release();
   }
 }
+
+/**
+ * Sentinel user-entra-id used by `withSystemContext` for queries that read
+ * globally-cached / system-scoped data (e.g. mcp_tools catalog, prompt_registry
+ * version lookups). Different from the empty string ('') so legacy
+ * "permissive-on-empty" RLS policies don't accidentally widen the gate.
+ *
+ * Queried as a string literal in the new policies in
+ * db/init/12_security_hardening.sql (`IS NOT NULL AND <> ''`), so any
+ * non-empty value passes those gates.
+ */
+export const SYSTEM_USER_ENTRA_ID = "__system__";
+
+/**
+ * Same contract as `withUserContext`, but uses a fixed system sentinel for
+ * `app.current_user_entra_id`. Use for code paths that legitimately need to
+ * read globally-shared state without any specific user context — for example
+ * reading the prompt_registry catalog or the mcp_tools row that names a
+ * forged tool.
+ *
+ * Do NOT use this to bypass RLS on per-user / per-project tables. For those,
+ * call `withUserContext` with the real Entra-ID.
+ */
+export async function withSystemContext<T>(
+  pool: Pool,
+  fn: (client: PoolClient) => Promise<T>,
+): Promise<T> {
+  return withUserContext(pool, SYSTEM_USER_ENTRA_ID, fn);
+}

@@ -7,9 +7,28 @@ import { PromptRegistry } from "../../src/prompts/registry.js";
 // Helpers
 // ---------------------------------------------------------------------------
 
+// PromptRegistry now wraps reads in withSystemContext (pool.connect → client.query).
+// `pool.query` is a vi.fn() spy used by tests to set return values + assert on
+// data-query call counts. BEGIN/SET LOCAL/COMMIT issued by the transaction
+// wrapper bypass the spy entirely (silent no-ops), so test assertions like
+// `toHaveBeenCalledOnce()` and `mockResolvedValueOnce` chains line up with
+// the data queries only.
 function makePool(overrides: Record<string, unknown> = {}) {
+  const dataSpy = vi.fn();
+  const isTxControl = (sql: unknown): boolean => {
+    if (typeof sql !== "string") return false;
+    const s = sql.toUpperCase().trim();
+    return s.startsWith("BEGIN") || s.startsWith("COMMIT") ||
+           s.startsWith("ROLLBACK") || s.includes("SET_CONFIG");
+  };
+  const queryDispatch = async (sql: unknown, ...args: unknown[]) => {
+    if (isTxControl(sql)) return { rows: [], rowCount: 0 };
+    return dataSpy(sql, ...args);
+  };
+  const client = { query: queryDispatch, release: vi.fn() };
   return {
-    query: vi.fn(),
+    query: dataSpy,
+    connect: vi.fn(async () => client),
     ...overrides,
   };
 }

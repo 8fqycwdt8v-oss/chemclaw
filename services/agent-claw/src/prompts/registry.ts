@@ -14,6 +14,7 @@
 //   - getShadowSummary(name, version): reads aggregated shadow score data
 
 import type { Pool } from "pg";
+import { withSystemContext } from "../db/with-user-context.js";
 
 interface CacheEntry {
   fetchedAt: number;
@@ -55,12 +56,17 @@ export class PromptRegistry {
       return { template: cached.template, version: cached.version };
     }
 
-    const r = await this.pool.query<{ template: string; version: number }>(
-      `SELECT template, version
-         FROM prompt_registry
-        WHERE name = $1 AND active = TRUE
-        LIMIT 1`,
-      [name],
+    // prompt_registry is a globally-shared catalog (FORCE RLS requires a
+    // non-empty user context). System sentinel passes the authenticated-user
+    // gate without coupling to any specific tenant.
+    const r = await withSystemContext(this.pool, (client) =>
+      client.query<{ template: string; version: number }>(
+        `SELECT template, version
+           FROM prompt_registry
+          WHERE name = $1 AND active = TRUE
+          LIMIT 1`,
+        [name],
+      ),
     );
     if (r.rows.length === 0 || !r.rows[0]) {
       throw new Error(`no active prompt registered for "${name}"`);
@@ -76,18 +82,20 @@ export class PromptRegistry {
    * Returns empty array if no shadow prompts exist.
    */
   async getShadowPrompts(name: string): Promise<ShadowPrompt[]> {
-    const r = await this.pool.query<{
-      template: string;
-      version: number;
-      shadow_until: Date;
-    }>(
-      `SELECT template, version, shadow_until
-         FROM prompt_registry
-        WHERE name = $1
-          AND active = FALSE
-          AND shadow_until > NOW()
-        ORDER BY version DESC`,
-      [name],
+    const r = await withSystemContext(this.pool, (client) =>
+      client.query<{
+        template: string;
+        version: number;
+        shadow_until: Date;
+      }>(
+        `SELECT template, version, shadow_until
+           FROM prompt_registry
+          WHERE name = $1
+            AND active = FALSE
+            AND shadow_until > NOW()
+          ORDER BY version DESC`,
+        [name],
+      ),
     );
     return r.rows.map((row) => ({
       template: row.template,
@@ -107,17 +115,20 @@ export class PromptRegistry {
     score: number,
     perClassScores: Record<string, number> | null = null,
   ): Promise<void> {
-    await this.pool.query(
-      `INSERT INTO shadow_run_scores
-         (prompt_name, version, trace_id, score, per_class_scores)
-       VALUES ($1, $2, $3, $4, $5)`,
-      [
-        promptName,
-        version,
-        traceId,
-        score,
-        perClassScores ? JSON.stringify(perClassScores) : null,
-      ],
+    // shadow_run_scores has no per-user scoping; system context is correct here.
+    await withSystemContext(this.pool, (client) =>
+      client.query(
+        `INSERT INTO shadow_run_scores
+           (prompt_name, version, trace_id, score, per_class_scores)
+         VALUES ($1, $2, $3, $4, $5)`,
+        [
+          promptName,
+          version,
+          traceId,
+          score,
+          perClassScores ? JSON.stringify(perClassScores) : null,
+        ],
+      ),
     );
   }
 
@@ -129,30 +140,34 @@ export class PromptRegistry {
     promptName: string,
     version: number,
   ): Promise<ShadowSummary | null> {
-    const r = await this.pool.query<{
-      mean_score: number;
-      run_count: string;
-      latest_run_at: Date | null;
-    }>(
-      `SELECT AVG(score) AS mean_score,
-              COUNT(*) AS run_count,
-              MAX(run_at) AS latest_run_at
-         FROM shadow_run_scores
-        WHERE prompt_name = $1 AND version = $2`,
-      [promptName, version],
+    const r = await withSystemContext(this.pool, (client) =>
+      client.query<{
+        mean_score: number;
+        run_count: string;
+        latest_run_at: Date | null;
+      }>(
+        `SELECT AVG(score) AS mean_score,
+                COUNT(*) AS run_count,
+                MAX(run_at) AS latest_run_at
+           FROM shadow_run_scores
+          WHERE prompt_name = $1 AND version = $2`,
+        [promptName, version],
+      ),
     );
 
     if (!r.rows[0] || r.rows[0].run_count === "0") return null;
 
     // Per-class breakdown — average per class from the per_class_scores JSONB.
-    const classR = await this.pool.query<{ class_name: string; avg_score: number }>(
-      `SELECT key AS class_name, AVG(value::float8) AS avg_score
-         FROM shadow_run_scores,
-              jsonb_each_text(per_class_scores) AS kv(key, value)
-        WHERE prompt_name = $1 AND version = $2
-          AND per_class_scores IS NOT NULL
-        GROUP BY key`,
-      [promptName, version],
+    const classR = await withSystemContext(this.pool, (client) =>
+      client.query<{ class_name: string; avg_score: number }>(
+        `SELECT key AS class_name, AVG(value::float8) AS avg_score
+           FROM shadow_run_scores,
+                jsonb_each_text(per_class_scores) AS kv(key, value)
+          WHERE prompt_name = $1 AND version = $2
+            AND per_class_scores IS NOT NULL
+          GROUP BY key`,
+        [promptName, version],
+      ),
     );
     const perClass: Record<string, number> = {};
     for (const row of classR.rows) {

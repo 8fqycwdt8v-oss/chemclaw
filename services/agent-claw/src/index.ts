@@ -18,6 +18,34 @@ import { createPool } from "./db/pool.js";
 import { LiteLLMProvider } from "./llm/litellm-provider.js";
 import { ToolRegistry } from "./tools/registry.js";
 import { buildCanonicalizeSmilesTool } from "./tools/builtins/canonicalize_smiles.js";
+// Phase F.1 / chemistry MCP wrappers.
+import { buildCheckContradictionsTool } from "./tools/builtins/check_contradictions.js";
+import { buildComputeConformerEnsembleTool } from "./tools/builtins/compute_conformer_ensemble.js";
+import { buildIdentifyUnknownFromMsTool } from "./tools/builtins/identify_unknown_from_ms.js";
+import { buildPredictMolecularPropertyTool } from "./tools/builtins/predict_molecular_property.js";
+import { buildPredictReactionYieldTool } from "./tools/builtins/predict_reaction_yield.js";
+import { buildQueryKgTool } from "./tools/builtins/query_kg.js";
+import { buildScreenAdmetTool } from "./tools/builtins/screen_admet.js";
+import { buildProposeRetrosynthesisTool } from "./tools/builtins/propose_retrosynthesis.js";
+// Pool-backed tools.
+import { buildAnalyzeCsvTool } from "./tools/builtins/analyze_csv.js";
+import { buildExpandReactionContextTool } from "./tools/builtins/expand_reaction_context.js";
+import { buildFetchOriginalDocumentTool } from "./tools/builtins/fetch_original_document.js";
+import { buildFetchFullDocumentTool } from "./tools/builtins/fetch_full_document.js";
+import { buildFindSimilarReactionsTool } from "./tools/builtins/find_similar_reactions.js";
+import { buildSearchKnowledgeTool } from "./tools/builtins/search_knowledge.js";
+import { buildStatisticalAnalyzeTool } from "./tools/builtins/statistical_analyze.js";
+import { buildSynthesizeInsightsTool } from "./tools/builtins/synthesize_insights.js";
+import { buildComputeConfidenceEnsembleTool } from "./tools/builtins/compute_confidence_ensemble.js";
+import { buildProposeHypothesisTool } from "./tools/builtins/propose_hypothesis.js";
+import { buildDraftSectionTool } from "./tools/builtins/draft_section.js";
+// Phase F.2 source-system wrappers.
+import { buildFetchElnEntryTool } from "./tools/builtins/fetch_eln_entry.js";
+import { buildFetchInstrumentRunTool } from "./tools/builtins/fetch_instrument_run.js";
+import { buildFetchLimsResultTool } from "./tools/builtins/fetch_lims_result.js";
+import { buildQueryElnExperimentsTool } from "./tools/builtins/query_eln_experiments.js";
+import { buildQueryInstrumentRunsTool } from "./tools/builtins/query_instrument_runs.js";
+import { buildQueryLimsResultsTool } from "./tools/builtins/query_lims_results.js";
 import { registerHealthzRoute } from "./routes/healthz.js";
 import { registerChatRoute } from "./routes/chat.js";
 import { registerDeepResearchRoute } from "./routes/deep-research.js";
@@ -125,9 +153,62 @@ const skillLoader = new SkillLoader();
 
 // Register builtin factories so loadFromDb() can find them.
 // Cast through Tool (unknown) to satisfy the registry's covariant Tool<unknown,unknown> map.
-registry.registerBuiltin("canonicalize_smiles", () =>
-  buildCanonicalizeSmilesTool(cfg.MCP_RDKIT_URL) as import("./tools/tool.js").Tool,
+type ToolBuiltin = import("./tools/tool.js").Tool;
+const asTool = (t: unknown) => t as ToolBuiltin;
+
+// Chemistry / KG (URL-only).
+registry.registerBuiltin("canonicalize_smiles", () => asTool(buildCanonicalizeSmilesTool(cfg.MCP_RDKIT_URL)));
+registry.registerBuiltin("check_contradictions", () => asTool(buildCheckContradictionsTool(cfg.MCP_KG_URL)));
+registry.registerBuiltin("compute_conformer_ensemble", () => asTool(buildComputeConformerEnsembleTool(cfg.MCP_XTB_URL)));
+registry.registerBuiltin("identify_unknown_from_ms", () => asTool(buildIdentifyUnknownFromMsTool(cfg.MCP_SIRIUS_URL)));
+registry.registerBuiltin("predict_molecular_property", () => asTool(buildPredictMolecularPropertyTool(cfg.MCP_CHEMPROP_URL)));
+registry.registerBuiltin("predict_reaction_yield", () => asTool(buildPredictReactionYieldTool(cfg.MCP_CHEMPROP_URL)));
+registry.registerBuiltin("query_kg", () => asTool(buildQueryKgTool(cfg.MCP_KG_URL)));
+registry.registerBuiltin("screen_admet", () => asTool(buildScreenAdmetTool(cfg.MCP_ADMETLAB_URL)));
+registry.registerBuiltin("propose_retrosynthesis", () =>
+  asTool(buildProposeRetrosynthesisTool(cfg.MCP_ASKCOS_URL, cfg.MCP_AIZYNTH_URL)),
 );
+
+// Pool-backed (read-only or scoped via withUserContext at call time inside the factory).
+registry.registerBuiltin("analyze_csv", () => asTool(buildAnalyzeCsvTool(pool, cfg.MCP_DOC_FETCHER_URL)));
+registry.registerBuiltin("expand_reaction_context", () => asTool(buildExpandReactionContextTool(pool, cfg.MCP_KG_URL)));
+registry.registerBuiltin("fetch_original_document", () => asTool(buildFetchOriginalDocumentTool(pool, cfg.MCP_DOC_FETCHER_URL)));
+registry.registerBuiltin("fetch_full_document", () => asTool(buildFetchFullDocumentTool(pool)));
+registry.registerBuiltin("find_similar_reactions", () => asTool(buildFindSimilarReactionsTool(pool, cfg.MCP_DRFP_URL)));
+registry.registerBuiltin("search_knowledge", () => asTool(buildSearchKnowledgeTool(pool, cfg.MCP_EMBEDDER_URL)));
+registry.registerBuiltin("statistical_analyze", () => asTool(buildStatisticalAnalyzeTool(pool, cfg.MCP_TABICL_URL)));
+registry.registerBuiltin("synthesize_insights", () =>
+  asTool(buildSynthesizeInsightsTool(pool, cfg.MCP_KG_URL, promptRegistry, llmProvider)),
+);
+registry.registerBuiltin("compute_confidence_ensemble", () => asTool(buildComputeConfidenceEnsembleTool(pool)));
+registry.registerBuiltin("propose_hypothesis", () => asTool(buildProposeHypothesisTool(pool)));
+registry.registerBuiltin("draft_section", () => asTool(buildDraftSectionTool()));
+
+// Phase F.2 source-system wrappers — citation enrichment lives in these factories.
+registry.registerBuiltin("fetch_eln_entry", () =>
+  asTool(buildFetchElnEntryTool(pool, cfg.MCP_ELN_BENCHLING_URL, cfg.BENCHLING_BASE_URL)),
+);
+registry.registerBuiltin("fetch_instrument_run", () =>
+  asTool(buildFetchInstrumentRunTool(pool, cfg.MCP_INSTRUMENT_WATERS_URL, cfg.EMPOWER_BASE_URL)),
+);
+registry.registerBuiltin("fetch_lims_result", () =>
+  asTool(buildFetchLimsResultTool(pool, cfg.MCP_LIMS_STARLIMS_URL, cfg.STARLIMS_BASE_URL)),
+);
+registry.registerBuiltin("query_eln_experiments", () =>
+  asTool(buildQueryElnExperimentsTool(pool, cfg.MCP_ELN_BENCHLING_URL, cfg.BENCHLING_BASE_URL)),
+);
+registry.registerBuiltin("query_instrument_runs", () =>
+  asTool(buildQueryInstrumentRunsTool(pool, cfg.MCP_INSTRUMENT_WATERS_URL, cfg.EMPOWER_BASE_URL)),
+);
+registry.registerBuiltin("query_lims_results", () =>
+  asTool(buildQueryLimsResultsTool(pool, cfg.MCP_LIMS_STARLIMS_URL, cfg.STARLIMS_BASE_URL)),
+);
+
+// Note: forge_tool, run_program, induce_forged_tool_from_trace, dispatch_sub_agent,
+// add_forged_tool_test are intentionally NOT registered here. They have either
+// per-call user-identity dependencies (add_forged_tool_test) or sandbox/sub-agent
+// orchestration deps (forge_tool family) that should be opt-in via dedicated
+// route handlers / sub-agent spawner rather than the generic chat tool path.
 
 // ---------------------------------------------------------------------------
 // Routes

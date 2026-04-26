@@ -284,17 +284,23 @@ export class SkillLoader {
     }>;
 
     try {
-      const result = await pool.query<{
-        id: string;
-        name: string;
-        prompt_md: string;
-        kind: string;
-        version: number;
-      }>(
-        `SELECT id::text AS id, name, prompt_md, kind, version
-           FROM skill_library
-          WHERE active = true
-          ORDER BY name, version DESC`,
+      // skill_library is a globally-shared catalog. With FORCE RLS the policy
+      // requires a non-empty user context — withSystemContext supplies the
+      // sentinel without mixing in any specific user's identity.
+      const { withSystemContext } = await import("../db/with-user-context.js");
+      const result = await withSystemContext(pool, (client) =>
+        client.query<{
+          id: string;
+          name: string;
+          prompt_md: string;
+          kind: string;
+          version: number;
+        }>(
+          `SELECT id::text AS id, name, prompt_md, kind, version
+             FROM skill_library
+            WHERE active = true
+            ORDER BY name, version DESC`,
+        ),
       );
       rows = result.rows;
     } catch {

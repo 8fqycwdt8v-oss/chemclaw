@@ -22,7 +22,7 @@ import { z } from "zod";
 import type { Pool } from "pg";
 import { promises as fsp } from "fs";
 import { join } from "path";
-import { randomUUID } from "crypto";
+import { randomUUID, createHash } from "crypto";
 import { defineTool } from "../tool.js";
 import type { LlmProvider, ModelRole } from "../../llm/provider.js";
 import type { SandboxClient } from "../../core/sandbox.js";
@@ -382,6 +382,13 @@ export function buildForgeToolTool(
         const scriptsPath = join(forgedToolsDir, `${toolId}.py`);
         await fsp.writeFile(scriptsPath, pythonCode, "utf-8");
 
+        // SHA-256 of the file we just wrote — verified at every call by the
+        // tool registry. Hash the in-memory string (matches what the registry
+        // re-reads from disk via readFileSync(..., "utf-8")).
+        const codeSha256 = createHash("sha256")
+          .update(pythonCode, "utf-8")
+          .digest("hex");
+
         const promptMd =
           `## ${input.name}\n\n${input.description}\n\n` +
           `**Input schema:**\n\`\`\`json\n${JSON.stringify(input.input_schema_json, null, 2)}\n\`\`\`\n\n` +
@@ -395,13 +402,14 @@ export function buildForgeToolTool(
         };
 
         // Insert skill_library row (Phase D.5: includes scope, forged_by_model/role, parent_tool_id, version).
+        // code_sha256 is verified at every call by the tool registry.
         const skillResult = await pool.query<{ id: string }>(
           `INSERT INTO skill_library
              (name, prompt_md, scripts_path, kind, active, shadow_until,
               proposed_by_user_entra_id, scope, forged_by_model, forged_by_role,
-              parent_tool_id, version)
+              parent_tool_id, version, code_sha256)
            VALUES ($1, $2, $3, 'forged_tool', false, NOW() + INTERVAL '14 days', $4,
-                   'private', $5, $6, $7, $8)
+                   'private', $5, $6, $7, $8, $9)
            RETURNING id::text AS id`,
           [
             input.name,
@@ -412,6 +420,7 @@ export function buildForgeToolTool(
             forgedByRole ?? null,
             input.parent_tool_id ?? null,
             newVersion,
+            codeSha256,
           ],
         );
         skillLibraryRowId = skillResult.rows[0]?.id;

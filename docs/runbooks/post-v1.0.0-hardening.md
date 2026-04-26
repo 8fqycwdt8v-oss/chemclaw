@@ -104,6 +104,22 @@ services/projectors/kg_source_cache/tests/       ✓     (35 / 35 across the fou
   network namespace lockdown + MCP service authentication, plus
   interim mitigations. Implementation deferred — see "Deferred" below.
 
+## Dependabot triage (8 alerts at branch tip)
+
+After the `_constraints.txt` work the alert count dropped from 16 → 8.
+Disposition of the remaining 8:
+
+| Severity | Package | Where | Disposition |
+|---|---|---|---|
+| **high** | `graphiti-core ==0.4.7` (`<= 0.28.1`) | `services/projectors/kg_hypotheses/requirements.txt` | **Major bump (0.4 → 0.28+) needed.** Cypher injection via `node_labels` in search filters. ChemClaw's KG writes use static type strings, not user-controlled labels, so direct exposure is bounded — but the version delta is large enough to need integration testing. **Open as a follow-up:** bump in a dedicated PR with full kg_hypotheses test pass + a smoke run. |
+| medium | `vite`, `esbuild` (transitive via `vitest`) | dev only | npm update applied here; remaining vulns are inside vitest's pinned vite/esbuild and require a vitest major-version bump. **Dev-only blast radius** (vitest doesn't ship to production); accepted with a follow-up to bump vitest in a dedicated PR. |
+| medium | `jsondiffpatch` | transitive | Updated via `npm update`. If the alert persists, it's still pinned by an upstream — re-check after CI re-runs. |
+| low | `ai ^4.3.19` (`< 5.0.52`) | `services/agent-claw/package.json` + root | Vercel AI SDK major bump (4 → 5). ChemClaw doesn't expose user-driven file uploads through the AI SDK, so the file-type-whitelist bypass is not currently exposed. **Major-version bump deferred** to a dedicated migration PR. |
+
+The transitive lockfile refresh from `npm update --workspaces` is included
+in this branch. The two major-version bumps (graphiti-core, ai) remain
+open and intentionally not auto-applied.
+
 ## Deferred (deliberate; reasoning included)
 
 | Audit item | Why deferred | Tracking |

@@ -257,4 +257,21 @@ CREATE POLICY prompt_registry_authenticated_policy ON prompt_registry
 -- the empty-user policy text is decorative.
 -- --------------------------------------------------------------------
 
+-- --------------------------------------------------------------------
+-- Forged-tool integrity: SHA-256 of the on-disk Python file, computed
+-- and persisted at forge time. The agent's tool registry recomputes
+-- the hash on every call and refuses to execute a forged tool whose
+-- on-disk content has changed since validation.
+-- --------------------------------------------------------------------
+ALTER TABLE skill_library
+  ADD COLUMN IF NOT EXISTS code_sha256 TEXT;
+
+COMMENT ON COLUMN skill_library.code_sha256 IS
+  'SHA-256 hex digest of the Python file at scripts_path computed at '
+  'forge_tool persist. Compared against the on-disk content at every '
+  'call — mismatch means the file was tampered with after validation '
+  'and the tool refuses to execute. NULL for tools forged before the '
+  'integrity-check migration; the agent logs once and runs without '
+  'verification for those (re-forge to enable).';
+
 COMMIT;
