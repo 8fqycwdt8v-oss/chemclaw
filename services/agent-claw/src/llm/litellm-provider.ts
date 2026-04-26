@@ -4,68 +4,84 @@
 // The gateway applies the redactor callback BEFORE the prompt leaves the cluster.
 //
 // Translation layer:
-//   harness Message[]   → AI SDK CoreMessage[]
-//   harness Tool[]      → AI SDK ToolSet (function-calling schema)
+//   harness Message[]   → AI SDK ModelMessage[]
+//   harness Tool[]      → AI SDK ToolSet (function-calling schema, inputSchema)
 //   AI SDK FinishReason → harness StepResult discriminated union
 //
 // completeJson() is a single-turn helper for structured output; it wraps
 // generateText + JSON.parse. Callers in Phase B+ use it for plan-mode previews
 // and hypothesis drafting.
+//
+// Migrated from AI SDK 4 → 5:
+//   - createOpenAI({ compatibility: "compatible" }) → createOpenAICompatible({...})
+//   - parameters → inputSchema (tool definition)
+//   - args → input (tool call)
+//   - result → output (tool result message part)
+//   - CoreMessage → ModelMessage; CoreTool → ToolSet/Tool
+//   - maxTokens → maxOutputTokens
+//   - usage.promptTokens/completionTokens → usage.inputTokens/outputTokens
 
-import { createOpenAI } from "@ai-sdk/openai";
-import { generateText, streamText } from "ai";
+import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
+import { generateText, streamText, tool } from "ai";
 import type { Config } from "../config.js";
 import type { LlmProvider, LlmResponse, ModelRole, StreamChunk } from "./provider.js";
 import type { Message } from "../core/types.js";
 import type { Tool } from "../tools/tool.js";
-import type { CoreMessage, CoreTool } from "ai";
+import type { ModelMessage, ToolSet } from "ai";
 import { z } from "zod";
 
 // ---------------------------------------------------------------------------
-// Internal helper: translate harness Message[] → AI SDK CoreMessage[].
+// Internal helper: translate harness Message[] → AI SDK ModelMessage[].
 // ---------------------------------------------------------------------------
 
-function toAiSdkMessages(messages: Message[]): CoreMessage[] {
-  return messages.map((m): CoreMessage => {
+function toAiSdkMessages(messages: Message[]): ModelMessage[] {
+  return messages.map((m): ModelMessage => {
     if (m.role === "tool") {
-      // AI SDK expects tool results as an array of ToolResultPart objects.
-      // The field is `result` (not `content`) per the AI SDK schema.
+      // v5 tool-result part uses `output` (was `result` in v4) and accepts
+      // a structured output object. We pass the raw string in `output: { type: "json", value: ... }`
+      // so it round-trips reliably regardless of the underlying provider.
+      let parsed: unknown = m.content;
+      try {
+        parsed = JSON.parse(m.content);
+      } catch {
+        // Not JSON — keep the raw string.
+      }
       return {
-        role: "tool" as const,
+        role: "tool",
         content: [
           {
-            type: "tool-result" as const,
+            type: "tool-result",
             toolCallId: m.toolId ?? "unknown",
             toolName: m.toolId ?? "unknown",
-            result: m.content,
+            output: { type: "json", value: parsed as Parameters<typeof JSON.stringify>[0] },
           },
         ],
       };
     }
-    return { role: m.role, content: m.content } as CoreMessage;
+    return { role: m.role, content: m.content } as ModelMessage;
   });
 }
 
 // ---------------------------------------------------------------------------
-// Internal helper: translate harness Tool[] → AI SDK tool definitions.
+// Internal helper: translate harness Tool[] → AI SDK ToolSet (v5 shape).
+//
+// In v5 the field is `inputSchema` (was `parameters`), and the recommended
+// idiom is the `tool({...})` helper which preserves type inference for the
+// optional `execute` callback. ChemClaw doesn't supply `execute` here — the
+// agent harness runs the tool itself after receiving the model's tool call —
+// so the shape is description + inputSchema only.
 // ---------------------------------------------------------------------------
 
-function toAiSdkTools(tools: Tool[]): Record<string, CoreTool> {
-  const result: Record<string, CoreTool> = {};
-  for (const tool of tools) {
-    result[tool.id] = {
-      description: tool.description,
-      // Use the tool's inputSchema directly as the AI SDK parameters.
-      // AI SDK accepts Zod schemas; cast through unknown to satisfy TypeScript.
-      parameters: tool.inputSchema as z.ZodType<unknown>,
-    };
+function toAiSdkTools(tools: Tool[]): ToolSet {
+  const result: ToolSet = {};
+  for (const t of tools) {
+    result[t.id] = tool({
+      description: t.description,
+      inputSchema: t.inputSchema as z.ZodType<unknown>,
+    });
   }
   return result;
 }
-
-// ---------------------------------------------------------------------------
-// LiteLLMProvider
-// ---------------------------------------------------------------------------
 
 // ---------------------------------------------------------------------------
 // Role → model ID mapping
@@ -76,7 +92,7 @@ type RoleModelMap = {
 };
 
 export class LiteLLMProvider implements LlmProvider {
-  private readonly _factory: ReturnType<typeof createOpenAI>;
+  private readonly _factory: ReturnType<typeof createOpenAICompatible>;
   private readonly _defaultModelId: string;
   private readonly _roleMap: RoleModelMap;
 
@@ -84,11 +100,14 @@ export class LiteLLMProvider implements LlmProvider {
     "LITELLM_BASE_URL" | "LITELLM_API_KEY" | "AGENT_MODEL" |
     "AGENT_MODEL_PLANNER" | "AGENT_MODEL_EXECUTOR" | "AGENT_MODEL_COMPACTOR" | "AGENT_MODEL_JUDGE"
   >) {
-    this._factory = createOpenAI({
+    // LiteLLM exposes an OpenAI-compatible endpoint but isn't strictly OpenAI
+    // (no `OpenAI-Organization` header, occasional non-strict response shape).
+    // v5 removed the `compatibility: "compatible"` escape hatch from
+    // @ai-sdk/openai; the canonical replacement is @ai-sdk/openai-compatible.
+    this._factory = createOpenAICompatible({
+      name: "litellm",
       baseURL: `${cfg.LITELLM_BASE_URL.replace(/\/$/, "")}/v1`,
       apiKey: cfg.LITELLM_API_KEY,
-      // Avoid sending the optional `OpenAI-Organization` header.
-      compatibility: "compatible",
     });
     this._defaultModelId = cfg.AGENT_MODEL;
     this._roleMap = {
@@ -113,23 +132,25 @@ export class LiteLLMProvider implements LlmProvider {
       model: this._factory(this._resolveModel(role)),
       messages: sdkMessages,
       tools: sdkTools,
-      maxTokens: 4_096,
+      maxOutputTokens: 4_096,
     });
 
+    // v5 usage shape: inputTokens / outputTokens (was promptTokens/completionTokens).
     const usage = {
-      promptTokens: result.usage.promptTokens,
-      completionTokens: result.usage.completionTokens,
+      promptTokens: result.usage.inputTokens ?? 0,
+      completionTokens: result.usage.outputTokens ?? 0,
     };
 
     // Check for tool calls first (finishReason may be 'tool-calls' or the
     // model may stop with both tool calls and text in some provider variants).
     if (result.toolCalls && result.toolCalls.length > 0) {
       const first = result.toolCalls[0]!;
+      // v5 renamed args → input on tool-call parts.
       return {
         result: {
           kind: "tool_call",
           toolId: first.toolName,
-          input: first.args,
+          input: first.input,
         },
         usage,
       };
@@ -148,11 +169,6 @@ export class LiteLLMProvider implements LlmProvider {
    *   - text_delta  for each text chunk the model streams
    *   - tool_call   if the model's first tool call appears (streaming stops)
    *   - finish      always as the last chunk (with usage totals)
-   *
-   * Note on granularity: AI SDK's streamText emits chunks roughly per-token
-   * for most providers. Some providers batch tokens into larger chunks (e.g.
-   * Claude may emit per-sentence). The harness surfaces whatever the provider
-   * sends — no artificial splitting is done.
    */
   async *streamCompletion(
     messages: Message[],
@@ -166,11 +182,10 @@ export class LiteLLMProvider implements LlmProvider {
       model: this._factory(this._resolveModel(role)),
       messages: sdkMessages,
       tools: sdkTools,
-      maxTokens: 4_096,
+      maxOutputTokens: 4_096,
     });
 
     // Stream text deltas token-by-token.
-    // AI SDK's textStream yields string chunks (empty strings are skipped).
     for await (const chunk of result.textStream) {
       if (chunk) {
         yield { type: "text_delta", delta: chunk };
@@ -178,7 +193,6 @@ export class LiteLLMProvider implements LlmProvider {
     }
 
     // After the text stream completes, resolve the async fields.
-    // These are Promises on the StreamTextResult (not on a "finalResult" object).
     const [toolCalls, usage, finishReason] = await Promise.all([
       result.toolCalls,
       result.usage,
@@ -191,7 +205,7 @@ export class LiteLLMProvider implements LlmProvider {
       yield {
         type: "tool_call",
         toolId: first.toolName,
-        input: first.args,
+        input: first.input,
       };
     }
 
@@ -199,8 +213,8 @@ export class LiteLLMProvider implements LlmProvider {
       type: "finish",
       finishReason: finishReason ?? "stop",
       usage: {
-        promptTokens: usage.promptTokens,
-        completionTokens: usage.completionTokens,
+        promptTokens: usage.inputTokens ?? 0,
+        completionTokens: usage.outputTokens ?? 0,
       },
     };
   }
@@ -208,14 +222,13 @@ export class LiteLLMProvider implements LlmProvider {
   /**
    * Single-turn JSON completion.
    * Sends system + user messages and JSON.parses the response text.
-   * Used for structured-output tasks (plan-mode previews, hypothesis drafts, etc.)
    */
   async completeJson(opts: { system: string; user: string; role?: ModelRole }): Promise<unknown> {
     const result = await generateText({
       model: this._factory(this._resolveModel(opts.role)),
       system: opts.system,
       messages: [{ role: "user", content: opts.user }],
-      maxTokens: 4_000,
+      maxOutputTokens: 4_000,
     });
     return JSON.parse(result.text);
   }

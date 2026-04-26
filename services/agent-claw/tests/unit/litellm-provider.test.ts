@@ -26,11 +26,14 @@ const { generateTextMock } = vi.hoisted(() => ({
 
 vi.mock("ai", () => ({
   generateText: generateTextMock,
+  // v5 `tool({...})` helper — identity passthrough is enough for these unit tests.
+  tool: vi.fn((def: unknown) => def),
 }));
 
-// @ai-sdk/openai: createOpenAI returns a model factory; we return a passthrough.
-vi.mock("@ai-sdk/openai", () => ({
-  createOpenAI: vi.fn(() => {
+// @ai-sdk/openai-compatible (v5 replacement for createOpenAI w/ compatibility flag).
+// createOpenAICompatible returns a model factory; we return a passthrough.
+vi.mock("@ai-sdk/openai-compatible", () => ({
+  createOpenAICompatible: vi.fn(() => {
     return vi.fn((modelId: string) => ({ _modelId: modelId }));
   }),
 }));
@@ -79,7 +82,7 @@ describe("LiteLLMProvider", () => {
       generateTextMock.mockResolvedValue({
         text: "Hello from the model",
         toolCalls: [],
-        usage: { promptTokens: 50, completionTokens: 20 },
+        usage: { inputTokens: 50, outputTokens: 20, totalTokens: 70 },
       });
 
       const provider = new LiteLLMProvider(makeConfig());
@@ -95,7 +98,7 @@ describe("LiteLLMProvider", () => {
       generateTextMock.mockResolvedValue({
         text: "Done",
         toolCalls: [],
-        usage: { promptTokens: 100, completionTokens: 30 },
+        usage: { inputTokens: 100, outputTokens: 30, totalTokens: 130 },
       });
 
       const provider = new LiteLLMProvider(makeConfig());
@@ -113,10 +116,10 @@ describe("LiteLLMProvider", () => {
         toolCalls: [
           {
             toolName: "canonicalize_smiles",
-            args: { smiles: "c1ccccc1" },
+            input: { smiles: "c1ccccc1" },
           },
         ],
-        usage: { promptTokens: 60, completionTokens: 15 },
+        usage: { inputTokens: 60, outputTokens: 15, totalTokens: 75 },
       });
 
       const provider = new LiteLLMProvider(makeConfig());
@@ -133,9 +136,9 @@ describe("LiteLLMProvider", () => {
       generateTextMock.mockResolvedValue({
         text: "I will call a tool",
         toolCalls: [
-          { toolName: "canonicalize_smiles", args: { smiles: "CC" } },
+          { toolName: "canonicalize_smiles", input: { smiles: "CC" } },
         ],
-        usage: { promptTokens: 40, completionTokens: 10 },
+        usage: { inputTokens: 40, outputTokens: 10, totalTokens: 50 },
       });
 
       const provider = new LiteLLMProvider(makeConfig());
@@ -148,7 +151,7 @@ describe("LiteLLMProvider", () => {
       generateTextMock.mockResolvedValue({
         text: "ok",
         toolCalls: [],
-        usage: { promptTokens: 10, completionTokens: 5 },
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
       });
 
       const provider = new LiteLLMProvider(makeConfig());
@@ -168,7 +171,7 @@ describe("LiteLLMProvider", () => {
       generateTextMock.mockResolvedValue({
         text: "done",
         toolCalls: [],
-        usage: { promptTokens: 10, completionTokens: 5 },
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
       });
 
       const provider = new LiteLLMProvider(makeConfig());
@@ -200,7 +203,7 @@ describe("LiteLLMProvider", () => {
       generateTextMock.mockResolvedValue({
         text: '{"plan":["step1","step2"]}',
         toolCalls: [],
-        usage: { promptTokens: 20, completionTokens: 10 },
+        usage: { inputTokens: 20, outputTokens: 10, totalTokens: 30 },
       });
 
       const provider = new LiteLLMProvider(makeConfig());
@@ -216,7 +219,7 @@ describe("LiteLLMProvider", () => {
       generateTextMock.mockResolvedValue({
         text: "not json at all",
         toolCalls: [],
-        usage: { promptTokens: 10, completionTokens: 5 },
+        usage: { inputTokens: 10, outputTokens: 5, totalTokens: 15 },
       });
 
       const provider = new LiteLLMProvider(makeConfig());
