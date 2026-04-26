@@ -36,6 +36,9 @@ import {
 } from "../core/slash.js";
 import { registerRedactSecretsHook, redactString } from "../core/hooks/redact-secrets.js";
 import type { RedactReplacement } from "../core/hooks/redact-secrets.js";
+import { createSession, loadSession, saveSession } from "../core/session-store.js";
+import type { SessionFinishReason } from "../core/session-store.js";
+import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 import { registerTagMaturityHook } from "../core/hooks/tag-maturity.js";
 import { registerBudgetGuardHook } from "../core/hooks/budget-guard.js";
 import { withUserContext } from "../db/with-user-context.js";
@@ -62,6 +65,14 @@ export type StreamEvent =
   | { type: "tool_result"; toolId: string; output: unknown }
   | { type: "plan_step"; step_number: number; tool: string; args: unknown; rationale: string }
   | { type: "plan_ready"; plan_id: string; steps: PlanStep[]; created_at: number }
+  // Emitted once per turn so clients can resume by passing session_id back.
+  | { type: "session"; session_id: string }
+  // Emitted by the manage_todos tool's post_tool hook.
+  | { type: "todo_update"; todos: Array<{ id: string; ordering: number; content: string; status: string }> }
+  // Emitted when the model called ask_user; the stream then ends with a
+  // `finish` of finishReason="awaiting_user_input". Client must POST a
+  // user message containing the answer with the same session_id to resume.
+  | { type: "awaiting_user_input"; session_id: string; question: string }
   | { type: "finish"; finishReason: string; usage: { promptTokens: number; completionTokens: number } }
   | { type: "error"; error: string };
 
@@ -75,6 +86,10 @@ const ChatRequestSchema = z.object({
   messages: z.array(ChatMessageSchema).min(1),
   stream: z.boolean().optional(),
   agent_trace_id: z.string().optional(),
+  // Resume an existing session: scratchpad + todos + awaiting_question
+  // are loaded from the agent_sessions row and threaded into ctx. If
+  // omitted, a new session is created and emitted via the `session` SSE event.
+  session_id: z.string().uuid().optional(),
 });
 
 type ChatRequest = z.infer<typeof ChatRequestSchema>;
@@ -335,16 +350,59 @@ async function handleChat(
     })),
   ];
 
-  // seenFactIds starts empty — init-scratch pre_turn hook and the harness
-  // will wire it through the scratchpad before the first tool call.
-  const _initialSeenFactIds = new Set<string>();
+  // ── Session: load existing or create fresh. ───────────────────────────────
+  // If the client supplied session_id, load the prior scratchpad and clear
+  // any awaiting_question (the new user message IS the answer). If not,
+  // mint a new session — the SSE path emits a `session` event so the client
+  // can resume on the next turn.
+  let sessionId: string | null = body.session_id ?? null;
+  let priorScratchpad: Record<string, unknown> = {};
+  if (sessionId) {
+    try {
+      const loaded = await loadSession(deps.pool, user, sessionId);
+      if (loaded) {
+        priorScratchpad = loaded.scratchpad ?? {};
+        // Clear awaiting_question — the just-arrived message answers it.
+        await saveSession(deps.pool, user, sessionId, { awaitingQuestion: null });
+      } else {
+        // Unknown session id: ignore and treat as a fresh session.
+        sessionId = null;
+      }
+    } catch (err) {
+      req.log.warn({ err, sessionId }, "loadSession failed; treating as fresh");
+      sessionId = null;
+    }
+  }
+  if (!sessionId) {
+    try {
+      sessionId = await createSession(deps.pool, user);
+    } catch (err) {
+      // Non-fatal: if session creation fails the agent can still serve the
+      // turn statelessly. Log and proceed.
+      req.log.warn({ err }, "createSession failed; continuing without session");
+    }
+  }
+
+  // seenFactIds: rehydrate from prior scratchpad if present, else fresh.
+  const _initialSeenFactIds = new Set<string>(
+    Array.isArray(priorScratchpad["seenFactIds"])
+      ? (priorScratchpad["seenFactIds"] as string[])
+      : [],
+  );
   const _scratchpad = new Map<string, unknown>();
+  // Hydrate everything else from the prior scratchpad (except keys the
+  // budget/seenFactIds setup below handles explicitly).
+  for (const [k, v] of Object.entries(priorScratchpad)) {
+    if (k === "seenFactIds" || k === "budget") continue;
+    _scratchpad.set(k, v);
+  }
   _scratchpad.set("budget", {
     promptTokensUsed: 0,
     completionTokensUsed: 0,
     tokenBudget: deps.config.AGENT_TOKEN_BUDGET,
   });
   _scratchpad.set("seenFactIds", _initialSeenFactIds);
+  if (sessionId) _scratchpad.set("session_id", sessionId);
   const ctx: ToolContext = {
     userEntraId: user,
     seenFactIds: _initialSeenFactIds,
@@ -400,6 +458,13 @@ async function handleChat(
 
   // ------- SSE streaming path -------
   setupSse(reply);
+
+  // Tell the client which session id to thread through subsequent POSTs.
+  // Emitted before any tool/text event so a UI can immediately render
+  // "session: <id>" or store it locally for resume.
+  if (sessionId) {
+    writeEvent(reply, { type: "session", session_id: sessionId });
+  }
 
   let closed = false;
   const onClose = () => { closed = true; };
@@ -519,7 +584,23 @@ async function handleChat(
         const parsedInput = tool.inputSchema.parse(effectiveInput);
         writeEvent(reply, { type: "tool_call", toolId, input: parsedInput });
 
-        const rawOutput = await tool.execute(ctx, parsedInput);
+        // Tool execution: AwaitingUserInputError is the documented control-flow
+        // exception (ask_user) — caught here, NOT in the outer try, so post_turn
+        // and session save still run normally and the awaiting_user_input event
+        // is emitted from the finally block.
+        let rawOutput: unknown;
+        try {
+          rawOutput = await tool.execute(ctx, parsedInput);
+        } catch (toolErr) {
+          if (toolErr instanceof AwaitingUserInputError) {
+            finishReason = "awaiting_user_input";
+            // Don't emit a tool_result for ask_user — the awaiting_user_input
+            // event below replaces it. The model isn't going to read this
+            // result anyway since the loop ends.
+            break streaming;
+          }
+          throw toolErr;
+        }
         const parsedOutput = tool.outputSchema.parse(rawOutput);
 
         const postPayload = { ctx, toolId, input: effectiveInput, output: parsedOutput };
@@ -527,6 +608,23 @@ async function handleChat(
         const effectiveOutput = postPayload.output;
 
         writeEvent(reply, { type: "tool_result", toolId, output: effectiveOutput });
+
+        // todo_update event: emit the latest checklist whenever manage_todos
+        // mutates state. The tool's output schema guarantees a `todos` array.
+        if (
+          toolId === "manage_todos" &&
+          effectiveOutput &&
+          typeof effectiveOutput === "object" &&
+          "todos" in effectiveOutput &&
+          Array.isArray((effectiveOutput as { todos: unknown }).todos)
+        ) {
+          writeEvent(reply, {
+            type: "todo_update",
+            todos: (effectiveOutput as {
+              todos: Array<{ id: string; ordering: number; content: string; status: string }>;
+            }).todos,
+          });
+        }
 
         const toolResultContent = effectiveOutput !== undefined
           ? JSON.stringify(effectiveOutput)
@@ -603,6 +701,49 @@ async function handleChat(
       await lifecycle.dispatch("post_turn", { ctx, finalText, stepsUsed });
     } catch (postTurnErr) {
       req.log.warn({ err: postTurnErr }, "post_turn dispatch failed");
+    }
+
+    // Persist session state. Emits a `session` event already happened at
+    // stream open. We dump the current scratchpad (sans budget — recomputed
+    // each turn) and the finish reason so the next turn (or the resume
+    // endpoint) can pick up cleanly. seenFactIds is serialized as an array.
+    if (sessionId) {
+      try {
+        const dump: Record<string, unknown> = {};
+        for (const [k, v] of ctx.scratchpad.entries()) {
+          if (k === "budget") continue; // recomputed every turn
+          dump[k] = v instanceof Set ? Array.from(v) : v;
+        }
+        // The awaitingQuestion field is set by the ask_user tool; if present
+        // in scratchpad we lift it to the dedicated column for the
+        // awaiting_user_input SSE event below.
+        const awaitingQuestion =
+          typeof dump["awaitingQuestion"] === "string"
+            ? (dump["awaitingQuestion"] as string)
+            : null;
+        await saveSession(deps.pool, user, sessionId, {
+          scratchpad: dump,
+          lastFinishReason: (finishReason as SessionFinishReason) ?? null,
+          awaitingQuestion,
+          messageCount: messages.length,
+        });
+
+        // If the model called ask_user, emit the awaiting_user_input event
+        // before the final `finish` so clients render the prompt UI.
+        if (awaitingQuestion && !closed) {
+          try {
+            writeEvent(reply, {
+              type: "awaiting_user_input",
+              session_id: sessionId,
+              question: awaitingQuestion,
+            });
+          } catch {
+            // socket already gone
+          }
+        }
+      } catch (saveErr) {
+        req.log.warn({ err: saveErr }, "saveSession failed");
+      }
     }
 
     if (!closed) {
