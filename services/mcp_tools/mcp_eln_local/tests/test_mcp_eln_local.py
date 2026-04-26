@@ -1,11 +1,13 @@
 """Tests for mcp-eln-local FastAPI app.
 
 The DB layer is fully mocked — no live Postgres required. We swap the
-module-level `_get_conn` with a fake that returns a stub AsyncConnection
-whose `cursor()` context manager replays canned rows per query.
+module-level `_acquire` async context manager with a fake that yields
+a stub AsyncConnection whose `cursor()` context manager replays canned
+rows per query.
 """
 from __future__ import annotations
 
+from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
 from unittest import mock
@@ -69,16 +71,18 @@ class FakeConn:
 
 
 # ---------------------------------------------------------------------------
-# App fixture — patches _get_conn to a fresh fake per test
+# App fixture — patches _acquire to a fresh fake per test
 # ---------------------------------------------------------------------------
 
 
 @pytest.fixture()
 def app_module():
-    # Disable the lifespan attempt to open a real DB connection.
+    # Disable the lifespan attempt to open a real DB connection by giving
+    # the settings a DSN that doesn't contain the dev sentinel password
+    # (which would trip the fail-closed safety guard).
     with mock.patch.dict(
         "os.environ",
-        {"MOCK_ELN_DSN": "postgresql://invalid@localhost:0/none"},
+        {"MOCK_ELN_DSN": "postgresql://test_user:test_pw@localhost:0/none"},
     ):
         from services.mcp_tools.mcp_eln_local import main as m  # noqa: PLC0415
     return m
@@ -87,14 +91,15 @@ def app_module():
 def _client_with_replies(app_module, replies: list[Any]) -> TestClient:
     fake = FakeConn(replies)
 
-    async def _fake_get_conn() -> FakeConn:
-        return fake
+    @asynccontextmanager
+    async def _fake_acquire():
+        yield fake
 
-    app_module._get_conn = _fake_get_conn  # type: ignore[assignment]
+    app_module._acquire = _fake_acquire  # type: ignore[assignment]
     # Build a TestClient that does NOT trigger the real lifespan (we don't
-    # need it; _get_conn is now stubbed). Calling TestClient as a context
-    # manager would still run the lifespan; we use it bare so connect-on-
-    # boot is skipped.
+    # need it; _acquire is now stubbed). Calling TestClient as a context
+    # manager would still run the lifespan; we use it bare so the pool
+    # never opens against a real DB.
     return TestClient(app_module.app)
 
 

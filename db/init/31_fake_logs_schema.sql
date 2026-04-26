@@ -32,11 +32,18 @@ CREATE SCHEMA IF NOT EXISTS fake_logs;
 -- in case 31 is applied alone (e.g. partial migration replay).
 DO $$
 DECLARE
-  v_reader_password TEXT := coalesce(
-    current_setting('chemclaw.mock_eln_reader_password', true),
-    'chemclaw_mock_eln_reader_dev_password_change_me'
-  );
+  v_provided_password TEXT := current_setting('chemclaw.mock_eln_reader_password', true);
+  v_reader_password   TEXT;
 BEGIN
+  IF v_provided_password IS NULL OR v_provided_password = '' THEN
+    RAISE NOTICE
+      '[fake_logs] chemclaw.mock_eln_reader_password GUC is unset; '
+      'creating chemclaw_mock_eln_reader with the DEV sentinel password. '
+      'See db/init/30_mock_eln_schema.sql for the override pattern.';
+    v_reader_password := 'chemclaw_mock_eln_reader_dev_password_change_me';
+  ELSE
+    v_reader_password := v_provided_password;
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'chemclaw_mock_eln_reader') THEN
     EXECUTE format(
       'CREATE ROLE chemclaw_mock_eln_reader WITH LOGIN NOBYPASSRLS PASSWORD %L',

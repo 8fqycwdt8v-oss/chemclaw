@@ -179,10 +179,13 @@ class FakePostgresBackend:
             params.append("\\")
         if cursor is not None:
             cursor_measured_at, cursor_uid = _decode_cursor(cursor)
-            # Keyset on (measured_at DESC, uid ASC).
-            clauses.append(
-                "(measured_at, uid) < (%s, %s)"
-            )
+            # Keyset on (measured_at DESC, uid DESC). Tuple `<` is correct
+            # for DESC/DESC: row comes "after" the cursor when its
+            # (measured_at, uid) sorts strictly less than the cursor's pair.
+            # An earlier version used `uid ASC` here, which made this
+            # predicate skip/duplicate rows when measured_at tied between
+            # consecutive datasets.
+            clauses.append("(measured_at, uid) < (%s, %s)")
             params.append(cursor_measured_at)
             params.append(cursor_uid)
 
@@ -195,7 +198,7 @@ class FakePostgresBackend:
                    parameters_jsonb, project_code, citation_uri
               FROM fake_logs.datasets
             {where_sql}
-             ORDER BY measured_at DESC, uid ASC
+             ORDER BY measured_at DESC, uid DESC
              LIMIT %s
         """
         params.append(limit + 1)

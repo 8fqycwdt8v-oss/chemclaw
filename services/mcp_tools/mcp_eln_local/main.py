@@ -37,6 +37,7 @@ from typing import Annotated, Any, AsyncIterator
 import psycopg
 from fastapi import Body, FastAPI, HTTPException
 from psycopg.rows import dict_row
+from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import SettingsConfigDict
 
@@ -45,6 +46,13 @@ from services.mcp_tools.common.settings import ToolSettings
 
 
 log = logging.getLogger("mcp-eln-local")
+
+
+# Sentinel password used by db/init/30_mock_eln_schema.sql when the
+# `chemclaw.mock_eln_reader_password` GUC is unset. If the configured
+# DSN still contains this literal we refuse to start unless explicitly
+# allowed via MOCK_ELN_ALLOW_DEV_PASSWORD=true (set in dev-compose).
+_DEV_SENTINEL_PASSWORD = "chemclaw_mock_eln_reader_dev_password_change_me"
 
 
 # --------------------------------------------------------------------------
@@ -59,61 +67,96 @@ class ElnLocalSettings(ToolSettings):
     # local-dev / CI.
     mock_eln_dsn: str = (
         "postgresql://chemclaw_mock_eln_reader:"
-        "chemclaw_mock_eln_reader_dev_password_change_me"
+        f"{_DEV_SENTINEL_PASSWORD}"
         "@postgres:5432/chemclaw"
     )
+    # Explicit acknowledgement that we're running with the dev sentinel
+    # password. Defaults to false so production deployments fail-closed
+    # if the operator forgets to override MOCK_ELN_DSN.
+    mock_eln_allow_dev_password: bool = False
     # Feature flag: when false (production default until the schema is
     # populated), /readyz reports degraded so the harness keeps the
     # adapter out of rotation.
     mock_eln_enabled: bool = True
     # Default TTL for cached facts (matches source-cache hook default).
     valid_until_days: int = 7
+    # Connection pool sizing. Small numbers — this is a read-only
+    # mock-data MCP, not a production hotspot.
+    pool_min_size: int = 1
+    pool_max_size: int = 5
 
 
 settings = ElnLocalSettings()
 
 
 # --------------------------------------------------------------------------
-# Connection holder + lifespan
+# Pool + lifespan
 # --------------------------------------------------------------------------
-_conn_holder: dict[str, psycopg.AsyncConnection] = {}
+_pool_holder: dict[str, AsyncConnectionPool] = {}
 
 
-async def _open_conn() -> psycopg.AsyncConnection:
-    return await psycopg.AsyncConnection.connect(
-        settings.mock_eln_dsn, row_factory=dict_row, autocommit=True
-    )
-
-
-async def _get_conn() -> psycopg.AsyncConnection:
-    """Return a live async connection, reconnecting if the cached one died."""
-    conn = _conn_holder.get("conn")
-    if conn is None or conn.closed:
-        new = await _open_conn()
-        _conn_holder["conn"] = new
-        return new
-    return conn
+def _check_dsn_safety() -> None:
+    """Refuse to start if the DSN still contains the dev sentinel password
+    and the operator hasn't explicitly opted into it."""
+    if (
+        _DEV_SENTINEL_PASSWORD in settings.mock_eln_dsn
+        and not settings.mock_eln_allow_dev_password
+    ):
+        raise RuntimeError(
+            "mcp-eln-local refusing to start: MOCK_ELN_DSN contains the dev "
+            "sentinel password but MOCK_ELN_ALLOW_DEV_PASSWORD is not set. "
+            "Either override MOCK_ELN_DSN with a real password, or set "
+            "MOCK_ELN_ALLOW_DEV_PASSWORD=true to acknowledge dev usage."
+        )
 
 
 @asynccontextmanager
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
+    _check_dsn_safety()
     log.info("mcp-eln-local starting; mock_eln_enabled=%s", settings.mock_eln_enabled)
+    pool = AsyncConnectionPool(
+        conninfo=settings.mock_eln_dsn,
+        min_size=settings.pool_min_size,
+        max_size=settings.pool_max_size,
+        kwargs={"row_factory": dict_row, "autocommit": True},
+        open=False,
+    )
     try:
         if settings.mock_eln_enabled:
             try:
-                _conn_holder["conn"] = await _open_conn()
+                await pool.open(wait=False)
+                _pool_holder["pool"] = pool
             except Exception as exc:  # noqa: BLE001 — DB may not be up yet
-                log.warning("mcp-eln-local: initial DB connect failed: %s", exc)
+                log.warning("mcp-eln-local: pool.open failed: %s", exc)
         yield
     finally:
-        conn = _conn_holder.pop("conn", None)
-        if conn is not None and not conn.closed:
-            await conn.close()
+        pool = _pool_holder.pop("pool", None)
+        if pool is not None:
+            await pool.close()
 
 
 def _ready_check() -> bool:
     """Sync ready check: feature-flag gates this; DB liveness is best-effort."""
     return bool(settings.mock_eln_enabled)
+
+
+@asynccontextmanager
+async def _acquire() -> AsyncIterator[psycopg.AsyncConnection]:
+    """Acquire a connection from the pool for the lifetime of one request.
+
+    Replaces the previous module-level shared connection: psycopg's async
+    connection is not safe for concurrent operations (only one cursor at
+    a time), so under any concurrent load the shared-conn pattern would
+    serialize requests at best and deadlock at worst.
+    """
+    pool = _pool_holder.get("pool")
+    if pool is None:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "service_unavailable", "detail": "mock_eln pool not initialized"},
+        )
+    async with pool.connection() as conn:
+        yield conn
 
 
 app = create_app(
@@ -571,10 +614,10 @@ async def experiments_query(
     # Fetch one extra to determine whether more exist.
     params["limit_plus"] = req.limit + 1
 
-    conn = await _get_conn()
-    async with conn.cursor() as cur:
-        await cur.execute("".join(sql), params)
-        rows = await cur.fetchall()
+    async with _acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("".join(sql), params)
+            rows = await cur.fetchall()
 
     items = [_row_to_entry(r) for r in rows[: req.limit]]
     next_cursor: str | None = None
@@ -624,33 +667,33 @@ async def _fetch_audit_summary(
 async def experiments_fetch(
     req: Annotated[ExperimentsFetchIn, Body(...)],
 ) -> ElnEntry:
-    conn = await _get_conn()
-    async with conn.cursor() as cur:
-        await cur.execute(
-            """
-            SELECT e.id, e.notebook_id, e.project_id, e.reaction_id, e.schema_kind,
-                   e.title, e.author_email, e.signed_by, e.status, e.entry_shape,
-                   e.data_quality_tier, e.fields_jsonb, e.freetext,
-                   e.freetext_length_chars, e.created_at, e.modified_at, e.signed_at,
-                   p.code AS project_code
-            FROM mock_eln.entries e
-            JOIN mock_eln.projects p ON p.id = e.project_id
-            WHERE e.id = %(entry_id)s::uuid
-            LIMIT 1
-            """,
-            {"entry_id": req.entry_id},
-        )
-        row = await cur.fetchone()
+    async with _acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT e.id, e.notebook_id, e.project_id, e.reaction_id, e.schema_kind,
+                       e.title, e.author_email, e.signed_by, e.status, e.entry_shape,
+                       e.data_quality_tier, e.fields_jsonb, e.freetext,
+                       e.freetext_length_chars, e.created_at, e.modified_at, e.signed_at,
+                       p.code AS project_code
+                FROM mock_eln.entries e
+                JOIN mock_eln.projects p ON p.id = e.project_id
+                WHERE e.id = %(entry_id)s::uuid
+                LIMIT 1
+                """,
+                {"entry_id": req.entry_id},
+            )
+            row = await cur.fetchone()
 
-    if row is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "detail": f"entry {req.entry_id!r} not found"},
-        )
-    entry = _row_to_entry(row)
-    entry.attachments = await _fetch_attachments(conn, entry.id)
-    entry.audit_summary = await _fetch_audit_summary(conn, entry.id)
-    return entry
+        if row is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "detail": f"entry {req.entry_id!r} not found"},
+            )
+        entry = _row_to_entry(row)
+        entry.attachments = await _fetch_attachments(conn, entry.id)
+        entry.audit_summary = await _fetch_audit_summary(conn, entry.id)
+        return entry
 
 
 @app.post("/reactions/query", response_model=ReactionsQueryOut, tags=["eln"])
@@ -686,10 +729,10 @@ async def reactions_query(
     )
     params["limit"] = req.limit
 
-    conn = await _get_conn()
-    async with conn.cursor() as cur:
-        await cur.execute("".join(sql), params)
-        rows = await cur.fetchall()
+    async with _acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute("".join(sql), params)
+            rows = await cur.fetchall()
     return ReactionsQueryOut(items=[_row_to_canonical_reaction(r) for r in rows])
 
 
@@ -701,104 +744,104 @@ async def reactions_query(
 async def reactions_fetch(
     req: Annotated[ReactionsFetchIn, Body(...)],
 ) -> CanonicalReactionDetail:
-    conn = await _get_conn()
-    async with conn.cursor() as cur:
-        await cur.execute(
-            """
-            SELECT v.reaction_id, v.canonical_smiles_rxn, v.family, v.project_id,
-                   v.step_number, v.ofat_count, v.mean_yield, v.last_activity_at,
-                   p.code AS project_code
-            FROM mock_eln.canonical_reactions_with_ofat v
-            JOIN mock_eln.projects p ON p.id = v.project_id
-            WHERE v.reaction_id = %(reaction_id)s::uuid
-            LIMIT 1
-            """,
-            {"reaction_id": req.reaction_id},
-        )
-        row = await cur.fetchone()
-
-    if row is None:
-        raise HTTPException(
-            status_code=404,
-            detail={
-                "error": "not_found",
-                "detail": f"reaction {req.reaction_id!r} not found",
-            },
-        )
-    canonical = _row_to_canonical_reaction(row)
-
-    children: list[ElnEntry] = []
-    if req.top_n_ofat > 0:
+    async with _acquire() as conn:
         async with conn.cursor() as cur:
             await cur.execute(
                 """
-                SELECT e.id, e.notebook_id, e.project_id, e.reaction_id, e.schema_kind,
-                       e.title, e.author_email, e.signed_by, e.status, e.entry_shape,
-                       e.data_quality_tier, e.fields_jsonb, e.freetext,
-                       e.freetext_length_chars, e.created_at, e.modified_at, e.signed_at,
+                SELECT v.reaction_id, v.canonical_smiles_rxn, v.family, v.project_id,
+                       v.step_number, v.ofat_count, v.mean_yield, v.last_activity_at,
                        p.code AS project_code
-                FROM mock_eln.entries e
-                JOIN mock_eln.projects p ON p.id = e.project_id
-                WHERE e.reaction_id = %(reaction_id)s::uuid
-                ORDER BY
-                  CASE
-                    WHEN jsonb_typeof(e.fields_jsonb -> 'results' -> 'yield_pct') = 'number'
-                      THEN (e.fields_jsonb -> 'results' ->> 'yield_pct')::numeric
-                    ELSE NULL
-                  END DESC NULLS LAST,
-                  e.modified_at DESC
-                LIMIT %(limit)s
+                FROM mock_eln.canonical_reactions_with_ofat v
+                JOIN mock_eln.projects p ON p.id = v.project_id
+                WHERE v.reaction_id = %(reaction_id)s::uuid
+                LIMIT 1
                 """,
-                {"reaction_id": req.reaction_id, "limit": req.top_n_ofat},
+                {"reaction_id": req.reaction_id},
             )
-            child_rows = await cur.fetchall()
-        children = [_row_to_entry(r) for r in child_rows]
+            row = await cur.fetchone()
 
-    return CanonicalReactionDetail(
-        **canonical.model_dump(),
-        ofat_children=children,
-    )
+        if row is None:
+            raise HTTPException(
+                status_code=404,
+                detail={
+                    "error": "not_found",
+                    "detail": f"reaction {req.reaction_id!r} not found",
+                },
+            )
+        canonical = _row_to_canonical_reaction(row)
+
+        children: list[ElnEntry] = []
+        if req.top_n_ofat > 0:
+            async with conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    SELECT e.id, e.notebook_id, e.project_id, e.reaction_id, e.schema_kind,
+                           e.title, e.author_email, e.signed_by, e.status, e.entry_shape,
+                           e.data_quality_tier, e.fields_jsonb, e.freetext,
+                           e.freetext_length_chars, e.created_at, e.modified_at, e.signed_at,
+                           p.code AS project_code
+                    FROM mock_eln.entries e
+                    JOIN mock_eln.projects p ON p.id = e.project_id
+                    WHERE e.reaction_id = %(reaction_id)s::uuid
+                    ORDER BY
+                      CASE
+                        WHEN jsonb_typeof(e.fields_jsonb -> 'results' -> 'yield_pct') = 'number'
+                          THEN (e.fields_jsonb -> 'results' ->> 'yield_pct')::numeric
+                        ELSE NULL
+                      END DESC NULLS LAST,
+                      e.modified_at DESC
+                    LIMIT %(limit)s
+                    """,
+                    {"reaction_id": req.reaction_id, "limit": req.top_n_ofat},
+                )
+                child_rows = await cur.fetchall()
+            children = [_row_to_entry(r) for r in child_rows]
+
+        return CanonicalReactionDetail(
+            **canonical.model_dump(),
+            ofat_children=children,
+        )
 
 
 @app.post("/samples/fetch", response_model=Sample, tags=["eln"])
 async def samples_fetch(
     req: Annotated[SamplesFetchIn, Body(...)],
 ) -> Sample:
-    conn = await _get_conn()
-    async with conn.cursor() as cur:
-        await cur.execute(
-            """
-            SELECT id, entry_id, sample_code, compound_id, amount_mg,
-                   purity_pct, notes, created_at
-            FROM mock_eln.samples
-            WHERE id = %(sample_id)s::uuid
-            LIMIT 1
-            """,
-            {"sample_id": req.sample_id},
-        )
-        row = await cur.fetchone()
+    async with _acquire() as conn:
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT id, entry_id, sample_code, compound_id, amount_mg,
+                       purity_pct, notes, created_at
+                FROM mock_eln.samples
+                WHERE id = %(sample_id)s::uuid
+                LIMIT 1
+                """,
+                {"sample_id": req.sample_id},
+            )
+            row = await cur.fetchone()
 
-    if row is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "detail": f"sample {req.sample_id!r} not found"},
-        )
-    sample = _row_to_sample(row)
+        if row is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "detail": f"sample {req.sample_id!r} not found"},
+            )
+        sample = _row_to_sample(row)
 
-    async with conn.cursor() as cur:
-        await cur.execute(
-            """
-            SELECT id, method_id, metric, value_num, value_text, unit,
-                   measured_at, metadata
-            FROM mock_eln.results
-            WHERE sample_id = %(sample_id)s::uuid
-            ORDER BY measured_at DESC NULLS LAST, created_at DESC
-            """,
-            {"sample_id": sample.id},
-        )
-        result_rows = await cur.fetchall()
-    sample.results = [_row_to_result(r) for r in result_rows]
-    return sample
+        async with conn.cursor() as cur:
+            await cur.execute(
+                """
+                SELECT id, method_id, metric, value_num, value_text, unit,
+                       measured_at, metadata
+                FROM mock_eln.results
+                WHERE sample_id = %(sample_id)s::uuid
+                ORDER BY measured_at DESC NULLS LAST, created_at DESC
+                """,
+                {"sample_id": sample.id},
+            )
+            result_rows = await cur.fetchall()
+        sample.results = [_row_to_result(r) for r in result_rows]
+        return sample
 
 
 @app.post(
@@ -809,22 +852,22 @@ async def samples_fetch(
 async def attachments_metadata(
     req: Annotated[AttachmentsMetadataIn, Body(...)],
 ) -> AttachmentsMetadataOut:
-    conn = await _get_conn()
-    # Verify the entry exists so we return 404 (not an empty list) for an
-    # unknown id — keeps cache invalidation semantics tidy.
-    async with conn.cursor() as cur:
-        await cur.execute(
-            "SELECT 1 FROM mock_eln.entries WHERE id = %(entry_id)s::uuid LIMIT 1",
-            {"entry_id": req.entry_id},
-        )
-        exists = await cur.fetchone()
-    if exists is None:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "not_found", "detail": f"entry {req.entry_id!r} not found"},
-        )
-    attachments = await _fetch_attachments(conn, req.entry_id)
-    return AttachmentsMetadataOut(entry_id=req.entry_id, attachments=attachments)
+    async with _acquire() as conn:
+        # Verify the entry exists so we return 404 (not an empty list) for an
+        # unknown id — keeps cache invalidation semantics tidy.
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT 1 FROM mock_eln.entries WHERE id = %(entry_id)s::uuid LIMIT 1",
+                {"entry_id": req.entry_id},
+            )
+            exists = await cur.fetchone()
+        if exists is None:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "not_found", "detail": f"entry {req.entry_id!r} not found"},
+            )
+        attachments = await _fetch_attachments(conn, req.entry_id)
+        return AttachmentsMetadataOut(entry_id=req.entry_id, attachments=attachments)
 
 
 # --------------------------------------------------------------------------
