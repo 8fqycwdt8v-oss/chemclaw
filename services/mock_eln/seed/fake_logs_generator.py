@@ -192,10 +192,27 @@ def _sample_for(
     # provided (loaded from the mock_eln fixture) we draw from it directly
     # so the resulting sample_id is guaranteed to exist in
     # ``mock_eln.samples.sample_code`` once both seeds load.
+    #
+    # IMPORTANT: the chosen sample MUST belong to ``project`` — the
+    # dataset's ``project_code`` field is set to ``project`` in
+    # ``_make_datasets_and_tracks``, and a mismatch (sample_id from
+    # project A but project_code = project B) breaks every cross-source
+    # filter scenario the agent runs. Filter the pool first.
     if (idx % 10) >= int(round(SAMPLE_ASSIGN_BAND_FRACTION * 10)):
         return None
     if sample_pool:
-        return rng.choice(sample_pool)
+        # sample codes are S-{PROJECT}-{NNNNN}; the project segment may
+        # itself contain a hyphen (e.g. NCE-1234), so reconstruct it as
+        # everything between the leading "S-" and the trailing "-NNNNN".
+        prefix = f"S-{project}-"
+        in_project = [s for s in sample_pool if s.startswith(prefix)]
+        if not in_project:
+            # Defensive: should never happen for the four well-known
+            # project codes, but if a future world.yaml introduces a
+            # project the fixture doesn't cover yet we'd rather skip the
+            # sample assignment than emit a cross-project mismatch.
+            return None
+        return rng.choice(in_project)
     project_size = SAMPLES_PER_PROJECT[project]
     sample_idx = (rng.randrange(project_size)) + 1
     return _fallback_sample_code(project, sample_idx)
@@ -380,8 +397,18 @@ def _write_csv(path: Path, rows: list[dict], columns: list[str]) -> None:
             writer.writerow(normalised)
 
 
-def generate(seed: int = 42, out_dir: Path | None = None) -> dict[str, int]:
+def generate(
+    seed: int = 42,
+    out_dir: Path | None = None,
+    *,
+    mock_eln_samples_fixture: Path | None = None,
+) -> dict[str, int]:
     """Generate fixtures into ``out_dir`` (default ``FIXTURE_DIR``).
+
+    ``mock_eln_samples_fixture`` overrides the path the cross-link sample
+    pool is loaded from (default: the checked-in ``test-fixtures/mock_eln/
+    world-default/samples.copy.gz``). Tests that produce mock_eln fixtures
+    in a temp dir use this to assert cross-link integrity end-to-end.
 
     Returns a count summary keyed by ``persons``, ``datasets``, ``tracks``,
     ``dataset_files`` for tests / smoke-checks.
@@ -390,7 +417,9 @@ def generate(seed: int = 42, out_dir: Path | None = None) -> dict[str, int]:
     target_dir = out_dir or FIXTURE_DIR
     target_dir.mkdir(parents=True, exist_ok=True)
 
-    sample_pool = _load_mock_eln_sample_codes()
+    sample_pool = _load_mock_eln_sample_codes(
+        mock_eln_samples_fixture or MOCK_ELN_SAMPLES_FIXTURE
+    )
     persons = _generate_persons(rng)
     datasets, tracks, files = _make_datasets_and_tracks(
         rng, persons, sample_pool=sample_pool or None

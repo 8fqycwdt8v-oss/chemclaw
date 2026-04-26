@@ -237,7 +237,20 @@ def _build_backend() -> FakePostgresBackend | RealLogsBackend:
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
     log.info("mcp-logs-sciy starting; backend=%s", settings.backend)
+    # Fail fast for the real backend if it hasn't been wired yet — better
+    # than passing /readyz at boot only to 500 every actual request.
+    # When the real backend lands, swap RealLogsBackend.ready() to a real
+    # tenant-auth check; the existing NotImplementedError is the
+    # fail-fast we want today.
+    if settings.backend == "real" and not (
+        settings.real_tenant_url and settings.real_api_key
+    ):
+        raise RuntimeError(
+            "mcp-logs-sciy: backend=real requires LOGS_REAL_TENANT_URL and "
+            "LOGS_REAL_API_KEY; refusing to start with empty config."
+        )
     _backend_holder["backend"] = _build_backend()
+    _backend_holder["healthy"] = settings.backend == "fake-postgres"
     try:
         yield
     finally:
@@ -252,12 +265,13 @@ def _backend() -> FakePostgresBackend | RealLogsBackend:
 
 
 def _ready_check() -> bool:
-    # Lightweight sync probe — confirms the backend instance was wired by
-    # the lifespan. The deeper async ready check (Postgres SELECT for the
-    # fake backend, tenant auth for the real one) is exercised by the
-    # routes themselves; surfacing it through /readyz would require an
-    # event loop and add no signal beyond connectivity.
-    return _backend_holder.get("backend") is not None
+    # The fake-postgres backend is always considered healthy when wired:
+    # connectivity is exercised by the routes themselves and a transient
+    # DB blip should not flap /readyz.
+    # The real backend is intentionally unhealthy until the SDK lands —
+    # fail-closed is the safer default while NotImplementedError is the
+    # only behaviour the routes expose.
+    return bool(_backend_holder.get("healthy"))
 
 
 app = create_app(

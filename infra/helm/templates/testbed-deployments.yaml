@@ -34,18 +34,17 @@ spec:
             - containerPort: {{ .Values.testbed.mcpElnLocal.port }}
           securityContext:
             allowPrivilegeEscalation: false
+          # The mcp-eln-local service reads `MOCK_ELN_DSN` (single DSN string),
+          # not split POSTGRES_* vars. Compose the DSN inline from a global
+          # host/db reference + the secret-backed reader password.
           env:
-            - name: POSTGRES_HOST
-              value: {{ .Values.global.postgres.host }}
-            - name: POSTGRES_DB
-              value: {{ .Values.global.postgres.db }}
-            - name: POSTGRES_USER
-              value: chemclaw_mock_eln_reader
-            - name: POSTGRES_PASSWORD
+            - name: MOCK_ELN_READER_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: {{ .Values.testbed.mcpElnLocal.readerPasswordSecret }}
                   key: {{ .Values.testbed.mcpElnLocal.readerPasswordSecretKey }}
+            - name: MOCK_ELN_DSN
+              value: "postgresql://chemclaw_mock_eln_reader:$(MOCK_ELN_READER_PASSWORD)@{{ .Values.global.postgres.host }}:5432/{{ .Values.global.postgres.db }}"
 ---
 apiVersion: v1
 kind: Service

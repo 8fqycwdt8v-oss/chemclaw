@@ -224,3 +224,63 @@ def test_seed_sql_contains_gating_and_copy(generated: dict[str, int]) -> None:
     for table in gen.TABLE_ORDER:
         assert f"\\copy mock_eln.{table}" in text, f"missing \\copy for {table}"
     assert "TRUNCATE TABLE mock_eln" in text
+
+
+# --------------------------------------------------------------------------
+# Cross-link integrity (regression for bd1b7b2 / fake_logs project_code mismatch)
+# --------------------------------------------------------------------------
+
+
+def test_fake_logs_project_code_matches_sample_id_project(
+    generated: dict[str, int], tmp_path: Path
+) -> None:
+    """Every fake_logs dataset that carries a sample_id must have a project_code
+    that matches the project encoded in the sample_id.
+
+    Regression: an earlier version of `_sample_for` (in fake_logs_generator)
+    drew from `sample_pool` ignoring the `project` argument, so 68% of
+    datasets ended up with project_code disagreeing with sample_id's project.
+    The agent's "find HPLC results for samples in NCE-1234" scenarios all
+    return the wrong rows when this regresses.
+    """
+    import csv as _csv
+    from services.mock_eln.seed import fake_logs_generator as flg
+
+    fdir = Path(generated["__fixtures_dir__"])  # type: ignore[index]
+    samples_fixture = fdir / "samples.copy.gz"
+    out_dir = tmp_path / "fake_logs"
+    out_dir.mkdir(parents=True, exist_ok=True)
+    counts = flg.generate(
+        seed=42,
+        out_dir=out_dir,
+        mock_eln_samples_fixture=samples_fixture,
+    )
+    assert counts["datasets"] == flg.NUM_DATASETS
+
+    with (out_dir / "datasets.csv").open() as fh:
+        rows = list(_csv.DictReader(fh))
+
+    matched = mismatched = with_sample = 0
+    for row in rows:
+        sid = row.get("sample_id") or ""
+        if not sid:
+            continue
+        with_sample += 1
+        # sample_id is S-{PROJECT}-{NNNNN}; project may itself contain a
+        # hyphen (NCE-1234), so reconstruct by stripping the leading 'S-'
+        # and the trailing '-NNNNN'.
+        parts = sid.split("-")
+        if len(parts) < 4:
+            continue
+        sample_project = "-".join(parts[1:-1])
+        if sample_project == row["project_code"]:
+            matched += 1
+        else:
+            mismatched += 1
+
+    assert with_sample > 0, "no datasets carry a sample_id (test fixture broken)"
+    assert mismatched == 0, (
+        f"{mismatched}/{with_sample} datasets have project_code disagreeing "
+        f"with the project encoded in sample_id — cross-link bug regressed"
+    )
+    assert matched == with_sample

@@ -36,11 +36,24 @@ CREATE SCHEMA IF NOT EXISTS mock_eln;
 -- --------------------------------------------------------------------
 DO $$
 DECLARE
-  v_reader_password TEXT := coalesce(
-    current_setting('chemclaw.mock_eln_reader_password', true),
-    'chemclaw_mock_eln_reader_dev_password_change_me'
-  );
+  v_provided_password TEXT := current_setting('chemclaw.mock_eln_reader_password', true);
+  v_reader_password   TEXT;
 BEGIN
+  IF v_provided_password IS NULL OR v_provided_password = '' THEN
+    -- No GUC set: fall back to the dev sentinel so `make db.init` works
+    -- out of the box. This role only has SELECT on mock_eln + fake_logs
+    -- (mock data, never production), but the dev password is well-known
+    -- and operators must override it before exposing the service.
+    RAISE NOTICE
+      '[mock_eln] chemclaw.mock_eln_reader_password GUC is unset; '
+      'creating chemclaw_mock_eln_reader with the DEV sentinel password. '
+      'Override via: ALTER DATABASE chemclaw SET chemclaw.mock_eln_reader_password = ''<random>''; '
+      'or: ALTER ROLE chemclaw_mock_eln_reader PASSWORD ''<random>''; '
+      'BEFORE exposing the mcp-eln-local service to any non-dev caller.';
+    v_reader_password := 'chemclaw_mock_eln_reader_dev_password_change_me';
+  ELSE
+    v_reader_password := v_provided_password;
+  END IF;
   IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'chemclaw_mock_eln_reader') THEN
     EXECUTE format(
       'CREATE ROLE chemclaw_mock_eln_reader WITH LOGIN NOBYPASSRLS PASSWORD %L',
@@ -296,6 +309,11 @@ CREATE INDEX IF NOT EXISTS idx_mock_eln_audit_action
 -- one row per canonical reaction (rather than 200 near-duplicates).
 -- mean_yield reads the conventional fields_jsonb.results.yield_pct path
 -- when present and numeric, else NULL.
+--
+-- Failed/cancelled entries are excluded from mean_yield because their
+-- yield_pct is sentinel-zero (the seed generator records yield=0 for
+-- data_quality_tier='failed' rows). Including them dragged the mean
+-- ~8% low on campaigns with a typical 8–10% failed-tier rate.
 -- --------------------------------------------------------------------
 CREATE OR REPLACE VIEW mock_eln.canonical_reactions_with_ofat AS
 SELECT
@@ -308,6 +326,8 @@ SELECT
   AVG(
     CASE
       WHEN jsonb_typeof(e.fields_jsonb -> 'results' -> 'yield_pct') = 'number'
+       AND e.data_quality_tier <> 'failed'
+       AND e.status <> 'cancelled'
         THEN (e.fields_jsonb -> 'results' ->> 'yield_pct')::numeric
       ELSE NULL
     END
