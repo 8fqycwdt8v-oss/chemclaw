@@ -34,8 +34,9 @@ import {
   shortCircuitResponse,
   HELP_TEXT,
 } from "../core/slash.js";
-import { registerRedactSecretsHook, redactString } from "../core/hooks/redact-secrets.js";
+import { redactString } from "../core/hooks/redact-secrets.js";
 import type { RedactReplacement } from "../core/hooks/redact-secrets.js";
+import { buildDefaultLifecycle } from "../core/harness-builders.js";
 import {
   createSession,
   loadSession,
@@ -45,8 +46,6 @@ import {
 import type { SessionFinishReason } from "../core/session-store.js";
 import { savePlanForSession } from "../core/plan-store-db.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
-import { registerTagMaturityHook } from "../core/hooks/tag-maturity.js";
-import { registerBudgetGuardHook } from "../core/hooks/budget-guard.js";
 import { withUserContext } from "../db/with-user-context.js";
 import { PromptRegistry } from "../prompts/registry.js";
 import type { Message, ToolContext } from "../core/types.js";
@@ -159,18 +158,6 @@ function setupSse(reply: FastifyReply): void {
   reply.raw.setHeader("Connection", "keep-alive");
   reply.raw.setHeader("X-Accel-Buffering", "no");
   reply.hijack();
-}
-
-// ---------------------------------------------------------------------------
-// Lifecycle builders.
-// ---------------------------------------------------------------------------
-
-function buildDefaultLifecycle(): Lifecycle {
-  const lc = new Lifecycle();
-  registerRedactSecretsHook(lc);
-  registerTagMaturityHook(lc);
-  registerBudgetGuardHook(lc);
-  return lc;
 }
 
 // ---------------------------------------------------------------------------

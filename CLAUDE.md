@@ -101,13 +101,50 @@ npm run test --workspace services/agent -- tests/unit/some.test.ts
 
 ## Row-Level Security — the rule
 
-Every project-scoped query must run in a transaction with `app.current_user_entra_id` set. Use the helper functions:
+Every project-scoped query must run in a transaction with `app.current_user_entra_id` set. The DB layer ships three roles (defined in `db/init/12_security_hardening.sql`):
 
-- **TypeScript agent**: `withUserContext(pool, userEntraId, async (client) => ...)` in `services/agent/src/db.ts`.
+| Role | LOGIN | BYPASSRLS | Used for |
+|---|---|---|---|
+| `chemclaw` | yes | implicit (table owner) | DB init + migrations only — **never** for app traffic |
+| `chemclaw_app` | yes | NO | All app traffic (agent-claw, frontend, paperclip). Subject to FORCE RLS. |
+| `chemclaw_service` | yes | YES | Projectors, ingestion workers, the optimizer cron, `session_reanimator`. |
+
+`FORCE ROW LEVEL SECURITY` is set on every project-scoped table, so even `chemclaw` (the owner) is RLS-enforced — there is no "owner shortcut."
+
+Use the helper functions:
+
+- **TypeScript agent**: `withUserContext(pool, userEntraId, async (client) => ...)` in `services/agent-claw/src/db/with-user-context.ts`. For globally-scoped catalog reads (prompt_registry, skill_library, mcp_tools), use `withSystemContext(pool, fn)` — same module — which sets the sentinel user `'__system__'` so RLS policies that gate on `current_setting('app.current_user_entra_id')` being non-empty pass without leaking into a real user's identity.
 - **Python Streamlit**: `connect(user_entra_id)` context manager in `services/frontend/db.py`.
-- **Ingestion workers and projectors**: set the user to `''` (empty string) — RLS policies treat this as "system / bypass" and are written permissively for empty context. The `chemclaw_service` role is also `BYPASSRLS` for containerized workloads.
+- **Projectors and system workers**: connect as `chemclaw_service` (BYPASSRLS) so they can read across all projects without setting a per-row user. The `session_reanimator` follows this pattern.
 
 **Never bypass RLS by connecting as the DB owner from user-facing code.** If a query returns rows the user shouldn't see, the bug is a missing or wrong `SET LOCAL`, not a missing WHERE clause.
+
+## Persistent agent sessions (autonomy upgrade)
+
+ChemClaw's agent has Claude-Code-like autonomy primitives backed by three new tables (`db/init/13_agent_sessions.sql` + `14_agent_session_extensions.sql`):
+
+| Table | Purpose |
+|---|---|
+| `agent_sessions` | Per-session scratchpad, awaiting_question, finish reason, message count, etag for optimistic concurrency, cross-turn token budget counters, auto-resume cap |
+| `agent_todos` | Per-session checklist (the `manage_todos` tool's storage) |
+| `agent_plans` | DB-backed plan storage (replaces the legacy in-memory 5-minute planStore for chained execution) |
+
+The `/api/chat` endpoint accepts an optional `session_id` and emits a `session` SSE event for the client to round-trip. Two new builtins drive the experience:
+
+- **`manage_todos`** (`tools/builtins/manage_todos.ts`) — the LLM creates a checklist at the start of any 3+ step task and ticks items off. Each call emits a `todo_update` SSE event so the user's UI renders live progress.
+- **`ask_user`** (`tools/builtins/ask_user.ts`) — pauses the harness with a clarifying question. The harness emits `awaiting_user_input` SSE event, persists the question to `agent_sessions.awaiting_question` (redacted first), and ends the stream. Resume by POSTing `/api/chat` with the same `session_id` + a user message.
+
+Chained execution: `POST /api/sessions/:id/plan/run` runs the harness in a loop bounded by `AGENT_PLAN_MAX_AUTO_TURNS` until the plan completes, max_steps is hit at the chain cap, the per-session token budget trips, or `ask_user` fires.
+
+Auto-resume: `services/optimizer/session_reanimator/` polls every 5 min for sessions with stalled `in_progress` todos and POSTs `/api/sessions/:id/resume` (synthetic "Continue" turn). Capped per-session via `agent_sessions.auto_resume_cap` (default 10).
+
+## Secrets and egress
+
+- **All LLM calls route through LiteLLM** (`services/litellm/config.yaml`). Never import provider SDKs directly in application code; always go through `litellm`. The agent uses `@ai-sdk/openai-compatible` with `baseURL` pointing at LiteLLM's OpenAI-compatible endpoint — this is the single egress chokepoint.
+- **Every prompt is redacted pre-egress** by the callback at `services/litellm_redactor/callback.py`. When adding new sensitive categories (new project-ID patterns, new compound-code formats), extend `services/litellm_redactor/redaction.py` and add a unit test in `tests/unit/test_redactor.py`.
+- The regex patterns in the redactor are length-bounded by construction — if you add new patterns, bound every quantifier (no unbounded `.*`) to avoid catastrophic backtracking.
+- **System prompts come from `prompt_registry`, not from hardcoded strings.** When adding a new agent mode, insert a new row (see `db/seed/02_prompt_registry.sql` for the canonical pattern) and reference it by name in code. The `PromptRegistry` cache TTL is 60s; call `invalidate()` in long-running processes if you hot-edit a prompt in the DB.
+- **MCP service Bearer-token authentication (ADR 006 Layer 2)** is implemented — the agent can mint HS256 JWTs via `services/agent-claw/src/security/mcp-tokens.ts` and MCP services verify via `services/mcp_tools/common/auth.py`. **Currently it is not wired end-to-end** (the agent doesn't yet call `signMcpToken` on outbound MCP requests, and `create_app()` doesn't yet add `Depends(require_mcp_token)` as a dependency). Wiring is tracked as a follow-up; setting `MCP_AUTH_REQUIRED=true` today would lock the cluster out. See `docs/adr/006-sandbox-isolation.md` and `docs/runbooks/autonomy-upgrade.md` for the rollout plan.
 
 ## Secrets and egress
 
@@ -161,16 +198,19 @@ The plan document is at `~/.claude/plans/go-through-the-three-vivid-sunset.md`.
   - `docs/adr/004-harness-engineering.md`, `docs/adr/005-data-layer-revision.md`, `docs/runbooks/harness-rollback.md`.
   - Tagged `v1.0.0-claw`.
 
-## Test counts (v1.0.0-claw)
+## Test counts (current branch)
 
 ```
-cd services/agent-claw && npm test   →  634 passed
-cd services/agent-claw && npm run typecheck → ok
-python3 -m pytest services/mcp_tools/mcp_eln_benchling/tests/ \
+cd services/agent-claw && npm test          →  657 passed
+cd services/agent-claw && npx tsc --noEmit  →  ok
+cd services/paperclip && npm test           →  17 passed
+python3 -m pytest tests/unit/test_redactor.py \
+  services/mcp_tools/mcp_eln_benchling/tests/ \
   services/mcp_tools/mcp_lims_starlims/tests/ \
   services/mcp_tools/mcp_instrument_waters/tests/ \
-  services/projectors/kg_source_cache/tests/   →  35 passed
-services/agent/  →  0 (deleted)
+  services/mcp_tools/common/tests/ \
+  services/projectors/kg_source_cache/tests/   →  49 passed
+npm audit (root)                            →  0 vulnerabilities
 ```
 
 ## Harness Primitives
@@ -181,9 +221,11 @@ The agent harness (`services/agent-claw/`) has five lifecycle hook points:
 |---|---|---|
 | `pre_turn` | Before LLM call; after slash parsing | `init-scratch`, `apply-skills`, stale-fact check |
 | `pre_tool` | Before a tool executes | `anti-fabrication`, `budget-guard`, `foundation-citation-guard` |
-| `post_tool` | After a tool returns | `tag-maturity`, `source-cache`, `compact-window` |
+| `post_tool` | After a tool returns | `tag-maturity`, `source-cache`, `compact-window`, `todo_update` SSE emit |
 | `pre_compact` | When context > 60% of budget | `compact-window` (invokes Haiku compactor) |
-| `post_turn` | After SSE stream closes | `redact-secrets` |
+| `post_turn` | After SSE stream closes | `redact-secrets` (defense-in-depth output scrub) |
+
+**Default lifecycle is built via `buildDefaultLifecycle()`** in `services/agent-claw/src/core/harness-builders.ts`. All three harness call paths (`/api/chat`, `/api/chat/plan/approve`, `/api/sessions/:id/plan/run`, `/api/sessions/:id/resume`) use the same factory so a hook addition picks up everywhere automatically. Same module exports `hydrateScratchpad` and `persistTurnState` — the rehydrate-from-session and end-of-turn save patterns shared across routes.
 
 Hook files: `hooks/*.yaml` (definition) + `services/agent-claw/src/core/hooks/*.ts` (implementation).
 

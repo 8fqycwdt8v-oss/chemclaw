@@ -25,7 +25,6 @@ import {
   advancePlan,
 } from "../core/plan-store-db.js";
 import { withUserContext } from "../db/with-user-context.js";
-import { Lifecycle } from "../core/lifecycle.js";
 import {
   Budget,
   BudgetExceededError,
@@ -33,9 +32,10 @@ import {
 } from "../core/budget.js";
 import { runHarness } from "../core/harness.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
-import { registerRedactSecretsHook } from "../core/hooks/redact-secrets.js";
-import { registerTagMaturityHook } from "../core/hooks/tag-maturity.js";
-import { registerBudgetGuardHook } from "../core/hooks/budget-guard.js";
+import {
+  buildDefaultLifecycle,
+  hydrateScratchpad,
+} from "../core/harness-builders.js";
 import type { Message, ToolContext } from "../core/types.js";
 
 interface SessionsRouteDeps {
@@ -306,20 +306,14 @@ async function runChainedHarness(
       break;
     }
 
-    const ctx: ToolContext = {
-      userEntraId: user,
-      seenFactIds: new Set<string>(
-        Array.isArray(state.scratchpad["seenFactIds"])
-          ? (state.scratchpad["seenFactIds"] as string[])
-          : [],
-      ),
-      scratchpad: hydrateScratchpad(state.scratchpad, sessionId, cfg.AGENT_TOKEN_BUDGET),
-    };
+    const { scratchpad, seenFactIds } = hydrateScratchpad(
+      state.scratchpad,
+      sessionId,
+      cfg.AGENT_TOKEN_BUDGET,
+    );
+    const ctx: ToolContext = { userEntraId: user, seenFactIds, scratchpad };
 
-    const lifecycle = new Lifecycle();
-    registerRedactSecretsHook(lifecycle);
-    registerTagMaturityHook(lifecycle);
-    registerBudgetGuardHook(lifecycle);
+    const lifecycle = buildDefaultLifecycle();
 
     const budget = new Budget({
       maxSteps: cfg.AGENT_CHAT_MAX_STEPS,
@@ -398,21 +392,6 @@ async function runChainedHarness(
   return { autoTurns, totalSteps, finalFinishReason };
 }
 
-function hydrateScratchpad(
-  prior: Record<string, unknown>,
-  sessionId: string,
-  tokenBudget: number,
-): Map<string, unknown> {
-  const scratchpad = new Map<string, unknown>();
-  for (const [k, v] of Object.entries(prior)) {
-    if (k === "seenFactIds" || k === "budget") continue;
-    scratchpad.set(k, v);
-  }
-  scratchpad.set("budget", {
-    promptTokensUsed: 0,
-    completionTokensUsed: 0,
-    tokenBudget,
-  });
-  scratchpad.set("session_id", sessionId);
-  return scratchpad;
-}
+// hydrateScratchpad lives in core/harness-builders.ts so chat.ts and this
+// file share the same hydration logic. Keeping it co-located there with
+// buildDefaultLifecycle and persistTurnState avoids drift.
