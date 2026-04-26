@@ -46,6 +46,9 @@ import { buildFetchLimsResultTool } from "./tools/builtins/fetch_lims_result.js"
 import { buildQueryElnExperimentsTool } from "./tools/builtins/query_eln_experiments.js";
 import { buildQueryInstrumentRunsTool } from "./tools/builtins/query_instrument_runs.js";
 import { buildQueryLimsResultsTool } from "./tools/builtins/query_lims_results.js";
+// Autonomy upgrade — Claude-Code-like plan mode.
+import { buildManageTodosTool } from "./tools/builtins/manage_todos.js";
+import { buildAskUserTool } from "./tools/builtins/ask_user.js";
 import { registerHealthzRoute } from "./routes/healthz.js";
 import { registerChatRoute } from "./routes/chat.js";
 import { registerDeepResearchRoute } from "./routes/deep-research.js";
@@ -57,6 +60,7 @@ import { registerLearnRoute } from "./routes/learn.js";
 import { registerFeedbackRoute } from "./routes/feedback.js";
 import { registerEvalRoute } from "./routes/eval.js";
 import { registerOptimizerRoutes } from "./routes/optimizer.js";
+import { registerSessionsRoute } from "./routes/sessions.js";
 import { PromptRegistry } from "./prompts/registry.js";
 import { initTracer } from "./observability/otel.js";
 import { loadHooks } from "./core/hook-loader.js";
@@ -210,6 +214,14 @@ registry.registerBuiltin("query_lims_results", () =>
 // orchestration deps (forge_tool family) that should be opt-in via dedicated
 // route handlers / sub-agent spawner rather than the generic chat tool path.
 
+// ── Autonomy upgrade tools ───────────────────────────────────────────────
+// manage_todos and ask_user implement Claude-Code-like plan mode (per-session
+// checklist + clarification-back). Both rely on agent_sessions (created on
+// every /api/chat POST in routes/chat.ts) and require a session_id in
+// ctx.scratchpad — which the chat route guarantees.
+registry.registerBuiltin("manage_todos", () => asTool(buildManageTodosTool(pool)));
+registry.registerBuiltin("ask_user", () => asTool(buildAskUserTool()));
+
 // ---------------------------------------------------------------------------
 // Routes
 // ---------------------------------------------------------------------------
@@ -296,6 +308,10 @@ registerEvalRoute(app, {
   getUser: getUser as (req: import("fastify").FastifyRequest) => string,
 });
 registerOptimizerRoutes(app, {
+  pool,
+  getUser: getUser as (req: import("fastify").FastifyRequest) => string,
+});
+registerSessionsRoute(app, {
   pool,
   getUser: getUser as (req: import("fastify").FastifyRequest) => string,
 });
