@@ -773,33 +773,6 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
-  # mcp-admetlab — ADMETlab 3.0 119-endpoint ADMET screen (port 8011)
-  # Operates in API-key mode (ADMETLAB_API_KEY) or local-model mode.
-  # Note: skill-promoter also uses 8011 on profile=optimizer — profiles don't overlap.
-  # -------------------------------------------------------------
-  mcp-admetlab:
-    build:
-      context: .
-      dockerfile: services/mcp_tools/mcp_admetlab/Dockerfile
-    container_name: chemclaw-mcp-admetlab
-    restart: unless-stopped
-    profiles: ["chemistry"]
-    ports:
-      - "8011:8011"
-    environment:
-      ADMETLAB_API_KEY: ${ADMETLAB_API_KEY:-}
-      ADMETLAB_MODEL_DIR: ${ADMETLAB_MODEL_DIR:-/var/lib/mcp-admetlab/models}
-      ADMETLAB_API_URL: ${ADMETLAB_API_URL:-https://admetlab3.scbdd.com/api}
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8011/readyz',timeout=5).status==200 else 1)\""]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
-    security_opt:
-      - no-new-privileges:true
-
-  # -------------------------------------------------------------
   # mcp-sirius — SIRIUS 6 + CSI:FingerID MS structure ID (port 8012)
   # Requires sirius binary installed in the image (JVM-based tool).
   # -------------------------------------------------------------
@@ -823,77 +796,13 @@ services:
 
   # -----------------------------------------------------------
   # Source-system MCP adapters — profile: sources
-  # Start with: docker compose --profile sources up
-  # Auth via env vars (see .env.example): BENCHLING_API_KEY,
-  # STARLIMS_USER + STARLIMS_TOKEN, WATERS_API_KEY.
+  # No source-system adapters are bundled in this build. The post-tool
+  # source-cache hook + kg_source_cache projector remain wired so a
+  # future ELN/LIMS/instrument MCP can register a builtin matching
+  # /^(query|fetch)_(eln|lims|instrument)_/ and inherit the caching
+  # pipeline for free. See services/mcp_tools/mcp_instrument_template/
+  # for a starting point.
   # -----------------------------------------------------------
-
-  # mcp-eln-benchling — Benchling ELN adapter (port 8013)
-  mcp-eln-benchling:
-    build:
-      context: .
-      dockerfile: services/mcp_tools/mcp_eln_benchling/Dockerfile
-    container_name: chemclaw-mcp-eln-benchling
-    restart: unless-stopped
-    profiles: ["sources"]
-    ports:
-      - "8013:8013"
-    environment:
-      BENCHLING_API_KEY: ${BENCHLING_API_KEY:-}
-      BENCHLING_BASE_URL: ${BENCHLING_BASE_URL:-https://your-tenant.benchling.com/api/v2}
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8013/readyz',timeout=5).status==200 else 1)\""]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 20s
-    security_opt:
-      - no-new-privileges:true
-
-  # mcp-lims-starlims — STARLIMS LIMS adapter (port 8014)
-  mcp-lims-starlims:
-    build:
-      context: .
-      dockerfile: services/mcp_tools/mcp_lims_starlims/Dockerfile
-    container_name: chemclaw-mcp-lims-starlims
-    restart: unless-stopped
-    profiles: ["sources"]
-    ports:
-      - "8014:8014"
-    environment:
-      STARLIMS_USER: ${STARLIMS_USER:-}
-      STARLIMS_TOKEN: ${STARLIMS_TOKEN:-}
-      STARLIMS_BASE_URL: ${STARLIMS_BASE_URL:-https://your-starlims-host/starlims/api/v1}
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8014/readyz',timeout=5).status==200 else 1)\""]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 20s
-    security_opt:
-      - no-new-privileges:true
-
-  # mcp-instrument-waters — Waters Empower HPLC adapter (port 8015)
-  mcp-instrument-waters:
-    build:
-      context: .
-      dockerfile: services/mcp_tools/mcp_instrument_waters/Dockerfile
-    container_name: chemclaw-mcp-instrument-waters
-    restart: unless-stopped
-    profiles: ["sources"]
-    ports:
-      - "8015:8015"
-    environment:
-      WATERS_API_KEY: ${WATERS_API_KEY:-}
-      WATERS_BASE_URL: ${WATERS_BASE_URL:-https://your-empower-host/empower/api/v2}
-    healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8015/readyz',timeout=5).status==200 else 1)\""]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 20s
-    security_opt:
-      - no-new-privileges:true
 
   # kg-source-cache — projector: source_fact_observed → :Fact in Neo4j
   kg-source-cache:

@@ -113,40 +113,19 @@ chemistry:
     image: chemclaw/mcp-xtb:latest
     port: 8010
     replicas: 1
-  mcpAdmetlab:
-    image: chemclaw/mcp-admetlab:latest
-    port: 8011
-    replicas: 1
   mcpSirius:
     image: chemclaw/mcp-sirius:latest
     port: 8012
     replicas: 1
 
 # ── Profile: sources ──────────────────────────────────────────────────────────
-# Enable with: --set sources.enabled=true
+# No source-system MCP adapters are bundled in this build. The
+# kg-source-cache projector is kept so a future ELN/LIMS/instrument
+# adapter can plug in via the source-cache post-tool hook (regex
+# /^(query|fetch)_(eln|lims|instrument)_/).
 
 sources:
   enabled: false
-  mcpElnBenchling:
-    image: chemclaw/mcp-eln-benchling:latest
-    port: 8013
-    replicas: 1
-    apiKeySecret: benchling-api-key
-    apiKeySecretKey: api-key
-    baseUrl: https://your-tenant.benchling.com/api/v2
-  mcpLimsStarlims:
-    image: chemclaw/mcp-lims-starlims:latest
-    port: 8014
-    replicas: 1
-    credentialsSecret: starlims-credentials
-    baseUrl: https://your-starlims-host/starlims/api/v1
-  mcpInstrumentWaters:
-    image: chemclaw/mcp-instrument-waters:latest
-    port: 8015
-    replicas: 1
-    apiKeySecret: waters-api-key
-    apiKeySecretKey: api-key
-    baseUrl: https://your-empower-host/empower/api/v2
   kgSourceCache:
     image: chemclaw/kg-source-cache:latest
     replicas: 1

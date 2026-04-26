@@ -189,15 +189,12 @@ The plan document is at `~/.claude/plans/go-through-the-three-vivid-sunset.md`.
 - **Phase D** (PTC + Paperclip-lite + Langfuse + feedback): E2B PTC sandbox; `run_program`; Paperclip-lite sidecar; Langfuse OTel tracing; `/feedback` wired to DB; multi-model routing.
 - **Phase D.5** (tool forging): `forge_tool`, `induce_forged_tool_from_trace`, `add_forged_tool_test`; `forged_tool_validation_runs` table; weak-from-strong transfer; scope promotion (private → project → org).
 - **Phase E** (self-improvement): DSPy GEPA nightly optimizer; golden set + held-out promotion gate; skill promotion loop; shadow serving (`shadow_until` column); `/eval` slash verb.
-- **Phase F.1** (chemistry MCPs): 6 new chemistry services: askcos (8007), aizynth (8008), chemprop (8009), xtb (8010), admetlab (8011), sirius (8012). 6 skill packs.
-- **Phase F.2** (source-system MCPs + retire legacy): **complete**.
-  - `mcp_eln_benchling` (8013) — Benchling ELN adapter; `GET /experiments/{id}` + `POST /query_runs`.
-  - `mcp_lims_starlims` (8014) — STARLIMS LIMS adapter; `GET /test_results/{id}` + `POST /query_results`.
-  - `mcp_instrument_waters` (8015) — Waters Empower HPLC adapter; `GET /run/{id}` + `POST /search_runs`. Template in `mcp_instrument_template/README.md`.
-  - 6 agent-claw builtins: `query/fetch_eln_*`, `query/fetch_lims_*`, `query/fetch_instrument_*`.
-  - `source-cache` post-tool hook + `kg_source_cache` projector — source facts → `:Fact` nodes with `(source_system_id, fetched_at, valid_until)` provenance.
-  - `eln_json_importer` retired from live path; preserved as `services/ingestion/eln_json_importer.legacy/`.
-  - Helm chart: `infra/helm/` with profile flags (chemistry/sources/optimizer/observability); 26 Deployments in prod config.
+- **Phase F.1** (chemistry MCPs): chemistry services on the `chemistry` profile: askcos (8007), aizynth (8008), chemprop (8009), xtb (8010), sirius (8012). The admetlab adapter has been removed from this build.
+- **Phase F.2** (source-system MCPs + retire legacy): **the source-system layer is currently empty**.
+  - The benchling / starlims / waters MCP adapters have been removed; their agent-claw builtins (`query/fetch_eln_*`, `query/fetch_lims_*`, `query/fetch_instrument_*`) are gone with them.
+  - The `source-cache` post-tool hook + `kg_source_cache` projector remain wired so any future ELN/LIMS/instrument MCP can register a builtin matching the regex `/^(query|fetch)_(eln|lims|instrument)_/` and inherit the caching pipeline. See `services/mcp_tools/mcp_instrument_template/README.md` for a starting point.
+  - `eln_json_importer` retired from live path; preserved as `services/ingestion/eln_json_importer.legacy/` for one-shot bulk migrations from a JSON dump.
+  - Helm chart: `infra/helm/` with profile flags (chemistry/sources/optimizer/observability).
   - `services/agent/` deleted; Streamlit `AGENT_BASE_URL` defaults to port 3101.
   - `docs/adr/004-harness-engineering.md`, `docs/adr/005-data-layer-revision.md`, `docs/runbooks/harness-rollback.md`.
   - Tagged `v1.0.0-claw`.
@@ -205,13 +202,11 @@ The plan document is at `~/.claude/plans/go-through-the-three-vivid-sunset.md`.
 ## Test counts (current branch)
 
 ```
-cd services/agent-claw && npm test          →  657 passed
+cd services/agent-claw && npm test          →  635 passed
 cd services/agent-claw && npx tsc --noEmit  →  ok
 cd services/paperclip && npm test           →  17 passed
 python3 -m pytest tests/unit/test_redactor.py \
-  services/mcp_tools/mcp_eln_benchling/tests/ \
-  services/mcp_tools/mcp_lims_starlims/tests/ \
-  services/mcp_tools/mcp_instrument_waters/tests/ \
+  tests/unit/optimizer/test_session_purger.py \
   services/mcp_tools/common/tests/ \
   services/projectors/kg_source_cache/tests/   →  49 passed
 npm audit (root)                            →  0 vulnerabilities

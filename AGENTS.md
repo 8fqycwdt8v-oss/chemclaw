@@ -740,7 +740,6 @@ their own Docker images.
 | `mcp-aizynth` | 8008 | `propose_retrosynthesis` (fallback) | ~20–40 s | `/var/lib/mcp-aizynth/configs/config.yml` |
 | `mcp-chemprop` | 8009 | `predict_reaction_yield`, `predict_molecular_property` | ~5–15 s | `/var/lib/mcp-chemprop/models/` |
 | `mcp-xtb` | 8010 | `compute_conformer_ensemble` | ~30–60 s | `xtb` + `crest` binary on PATH |
-| `mcp-admetlab` | 8011 | `screen_admet` | ~5–15 s (API) / ~30–60 s (local) | `ADMETLAB_API_KEY` or local model dir |
 | `mcp-sirius` | 8012 | `identify_unknown_from_ms` | ~60–120 s | `sirius` binary on PATH |
 
 ### Readiness policy
@@ -757,7 +756,6 @@ harness surfaces a clear error rather than calling the tool blindly.
 | "What yield will this reaction give?" | `predict_reaction_yield` | chemprop v2 MPNN |
 | "What is the logP / logS of this compound?" | `predict_molecular_property` | chemprop v2 |
 | "What are the stable conformers of X?" | `compute_conformer_ensemble` | GFN2-xTB + CREST; ~30–60 s |
-| "Is this compound safe to advance?" | `screen_admet` | ADMETlab 3.0; 119 endpoints |
 | "What is this unknown impurity?" | `identify_unknown_from_ms` | SIRIUS 6 + CSI:FingerID; ~60–120 s |
 
 ### Skill packs
@@ -768,7 +766,6 @@ harness surfaces a clear error rather than calling the tool blindly.
 | `aizynth_route` | `skills/aizynth_route/` | `propose_retrosynthesis` (prefer_aizynth) | `/aizynth` |
 | `chemprop_yield` | `skills/chemprop_yield/` | `predict_reaction_yield` | `/yield` |
 | `xtb_conformer` | `skills/xtb_conformer/` | `compute_conformer_ensemble` | `/conformer` |
-| `admet_screen` | `skills/admet_screen/` | `screen_admet` | `/admet`, `/screen` |
 | `sirius_id` | `skills/sirius_id/` | `identify_unknown_from_ms` | `/identify`, `/ms-id` |
 
 ### Environment variables
@@ -780,8 +777,6 @@ ASKCOS_MODEL_DIR=/path/to/askcos/models
 AIZYNTH_MODEL_DIR=/path/to/aizynth
 AIZYNTH_CONFIG=/path/to/aizynth/configs/config.yml
 CHEMPROP_MODEL_DIR=/path/to/chemprop/models
-ADMETLAB_API_KEY=<your-api-key>     # or leave blank to use local model
-ADMETLAB_API_URL=https://admetlab3.scbdd.com/api
 ```
 
 ### Latency guidance
@@ -793,7 +788,7 @@ ADMETLAB_API_URL=https://admetlab3.scbdd.com/api
 
 ### Bounded compromises
 
-The heavy ML packages (`askcos2`, `aizynthfinder`, `chemprop`, `rdkit` for xTB, `admetlab3`)
+The heavy ML packages (`askcos2`, `aizynthfinder`, `chemprop`, `rdkit` for xTB)
 cannot be installed in the dev `.venv` because of conflicting transitive dependencies. Each
 service has its own `Dockerfile` that pip-installs only its dependencies inside the image.
 Python tests mock the downstream library imports (no `chemprop`, `askcos2`, etc. in the
@@ -803,40 +798,18 @@ test environment). TypeScript tests mock HTTP calls via `vi.stubGlobal("fetch", 
 
 ## Source systems
 
-Three on-demand source-system adapters are available (Phase F.2). These read source
-data directly rather than from a local replica. After each call, the `source-cache`
-post-tool hook writes `ingestion_events` rows so the `kg_source_cache` projector can
-create `:Fact` nodes with provenance (`source_system_id`, `fetched_at`, `valid_until`).
+No source-system MCP adapters (ELN/LIMS/instrument) are bundled in this build.
 
-### When to use each
+The infrastructure to plug one in is preserved:
 
-| Tool | Source system | Use when |
-|---|---|---|
-| `query_eln_experiments` | Benchling ELN | Browsing ELN entries for a project or time range |
-| `fetch_eln_entry` | Benchling ELN | Need full detail of a specific notebook entry by ID |
-| `query_lims_results` | STARLIMS | Looking up QC/QA analytical results by sample or method |
-| `fetch_lims_result` | STARLIMS | Need full detail of a specific LIMS result by ID |
-| `query_instrument_runs` | Waters Empower HPLC | Browsing chromatographic runs by sample/method/date |
-| `fetch_instrument_run` | Waters Empower HPLC | Need full peak data for a specific HPLC run by ID |
-
-### Citation discipline
-
-Every source-system tool returns a `citation` field with `source_kind="external_url"`
-and `source_uri` pointing to the entry in the originating system. **Always include
-this citation when reporting a fact from a source system.** Do not present source
-data as internally derived knowledge.
-
-### Freshness and stale facts
-
-Cached source facts have a `valid_until` TTL (default 7 days). When the pre-turn
-hook detects stale facts, it injects a warning into working memory. If freshness
-matters for the current question (e.g., a batch release decision), re-query the
-source system before reporting. If the user is asking a historical question, the
-cached value is sufficient.
-
-### Caching semantics
-
-After a source-system tool call, facts are automatically cached in the KG via the
-`source-cache` hook. Subsequent KG queries (`query_kg`) will find these facts without
-a new external call. The cache is refreshed when the TTL expires or when a source
-webhook fires (if configured).
+- **`source-cache` post-tool hook** matches any tool whose ID starts with
+  `query_eln_`, `fetch_eln_`, `query_lims_`, `fetch_lims_`, `query_instrument_`,
+  or `fetch_instrument_` and writes `ingestion_events` rows on every call.
+- **`kg_source_cache` projector** converts those rows into `:Fact` nodes with
+  `(source_system_id, fetched_at, valid_until)` provenance.
+- **Citation discipline** — when a future adapter is added, its tool wrappers
+  must return a `citation` field with `source_kind="external_url"` and a
+  `source_uri` pointing to the originating entry. The agent must surface that
+  citation when reporting source-derived facts.
+- **`mcp_instrument_template/README.md`** is a starting point for new
+  instrument adapters.

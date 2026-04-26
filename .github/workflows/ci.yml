@@ -41,20 +41,15 @@ jobs:
       - name: Install touched-service deps
         run: |
           python3 -m pip install --upgrade pip
-          python3 -m pip install \
-            -r services/mcp_tools/mcp_eln_benchling/requirements.txt \
-            -r services/mcp_tools/mcp_lims_starlims/requirements.txt \
-            -r services/mcp_tools/mcp_instrument_waters/requirements.txt
           python3 -m pip install -r services/projectors/kg_source_cache/requirements.txt
           python3 -m pip install -r services/optimizer/session_reanimator/requirements.txt
+          python3 -m pip install -r services/optimizer/session_purger/requirements.txt
           python3 -m pip install pytest pytest-asyncio
       - name: Pytest
         run: |
           python3 -m pytest -q \
             tests/unit/test_redactor.py \
-            services/mcp_tools/mcp_eln_benchling/tests/ \
-            services/mcp_tools/mcp_lims_starlims/tests/ \
-            services/mcp_tools/mcp_instrument_waters/tests/ \
+            tests/unit/optimizer/test_session_purger.py \
             services/mcp_tools/common/tests/ \
             services/projectors/kg_source_cache/tests/
       - name: Parse-check Python services

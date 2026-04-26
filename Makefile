@@ -106,8 +106,8 @@ run.frontend: ## Run Streamlit frontend
 
 .PHONY: import.sample.legacy
 import.sample.legacy: ## [DEPRECATED] One-shot bulk import via legacy eln_json_importer.
-	@echo "WARNING: eln_json_importer is retired from the live path (Phase F.2)."
-	@echo "New ELN entries flow through mcp_eln_benchling. Use this only for one-shot bulk migrations."
+	@echo "WARNING: eln_json_importer is retired from the live path."
+	@echo "Use this only for one-shot bulk migrations from a JSON dump."
 	$(VENV)/bin/python -m services.ingestion.eln_json_importer.legacy.cli \
 	  --input sample-data/eln-experiments-sample.json
 

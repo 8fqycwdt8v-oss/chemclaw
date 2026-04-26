@@ -24,15 +24,15 @@ and reads source systems on-demand (Benchling ELN, STARLIMS LIMS, Waters Empower
 │                                                             │
 │  Tools: 30+ builtins · Forged tools · Skill packs (8 max)   │
 │  Skills: retro / qc / cross_learning / deep_research /       │
-│          askcos / aizynth / chemprop / xtb / admet / sirius  │
+│          askcos / aizynth / chemprop / xtb / sirius          │
 └────┬──────────────────┬────────────────────┬────────────────┘
-     │ MCP (Python)     │ MCP (Python)       │ MCP (Python)
-     ▼                  ▼                    ▼
+     │ MCP (Python)     │ (none in            │ MCP (Python)
+     ▼                  │  this build)        ▼
 Chemistry tools    Source-system adapters    KG + retrieval
-rdkit · drfp       benchling (8013)         mcp-kg (8003)
-askcos · aizynth   starlims (8014)          mcp-embedder (8004)
-chemprop · xtb     waters-empower (8015)    mcp-tabicl (8005)
-admetlab · sirius                           mcp-doc-fetcher (8006)
+rdkit · drfp       —                        mcp-kg (8003)
+askcos · aizynth                            mcp-embedder (8004)
+chemprop · xtb                              mcp-tabicl (8005)
+sirius                                      mcp-doc-fetcher (8006)
 
      │ all MCP calls route through
      ▼

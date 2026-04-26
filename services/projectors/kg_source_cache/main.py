@@ -74,7 +74,7 @@ class KGSourceCacheProjector(BaseProjector):
         """Project a source_fact_observed event into the KG as a :Fact node.
 
         Expected payload keys:
-          source_system_id: str           — e.g. "benchling", "starlims", "waters"
+          source_system_id: str           — opaque label for the originating system
           source_system_timestamp: str    — ISO-8601 from the source system
           fetched_at: str                 — ISO-8601 when the agent fetched this
           valid_until: str | None         — ISO-8601 TTL; default now + 7 days

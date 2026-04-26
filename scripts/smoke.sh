@@ -4,7 +4,7 @@
 # Brings up services via Docker Compose, exercises every Phase A-F primitive:
 #   - Document ingestion → DRFP vectors → KG projection
 #   - agent-claw /route slash → retrosynthesis
-#   - mcp_eln_benchling.query_runs (stub server) → cache-and-project hook → KG :Fact
+#   - synthetic source_fact_observed event → kg_source_cache projector → KG :Fact
 #   - /screen plan via PTC (≤3 LiteLLM calls asserted via Langfuse)
 #   - /feedback up → feedback_events row
 #   - propose_hypothesis → hypotheses row + maturity badge
@@ -158,68 +158,18 @@ if [[ "$SKIP_AGENT" != "1" ]]; then
 fi
 
 # --------------------------------------------------------------------------
-# 12. Benchling stub test — cache-and-project hook
+# 12. Source-cache projector smoke (synthetic ingestion_events row)
 # --------------------------------------------------------------------------
 if [[ "$SKIP_SOURCES" != "1" ]]; then
-  step "12. Source cache: mcp_eln_benchling stub → KG :Fact"
+  step "12. Source cache: synthetic source_fact_observed → KG :Fact"
 
-  # Spin up a minimal in-process stub Benchling server on port 18013
-  STUB_PORT=18013
-  $PYTHON - <<'PYEOF' &
-import json, http.server, threading, sys, os, signal
-
-class Handler(http.server.BaseHTTPRequestHandler):
-    def log_message(self, *a): pass
-    def do_GET(self):
-        if "/entries/" in self.path:
-            body = json.dumps({
-                "id": "etr_stub001",
-                "schema": {"id": "sch_stub"},
-                "fields": {"yield_pct": {"value": 92.3, "displayValue": "92.3%"}},
-                "attachments": [],
-                "createdAt": "2024-01-01T00:00:00Z",
-                "modifiedAt": "2024-01-02T00:00:00Z",
-            }).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(body)
-    def do_POST(self):
-        if "/entries" in self.path:
-            body = json.dumps({"entries": [
-                {"id": "etr_stub001",
-                 "schema": {"id": "sch_stub"},
-                 "fields": {"yield_pct": {"value": 92.3}},
-                 "attachments": [], "modifiedAt": "2024-01-02T00:00:00Z"}
-            ]}).encode()
-            self.send_response(200)
-            self.send_header("Content-Type", "application/json")
-            self.end_headers()
-            self.wfile.write(body)
-
-httpd = http.server.HTTPServer(("127.0.0.1", 18013), Handler)
-signal.signal(signal.SIGTERM, lambda *_: sys.exit(0))
-httpd.serve_forever()
-PYEOF
-  STUB_PID=$!
-  sleep 1
-
-  # Query the stub ELN via mcp_eln_benchling running locally (if available)
-  # If the service is in Docker, we curl it directly; otherwise use Python.
-  stub_resp=$(curl -sf -X POST http://127.0.0.1:18013/api/v2/entries \
-    -H "Content-Type: application/json" \
-    -d '{"pageSize":"1"}' 2>/dev/null || echo "{}")
-  if echo "$stub_resp" | python3 -c "import json,sys; d=json.load(sys.stdin); assert d.get('entries'), 'no entries'" 2>/dev/null; then
-    ok "Stub Benchling server responded with entries"
-  else
-    warn "Stub Benchling server response check skipped (OK — confirms stub is up)"
-  fi
-
-  # Verify ingestion_events row from source cache (simulated via direct DB insert)
+  # No live source-system MCP adapters in this build. Insert a synthetic
+  # ingestion_events row to verify the kg_source_cache projector is wired
+  # and the ingestion_events table is reachable.
   docker compose exec -T postgres psql -U chemclaw -d chemclaw -v ON_ERROR_STOP=1 -c "
     INSERT INTO ingestion_events (event_type, source_table, source_row_id, payload)
     VALUES ('source_fact_observed', 'smoke_test', 'etr_stub001', '{
-      \"source_system_id\": \"benchling\",
+      \"source_system_id\": \"smoke-stub\",
       \"predicate\": \"HAS_YIELD\",
       \"subject_id\": \"etr_stub001\",
       \"object_value\": 92.3,
@@ -233,10 +183,6 @@ PYEOF
   source_fact_count=${source_fact_count//[$'\t\r\n ']}
   [[ "${source_fact_count:-0}" -ge 1 ]] && ok "source_fact_observed events: ${source_fact_count}" \
     || warn "No source_fact_observed events found (KG projector may not be running)"
-
-  # Stop the stub server
-  kill "$STUB_PID" 2>/dev/null || true
-  ok "Benchling stub server stopped"
 fi
 
 # --------------------------------------------------------------------------

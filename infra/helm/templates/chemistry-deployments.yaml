@@ -12,7 +12,6 @@
   (dict "name" "mcp-aizynth"   "image" .Values.chemistry.mcpAizynth.image   "port" .Values.chemistry.mcpAizynth.port)
   (dict "name" "mcp-chemprop"  "image" .Values.chemistry.mcpChemprop.image  "port" .Values.chemistry.mcpChemprop.port)
   (dict "name" "mcp-xtb"       "image" .Values.chemistry.mcpXtb.image       "port" .Values.chemistry.mcpXtb.port)
-  (dict "name" "mcp-admetlab"  "image" .Values.chemistry.mcpAdmetlab.image  "port" .Values.chemistry.mcpAdmetlab.port)
   (dict "name" "mcp-sirius"    "image" .Values.chemistry.mcpSirius.image    "port" .Values.chemistry.mcpSirius.port)
 }}
 
