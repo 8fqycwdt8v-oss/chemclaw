@@ -165,6 +165,28 @@ def test_ofat_campaigns_have_configured_counts(generated: dict[str, int]) -> Non
 
 
 # --------------------------------------------------------------------------
+# Sample-code format (cross-link contract with fake_logs)
+# --------------------------------------------------------------------------
+
+
+def test_sample_code_format_is_s_project_ordinal(generated: dict[str, int]) -> None:
+    """sample_code must be `S-{PROJECT_CODE}-{NNNNN}` (5-digit zero-padded).
+
+    fake_logs.datasets cross-links via this exact format. If you change it,
+    coordinate with the logs-mcp-builder first — the cross-link integrity
+    test (≥1500 datasets matching a samples.sample_code) breaks otherwise.
+    """
+    import re
+
+    fdir = generated["__fixtures_dir__"]  # type: ignore[index]
+    rows = _read_table(fdir, "samples")
+    code_idx = _col_index("samples", "sample_code")
+    pattern = re.compile(r"^S-(NCE-1234|NCE-5678|GEN-9999|FOR-1111)-\d{5}$")
+    bad = [r[code_idx] for r in rows if not pattern.match(r[code_idx])]
+    assert not bad, f"sample_codes don't match S-PROJECT-NNNNN: {bad[:5]}"
+
+
+# --------------------------------------------------------------------------
 # Determinism
 # --------------------------------------------------------------------------
 

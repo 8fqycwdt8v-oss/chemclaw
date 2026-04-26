@@ -802,9 +802,21 @@ def generate(world: dict[str, Any], seed: int) -> GenState:
     attachments_target = 3500
     audit_target = 12000
 
-    # Samples: ~1.5 per entry, but skewed so some entries have 0 and others have many
+    # Samples: ~1.5 per entry, but skewed so some entries have 0 and others have many.
+    #
+    # sample_code format: S-{PROJECT_CODE}-{NNNNN} (zero-padded sequential
+    # per project). This is the cross-link key used by fake_logs.datasets
+    # (~70% of which carry a sample_id matching one of these codes), so it
+    # MUST stay deterministic and predictable from the project code +
+    # ordinal alone — DO NOT mix entry-derived bytes into it.
     sample_rng = random.Random(seed + 1)
     samples_emitted = 0
+    project_sample_counters: dict[str, int] = {}
+    # Build a fast lookup project_id → project_code (avoids the linear
+    # search inside the hot loop).
+    pid_to_code: dict[str, str] = {
+        stable_uuid("project", p["code"]): p["code"] for p in world["projects"]
+    }
     for e in entries:
         if samples_emitted >= samples_target:
             break
@@ -813,15 +825,16 @@ def generate(world: dict[str, Any], seed: int) -> GenState:
         n_samples = 0 if roll < 0.10 else 1 if roll < 0.55 else 2 if roll < 0.85 else sample_rng.randint(3, 5)
         if e["data_quality_tier"] == "failed":
             n_samples = max(0, n_samples - 1)
+        proj_code = pid_to_code[e["project_id"]]
         for s_idx in range(n_samples):
             if samples_emitted >= samples_target:
                 break
             sample_id = stable_uuid("sample", e["id"], s_idx)
-            project_compounds_for_proj = project_compounds[
-                next(p["code"] for p in world["projects"] if stable_uuid("project", p["code"]) == e["project_id"])
-            ]
+            project_compounds_for_proj = project_compounds[proj_code]
             cmpd = sample_rng.choice(project_compounds_for_proj) if project_compounds_for_proj else None
-            sample_code = f"{e['id'][:8]}-S{s_idx + 1:02d}"
+            ordinal = project_sample_counters.get(proj_code, 0) + 1
+            project_sample_counters[proj_code] = ordinal
+            sample_code = f"S-{proj_code}-{ordinal:05d}"
             amt = round(sample_rng.uniform(5, 500), 2)
             purity = round(sample_rng.uniform(70, 99.9), 2)
             state.add(
