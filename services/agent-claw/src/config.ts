@@ -33,6 +33,17 @@ const ConfigSchema = z.object({
   // Token budget per turn. Guards against runaway loops consuming the context window.
   AGENT_TOKEN_BUDGET: z.coerce.number().int().positive().default(120_000),
 
+  // Session-level (cross-turn) token budgets. Falls back to these when an
+  // agent_sessions row's session_token_budget column is NULL. Default 1M
+  // input and 200k output is enough for ~10 typical turns of investigation.
+  AGENT_SESSION_INPUT_TOKEN_BUDGET: z.coerce.number().int().positive().default(1_000_000),
+  AGENT_SESSION_OUTPUT_TOKEN_BUDGET: z.coerce.number().int().positive().default(200_000),
+
+  // Plan v2 — auto-chain cap. When a chained plan keeps making progress,
+  // the harness will re-enter the loop up to this many times before
+  // demanding a fresh user POST. Prevents infinite chains.
+  AGENT_PLAN_MAX_AUTO_TURNS: z.coerce.number().int().positive().default(10),
+
   // Chat-specific rate limit (lower than the global rate limit).
   AGENT_CHAT_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
   AGENT_CHAT_RATE_LIMIT_WINDOW_MS: z.coerce.number().int().positive().default(60_000),

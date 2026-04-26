@@ -314,6 +314,11 @@ registerOptimizerRoutes(app, {
 registerSessionsRoute(app, {
   pool,
   getUser: getUser as (req: import("fastify").FastifyRequest) => string,
+  // Phase E + I: chained-run + resume endpoints share the chat harness deps.
+  config: cfg,
+  llm: llmProvider,
+  registry,
+  promptRegistry,
 });
 
 app.get("/readyz", async (_req, reply) => {

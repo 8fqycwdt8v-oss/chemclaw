@@ -46,9 +46,33 @@ export interface SessionState {
   awaitingQuestion: string | null;
   messageCount: number;
   todos: Todo[];
+  /** Optimistic-concurrency token; regenerated on every UPDATE that
+   * mutates user-facing state. saveSession with mismatched expectedEtag
+   * raises OptimisticLockError. */
+  etag: string;
+  // Cross-turn budget accumulation (Phase F). NULL session_token_budget
+  // means "fall back to AGENT_SESSION_TOKEN_BUDGET env var".
+  sessionInputTokens: number;
+  sessionOutputTokens: number;
+  sessionSteps: number;
+  sessionTokenBudget: number | null;
+  // Auto-resume cap (Phase I). reanimator stops when count >= cap.
+  autoResumeCount: number;
+  autoResumeCap: number;
   createdAt: Date;
   updatedAt: Date;
   expiresAt: Date;
+}
+
+/**
+ * Thrown by saveSession when the row's etag has changed since loadSession.
+ * Caller should reload + reconcile + retry. Maps to HTTP 409 at the route layer.
+ */
+export class OptimisticLockError extends Error {
+  constructor(sessionId: string) {
+    super(`agent_sessions row ${sessionId} was modified concurrently`);
+    this.name = "OptimisticLockError";
+  }
 }
 
 interface SessionRow {
@@ -58,6 +82,13 @@ interface SessionRow {
   last_finish_reason: SessionFinishReason | null;
   awaiting_question: string | null;
   message_count: number;
+  etag: string;
+  session_input_tokens: string;  // BIGINT — pg returns string
+  session_output_tokens: string;
+  session_steps: number;
+  session_token_budget: string | null;
+  auto_resume_count: number;
+  auto_resume_cap: number;
   created_at: Date;
   updated_at: Date;
   expires_at: Date;
@@ -127,6 +158,13 @@ export async function loadSession(
               last_finish_reason,
               awaiting_question,
               message_count,
+              etag::text AS etag,
+              session_input_tokens,
+              session_output_tokens,
+              session_steps,
+              session_token_budget,
+              auto_resume_count,
+              auto_resume_cap,
               created_at,
               updated_at,
               expires_at
@@ -152,6 +190,14 @@ export async function loadSession(
       lastFinishReason: row.last_finish_reason,
       awaitingQuestion: row.awaiting_question,
       messageCount: row.message_count,
+      etag: row.etag,
+      sessionInputTokens: Number(row.session_input_tokens),
+      sessionOutputTokens: Number(row.session_output_tokens),
+      sessionSteps: row.session_steps,
+      sessionTokenBudget:
+        row.session_token_budget == null ? null : Number(row.session_token_budget),
+      autoResumeCount: row.auto_resume_count,
+      autoResumeCap: row.auto_resume_cap,
       todos: rowsToTodos(todosResult.rows),
       createdAt: row.created_at,
       updatedAt: row.updated_at,
@@ -180,9 +226,16 @@ export async function saveSession(
     lastFinishReason?: SessionFinishReason | null;
     awaitingQuestion?: string | null;
     messageCount?: number;
+    sessionInputTokens?: number;
+    sessionOutputTokens?: number;
+    sessionSteps?: number;
+    autoResumeCount?: number;
+    /** Optimistic-concurrency check: if set, the UPDATE WHERE clause
+     * matches on this etag. Mismatch → OptimisticLockError. */
+    expectedEtag?: string;
   },
-): Promise<void> {
-  await withUserContext(pool, userEntraId, async (client) => {
+): Promise<{ etag: string }> {
+  return withUserContext(pool, userEntraId, async (client) => {
     // JSON-safe serialization: Sets and Maps don't serialize natively.
     const safeScratch = patch.scratchpad
       ? JSON.parse(
@@ -213,13 +266,47 @@ export async function saveSession(
       sets.push(`message_count = $${params.length + 1}`);
       params.push(patch.messageCount);
     }
-    if (sets.length === 0) return; // nothing to do
+    if (patch.sessionInputTokens !== undefined) {
+      sets.push(`session_input_tokens = $${params.length + 1}`);
+      params.push(patch.sessionInputTokens);
+    }
+    if (patch.sessionOutputTokens !== undefined) {
+      sets.push(`session_output_tokens = $${params.length + 1}`);
+      params.push(patch.sessionOutputTokens);
+    }
+    if (patch.sessionSteps !== undefined) {
+      sets.push(`session_steps = $${params.length + 1}`);
+      params.push(patch.sessionSteps);
+    }
+    if (patch.autoResumeCount !== undefined) {
+      sets.push(`auto_resume_count = $${params.length + 1}`);
+      params.push(patch.autoResumeCount);
+    }
+
+    // Always read back the etag so callers can chain a follow-up save.
+    if (sets.length === 0) {
+      const r = await client.query<{ etag: string }>(
+        `SELECT etag::text AS etag FROM agent_sessions WHERE id = $1::uuid`,
+        [sessionId],
+      );
+      const row = r.rows[0];
+      if (!row) throw new OptimisticLockError(sessionId);
+      return { etag: row.etag };
+    }
 
     params.push(sessionId);
-    await client.query(
-      `UPDATE agent_sessions SET ${sets.join(", ")} WHERE id = $${params.length}::uuid`,
-      params,
-    );
+    const idIdx = params.length;
+    let sql = `UPDATE agent_sessions SET ${sets.join(", ")} WHERE id = $${idIdx}::uuid`;
+    if (patch.expectedEtag !== undefined) {
+      params.push(patch.expectedEtag);
+      sql += ` AND etag = $${params.length}::uuid`;
+    }
+    sql += ` RETURNING etag::text AS etag`;
+
+    const r = await client.query<{ etag: string }>(sql, params);
+    const row = r.rows[0];
+    if (!row) throw new OptimisticLockError(sessionId);
+    return { etag: row.etag };
   });
 }
 

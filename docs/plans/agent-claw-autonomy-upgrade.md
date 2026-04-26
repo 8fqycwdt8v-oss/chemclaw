@@ -80,13 +80,58 @@ This is the single biggest unlock for autonomous multi-hour work — the agent c
 - Unit tests for `session-store` round-trip, `manage_todos` CRUD, `ask_user` event emission + state persistence, `/api/sessions/:id` shape.
 - One commit per phase (A, B, C, D). The diff for each is contained enough to bisect.
 
-## Out of scope for first cut
+## Phase E — Plan v2 (DB-backed plans + chaining)
 
-- **Plan v2 (DB-backed plans + chaining).** The existing in-memory 5-min `planStore` is fine for what `/plan` does today (single-shot preview). Migrating it to the new session table is a follow-up; the new session infra makes it easy.
-- **Cross-turn budget accumulation.** The existing per-turn budget is a known cap. After Phase A lands, persisting `tokens_used_in_session` is a one-column addition.
-- **Auto-resume cron.** Today the client decides when to POST. A cron-style "wake the agent every 5 min if a session has unfinished todos" would close the loop on truly multi-day tasks but is its own design.
-- **Sub-agent persistence.** Sub-agents stay isolated for now; folding their `seenFactIds` into the parent session is a follow-up.
-- **Concurrent edits to the same session.** Two browser tabs writing to the same session_id will race; we'll use last-writer-wins for now and add an `etag` column later if needed.
+**Why:** Today's `/plan` writes to an in-memory 5-min `planStore` and runs once on approval. That's single-shot — there's no chaining if a plan exceeds `max_steps`. To support "investigate batch 7 across 8 hours of tool calls", we need plans that survive turn boundaries and auto-continue.
+
+**Schema** (`db/init/14_agent_plans.sql`):
+- `agent_plans(id uuid pk, session_id uuid → agent_sessions, steps jsonb, current_step_index int default 0, status text check in ('proposed','approved','running','completed','cancelled','failed'), created_at, updated_at)`
+- RLS via parent session.
+
+**Code:**
+- `core/plan-store.ts` — replace the in-memory `planStore` Map with `loadPlan` / `savePlan` / `advancePlan` against the new table.
+- `routes/plan.ts` — `/plan/approve` creates a row with status='approved' instead of looking up an in-memory ID.
+- `routes/chat.ts` — when invoked with `plan_id` set, after each user-visible turn, if the plan still has `current_step_index < steps.length`, immediately recurse without waiting for a new user message (bounded by `AGENT_PLAN_MAX_AUTO_TURNS`).
+- New SSE event: `plan_progress` (`current_step_index`, `total_steps`, `last_step_status`).
+
+## Phase F — Cross-turn budget accumulation
+
+**Why:** The existing `Budget` class is per-turn — every `/api/chat` POST resets prompt+completion counters. A long-running session has no session-level cap; a runaway plan could burn unlimited tokens.
+
+**Schema:** `agent_sessions` add `session_input_tokens BIGINT NOT NULL DEFAULT 0`, `session_output_tokens BIGINT NOT NULL DEFAULT 0`, `session_steps INT NOT NULL DEFAULT 0`, `session_token_budget BIGINT` (NULL = use env default).
+
+**Code:**
+- `core/budget.ts` — add an optional `sessionBudget?: { used, cap }` parameter; `consumeStep` increments both per-turn and session counters. `isStepCapReached()` honors both caps.
+- `routes/chat.ts` — load session totals into Budget at turn start; save back at turn end.
+- New error variant: `SessionBudgetExceededError`. Surfaces as HTTP 429 from `/api/chat`.
+- Env var: `AGENT_SESSION_TOKEN_BUDGET` (default 1_000_000).
+
+## Phase G — Sub-agent persistence
+
+**Why:** Sub-agents harvest `seenFactIds` (citations the sub-agent grounded its answer on). Today those facts vanish at sub-agent exit; the parent's anti-fabrication hook can't tell that the sub-agent's answer is grounded in real facts. The parent re-checks against its own `seenFactIds` Set and over-rejects.
+
+**Code:**
+- `core/sub-agent.ts` — `SubAgentResult` already carries `citations: string[]`. Add a `mergeIntoParent: boolean = true` option (default merge).
+- `tools/builtins/dispatch_sub_agent.ts` — after the sub-agent returns, if `mergeIntoParent`, do `for (const id of result.citations) parentCtx.seenFactIds.add(id)`. The parent's anti-fabrication hook now sees the union.
+
+## Phase H — etag concurrency
+
+**Why:** Two browser tabs editing the same session race. Last-writer-wins corrupts the scratchpad. An optimistic-concurrency token detects + rejects the conflict.
+
+**Schema:** `agent_sessions` add `etag UUID NOT NULL DEFAULT uuid_generate_v4()`. Update trigger regenerates etag on every `UPDATE`.
+
+**Code:**
+- `core/session-store.ts` — `loadSession` returns `etag`; `saveSession` accepts optional `expectedEtag`. Uses `UPDATE ... WHERE id = $id AND etag = $expected RETURNING etag`. If RETURNING is empty → throw `OptimisticLockError`.
+- `routes/chat.ts` — load etag at turn start, pass as `expectedEtag` on save. On mismatch, surface `409` (or the SSE equivalent: emit `error` event with `code: "concurrent_modification"`).
+
+## Phase I — Auto-resume
+
+**Why:** Truly-multi-day autonomous work needs a "wake the agent" mechanism. Today the agent only runs when the client POSTs.
+
+**Code:**
+- `routes/sessions.ts` — `POST /api/sessions/:id/resume`. Auth-gated by admin role + session ownership. If `last_finish_reason` ∈ {`max_steps`, `stop`} (NOT `awaiting_user_input` — that needs human input) AND there are `in_progress` todos AND session-budget not exceeded → run one harness turn with a synthetic user message (`"Continue with the next step on your todo list."`). Returns the updated session state.
+- New service `services/optimizer/session_reanimator/` — Python `apscheduler` worker. Polls every 5 min: `SELECT id FROM agent_sessions WHERE last_finish_reason = 'max_steps' AND updated_at < NOW() - INTERVAL '5 minutes' AND session_input_tokens < session_token_budget AND id IN (SELECT session_id FROM agent_todos WHERE status = 'in_progress') LIMIT 10`. For each, POST `/api/sessions/:id/resume`.
+- Cap auto-resumes per session: `agent_sessions.auto_resume_count INT DEFAULT 0`. Cron stops at 10 resumes (configurable). Prevents infinite loops.
 
 ## Acceptance
 
