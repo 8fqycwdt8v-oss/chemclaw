@@ -16,6 +16,7 @@
 import { BudgetExceededError } from "./budget.js";
 import { stepOnce } from "./step.js";
 import type { HarnessOptions, HarnessResult, Message, ToolContext } from "./types.js";
+import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 
 export { type HarnessOptions, type HarnessResult };
 
@@ -99,6 +100,18 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
       finishReason = "budget_exceeded";
       // Re-throw so the caller knows the turn was aborted mid-flight.
       // post_turn still fires in the finally block below.
+      throw err;
+    }
+    if (err instanceof AwaitingUserInputError) {
+      // ask_user is a control-flow exception, not an error: the model
+      // legitimately asked for clarification. Set finishReason and return
+      // normally — post_turn fires in finally to persist the question to
+      // session state. Callers (chat.ts, runChainedHarness) check the
+      // finishReason and emit the awaiting_user_input SSE event.
+      finishReason = "awaiting_user_input";
+      // Mirror BudgetExceededError's "throw + finally fires" pattern so the
+      // SSE streaming path in chat.ts can short-circuit the streaming loop.
+      // runChainedHarness explicitly catches this class.
       throw err;
     }
     // Other errors (tool execution failures, hook aborts) propagate as-is.

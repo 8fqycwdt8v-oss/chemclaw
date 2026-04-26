@@ -30,7 +30,6 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 from datetime import datetime, timezone
 from typing import Any
 
@@ -166,24 +165,34 @@ async def amain() -> None:
                 for row in resumable:
                     sid = row["id"]
                     uid = row["user_entra_id"]
-                    log.info(
-                        "resuming session %s (user=%s, attempt=%d/%d)",
-                        sid, uid, row["auto_resume_count"] + 1, row["auto_resume_cap"],
-                    )
-                    result = await resume_session(client, settings, sid, uid)
-                    if result["ok"]:
-                        body = result["body"]
+                    # Per-session try/except: a single failure (network,
+                    # malformed JSON, hung tool) must not stall the rest of
+                    # the batch. Without this, one bad session DOSes every
+                    # peer in the same tick until the next 5-minute cycle.
+                    try:
                         log.info(
-                            "session %s resumed: finish=%s steps=%d count=%d",
-                            sid,
-                            body.get("final_finish_reason"),
-                            body.get("total_steps_used", 0),
-                            body.get("auto_resume_count", 0),
+                            "resuming session %s (user=%s, attempt=%d/%d)",
+                            sid, uid, row["auto_resume_count"] + 1, row["auto_resume_cap"],
                         )
-                    else:
-                        log.warning(
-                            "session %s resume failed (%d): %s",
-                            sid, result["status"], result["body"],
+                        result = await resume_session(client, settings, sid, uid)
+                        if result["ok"]:
+                            body = result["body"]
+                            log.info(
+                                "session %s resumed: finish=%s steps=%d count=%d",
+                                sid,
+                                body.get("final_finish_reason"),
+                                body.get("total_steps_used", 0),
+                                body.get("auto_resume_count", 0),
+                            )
+                        else:
+                            log.warning(
+                                "session %s resume failed (%d): %s",
+                                sid, result["status"], result["body"],
+                            )
+                    except Exception as session_exc:  # noqa: BLE001 — keep batch alive
+                        log.exception(
+                            "session %s resume raised; skipping to next: %s",
+                            sid, session_exc,
                         )
             except Exception as exc:  # noqa: BLE001 — keep the loop alive
                 log.exception("tick failed: %s", exc)
@@ -202,11 +211,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-
-# Override the env-var name used by `agent_user_header`. The setting is
-# `agent_user_header` so pydantic-settings reads `AGENT_USER_HEADER` —
-# but the docker-compose convention uses `AGENT_USER_HEADER`, fine.
-
-# Ensure unused imports trip ruff if the file gets edited.
-_ = os

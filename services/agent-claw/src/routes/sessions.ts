@@ -17,6 +17,7 @@ import type { PromptRegistry } from "../prompts/registry.js";
 import {
   loadSession,
   saveSession,
+  OptimisticLockError,
   type SessionFinishReason,
 } from "../core/session-store.js";
 import {
@@ -25,8 +26,13 @@ import {
 } from "../core/plan-store-db.js";
 import { withUserContext } from "../db/with-user-context.js";
 import { Lifecycle } from "../core/lifecycle.js";
-import { Budget } from "../core/budget.js";
+import {
+  Budget,
+  BudgetExceededError,
+  SessionBudgetExceededError,
+} from "../core/budget.js";
 import { runHarness } from "../core/harness.js";
+import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 import { registerRedactSecretsHook } from "../core/hooks/redact-secrets.js";
 import { registerTagMaturityHook } from "../core/hooks/tag-maturity.js";
 import { registerBudgetGuardHook } from "../core/hooks/budget-guard.js";
@@ -364,10 +370,22 @@ async function runChainedHarness(
         { role: "user", content: "Continue from the last step. Stop when the plan is complete." },
       ];
     } catch (err) {
-      const errName = err instanceof Error ? err.name : "";
-      if (errName === "SessionBudgetExceededError") {
+      // Use instanceof checks rather than err.name string-compares so a class
+      // rename / minification can't silently change classification.
+      if (err instanceof AwaitingUserInputError) {
+        // ask_user fired: the harness threw because the LLM legitimately
+        // asked for clarification. The runHarness finally already ran
+        // post_turn (which persists awaiting_question). Stop chaining —
+        // a real human reply is required to resume.
+        finalFinishReason = "awaiting_user_input";
+      } else if (err instanceof SessionBudgetExceededError) {
         finalFinishReason = "session_budget_exceeded";
-      } else if (errName === "OptimisticLockError") {
+      } else if (err instanceof BudgetExceededError) {
+        // Per-turn budget overrun is recoverable — the next chained
+        // iteration starts with a fresh per-turn budget. Map to max_steps
+        // so the existing termination logic decides whether to chain again.
+        finalFinishReason = "max_steps";
+      } else if (err instanceof OptimisticLockError) {
         finalFinishReason = "concurrent_modification";
       } else {
         finalFinishReason = "error";

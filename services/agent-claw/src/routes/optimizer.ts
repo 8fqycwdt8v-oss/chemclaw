@@ -11,7 +11,7 @@
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Pool } from "pg";
-import { withUserContext } from "../db/with-user-context.js";
+import { withUserContext, withSystemContext } from "../db/with-user-context.js";
 
 interface OptimizerRouteDeps {
   pool: Pool;
@@ -58,24 +58,34 @@ export function registerOptimizerRoutes(
   app: FastifyInstance,
   { pool, getUser }: OptimizerRouteDeps,
 ): void {
+  // Optimizer routes read system-scoped catalog tables (prompt_registry,
+  // skill_promotion_events, shadow_run_scores). Under FORCE RLS + the
+  // chemclaw_app role, raw pool.query returns zero rows because no
+  // policy matches an empty user. We wrap each query in withSystemContext
+  // (sentinel '__system__' user) so the policies that gate on
+  // current_setting('app.current_user_entra_id') being non-empty pass.
+  // The admin gate has already authorized the calling user.
+
   // -----------------------------------------------------------------------
   // GET /api/optimizer/runs
   // -----------------------------------------------------------------------
   app.get("/api/optimizer/runs", async (req, reply) => {
     if (!(await gateAdmin(pool, getUser, req, reply))) return;
-    const r = await pool.query<{
-      name: string;
-      version: number;
-      active: boolean;
-      shadow_until: Date | null;
-      gepa_metadata: Record<string, unknown> | null;
-      created_at: Date;
-    }>(
-      `SELECT name, version, active, shadow_until, gepa_metadata, created_at
-         FROM prompt_registry
-        WHERE gepa_metadata IS NOT NULL
-        ORDER BY created_at DESC
-        LIMIT 100`,
+    const r = await withSystemContext(pool, (client) =>
+      client.query<{
+        name: string;
+        version: number;
+        active: boolean;
+        shadow_until: Date | null;
+        gepa_metadata: Record<string, unknown> | null;
+        created_at: Date;
+      }>(
+        `SELECT name, version, active, shadow_until, gepa_metadata, created_at
+           FROM prompt_registry
+          WHERE gepa_metadata IS NOT NULL
+          ORDER BY created_at DESC
+          LIMIT 100`,
+      ),
     );
     return reply.code(200).send({ runs: r.rows });
   });
@@ -85,11 +95,13 @@ export function registerOptimizerRoutes(
   // -----------------------------------------------------------------------
   app.get("/api/optimizer/promotions", async (req, reply) => {
     if (!(await gateAdmin(pool, getUser, req, reply))) return;
-    const r = await pool.query(
-      `SELECT skill_name, version, event_type, reason, metadata, created_at
-         FROM skill_promotion_events
-        ORDER BY created_at DESC
-        LIMIT 200`,
+    const r = await withSystemContext(pool, (client) =>
+      client.query(
+        `SELECT skill_name, version, event_type, reason, metadata, created_at
+           FROM skill_promotion_events
+          ORDER BY created_at DESC
+          LIMIT 200`,
+      ),
     );
     return reply.code(200).send({ events: r.rows });
   });
@@ -99,15 +111,17 @@ export function registerOptimizerRoutes(
   // -----------------------------------------------------------------------
   app.get("/api/optimizer/shadow", async (req, reply) => {
     if (!(await gateAdmin(pool, getUser, req, reply))) return;
-    const r = await pool.query(
-      `SELECT prompt_name, version,
-              AVG(score) AS mean_score,
-              COUNT(*) AS run_count,
-              MIN(run_at) AS first_run_at,
-              MAX(run_at) AS last_run_at
-         FROM shadow_run_scores
-        GROUP BY prompt_name, version
-        ORDER BY last_run_at DESC`,
+    const r = await withSystemContext(pool, (client) =>
+      client.query(
+        `SELECT prompt_name, version,
+                AVG(score) AS mean_score,
+                COUNT(*) AS run_count,
+                MIN(run_at) AS first_run_at,
+                MAX(run_at) AS last_run_at
+           FROM shadow_run_scores
+          GROUP BY prompt_name, version
+          ORDER BY last_run_at DESC`,
+      ),
     );
     return reply.code(200).send({ shadows: r.rows });
   });
@@ -117,11 +131,13 @@ export function registerOptimizerRoutes(
   // -----------------------------------------------------------------------
   app.get("/api/optimizer/golden", async (req, reply) => {
     if (!(await gateAdmin(pool, getUser, req, reply))) return;
-    const r = await pool.query(
-      `SELECT prompt_name, version, score, per_class_scores, run_at
-         FROM shadow_run_scores
-        ORDER BY run_at DESC
-        LIMIT 30`,
+    const r = await withSystemContext(pool, (client) =>
+      client.query(
+        `SELECT prompt_name, version, score, per_class_scores, run_at
+           FROM shadow_run_scores
+          ORDER BY run_at DESC
+          LIMIT 30`,
+      ),
     );
     return reply.code(200).send({ scores: r.rows });
   });

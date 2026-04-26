@@ -20,12 +20,21 @@ ALTER TABLE agent_sessions
 CREATE OR REPLACE FUNCTION agent_sessions_regen_etag()
 RETURNS TRIGGER AS $$
 BEGIN
-  -- Only regenerate when one of the user-facing columns changes — pure
-  -- internal-counter updates (e.g., the trigger itself) don't need a new etag.
+  -- Regenerate when ANY mutable column changes. Originally we only bumped
+  -- on user-facing columns (scratchpad/last_finish_reason/awaiting_question/
+  -- message_count) but that left a hole: a parallel writer that bumped
+  -- only the budget counters (session_input_tokens/output_tokens/steps) or
+  -- auto_resume_count would leave etag unchanged, letting the next
+  -- expectedEtag check pass and silently overwrite the increment.
+  -- Including the counter columns closes the bypass.
   IF NEW.scratchpad IS DISTINCT FROM OLD.scratchpad
      OR NEW.last_finish_reason IS DISTINCT FROM OLD.last_finish_reason
      OR NEW.awaiting_question IS DISTINCT FROM OLD.awaiting_question
-     OR NEW.message_count IS DISTINCT FROM OLD.message_count THEN
+     OR NEW.message_count IS DISTINCT FROM OLD.message_count
+     OR NEW.session_input_tokens IS DISTINCT FROM OLD.session_input_tokens
+     OR NEW.session_output_tokens IS DISTINCT FROM OLD.session_output_tokens
+     OR NEW.session_steps IS DISTINCT FROM OLD.session_steps
+     OR NEW.auto_resume_count IS DISTINCT FROM OLD.auto_resume_count THEN
     NEW.etag := uuid_generate_v4();
   END IF;
   RETURN NEW;

@@ -88,13 +88,15 @@ export function buildManageTodosTool(pool: Pool) {
     execute: async (ctx, input) => {
       const sessionId = ctx.scratchpad.get("session_id");
       if (typeof sessionId !== "string" || sessionId.length === 0) {
-        // Stateless turn (no session_id). Return a structured no-op so the
-        // model can adapt; do not throw — that would abort the tool call.
-        return {
-          todos: [],
-          notice:
-            "manage_todos requires an active session — none is bound to this turn. Continue without a checklist.",
-        };
+        // Throw rather than return a "successful" empty list — otherwise
+        // the LLM may interpret todos.length===0 as "no todos exist" and
+        // proceed as if it had created the checklist. A typed error
+        // surfaces in the harness as a tool failure, which the model
+        // handles by adapting (typically: skip the checklist + carry on).
+        throw new Error(
+          "manage_todos requires an active session_id in scratchpad. " +
+            "If you intended to operate without state, do not call this tool.",
+        );
       }
 
       switch (input.action) {

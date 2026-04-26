@@ -100,15 +100,15 @@ describe("manage_todos — create", () => {
     expect(result.todos[0]!.status).toBe("pending");
   });
 
-  it("returns a notice when no session_id is bound", async () => {
+  it("throws when no session_id is bound", async () => {
     const { pool } = makeMockPool({});
     const tool = buildManageTodosTool(pool);
-    const result = await tool.execute(makeCtx(null), {
-      action: "create",
-      contents: ["Lonely step"],
-    });
-    expect(result.todos).toEqual([]);
-    expect(result.notice).toMatch(/requires an active session/);
+    await expect(
+      tool.execute(makeCtx(null), {
+        action: "create",
+        contents: ["Lonely step"],
+      }),
+    ).rejects.toThrow(/active session_id/);
   });
 });
 

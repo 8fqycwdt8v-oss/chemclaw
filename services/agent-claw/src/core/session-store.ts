@@ -24,18 +24,22 @@ export interface Todo {
 /**
  * Why the last harness turn ended. Drives the client's resume logic.
  *
- *   stop                 — model produced a final text response.
- *   max_steps            — step cap reached; client may re-POST to continue.
- *   budget_exceeded      — token budget tripped; needs a fresh budget.
- *   awaiting_user_input  — ask_user fired; client must POST a user message
- *                          carrying the answer to resume.
- *   error                — uncaught exception; check logs.
+ *   stop                       — model produced a final text response.
+ *   max_steps                  — step cap reached; client may re-POST to continue.
+ *   budget_exceeded            — per-turn token budget tripped; fresh budget needed.
+ *   session_budget_exceeded    — per-session lifetime cap tripped; needs cap bump.
+ *   awaiting_user_input        — ask_user fired; client must POST a user message
+ *                                carrying the answer to resume.
+ *   concurrent_modification    — etag mismatch on save; client should reload + retry.
+ *   error                      — uncaught exception; check logs.
  */
 export type SessionFinishReason =
   | "stop"
   | "max_steps"
   | "budget_exceeded"
+  | "session_budget_exceeded"
   | "awaiting_user_input"
+  | "concurrent_modification"
   | "error";
 
 export interface SessionState {
