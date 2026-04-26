@@ -38,6 +38,16 @@ import { buildSynthesizeInsightsTool } from "./tools/builtins/synthesize_insight
 import { buildComputeConfidenceEnsembleTool } from "./tools/builtins/compute_confidence_ensemble.js";
 import { buildProposeHypothesisTool } from "./tools/builtins/propose_hypothesis.js";
 import { buildDraftSectionTool } from "./tools/builtins/draft_section.js";
+// Source-system wrappers (Phase F.2 reboot — Postgres-backed mock ELN).
+import { buildQueryElnExperimentsTool } from "./tools/builtins/query_eln_experiments.js";
+import { buildFetchElnEntryTool } from "./tools/builtins/fetch_eln_entry.js";
+import { buildQueryElnCanonicalReactionsTool } from "./tools/builtins/query_eln_canonical_reactions.js";
+import { buildFetchElnCanonicalReactionTool } from "./tools/builtins/fetch_eln_canonical_reaction.js";
+import { buildFetchElnSampleTool } from "./tools/builtins/fetch_eln_sample.js";
+// Source-system wrappers — LOGS-by-SciY analytical SDMS (Phase F.2 reboot).
+import { buildQueryInstrumentRunsTool } from "./tools/builtins/query_instrument_runs.js";
+import { buildFetchInstrumentRunTool } from "./tools/builtins/fetch_instrument_run.js";
+import { buildQueryInstrumentDatasetsTool } from "./tools/builtins/query_instrument_datasets.js";
 // Autonomy upgrade — Claude-Code-like plan mode.
 import { buildManageTodosTool } from "./tools/builtins/manage_todos.js";
 import { buildAskUserTool } from "./tools/builtins/ask_user.js";
@@ -179,12 +189,42 @@ registry.registerBuiltin("compute_confidence_ensemble", () => asTool(buildComput
 registry.registerBuiltin("propose_hypothesis", () => asTool(buildProposeHypothesisTool(pool)));
 registry.registerBuiltin("draft_section", () => asTool(buildDraftSectionTool()));
 
-// Source-system wrappers (Phase F.2) intentionally omitted — the
-// admetlab/benchling/starlims/waters MCP services are no longer part
-// of this build. The post-tool source-cache hook + kg_source_cache
-// projector remain wired so any future ELN/LIMS/instrument MCP can
-// register a builtin matching the regex /^(query|fetch)_(eln|lims|instrument)_/
-// and inherit the caching pipeline for free.
+// Source-system wrappers — local Postgres-backed mock ELN (Phase F.2 reboot).
+// These five tool ids match /^(query|fetch)_eln_/ so the post-tool
+// source-cache hook fires automatically and stamps :Fact provenance.
+registry.registerBuiltin("query_eln_experiments", () =>
+  asTool(buildQueryElnExperimentsTool(cfg.MCP_ELN_LOCAL_URL)),
+);
+registry.registerBuiltin("fetch_eln_entry", () =>
+  asTool(buildFetchElnEntryTool(cfg.MCP_ELN_LOCAL_URL)),
+);
+registry.registerBuiltin("query_eln_canonical_reactions", () =>
+  asTool(buildQueryElnCanonicalReactionsTool(cfg.MCP_ELN_LOCAL_URL)),
+);
+registry.registerBuiltin("fetch_eln_canonical_reaction", () =>
+  asTool(buildFetchElnCanonicalReactionTool(cfg.MCP_ELN_LOCAL_URL)),
+);
+registry.registerBuiltin("fetch_eln_sample", () =>
+  asTool(buildFetchElnSampleTool(cfg.MCP_ELN_LOCAL_URL)),
+);
+
+// Source-system wrappers — LOGS-by-SciY analytical SDMS (Phase F.2 reboot).
+// The three tool ids match /^(query|fetch)_instrument_/ so the post-tool
+// source-cache hook fires and stamps :Fact provenance for every dataset.
+registry.registerBuiltin("query_instrument_runs", () =>
+  asTool(buildQueryInstrumentRunsTool(cfg.MCP_LOGS_SCIY_URL)),
+);
+registry.registerBuiltin("fetch_instrument_run", () =>
+  asTool(buildFetchInstrumentRunTool(cfg.MCP_LOGS_SCIY_URL)),
+);
+registry.registerBuiltin("query_instrument_datasets", () =>
+  asTool(buildQueryInstrumentDatasetsTool(cfg.MCP_LOGS_SCIY_URL)),
+);
+
+// LIMS adapters remain unwired in this build. The post-tool source-cache
+// hook + kg_source_cache projector remain available so any future LIMS
+// MCP can register a builtin matching /^(query|fetch)_lims_/ and inherit
+// the caching pipeline.
 
 // Note: forge_tool, run_program, induce_forged_tool_from_trace, dispatch_sub_agent,
 // add_forged_tool_test are intentionally NOT registered here. They have either

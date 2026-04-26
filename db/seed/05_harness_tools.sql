@@ -691,9 +691,209 @@ ON CONFLICT (name) DO UPDATE SET
   source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
   description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
 
--- ── Source-system MCP services ───────────────────────────────────────────────
--- No source-system MCP adapters (ELN/LIMS/instrument) are bundled in this build.
--- Future adapters can register here and re-use the source-cache hook +
--- kg_source_cache projector.
+-- ── Source-system MCP services (Phase F.2 reboot) ────────────────────────────
+-- Local Postgres-backed mock ELN. Registers under the same source-cache
+-- hook regex (/^(query|fetch)_(eln|lims|instrument)_/) as the dropped
+-- vendor adapters; downstream KG plumbing is unchanged.
+
+INSERT INTO mcp_tools (service_name, base_url, enabled, health_status)
+VALUES ('mcp-eln-local', 'http://localhost:8013', true, 'unknown')
+ON CONFLICT (service_name) DO UPDATE SET
+  base_url = EXCLUDED.base_url,
+  enabled  = EXCLUDED.enabled;
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'query_eln_experiments',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "project_code": {"type": "string", "minLength": 1, "maxLength": 64,
+                       "description": "Project code (e.g. NCE-1234)."},
+      "schema_kind":  {"type": "string", "maxLength": 64,
+                       "description": "Optional schema kind filter (e.g. ord-v0.3)."},
+      "reaction_id":  {"type": "string", "maxLength": 128,
+                       "description": "Optional canonical reaction id filter."},
+      "since":        {"type": "string", "format": "date-time",
+                       "description": "Optional ISO-8601 lower bound on modified_at."},
+      "entry_shape":  {"type": "string", "enum": ["mixed", "pure-structured", "pure-freetext"]},
+      "data_quality_tier": {"type": "string", "enum": ["clean", "partial", "noisy", "failed"]},
+      "limit":        {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
+      "cursor":       {"type": "string", "maxLength": 256,
+                       "description": "Opaque keyset cursor returned by the previous page."}
+    },
+    "required": ["project_code"]
+  }',
+  'Query the local mock ELN for experiments. Returns keyset-paginated ElnEntry rows; pass next_cursor back as cursor to continue.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'fetch_eln_entry',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "entry_id": {"type": "string", "minLength": 1, "maxLength": 128,
+                   "description": "ELN entry id."}
+    },
+    "required": ["entry_id"]
+  }',
+  'Fetch one ELN entry by id with full fields_jsonb, freetext, attachments, and audit summary.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'query_eln_canonical_reactions',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "family":         {"type": "string", "maxLength": 64,
+                         "description": "Reaction family (e.g. amide_coupling)."},
+      "project_code":   {"type": "string", "maxLength": 64,
+                         "description": "Project code filter."},
+      "step_number":    {"type": "integer", "minimum": 0, "maximum": 100},
+      "min_ofat_count": {"type": "integer", "minimum": 0, "maximum": 10000,
+                         "description": "Only return reactions with at least this many OFAT child entries."},
+      "limit":          {"type": "integer", "minimum": 1, "maximum": 200, "default": 50}
+    }
+  }',
+  'Query canonical reactions in the local mock ELN with OFAT campaign sizes (one row per canonical reaction, not per OFAT child).',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'fetch_eln_canonical_reaction',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "reaction_id": {"type": "string", "minLength": 1, "maxLength": 128,
+                      "description": "Canonical reaction id."},
+      "top_n_ofat":  {"type": "integer", "minimum": 0, "maximum": 200, "default": 10,
+                      "description": "Number of OFAT child entries to include (sorted by yield desc)."}
+    },
+    "required": ["reaction_id"]
+  }',
+  'Fetch one canonical reaction plus its top-N OFAT child entries (sorted by yield descending).',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'fetch_eln_sample',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "sample_id": {"type": "string", "minLength": 1, "maxLength": 128,
+                    "description": "Sample id."}
+    },
+    "required": ["sample_id"]
+  }',
+  'Fetch one ELN sample (isolated material) with all linked analytical results.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+-- ── Phase F.2: LOGS-by-SciY analytical SDMS adapter ─────────────────────────
+
+INSERT INTO mcp_tools (service_name, base_url, enabled, health_status)
+VALUES ('mcp-logs-sciy', 'http://localhost:8016', true, 'unknown')
+ON CONFLICT (service_name) DO UPDATE SET
+  base_url = EXCLUDED.base_url,
+  enabled  = EXCLUDED.enabled;
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'query_instrument_runs',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "instrument_kind": {"type": "array", "items": {"type": "string",
+                            "enum": ["HPLC", "NMR", "MS", "GC-MS", "LC-MS", "IR"]},
+                          "minItems": 1, "maxItems": 6,
+                          "description": "Instrument family filter."},
+      "since":          {"type": "string", "description": "ISO-8601 lower bound on measured_at."},
+      "project_code":   {"type": "string", "minLength": 1, "maxLength": 64,
+                         "description": "Project code matching mock_eln.projects.code."},
+      "sample_name":    {"type": "string", "minLength": 1, "maxLength": 200,
+                         "description": "Partial-match filter on sample_name."},
+      "limit":          {"type": "integer", "minimum": 1, "maximum": 200, "default": 50},
+      "cursor":         {"type": "string", "description": "Opaque keyset cursor from a previous call."}
+    }
+  }',
+  'Search analytical instrument runs (HPLC, NMR, MS, etc.) recorded in LOGS-by-SciY. Filter by instrument_kind, since, project_code, or partial sample_name.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'fetch_instrument_run',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "uid": {"type": "string", "minLength": 1, "maxLength": 128,
+              "description": "LOGS dataset UID."}
+    },
+    "required": ["uid"]
+  }',
+  'Fetch a single LOGS-by-SciY analytical dataset by UID. Returns parameters and detector tracks.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'query_instrument_datasets',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "sample_id": {"type": "string", "minLength": 1, "maxLength": 128,
+                    "description": "Sample identifier matching mock_eln.samples.sample_code."}
+    },
+    "required": ["sample_id"]
+  }',
+  'Find all LOGS-by-SciY analytical datasets recorded for a given sample_id.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
 
 COMMIT;
