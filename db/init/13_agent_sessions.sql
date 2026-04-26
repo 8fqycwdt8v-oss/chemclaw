@@ -31,7 +31,7 @@ CREATE TABLE IF NOT EXISTS agent_sessions (
   message_count        INT NOT NULL DEFAULT 0,
   created_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   updated_at           TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  -- TTL — a future cron job purges expired rows. Decorative until then.
+  -- TTL — services/optimizer/session_purger evicts rows where expires_at < NOW().
   expires_at           TIMESTAMPTZ NOT NULL DEFAULT NOW() + INTERVAL '7 days'
 );
 
