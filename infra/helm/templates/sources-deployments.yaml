@@ -1,10 +1,62 @@
 # Source-system deployments — enabled when sources.enabled=true
 #
-# No source-system MCP adapters (ELN/LIMS/instrument) are bundled in this
-# build. The kg-source-cache projector is kept so that future adapters
-# matching the source-cache hook regex (/^(query|fetch)_(eln|lims|instrument)_/)
-# can plug in without redeploying the projector.
+# Bundled: mcp-logs-sciy (LOGS-by-SciY analytical SDMS adapter, two backends).
+# The kg-source-cache projector consumes ingestion events from this MCP via
+# the source-cache post-tool hook (regex unchanged).
 {{- if .Values.sources.enabled }}
+
+# ── mcp-logs-sciy ────────────────────────────────────────────────────────────
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-logs-sciy
+  labels:
+    app: mcp-logs-sciy
+    profile: sources
+spec:
+  replicas: {{ .Values.sources.mcpLogsSciy.replicas }}
+  selector:
+    matchLabels:
+      app: mcp-logs-sciy
+  template:
+    metadata:
+      labels:
+        app: mcp-logs-sciy
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: mcp-logs-sciy
+          image: {{ .Values.sources.mcpLogsSciy.image }}
+          ports:
+            - containerPort: {{ .Values.sources.mcpLogsSciy.port }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          env:
+            - name: LOGS_BACKEND
+              value: {{ .Values.sources.mcpLogsSciy.backend | quote }}
+            {{- if eq .Values.sources.mcpLogsSciy.backend "real" }}
+            - name: LOGS_TENANT_HOST
+              value: {{ .Values.sources.mcpLogsSciy.realTenantHost | quote }}
+            - name: LOGS_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.sources.mcpLogsSciy.realApiKeySecret }}
+                  key: {{ .Values.sources.mcpLogsSciy.realApiKeySecretKey }}
+            {{- end }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-logs-sciy
+spec:
+  selector:
+    app: mcp-logs-sciy
+  ports:
+    - port: {{ .Values.sources.mcpLogsSciy.port }}
+      targetPort: {{ .Values.sources.mcpLogsSciy.port }}
 
 # ── kg-source-cache projector ─────────────────────────────────────────────────
 ---

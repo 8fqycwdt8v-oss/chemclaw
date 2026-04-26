@@ -119,16 +119,41 @@ chemistry:
     replicas: 1
 
 # ── Profile: sources ──────────────────────────────────────────────────────────
-# No source-system MCP adapters are bundled in this build. The
-# kg-source-cache projector is kept so a future ELN/LIMS/instrument
-# adapter can plug in via the source-cache post-tool hook (regex
-# /^(query|fetch)_(eln|lims|instrument)_/).
+# Source-system MCP adapters bundled here: mcp-logs-sciy (LOGS-by-SciY adapter
+# with fake-postgres + real backends). The mcp-eln-local mock ELN ships under
+# the testbed profile (below). The kg-source-cache projector consumes events
+# from both via the unchanged source-cache hook regex
+# /^(query|fetch)_(eln|lims|instrument)_/.
 
 sources:
   enabled: false
+  mcpLogsSciy:
+    image: chemclaw/mcp-logs-sciy:latest
+    port: 8016
+    replicas: 1
+    backend: fake-postgres        # fake-postgres | real
+    # Real-backend tenant config (gated; ignored when backend=fake-postgres):
+    realTenantHost: ""
+    realApiKeySecret: ""
+    realApiKeySecretKey: api-key
   kgSourceCache:
     image: chemclaw/kg-source-cache:latest
     replicas: 1
+
+# ── Profile: testbed ─────────────────────────────────────────────────────────
+# Enable with: --set testbed.enabled=true
+# Hosts the local mock ELN. Hermetic; never used for production data.
+
+testbed:
+  enabled: false
+  mcpElnLocal:
+    image: chemclaw/mcp-eln-local:latest
+    port: 8013
+    replicas: 1
+    # The mock_eln Postgres schema must be seeded separately (make seed.mock_eln).
+    # Reader role: chemclaw_mock_eln_reader (created by db/init/30_mock_eln_schema.sql).
+    readerPasswordSecret: chemclaw-mock-eln-reader-password
+    readerPasswordSecretKey: password
 
 # ── Profile: optimizer ───────────────────────────────────────────────────────
 # Enable with: --set optimizer.enabled=true

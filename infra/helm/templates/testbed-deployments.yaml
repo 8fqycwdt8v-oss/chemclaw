@@ -1,0 +1,61 @@
+# Testbed deployments — enabled when testbed.enabled=true
+#
+# Hosts the local mock ELN MCP. The mock_eln Postgres schema must be seeded
+# out-of-band (`make seed.mock_eln`); this Deployment only runs the FastAPI
+# wrapper. Never enable in production.
+{{- if .Values.testbed.enabled }}
+
+# ── mcp-eln-local ────────────────────────────────────────────────────────────
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: mcp-eln-local
+  labels:
+    app: mcp-eln-local
+    profile: testbed
+spec:
+  replicas: {{ .Values.testbed.mcpElnLocal.replicas }}
+  selector:
+    matchLabels:
+      app: mcp-eln-local
+  template:
+    metadata:
+      labels:
+        app: mcp-eln-local
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: mcp-eln-local
+          image: {{ .Values.testbed.mcpElnLocal.image }}
+          ports:
+            - containerPort: {{ .Values.testbed.mcpElnLocal.port }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          env:
+            - name: POSTGRES_HOST
+              value: {{ .Values.global.postgres.host }}
+            - name: POSTGRES_DB
+              value: {{ .Values.global.postgres.db }}
+            - name: POSTGRES_USER
+              value: chemclaw_mock_eln_reader
+            - name: POSTGRES_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.testbed.mcpElnLocal.readerPasswordSecret }}
+                  key: {{ .Values.testbed.mcpElnLocal.readerPasswordSecretKey }}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: mcp-eln-local
+spec:
+  selector:
+    app: mcp-eln-local
+  ports:
+    - port: {{ .Values.testbed.mcpElnLocal.port }}
+      targetPort: {{ .Values.testbed.mcpElnLocal.port }}
+
+{{- end }}
