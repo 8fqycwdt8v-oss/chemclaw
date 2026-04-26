@@ -17,10 +17,20 @@ from collections.abc import Callable
 from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from services.mcp_tools.common.logging import configure_logging
+
+
+# Standard error codes used in the {error, detail} envelope. Services should
+# pass one of these to HTTPException(status_code=..., detail={"error": CODE,
+# "detail": "..."}) — the handler below preserves them verbatim.
+ERROR_CODE_INVALID_INPUT = "invalid_input"
+ERROR_CODE_NOT_FOUND = "not_found"
+ERROR_CODE_NOT_IMPLEMENTED = "not_implemented"
+ERROR_CODE_UPSTREAM = "upstream_error"
+ERROR_CODE_DEGRADED = "degraded"
 
 log = logging.getLogger("mcp.common")
 
@@ -29,18 +39,37 @@ def create_app(
     name: str,
     version: str,
     log_level: str = "INFO",
-    ready_check: Callable[[], bool] | None = None,
+    ready_check: Callable[[], bool] | Callable[[], Any] | None = None,
+    lifespan: Callable[[FastAPI], Any] | None = None,
 ) -> FastAPI:
-    """Build a FastAPI app with the standard shape for an MCP tool service."""
+    """Build a FastAPI app with the standard shape for an MCP tool service.
+
+    Pass `lifespan` if your service needs to manage resources (DB drivers,
+    HTTP clients) across the app lifetime. The factory wraps the supplied
+    lifespan so the standard start/stop logs still fire.
+
+    Bearer-token authentication (ADR 006 partial) is wired automatically.
+    By default it runs in dev mode — calls without a token are accepted with
+    a warning so existing tests still pass. Set MCP_AUTH_REQUIRED=true in
+    production to enforce verification on every /tools/* request.
+    """
     configure_logging(log_level)
+    # Imported lazily so unit tests of `auth.py` don't drag in FastAPI.
+    from services.mcp_tools.common.auth import (  # noqa: F401 — used for the dependency below
+        require_mcp_token,
+    )
 
     @asynccontextmanager
-    async def lifespan(_app: FastAPI) -> Any:
+    async def _default_lifespan(app: FastAPI) -> Any:
         log.info("starting %s@%s", name, version)
-        yield
+        if lifespan is not None:
+            async with lifespan(app):  # type: ignore[misc]
+                yield
+        else:
+            yield
         log.info("stopping %s", name)
 
-    app = FastAPI(title=name, version=version, lifespan=lifespan)
+    app = FastAPI(title=name, version=version, lifespan=_default_lifespan)
 
     @app.middleware("http")
     async def add_request_id(request: Request, call_next: Callable):
@@ -54,7 +83,34 @@ def create_app(
     async def handle_value_error(request: Request, exc: ValueError) -> JSONResponse:
         return JSONResponse(
             status_code=400,
-            content={"error": "invalid_input", "detail": str(exc)},
+            content={"error": ERROR_CODE_INVALID_INPUT, "detail": str(exc)},
+            headers={"x-request-id": getattr(request.state, "request_id", "")},
+        )
+
+    @app.exception_handler(HTTPException)
+    async def handle_http_exception(request: Request, exc: HTTPException) -> JSONResponse:
+        # Standardize the error envelope across the fleet. Services may pass
+        # detail as either a plain string ("not found") or a dict that already
+        # contains an `error` code — preserve both shapes.
+        if isinstance(exc.detail, dict) and "error" in exc.detail:
+            content = exc.detail
+        else:
+            # Map common status codes to error codes so clients can switch on
+            # `error` without reading status_code.
+            code_map = {
+                400: ERROR_CODE_INVALID_INPUT,
+                404: ERROR_CODE_NOT_FOUND,
+                501: ERROR_CODE_NOT_IMPLEMENTED,
+                502: ERROR_CODE_UPSTREAM,
+                503: ERROR_CODE_DEGRADED,
+            }
+            content = {
+                "error": code_map.get(exc.status_code, "error"),
+                "detail": exc.detail if isinstance(exc.detail, str) else str(exc.detail),
+            }
+        return JSONResponse(
+            status_code=exc.status_code,
+            content=content,
             headers={"x-request-id": getattr(request.state, "request_id", "")},
         )
 

@@ -11,6 +11,7 @@
 import { z } from "zod";
 import { type Pool } from "pg";
 import { readFileSync } from "fs";
+import { createHash } from "node:crypto";
 import type { Tool } from "./tool.js";
 import type { ModelRole } from "../llm/provider.js";
 import { postJson } from "../mcp/postJson.js";
@@ -112,6 +113,14 @@ interface ToolRow {
   forged_by_role?: ModelRole | null;
   /** Phase D.5: which model forged this tool. */
   forged_by_model?: string | null;
+  /**
+   * SHA-256 of the Python file contents at forge time. Recomputed at every
+   * call and compared to refuse execution if the on-disk file has been
+   * tampered with after validation. NULL for tools forged before the
+   * integrity-check migration; we fall back to "skip integrity check"
+   * for those (logged once per tool) until they're re-forged.
+   */
+  code_sha256?: string | null;
 }
 
 // ---------------------------------------------------------------------------
@@ -290,7 +299,8 @@ export class ToolRegistry {
       `SELECT t.name, t.source, t.schema_json, t.mcp_url, t.mcp_endpoint, t.description,
               sl.scripts_path,
               sl.forged_by_role,
-              sl.forged_by_model
+              sl.forged_by_model,
+              sl.code_sha256
          FROM tools t
          LEFT JOIN skill_library sl
                ON sl.name = t.name AND sl.kind = 'forged_tool'
@@ -299,6 +309,23 @@ export class ToolRegistry {
     );
 
     for (const row of rows) {
+      // Precedence: programmatically-registered builtins win over DB rows
+      // with the same name. The DB row may be stale (a forged tool that
+      // was renamed, or a leftover row pointing at a removed MCP endpoint),
+      // and the in-memory builtin registration is the source of truth for
+      // the running process. Skip + warn rather than silently overwrite.
+      const existing = this._tools.get(row.name);
+      const isProgrammaticBuiltin =
+        existing !== undefined && row.source !== "builtin";
+      if (isProgrammaticBuiltin) {
+        // eslint-disable-next-line no-console
+        console.warn(
+          `[ToolRegistry] DB row source="${row.source}" for "${row.name}" ` +
+            `would overwrite a programmatically-registered tool — skipping.`,
+        );
+        continue;
+      }
+
       const tool = this._buildTool(row);
       if (tool) {
         this.upsert(tool, {
@@ -371,6 +398,7 @@ export class ToolRegistry {
       const sandboxClient = this._sandboxClient;
       const scriptsPath = row.scripts_path;
       const name = row.name;
+      const expectedSha256 = row.code_sha256 ?? null;
       const codeCache = this._forgedCodeCache;
 
       // Build the stub library using default localhost URLs
@@ -383,18 +411,37 @@ export class ToolRegistry {
         inputSchema,
         outputSchema,
         execute: async (_ctx, input) => {
-          // Load code from disk on first call (cached in memory thereafter).
-          let code = codeCache.get(name);
-          if (!code) {
-            try {
-              code = readFileSync(scriptsPath, "utf-8");
-              codeCache.set(name, code);
-            } catch (err) {
+          // Always re-read from disk and verify SHA-256. We do NOT cache the
+          // verified code — caching would let an attacker tamper with the
+          // file after the first call. The integrity check is cheap (one
+          // file read + one hash) compared to an E2B sandbox spin-up, so
+          // run it on every invocation.
+          let code: string;
+          try {
+            code = readFileSync(scriptsPath, "utf-8");
+          } catch (err) {
+            throw new Error(
+              `ToolRegistry: failed to read forged tool code from '${scriptsPath}': ${(err as Error).message}`,
+            );
+          }
+
+          if (expectedSha256) {
+            const actual = createHash("sha256").update(code, "utf-8").digest("hex");
+            if (actual !== expectedSha256) {
               throw new Error(
-                `ToolRegistry: failed to read forged tool code from '${scriptsPath}': ${(err as Error).message}`,
+                `forged tool '${name}': SHA-256 mismatch — refusing to execute. ` +
+                  `Expected ${expectedSha256.slice(0, 16)}…, got ${actual.slice(0, 16)}…. ` +
+                  `The on-disk file at '${scriptsPath}' has been modified since this tool was validated.`,
               );
             }
+          } else if (!codeCache.has(name)) {
+            // First call for a legacy tool with no stored hash. Log once.
+            // eslint-disable-next-line no-console
+            console.warn(
+              `ToolRegistry: forged tool '${name}' has no code_sha256 (legacy row). Re-forge to enable integrity checking.`,
+            );
           }
+          codeCache.set(name, code);
 
           const inputRecord = input as Record<string, unknown>;
           const expectedOutputs = Object.keys(

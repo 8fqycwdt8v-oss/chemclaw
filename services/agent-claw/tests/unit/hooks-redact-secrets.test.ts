@@ -1,11 +1,16 @@
-// Tests for the redact-secrets pre_tool hook.
+// Tests for the redact-secrets post_turn hook.
 
 import { describe, it, expect } from "vitest";
-import { redactString, redactSecretsHook } from "../../src/core/hooks/redact-secrets.js";
-import type { PreToolPayload } from "../../src/core/types.js";
+import {
+  redactString,
+  redactSecretsHook,
+  registerRedactSecretsHook,
+} from "../../src/core/hooks/redact-secrets.js";
+import { Lifecycle } from "../../src/core/lifecycle.js";
+import type { PostTurnPayload } from "../../src/core/types.js";
 
 // ---------------------------------------------------------------------------
-// redactString unit tests
+// redactString unit tests — pattern matching
 // ---------------------------------------------------------------------------
 
 describe("redactString — pattern matching", () => {
@@ -57,52 +62,85 @@ describe("redactString — pattern matching", () => {
 });
 
 // ---------------------------------------------------------------------------
-// redactSecretsHook integration
+// post_turn hook — finalText mutation
 // ---------------------------------------------------------------------------
 
-describe("redactSecretsHook — payload mutation", () => {
-  function makePayload(input: unknown): PreToolPayload {
-    const seenFactIds = new Set<string>();
-    const scratchpad = new Map<string, unknown>([["seenFactIds", seenFactIds]]);
-    return {
-      ctx: {
-        userEntraId: "test@example.com",
-        scratchpad,
-        seenFactIds,
-      },
-      toolId: "test_tool",
-      input,
-    };
-  }
+function makePostTurnPayload(finalText: string): PostTurnPayload {
+  const seenFactIds = new Set<string>();
+  const scratchpad = new Map<string, unknown>([["seenFactIds", seenFactIds]]);
+  return {
+    ctx: {
+      userEntraId: "test@example.com",
+      scratchpad,
+      seenFactIds,
+    },
+    finalText,
+    stepsUsed: 1,
+  };
+}
 
-  it("mutates string input containing NCE ID in-place", async () => {
-    const payload = makePayload("Check NCE-001 project status.");
+describe("redactSecretsHook — post_turn finalText scrub", () => {
+  it("scrubs an NCE ID in finalText", async () => {
+    const payload = makePostTurnPayload("Project NCE-001 is on track.");
     await redactSecretsHook(payload);
-    expect(payload.input as string).toContain("[REDACTED]");
-    expect(payload.input as string).not.toContain("NCE-001");
+    expect(payload.finalText).toContain("[REDACTED]");
+    expect(payload.finalText).not.toContain("NCE-001");
   });
 
-  it("mutates object input containing sensitive fields", async () => {
-    const payload = makePayload({ query: "Report for NCE-999999", user: "alice@corp.com" });
+  it("scrubs multiple patterns in one pass", async () => {
+    const payload = makePostTurnPayload(
+      "Email alice@corp.com about NCE-007 and CMP-12345678.",
+    );
     await redactSecretsHook(payload);
-    const input = payload.input as Record<string, string>;
-    expect(input["query"]).toContain("[REDACTED]");
-    expect(input["user"]).toContain("[REDACTED]");
+    expect(payload.finalText).not.toContain("alice@corp.com");
+    expect(payload.finalText).not.toContain("NCE-007");
+    expect(payload.finalText).not.toContain("CMP-12345678");
   });
 
-  it("is a no-op for benign input and does not set redact_log", async () => {
-    const payload = makePayload({ query: "What is the yield for amide coupling?" });
+  it("is a no-op for benign finalText and does not set redact_log", async () => {
+    const payload = makePostTurnPayload("What is the yield for amide coupling?");
     await redactSecretsHook(payload);
-    const input = payload.input as Record<string, string>;
-    expect(input["query"]).toBe("What is the yield for amide coupling?");
+    expect(payload.finalText).toBe("What is the yield for amide coupling?");
     expect(payload.ctx.scratchpad.has("redact_log")).toBe(false);
   });
 
   it("appends to redact_log scratchpad on a hit", async () => {
-    const payload = makePayload("Project NCE-042 needs follow-up.");
+    const payload = makePostTurnPayload("Project NCE-042 needs follow-up.");
     await redactSecretsHook(payload);
-    const log = payload.ctx.scratchpad.get("redact_log") as unknown[];
+    const log = payload.ctx.scratchpad.get("redact_log") as Array<{
+      scope: string;
+      replacements: Array<{ pattern: string; original: string }>;
+    }>;
     expect(log).toBeDefined();
-    expect(log.length).toBeGreaterThan(0);
+    expect(log[0]?.scope).toBe("post_turn");
+    expect(log[0]?.replacements.some((r) => r.pattern === "NCE")).toBe(true);
+  });
+
+  it("handles undefined finalText gracefully", async () => {
+    const payload = makePostTurnPayload("");
+    payload.finalText = undefined as unknown as string;
+    await redactSecretsHook(payload);
+    expect(payload.ctx.scratchpad.has("redact_log")).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Registration — hook lands on post_turn, not pre_tool
+// ---------------------------------------------------------------------------
+
+describe("registerRedactSecretsHook", () => {
+  it("registers exactly one post_turn hook", () => {
+    const lc = new Lifecycle();
+    registerRedactSecretsHook(lc);
+    expect(lc.count("post_turn")).toBe(1);
+    expect(lc.count("pre_tool")).toBe(0);
+  });
+
+  it("dispatched post_turn scrubs finalText", async () => {
+    const lc = new Lifecycle();
+    registerRedactSecretsHook(lc);
+    const payload = makePostTurnPayload("NCE-9001 is exciting.");
+    await lc.dispatch("post_turn", payload);
+    expect(payload.finalText).not.toContain("NCE-9001");
   });
 });

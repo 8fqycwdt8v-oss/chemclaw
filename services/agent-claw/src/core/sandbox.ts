@@ -50,7 +50,12 @@ export class SandboxError extends Error {
 export const SANDBOX_MAX_CPU_S = Number(process.env["SANDBOX_MAX_CPU_S"] ?? 30);
 export const SANDBOX_MAX_MEM_MB = Number(process.env["SANDBOX_MAX_MEM_MB"] ?? 2048);
 // Set to "true" to allow forged code to make outbound HTTP. Off by default.
-export const SANDBOX_ALLOW_NET_EGRESS = process.env["SANDBOX_MAX_NET_EGRESS"] === "true";
+// SANDBOX_ALLOW_NET_EGRESS is the canonical name. SANDBOX_MAX_NET_EGRESS was
+// the original (misleading — sounded like a byte cap) and is read as a
+// migration fallback so existing deployments don't silently change behavior.
+export const SANDBOX_ALLOW_NET_EGRESS =
+  process.env["SANDBOX_ALLOW_NET_EGRESS"] === "true" ||
+  process.env["SANDBOX_MAX_NET_EGRESS"] === "true";
 
 // ---------------------------------------------------------------------------
 // Lazy E2B SDK loader — avoids hard import at module level so tests can mock

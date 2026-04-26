@@ -93,7 +93,11 @@ export class Lifecycle {
    * (remaining handlers for that point are skipped). This is intentional —
    * a budget-guard hook that throws aborts the tool call.
    *
-   * For all other points: errors are caught and re-thrown after logging.
+   * For all other points (pre_turn, post_tool, pre_compact, post_turn):
+   * a thrown error is logged and the next hook is invoked. We do NOT abort
+   * the whole turn just because (e.g.) tag-maturity has a transient DB
+   * hiccup, and we MUST not skip subsequent hooks (such as the redact-secrets
+   * post_turn pass) on a transient failure of an earlier hook.
    */
   async dispatch<P extends HookPoint>(
     point: P,
@@ -101,7 +105,25 @@ export class Lifecycle {
   ): Promise<void> {
     const hooks = this._hooks.get(point) ?? [];
     for (const hook of hooks) {
-      await (hook.handler as HookHandler<P>)(payload);
+      if (point === "pre_tool") {
+        // Strict-throw semantics for pre_tool: a throwing hook aborts the
+        // tool call (used by budget-guard, anti-fabrication, citation guard).
+        await (hook.handler as HookHandler<P>)(payload);
+      } else {
+        try {
+          await (hook.handler as HookHandler<P>)(payload);
+        } catch (err) {
+          // Best-effort logging — we use console here because the lifecycle
+          // is platform-agnostic. Routes that have a Fastify logger should
+          // observe these errors via Langfuse spans (instrumented at the
+          // hook implementation site).
+          // eslint-disable-next-line no-console
+          console.error(
+            `[lifecycle] non-pre_tool hook "${hook.name}" at "${point}" threw — continuing with remaining hooks`,
+            err,
+          );
+        }
+      }
     }
   }
 }

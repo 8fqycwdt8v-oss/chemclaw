@@ -16,25 +16,44 @@ interface StubRow {
   version: number;
 }
 
+// SkillLoader.loadFromDb now uses withSystemContext (pool.connect → client.query
+// inside a BEGIN/SET LOCAL/COMMIT transaction). The stub pool needs a
+// `connect()` that returns a client whose `.query()` returns the configured
+// rows for skill_library SELECTs and silently no-ops for transaction-control
+// SQL.
+const _txControl = (sql: unknown): boolean => {
+  if (typeof sql !== "string") return false;
+  const s = sql.toUpperCase().trim();
+  return s.startsWith("BEGIN") || s.startsWith("COMMIT") ||
+         s.startsWith("ROLLBACK") || s.includes("SET_CONFIG");
+};
+
 function makeStubPool(rows: StubRow[]): Pool {
+  const dataResult = {
+    rows,
+    rowCount: rows.length,
+    command: "SELECT",
+    oid: 0,
+    fields: [],
+  } as unknown as QueryResult;
+  const empty = { rows: [], rowCount: 0, command: "", oid: 0, fields: [] } as unknown as QueryResult;
+  const clientQuery = async (sql: unknown) => (_txControl(sql) ? empty : dataResult);
   return {
-    query: async <T = StubRow>(_sql: string, _params?: unknown[]): Promise<QueryResult<T>> => {
-      return {
-        rows: rows as unknown as T[],
-        rowCount: rows.length,
-        command: "SELECT",
-        oid: 0,
-        fields: [],
-      };
-    },
+    query: clientQuery,
+    connect: async () => ({ query: clientQuery, release: () => {} }),
   } as unknown as Pool;
 }
 
 function makeFailingPool(): Pool {
+  const fail = async (sql: unknown) => {
+    // Let transaction control through so the rollback path doesn't crash on
+    // a missing BEGIN; the actual data SELECT is what should throw.
+    if (_txControl(sql)) return { rows: [], rowCount: 0 } as unknown as QueryResult;
+    throw new Error("DB unavailable");
+  };
   return {
-    query: async () => {
-      throw new Error("DB unavailable");
-    },
+    query: fail,
+    connect: async () => ({ query: fail, release: () => {} }),
   } as unknown as Pool;
 }
 

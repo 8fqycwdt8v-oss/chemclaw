@@ -44,6 +44,13 @@ const ConfigSchema = z.object({
   POSTGRES_HOST: z.string().default("localhost"),
   POSTGRES_PORT: z.coerce.number().int().default(5432),
   POSTGRES_DB: z.string().default("chemclaw"),
+  // The agent connects as chemclaw_app (LOGIN, NO BYPASSRLS) so every read
+  // is RLS-enforced against the calling user's project membership. Owner
+  // role `chemclaw` and BYPASSRLS role `chemclaw_service` are not for
+  // user-facing traffic. Falls back to the legacy POSTGRES_USER/PASSWORD
+  // for backward compatibility during the migration window.
+  CHEMCLAW_APP_USER: z.string().default("chemclaw_app"),
+  CHEMCLAW_APP_PASSWORD: z.string().optional(),
   POSTGRES_USER: z.string().default("chemclaw"),
   POSTGRES_PASSWORD: z.string().min(1, "POSTGRES_PASSWORD must be non-empty"),
   // Server-side per-query cap (ms). Prevents runaway queries from holding connections.
@@ -66,6 +73,24 @@ const ConfigSchema = z.object({
   MCP_EMBEDDER_URL: z.string().url().default("http://localhost:8004"),
   MCP_TABICL_URL: z.string().url().default("http://localhost:8005"),
   MCP_DOC_FETCHER_URL: z.string().url().default("http://localhost:8006"),
+
+  // Phase F.1 chemistry MCPs.
+  MCP_ASKCOS_URL: z.string().url().default("http://localhost:8007"),
+  MCP_AIZYNTH_URL: z.string().url().default("http://localhost:8008"),
+  MCP_CHEMPROP_URL: z.string().url().default("http://localhost:8009"),
+  MCP_XTB_URL: z.string().url().default("http://localhost:8010"),
+  MCP_ADMETLAB_URL: z.string().url().default("http://localhost:8011"),
+  MCP_SIRIUS_URL: z.string().url().default("http://localhost:8012"),
+
+  // Phase F.2 source-system MCPs.
+  MCP_ELN_BENCHLING_URL: z.string().url().default("http://localhost:8013"),
+  MCP_LIMS_STARLIMS_URL: z.string().url().default("http://localhost:8014"),
+  MCP_INSTRUMENT_WATERS_URL: z.string().url().default("http://localhost:8015"),
+
+  // Source-system web bases for citation URI assembly. Override per tenant.
+  BENCHLING_BASE_URL: z.string().url().default("https://your-tenant.benchling.com"),
+  STARLIMS_BASE_URL: z.string().url().default("https://your-starlims-host"),
+  EMPOWER_BASE_URL: z.string().url().default("https://your-empower-host"),
 
   // LiteLLM proxy — single egress chokepoint for all LLM traffic.
   LITELLM_BASE_URL: z.string().url().default("http://localhost:4000"),

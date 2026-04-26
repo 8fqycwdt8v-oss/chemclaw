@@ -11,6 +11,11 @@ services:
     container_name: chemclaw-postgres
     restart: unless-stopped
     environment:
+      # The container's POSTGRES_USER stays `chemclaw` — this is the database
+      # OWNER role created by the Postgres entrypoint, used at boot to apply
+      # db/init/*.sql migrations. The init scripts then create the runtime
+      # roles `chemclaw_app` (LOGIN, NO BYPASSRLS — for app traffic) and
+      # `chemclaw_service` (LOGIN BYPASSRLS — for projectors / batch jobs).
       POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
       POSTGRES_USER: ${POSTGRES_USER:-chemclaw}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}
@@ -171,8 +176,11 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
-      POSTGRES_USER: ${POSTGRES_USER:-chemclaw}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}
+      # System workers connect as chemclaw_service (LOGIN BYPASSRLS) so they
+      # can read/write across all projects. User-facing services run on the
+      # host via `make` and pick up CHEMCLAW_APP_USER/PASSWORD from .env.
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
       MCP_KG_URL: http://mcp-kg:8003
       MCP_RDKIT_URL: http://mcp-rdkit:8001
       PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
@@ -197,8 +205,11 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
-      POSTGRES_USER: ${POSTGRES_USER:-chemclaw}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}
+      # System workers connect as chemclaw_service (LOGIN BYPASSRLS) so they
+      # can read/write across all projects. User-facing services run on the
+      # host via `make` and pick up CHEMCLAW_APP_USER/PASSWORD from .env.
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
       DOCS_ROOT: /docs
     volumes:
       - ./sample-data/documents:/docs:ro
@@ -223,8 +234,11 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
-      POSTGRES_USER: ${POSTGRES_USER:-chemclaw}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}
+      # System workers connect as chemclaw_service (LOGIN BYPASSRLS) so they
+      # can read/write across all projects. User-facing services run on the
+      # host via `make` and pick up CHEMCLAW_APP_USER/PASSWORD from .env.
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
       MCP_EMBEDDER_URL: http://mcp-embedder:8004
       PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
     security_opt:
@@ -247,8 +261,11 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
-      POSTGRES_USER: ${POSTGRES_USER:-chemclaw}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}
+      # System workers connect as chemclaw_service (LOGIN BYPASSRLS) so they
+      # can read/write across all projects. User-facing services run on the
+      # host via `make` and pick up CHEMCLAW_APP_USER/PASSWORD from .env.
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
       LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000}
       LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-chemclaw-dev-master-change-me}
       CONTEXT_MODEL: ${CONTEXT_MODEL:-claude-haiku-4-5}
@@ -274,8 +291,11 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
-      POSTGRES_USER: ${POSTGRES_USER:-chemclaw}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}
+      # System workers connect as chemclaw_service (LOGIN BYPASSRLS) so they
+      # can read/write across all projects. User-facing services run on the
+      # host via `make` and pick up CHEMCLAW_APP_USER/PASSWORD from .env.
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
       MCP_DRFP_URL: http://mcp-drfp:8002
       PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
     security_opt:
@@ -300,8 +320,10 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
-      POSTGRES_USER: chemclaw_service
-      POSTGRES_SERVICE_PASSWORD: ${POSTGRES_SERVICE_PASSWORD:-chemclaw_service_pw}
+      # System workers connect as chemclaw_service (LOGIN BYPASSRLS) so they
+      # can read/write across all projects.
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
       NEO4J_URI: bolt://neo4j:7687
       NEO4J_USER: ${NEO4J_USER:-neo4j}
       NEO4J_PASSWORD: ${NEO4J_PASSWORD:-chemclaw_dev_neo4j_change_me}
@@ -517,8 +539,11 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
-      POSTGRES_USER: ${POSTGRES_USER:-chemclaw}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}
+      # System workers connect as chemclaw_service (LOGIN BYPASSRLS) so they
+      # can read/write across all projects. User-facing services run on the
+      # host via `make` and pick up CHEMCLAW_APP_USER/PASSWORD from .env.
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
     security_opt:
       - no-new-privileges:true
 
@@ -542,8 +567,11 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
-      POSTGRES_USER: ${POSTGRES_USER:-chemclaw}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}
+      # System workers connect as chemclaw_service (LOGIN BYPASSRLS) so they
+      # can read/write across all projects. User-facing services run on the
+      # host via `make` and pick up CHEMCLAW_APP_USER/PASSWORD from .env.
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
       LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse:3000}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
@@ -580,8 +608,11 @@ services:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
       POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
-      POSTGRES_USER: ${POSTGRES_USER:-chemclaw}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}
+      # System workers connect as chemclaw_service (LOGIN BYPASSRLS) so they
+      # can read/write across all projects. User-facing services run on the
+      # host via `make` and pick up CHEMCLAW_APP_USER/PASSWORD from .env.
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
       SKILL_PROMOTER_PORT: "8011"
     ports:
       - "${SKILL_PROMOTER_PORT:-8011}:8011"
@@ -848,8 +879,11 @@ services:
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
-      POSTGRES_USER: ${POSTGRES_USER:-chemclaw}
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}
+      # System workers connect as chemclaw_service (LOGIN BYPASSRLS) so they
+      # can read/write across all projects. User-facing services run on the
+      # host via `make` and pick up CHEMCLAW_APP_USER/PASSWORD from .env.
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
       MCP_KG_URL: http://mcp-kg:8003
     security_opt:
       - no-new-privileges:true

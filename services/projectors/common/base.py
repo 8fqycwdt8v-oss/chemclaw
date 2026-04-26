@@ -115,6 +115,39 @@ class BaseProjector(ABC):
 
         log.info("[%s] starting", self.name)
 
+        # Reconnect loop with exponential backoff. A transient Postgres blip
+        # (failover, idle eviction) used to kill the whole process; now we
+        # reopen the LISTEN + work connection and resume from the durable
+        # cursor in projection_acks. Replays remain safe because every
+        # handler is idempotent (per the design invariant in CLAUDE.md).
+        backoff = 1.0
+        max_backoff = 30.0
+        while not self._shutdown.is_set():
+            try:
+                await self._connect_and_run()
+                # Clean exit (shutdown event set inside _connect_and_run).
+                break
+            except (psycopg.OperationalError, OSError) as exc:
+                if self._shutdown.is_set():
+                    break
+                log.warning(
+                    "[%s] DB connection error: %s — reconnecting in %.1fs",
+                    self.name, exc, backoff,
+                )
+                try:
+                    await asyncio.wait_for(self._shutdown.wait(), timeout=backoff)
+                    break  # shutdown raced backoff
+                except asyncio.TimeoutError:
+                    pass
+                backoff = min(backoff * 2, max_backoff)
+            except Exception:
+                # Non-DB errors propagate — they likely indicate a real bug.
+                raise
+
+        log.info("[%s] stopped", self.name)
+
+    async def _connect_and_run(self) -> None:
+        """One full cycle: open both connections, catch up, listen, until DB drops."""
         # OPEN LISTEN FIRST so NOTIFYs during catch-up land in the buffer.
         async with await psycopg.AsyncConnection.connect(
             self.settings.postgres_dsn,
@@ -132,8 +165,6 @@ class BaseProjector(ABC):
                 await self._catch_up(work_conn)
                 log.info("[%s] catch-up complete", self.name)
                 await self._listen_loop(listen_conn, work_conn)
-
-        log.info("[%s] stopped", self.name)
 
     # ----- catch-up --------------------------------------------------------
     async def _catch_up(self, work_conn: psycopg.AsyncConnection) -> None:

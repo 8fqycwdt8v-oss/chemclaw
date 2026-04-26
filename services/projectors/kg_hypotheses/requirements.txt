@@ -1,5 +1,13 @@
-psycopg[binary]==3.2.3
-pydantic==2.10.4
-pydantic-settings==2.7.0
-graphiti-core==0.4.7
-neo4j==5.26.0
+# Pin floors managed centrally in services/_constraints.txt; this file lists
+# only the deps this projector actually imports.
+-c ../../_constraints.txt
+psycopg[binary]
+pydantic
+pydantic-settings
+neo4j>=5.26,<6
+# graphiti-core was historically declared here when Graphiti was the planned
+# KG layer (see ~/.claude/plans/chemos-knowledge-intelligence-tranquil-marshmallow.md).
+# The actual implementation uses the neo4j driver directly with hand-rolled
+# MERGE queries (see main.py), so graphiti-core is removed — neither this
+# projector nor any other service imports it. This also clears the high-severity
+# Cypher-injection Dependabot alert since the package is no longer installed.

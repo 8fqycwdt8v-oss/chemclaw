@@ -13,9 +13,18 @@ import { buildFetchInstrumentRunTool } from "../../../src/tools/builtins/fetch_i
 
 // ---------- Mock infrastructure ----------------------------------------------
 
-// postJson is used by query_* tools; fetch is used by fetch_* tools.
+// postJson is used by query_* tools; getJson is used by fetch_* tools.
+// Both come from the same module — mock both.
 vi.mock("../../../src/mcp/postJson.js", () => ({
   postJson: vi.fn(),
+  getJson: vi.fn(),
+  // UpstreamError exported for `instanceof` checks (not used by these tests
+  // but preserved for completeness).
+  UpstreamError: class extends Error {
+    constructor(public service: string, public status: number, public detail: string) {
+      super(`${service} returned ${status}: ${detail}`);
+    }
+  },
 }));
 
 const mockPool = {} as Pool;
@@ -120,10 +129,8 @@ describe("fetch_eln_entry", () => {
   });
 
   it("returns entry with citation on success", async () => {
-    vi.mocked(fetch).mockResolvedValue({
-      ok: true,
-      json: async () => fakeEntry("etr_abc"),
-    } as unknown as Response);
+    const { getJson } = await import("../../../src/mcp/postJson.js");
+    vi.mocked(getJson).mockResolvedValue(fakeEntry("etr_abc"));
 
     const tool = buildFetchElnEntryTool(mockPool, "http://localhost:8013");
     const result = await tool.execute(mockCtx, { entry_id: "etr_abc" });
@@ -133,23 +140,17 @@ describe("fetch_eln_entry", () => {
     expect(result.citation).toBeDefined();
   });
 
-  it("throws on non-OK response", async () => {
-    vi.mocked(fetch).mockResolvedValue({
-      ok: false,
-      status: 404,
-      text: async () => "not found",
-      statusText: "Not Found",
-    } as unknown as Response);
+  it("throws on upstream error", async () => {
+    const { getJson, UpstreamError } = await import("../../../src/mcp/postJson.js");
+    vi.mocked(getJson).mockRejectedValue(new UpstreamError("mcp-eln-benchling", 404, "not found"));
 
     const tool = buildFetchElnEntryTool(mockPool, "http://localhost:8013");
-    await expect(tool.execute(mockCtx, { entry_id: "etr_missing" })).rejects.toThrow("404");
+    await expect(tool.execute(mockCtx, { entry_id: "etr_missing" })).rejects.toThrow();
   });
 
   it("builds benchling URI in citation", async () => {
-    vi.mocked(fetch).mockResolvedValue({
-      ok: true,
-      json: async () => fakeEntry("etr_xyz"),
-    } as unknown as Response);
+    const { getJson } = await import("../../../src/mcp/postJson.js");
+    vi.mocked(getJson).mockResolvedValue(fakeEntry("etr_xyz"));
 
     const tool = buildFetchElnEntryTool(mockPool, "http://localhost:8013", "https://myco.benchling.com");
     const result = await tool.execute(mockCtx, { entry_id: "etr_xyz" });
@@ -211,10 +212,8 @@ describe("fetch_lims_result", () => {
   });
 
   it("returns result with citation on success", async () => {
-    vi.mocked(fetch).mockResolvedValue({
-      ok: true,
-      json: async () => fakeResult("res_999"),
-    } as unknown as Response);
+    const { getJson } = await import("../../../src/mcp/postJson.js");
+    vi.mocked(getJson).mockResolvedValue(fakeResult("res_999"));
 
     const tool = buildFetchLimsResultTool(mockPool, "http://localhost:8014");
     const result = await tool.execute(mockCtx, { result_id: "res_999" });
@@ -224,13 +223,9 @@ describe("fetch_lims_result", () => {
     expect(result.citation).toBeDefined();
   });
 
-  it("throws on 404", async () => {
-    vi.mocked(fetch).mockResolvedValue({
-      ok: false,
-      status: 404,
-      text: async () => "not found",
-      statusText: "Not Found",
-    } as unknown as Response);
+  it("throws on upstream error", async () => {
+    const { getJson, UpstreamError } = await import("../../../src/mcp/postJson.js");
+    vi.mocked(getJson).mockRejectedValue(new UpstreamError("mcp-lims-starlims", 404, "not found"));
 
     const tool = buildFetchLimsResultTool(mockPool, "http://localhost:8014");
     await expect(tool.execute(mockCtx, { result_id: "res_missing" })).rejects.toThrow();
@@ -290,10 +285,8 @@ describe("fetch_instrument_run", () => {
   });
 
   it("returns run with peaks and citation on success", async () => {
-    vi.mocked(fetch).mockResolvedValue({
-      ok: true,
-      json: async () => fakeRun("run_W999"),
-    } as unknown as Response);
+    const { getJson } = await import("../../../src/mcp/postJson.js");
+    vi.mocked(getJson).mockResolvedValue(fakeRun("run_W999"));
 
     const tool = buildFetchInstrumentRunTool(mockPool, "http://localhost:8015");
     const result = await tool.execute(mockCtx, { run_id: "run_W999" });
@@ -305,23 +298,17 @@ describe("fetch_instrument_run", () => {
     expect((result.citation as { source_uri: string }).source_uri).toContain("run_W999");
   });
 
-  it("throws on 404", async () => {
-    vi.mocked(fetch).mockResolvedValue({
-      ok: false,
-      status: 404,
-      text: async () => "not found",
-      statusText: "Not Found",
-    } as unknown as Response);
+  it("throws on upstream error", async () => {
+    const { getJson, UpstreamError } = await import("../../../src/mcp/postJson.js");
+    vi.mocked(getJson).mockRejectedValue(new UpstreamError("mcp-instrument-waters", 404, "not found"));
 
     const tool = buildFetchInstrumentRunTool(mockPool, "http://localhost:8015");
     await expect(tool.execute(mockCtx, { run_id: "run_missing" })).rejects.toThrow();
   });
 
   it("builds empower URI in citation", async () => {
-    vi.mocked(fetch).mockResolvedValue({
-      ok: true,
-      json: async () => fakeRun("run_W42"),
-    } as unknown as Response);
+    const { getJson } = await import("../../../src/mcp/postJson.js");
+    vi.mocked(getJson).mockResolvedValue(fakeRun("run_W42"));
 
     const tool = buildFetchInstrumentRunTool(mockPool, "http://localhost:8015", "https://myco.empower.host");
     const result = await tool.execute(mockCtx, { run_id: "run_W42" });

@@ -12,11 +12,37 @@ from __future__ import annotations
 
 import logging
 import os
+import re
+from datetime import datetime
 from typing import Annotated, Any
 
 import httpx
 from fastapi import Body, Path
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
+
+# Benchling entry IDs are like "etr_abc123" — letters/digits/underscores only.
+# Strict regex prevents path-traversal / query-string injection through f-string
+# URL assembly downstream.
+_BENCHLING_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,128}$")
+_PROJECT_ID_RE = _BENCHLING_ID_RE
+_SCHEMA_ID_RE = _BENCHLING_ID_RE
+
+
+def _validate_id(value: str, label: str) -> str:
+    if not _BENCHLING_ID_RE.match(value):
+        raise ValueError(
+            f"{label} must match {_BENCHLING_ID_RE.pattern} — got {value!r}"
+        )
+    return value
+
+
+def _validate_iso8601(value: str) -> str:
+    """Strict ISO-8601 timestamp check. Rejects anything fromisoformat() won't accept."""
+    try:
+        datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"since must be ISO-8601 — got {value!r}") from exc
+    return value
 
 from services.mcp_tools.common.app import create_app
 from services.mcp_tools.common.settings import ToolSettings
@@ -91,6 +117,20 @@ class QueryRunsRequest(BaseModel):
     )
     limit: int = Field(50, ge=1, le=200, description="Max entries to return (1–200).")
 
+    @field_validator("project_id", "schema_id")
+    @classmethod
+    def _validate_ids(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        return _validate_id(v, "id")
+
+    @field_validator("since")
+    @classmethod
+    def _validate_since(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        return _validate_iso8601(v)
+
 
 class QueryRunsResponse(BaseModel):
     entries: list[ExperimentEntry]
@@ -124,13 +164,14 @@ def _parse_entry(raw: dict[str, Any]) -> ExperimentEntry:
 # --------------------------------------------------------------------------
 @app.get("/experiments/{entry_id}", response_model=ExperimentEntry)
 async def get_experiment(
-    entry_id: Annotated[str, Path(min_length=1, max_length=200)],
+    entry_id: Annotated[str, Path(min_length=1, max_length=128)],
 ) -> ExperimentEntry:
     """Retrieve a single ELN notebook entry by its Benchling ID."""
-    if not entry_id.strip():
-        raise ValueError("entry_id must be a non-empty string")
+    _validate_id(entry_id, "entry_id")
 
     async with _client_factory() as client:
+        # entry_id is regex-validated (letters/digits/underscore/hyphen only),
+        # so f-string interpolation cannot inject ?, #, or path traversal.
         resp = await client.get(f"/entries/{entry_id}")
         if resp.status_code == 404:
             raise ValueError(f"Benchling entry not found: {entry_id!r}")
@@ -151,6 +192,9 @@ async def query_runs(
     if body.schema_id:
         params["schemaId"] = body.schema_id
     if body.since:
+        # body.since has already been ISO-8601-validated by the field validator.
+        # Pass via httpx params= to avoid f-string assembly into the query
+        # string; the leading ">" is the Benchling filter operator.
         params["modifiedAt"] = f">{body.since}"
 
     async with _client_factory() as client:

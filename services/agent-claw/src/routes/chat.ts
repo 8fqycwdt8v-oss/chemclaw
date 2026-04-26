@@ -34,7 +34,8 @@ import {
   shortCircuitResponse,
   HELP_TEXT,
 } from "../core/slash.js";
-import { registerRedactSecretsHook } from "../core/hooks/redact-secrets.js";
+import { registerRedactSecretsHook, redactString } from "../core/hooks/redact-secrets.js";
+import type { RedactReplacement } from "../core/hooks/redact-secrets.js";
 import { registerTagMaturityHook } from "../core/hooks/tag-maturity.js";
 import { registerBudgetGuardHook } from "../core/hooks/budget-guard.js";
 import { withUserContext } from "../db/with-user-context.js";
@@ -405,6 +406,16 @@ async function handleChat(
   req.raw.on("close", onClose);
   req.raw.on("aborted", onClose);
 
+  // Hoisted out of the try block so the finally can read them when the loop
+  // exits via error. Mirrors runHarness() in core/harness.ts.
+  let finishReason = "stop";
+  let finalText = "";
+  let stepsUsed = 0;
+  // Streaming redaction log: each text_delta is scrubbed in flight via
+  // redactString; replacements are persisted to scratchpad before post_turn.
+  const _streamRedactions: RedactReplacement[] = [];
+  let budget: Budget | undefined;
+
   try {
     // Plan mode: ask LLM for a JSON plan; emit plan_step + plan_ready; no tool execution.
     if (isPlanMode) {
@@ -473,14 +484,10 @@ async function handleChat(
 
     await lifecycle.dispatch("pre_turn", { ctx, messages });
 
-    const budget = new Budget({
+    budget = new Budget({
       maxSteps: effectiveMaxSteps,
       maxPromptTokens: deps.config.AGENT_TOKEN_BUDGET,
     });
-
-    let finishReason = "stop";
-    let finalText = "";
-    let stepsUsed = 0;
 
     streaming: while (true) {
       if (closed) break;
@@ -541,8 +548,9 @@ async function handleChat(
           for await (const chunk of deps.llm.streamCompletion(messages, tools)) {
             if (closed) break;
             if (chunk.type === "text_delta") {
-              streamed += chunk.delta;
-              writeEvent(reply, { type: "text_delta", delta: chunk.delta });
+              const redacted = redactString(chunk.delta, _streamRedactions);
+              streamed += redacted;
+              writeEvent(reply, { type: "text_delta", delta: redacted });
             }
             // finish/tool_call chunks from the stream are not re-emitted here;
             // the harness emits its own finish event below.
@@ -553,22 +561,14 @@ async function handleChat(
           }
         } catch {
           // Stream failed — fall back to the complete text we got from call().
-          writeEvent(reply, { type: "text_delta", delta: finalText });
+          const redactedFallback = redactString(finalText, _streamRedactions);
+          finalText = redactedFallback;
+          writeEvent(reply, { type: "text_delta", delta: redactedFallback });
         }
       }
 
       messages.push({ role: "assistant", content: finalText });
       break streaming;
-    }
-
-    await lifecycle.dispatch("post_turn", { ctx, finalText, stepsUsed });
-
-    if (!closed) {
-      writeEvent(reply, {
-        type: "finish",
-        finishReason,
-        usage: budget.summary(),
-      });
     }
   } catch (err) {
     req.log.error({ err }, "chat stream failed");
@@ -577,6 +577,46 @@ async function handleChat(
       writeEvent(reply, { type: "error", error: "internal" });
     }
   } finally {
+    // post_turn fires even if the streaming loop threw — mirrors runHarness().
+    // The redact-secrets hook scrubs finalText here; for streaming responses
+    // each delta was already scrubbed via redactString above, so this is a
+    // belt-and-suspenders pass that also writes the audit log to scratchpad.
+    try {
+      // Persist any in-flight stream redactions to scratchpad before post_turn
+      // runs so observability captures both layers.
+      if (_streamRedactions.length > 0) {
+        const existing =
+          (ctx.scratchpad.get("redact_log") as Array<{
+            scope: string;
+            replacements: RedactReplacement[];
+            timestamp: string;
+          }>) ?? [];
+        ctx.scratchpad.set("redact_log", [
+          ...existing,
+          {
+            scope: "stream_delta",
+            replacements: _streamRedactions,
+            timestamp: new Date().toISOString(),
+          },
+        ]);
+      }
+      await lifecycle.dispatch("post_turn", { ctx, finalText, stepsUsed });
+    } catch (postTurnErr) {
+      req.log.warn({ err: postTurnErr }, "post_turn dispatch failed");
+    }
+
+    if (!closed) {
+      try {
+        writeEvent(reply, {
+          type: "finish",
+          finishReason,
+          usage: budget?.summary() ?? { promptTokens: 0, completionTokens: 0 },
+        });
+      } catch {
+        // socket already gone
+      }
+    }
+
     cleanupSkillForTurn?.();
     try {
       reply.raw.end();

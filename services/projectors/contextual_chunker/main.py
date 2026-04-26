@@ -177,6 +177,11 @@ class ContextualChunkerProjector(BaseProjector):
                             page_number = max(1, (row["byte_start"] or 0) // 2000 + 1)
 
                     async with conn.cursor() as cur:
+                        # NOTE: write `prefix` verbatim — even when the LLM raised
+                        # _PermanentChunkError we wrote prefix="" above. Empty
+                        # string is the "processed but no useful prefix" sentinel;
+                        # NULL means "not yet attempted" and would re-trigger this
+                        # projector on every replay (retry storm on bad data).
                         await cur.execute(
                             """
                             UPDATE document_chunks
@@ -185,7 +190,7 @@ class ContextualChunkerProjector(BaseProjector):
                              WHERE id = %s::uuid
                                AND contextual_prefix IS NULL
                             """,
-                            (prefix or None, page_number, row["id"]),
+                            (prefix, page_number, row["id"]),
                         )
                     await conn.commit()
                     total += 1

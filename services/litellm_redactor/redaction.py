@@ -114,8 +114,16 @@ def redact(text: str) -> RedactionResult:
 def redact_messages(messages: list[dict]) -> list[dict]:
     """Apply redact() to every 'content' field in a list of chat messages.
 
+    Also scrubs OpenAI-style assistant tool_calls (each tool_call's
+    function.arguments JSON string) so SMILES / NCE-IDs / compound-codes
+    that the model emits as tool arguments don't leak back to the next
+    LLM call. Tool-result messages (role="tool") are scrubbed via the
+    content path above.
+
     Does not mutate the input; returns a new list.
     """
+    import json
+
     redacted = []
     for m in messages:
         if not isinstance(m, dict):
@@ -136,5 +144,30 @@ def redact_messages(messages: list[dict]) -> list[dict]:
                 else:
                     new_blocks.append(block)
             copy["content"] = new_blocks
+
+        # OpenAI-style tool_calls — assistant messages with no content but
+        # function.arguments holding the LLM's tool input. Each arguments
+        # value is a JSON-encoded string; redact the whole string and
+        # preserve the tool_calls structure.
+        tool_calls = m.get("tool_calls")
+        if isinstance(tool_calls, list):
+            new_tcs = []
+            for tc in tool_calls:
+                if not isinstance(tc, dict):
+                    new_tcs.append(tc)
+                    continue
+                new_tc = dict(tc)
+                fn = tc.get("function")
+                if isinstance(fn, dict):
+                    new_fn = dict(fn)
+                    args = fn.get("arguments")
+                    if isinstance(args, str) and args:
+                        # Redact the JSON string verbatim — patterns are
+                        # length-bounded so this is safe on any size payload.
+                        new_fn["arguments"] = redact(args).text
+                    new_tc["function"] = new_fn
+                new_tcs.append(new_tc)
+            copy["tool_calls"] = new_tcs
+
         redacted.append(copy)
     return redacted
