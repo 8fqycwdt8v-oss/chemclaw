@@ -1,21 +1,24 @@
 // POST /api/chat — SSE-streaming chat endpoint.
 //
-// Request shape (matches legacy services/agent/src/routes/chat.ts):
+// Request shape:
 //   {
 //     "messages": [{"role":"user","content":"..."}],
 //     "stream": true|false,
-//     "agent_trace_id": "<optional — last assistant turn's trace key for /feedback>"
+//     "agent_trace_id": "<optional — last assistant turn's trace key for /feedback>",
+//     "session_id": "<optional — UUID; resumes a session, threads scratchpad/todos/awaiting-question>"
 //   }
 //
 // Pre-pass: the slash router is checked first. isStreamable=false verbs emit
 // a single text-completion + finish event without invoking the harness.
 //
-// SSE event types: text_delta | tool_call | tool_result | plan_step | plan_ready | finish | error
+// SSE event union: see ../streaming/sse.ts (StreamEvent). Every turn ends with
+// exactly one terminal event (`finish` or `error`).
 //
 // Defences:
 //   - Dedicated lower rate limit (AGENT_CHAT_RATE_LIMIT_MAX).
 //   - History cap (AGENT_CHAT_MAX_HISTORY) + per-message cap (AGENT_CHAT_MAX_INPUT_CHARS).
 //   - Server-enforced maxSteps on the agent loop.
+//   - Cross-turn session token budget (AGENT_TOKEN_BUDGET); breach → `error: session_budget_exceeded`.
 //   - Terminal-event guarantee: finish or error always emitted.
 //   - Plan mode: LLM asked to produce JSON plan; plan_step + plan_ready events emitted; no tools execute.
 
@@ -36,7 +39,7 @@ import {
 } from "../core/slash.js";
 import { redactString } from "../core/hooks/redact-secrets.js";
 import type { RedactReplacement } from "../core/hooks/redact-secrets.js";
-import { buildDefaultLifecycle } from "../core/harness-builders.js";
+import { buildDefaultLifecycle, hydrateScratchpad } from "../core/harness-builders.js";
 import {
   createSession,
   loadSession,
@@ -56,31 +59,13 @@ import {
   createPlan,
   parsePlanSteps,
   PLAN_MODE_SYSTEM_SUFFIX,
-  type PlanStep,
 } from "../core/plan-mode.js";
 import type { SkillLoader } from "../core/skills.js";
 import { VERB_TO_SKILL } from "../core/skills.js";
-
-// ---------------------------------------------------------------------------
-// Wire types
-// ---------------------------------------------------------------------------
-
-export type StreamEvent =
-  | { type: "text_delta"; delta: string }
-  | { type: "tool_call"; toolId: string; input: unknown }
-  | { type: "tool_result"; toolId: string; output: unknown }
-  | { type: "plan_step"; step_number: number; tool: string; args: unknown; rationale: string }
-  | { type: "plan_ready"; plan_id: string; steps: PlanStep[]; created_at: number }
-  // Emitted once per turn so clients can resume by passing session_id back.
-  | { type: "session"; session_id: string }
-  // Emitted by the manage_todos tool's post_tool hook.
-  | { type: "todo_update"; todos: Array<{ id: string; ordering: number; content: string; status: string }> }
-  // Emitted when the model called ask_user; the stream then ends with a
-  // `finish` of finishReason="awaiting_user_input". Client must POST a
-  // user message containing the answer with the same session_id to resume.
-  | { type: "awaiting_user_input"; session_id: string; question: string }
-  | { type: "finish"; finishReason: string; usage: { promptTokens: number; completionTokens: number } }
-  | { type: "error"; error: string };
+import { writeEvent, setupSse } from "../streaming/sse.js";
+// Re-exported so existing imports `import type { StreamEvent } from "./chat.js"`
+// keep compiling — the canonical home is now ../streaming/sse.ts.
+export type { StreamEvent } from "../streaming/sse.js";
 
 const ChatMessageSchema = z.object({
   role: z.enum(["user", "assistant", "system", "tool"]),
@@ -141,24 +126,6 @@ function enforceBounds(
     }
   }
   return { ok: true };
-}
-
-// ---------------------------------------------------------------------------
-// SSE helpers
-// ---------------------------------------------------------------------------
-
-function writeEvent(reply: FastifyReply, payload: StreamEvent): void {
-  const json = JSON.stringify(payload).replace(/\r?\n/g, "\\n");
-  reply.raw.write(`data: ${json}\n\n`);
-}
-
-function setupSse(reply: FastifyReply): void {
-  reply.raw.statusCode = 200;
-  reply.raw.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-  reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
-  reply.raw.setHeader("Connection", "keep-alive");
-  reply.raw.setHeader("X-Accel-Buffering", "no");
-  reply.hijack();
 }
 
 // ---------------------------------------------------------------------------
@@ -406,30 +373,15 @@ async function handleChat(
     }
   }
 
-  // seenFactIds: rehydrate from prior scratchpad if present, else fresh.
-  const _initialSeenFactIds = new Set<string>(
-    Array.isArray(priorScratchpad["seenFactIds"])
-      ? (priorScratchpad["seenFactIds"] as string[])
-      : [],
+  const { scratchpad, seenFactIds } = hydrateScratchpad(
+    priorScratchpad,
+    sessionId,
+    deps.config.AGENT_TOKEN_BUDGET,
   );
-  const _scratchpad = new Map<string, unknown>();
-  // Hydrate everything else from the prior scratchpad (except keys the
-  // budget/seenFactIds setup below handles explicitly).
-  for (const [k, v] of Object.entries(priorScratchpad)) {
-    if (k === "seenFactIds" || k === "budget") continue;
-    _scratchpad.set(k, v);
-  }
-  _scratchpad.set("budget", {
-    promptTokensUsed: 0,
-    completionTokensUsed: 0,
-    tokenBudget: deps.config.AGENT_TOKEN_BUDGET,
-  });
-  _scratchpad.set("seenFactIds", _initialSeenFactIds);
-  if (sessionId) _scratchpad.set("session_id", sessionId);
   const ctx: ToolContext = {
     userEntraId: user,
-    seenFactIds: _initialSeenFactIds,
-    scratchpad: _scratchpad,
+    seenFactIds,
+    scratchpad,
   };
 
   const lifecycle = buildDefaultLifecycle();

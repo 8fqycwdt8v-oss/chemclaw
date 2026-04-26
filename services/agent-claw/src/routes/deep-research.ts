@@ -38,9 +38,10 @@ import { withUserContext } from "../db/with-user-context.js";
 import { PromptRegistry } from "../prompts/registry.js";
 import { runWithRequestContext } from "../core/request-context.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
+import { hydrateScratchpad } from "../core/harness-builders.js";
 import type { Message, ToolContext } from "../core/types.js";
 import type { PreToolPayload } from "../core/types.js";
-import type { StreamEvent } from "./chat.js";
+import { writeEvent, setupSse } from "../streaming/sse.js";
 
 // ---------------------------------------------------------------------------
 // Deep Research request schema (same shape as /api/chat).
@@ -79,24 +80,6 @@ export interface DeepResearchRouteDeps {
 
 const DR_SUFFIX =
   "\n\nDR mode: think step by step; produce a structured report.";
-
-// ---------------------------------------------------------------------------
-// SSE helpers (mirrors chat.ts — kept local to avoid coupling).
-// ---------------------------------------------------------------------------
-
-function writeEvent(reply: FastifyReply, payload: StreamEvent): void {
-  const json = JSON.stringify(payload).replace(/\r?\n/g, "\\n");
-  reply.raw.write(`data: ${json}\n\n`);
-}
-
-function setupSse(reply: FastifyReply): void {
-  reply.raw.statusCode = 200;
-  reply.raw.setHeader("Content-Type", "text/event-stream; charset=utf-8");
-  reply.raw.setHeader("Cache-Control", "no-cache, no-transform");
-  reply.raw.setHeader("Connection", "keep-alive");
-  reply.raw.setHeader("X-Accel-Buffering", "no");
-  reply.hijack();
-}
 
 // ---------------------------------------------------------------------------
 // Bounds check.
@@ -175,20 +158,16 @@ async function handleDeepResearch(
     })),
   ];
 
-  // seenFactIds starts empty — init-scratch pre_turn hook and the harness
-  // will wire it through the scratchpad before the first tool call.
-  const _initialSeenFactIds = new Set<string>();
-  const _scratchpad = new Map<string, unknown>();
-  _scratchpad.set("budget", {
-    promptTokensUsed: 0,
-    completionTokensUsed: 0,
-    tokenBudget: deps.config.AGENT_TOKEN_BUDGET,
-  });
-  _scratchpad.set("seenFactIds", _initialSeenFactIds);
+  // DR is single-turn (no session), so prior scratchpad is empty.
+  const { scratchpad, seenFactIds } = hydrateScratchpad(
+    {},
+    null,
+    deps.config.AGENT_TOKEN_BUDGET,
+  );
   const ctx: ToolContext = {
     userEntraId: user,
-    seenFactIds: _initialSeenFactIds,
-    scratchpad: _scratchpad,
+    seenFactIds,
+    scratchpad,
   };
 
   // DR mode: 4× maxSteps, capped at 40.

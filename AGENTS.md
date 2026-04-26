@@ -72,16 +72,22 @@ The following tools are available. The harness loads the live catalog from the
 - A `Citation` with `source_kind="original_doc"` and `source_uri` pointing at the storage location is returned for `bytes` and `pdf_pages` outputs — surface it in the response so the user can click through to the source.
 - If `original_uri` is NULL for a document (ingested before Phase B.1 backfill), fall back to `format="markdown"` and note that the original file location is not recorded.
 
-### Phase B additions
+### Tabular and orchestration
 
 | Tool | What it does |
 |---|---|
 | `analyze_csv` | Parse and summarize tabular CSV data. Accepts `document_id` (fetched via mcp-doc-fetcher) or `csv_text` (raw string, max 1 MB). Returns row count, per-column summary, and `answer_to_query`. If `answer_to_query` is `__llm_judgement_required__`, call `synthesize_insights` next. |
 | `dispatch_sub_agent` | Spawn a specialized sub-agent (chemist / analyst / reader) for a focused sub-task. Returns the sub-agent's answer, citations, and budget summary. |
+| `run_program` | Execute a short Python snippet inside an E2B sandbox for one-off computation. Prefer this over `forge_tool` for non-recurring work. |
 
-**Deferred to later phases:**
-- `run_program` — programmatic tool calling via E2B sandbox (Phase D).
-- `skill_invoke` — invoke a named skill pack (Phase E).
+### Long-horizon autonomy (session-backed)
+
+These builtins let the agent plan, track progress, and pause for clarification across multiple turns of a single session. They are no-ops when the request has no `session_id`.
+
+| Tool | What it does |
+|---|---|
+| `manage_todos` | Read or write the session's todo list. Supports `op: "list" \| "add" \| "update" \| "remove"`. Each write fires a `todo_update` SSE event so the frontend can render the live list. Use to sketch a multi-step plan up-front, then mark items as the work proceeds. |
+| `ask_user` | Pause execution and surface a question to the user. Throws `AwaitingUserInputError` inside the harness, which makes the turn end with `finish.finishReason="awaiting_user_input"` and emits an `awaiting_user_input` SSE event. The next user message on the same `session_id` resumes the loop with the answer threaded back into the conversation. Only call this when the question genuinely blocks progress — speculation is not a reason to ask. |
 
 ---
 
@@ -271,6 +277,41 @@ SSE events emitted:
 `POST /api/chat/plan/reject { plan_id }` discards the plan.
 
 No tool calls execute during plan mode — only after approval.
+
+---
+
+## SSE event taxonomy
+
+Every streaming endpoint (`/api/chat`, `/api/deep_research`, `/api/chat/plan/approve`) emits the same discriminated event union. The canonical TypeScript definition lives in `services/agent-claw/src/streaming/sse.ts`; this table is the human-readable reference.
+
+| `type` | Payload | Fired by |
+|---|---|---|
+| `text_delta` | `{ delta: string }` | Each LLM text chunk |
+| `tool_call` | `{ toolId, input }` | Before a tool executes |
+| `tool_result` | `{ toolId, output }` | After a tool returns (output may be redacted/truncated) |
+| `plan_step` | `{ step_number, tool, args, rationale }` | Once per step during plan-mode rendering |
+| `plan_ready` | `{ plan_id, steps, created_at }` | Plan saved; client can POST approve/reject |
+| `session` | `{ session_id }` | Once per turn so the client can resume |
+| `todo_update` | `{ todos: Array<{ id, ordering, content, status }> }` | Every `manage_todos` write |
+| `awaiting_user_input` | `{ session_id, question }` | `ask_user` was invoked; turn will close with `finish.finishReason="awaiting_user_input"` |
+| `finish` | `{ finishReason, usage: { promptTokens, completionTokens } }` | Terminal — stream ended cleanly |
+| `error` | `{ error: string }` | Terminal — stream failed |
+
+Every SSE turn ends with exactly one of `finish` or `error`. Treat anything else as a transport bug.
+
+---
+
+## Session resume — multi-hour autonomy
+
+The agent can run for many turns against a single durable session. The wire-level handshake is:
+
+1. **Client posts** `POST /api/chat` with messages and (optionally) `session_id`. If absent, the harness creates one and emits a `session` SSE event with the new id.
+2. **The harness loads** prior state from `agent_sessions`: scratchpad (including `seenFactIds`), session-level token totals, todo list, awaiting-question (if any).
+3. **The harness streams** the turn. If the model calls `ask_user`, the turn ends with `awaiting_user_input` + `finish.finishReason="awaiting_user_input"` and the question is persisted on the session row.
+4. **Client resumes** by posting another `/api/chat` request with the same `session_id` and the user's answer in `messages[-1]`. The harness threads the answer in and continues.
+5. **Cross-turn budget** (`session_input_tokens`, `session_output_tokens`) accumulates on the row. When totals breach `AGENT_TOKEN_BUDGET`, the harness emits `error: "session_budget_exceeded"` and refuses further turns on that session.
+
+Auto-resume: a daemon (`session_reanimator`) periodically advances stalled sessions whose `last_finish_reason` is not `awaiting_user_input` (those are gated on real user input). Counter is bounded by `auto_resume_cap` and incremented atomically.
 
 ---
 
