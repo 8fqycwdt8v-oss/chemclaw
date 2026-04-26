@@ -36,6 +36,8 @@ import { registerTagMaturityHook } from "../core/hooks/tag-maturity.js";
 import { registerBudgetGuardHook } from "../core/hooks/budget-guard.js";
 import { withUserContext } from "../db/with-user-context.js";
 import { PromptRegistry } from "../prompts/registry.js";
+import { runWithRequestContext } from "../core/request-context.js";
+import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 import type { Message, ToolContext } from "../core/types.js";
 import type { PreToolPayload } from "../core/types.js";
 import type { StreamEvent } from "./chat.js";
@@ -261,7 +263,21 @@ async function handleDeepResearch(
         const parsedInput = tool.inputSchema.parse(effectiveInput);
         writeEvent(reply, { type: "tool_call", toolId, input: parsedInput });
 
-        const rawOutput = await tool.execute(ctx, parsedInput);
+        // AwaitingUserInputError is a control-flow exception (ask_user); catch
+        // it here so post_turn / SSE termination still run cleanly. Mirrors
+        // routes/chat.ts. Without this, a DR session that fires ask_user
+        // ends up with last_finish_reason='error' and the reanimator
+        // misclassifies it as resumable.
+        let rawOutput: unknown;
+        try {
+          rawOutput = await tool.execute(ctx, parsedInput);
+        } catch (toolErr) {
+          if (toolErr instanceof AwaitingUserInputError) {
+            finishReason = "awaiting_user_input";
+            break streaming;
+          }
+          throw toolErr;
+        }
         const parsedOutput = tool.outputSchema.parse(rawOutput);
 
         const postPayload = { ctx, toolId, input: effectiveInput, output: parsedOutput };
@@ -344,6 +360,13 @@ export function registerDeepResearchRoute(
         },
       },
     },
-    (req, reply) => handleDeepResearch(req, reply, deps),
+    // Wrap in AsyncLocalStorage so outbound MCP calls inherit the user's
+    // identity (mirrors /api/chat). Without this, the JWT minted for
+    // outbound calls would have no user, and MCP services in production
+    // would 401 every DR call.
+    (req, reply) =>
+      runWithRequestContext({ userEntraId: deps.getUser(req) }, () =>
+        handleDeepResearch(req, reply, deps),
+      ),
   );
 }

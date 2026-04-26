@@ -58,10 +58,16 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
       return reply.code(404).send({ error: "plan_not_found" });
     }
 
+    // Owner check: a leaked plan_id mustn't let user A run user B's plan.
+    const user = deps.getUser(req);
+    if (plan.user_entra_id !== user) {
+      // 404 (not 403) so we don't leak the existence of plans across users.
+      return reply.code(404).send({ error: "plan_not_found" });
+    }
+
     // Remove plan from store (consumed).
     planStore.delete(parsed.data.plan_id);
 
-    const user = deps.getUser(req);
     const tools = deps.registry.all();
 
     const seenFactIds = new Set<string>();
@@ -131,19 +137,30 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
       return reply.code(400).send({ error: "invalid_input", detail: parsed.error.issues });
     }
 
-    const existed = planStore.delete(parsed.data.plan_id);
-    if (!existed) {
+    // Owner check before delete.
+    const plan = planStore.get(parsed.data.plan_id);
+    if (!plan) {
+      return reply.code(404).send({ error: "plan_not_found" });
+    }
+    const user = deps.getUser(req);
+    if (plan.user_entra_id !== user) {
       return reply.code(404).send({ error: "plan_not_found" });
     }
 
+    planStore.delete(parsed.data.plan_id);
     return reply.send({ ok: true, message: "Plan rejected and discarded." });
   });
 
-  // GET /api/chat/plan/:plan_id — retrieve plan details (for testing).
+  // GET /api/chat/plan/:plan_id — retrieve plan details (for testing + UI preview).
   app.get("/api/chat/plan/:plan_id", async (req, reply) => {
     const { plan_id } = req.params as { plan_id: string };
     const plan = planStore.get(plan_id);
     if (!plan) {
+      return reply.code(404).send({ error: "plan_not_found" });
+    }
+    // Owner check.
+    const user = deps.getUser(req);
+    if (plan.user_entra_id !== user) {
       return reply.code(404).send({ error: "plan_not_found" });
     }
     return reply.send({

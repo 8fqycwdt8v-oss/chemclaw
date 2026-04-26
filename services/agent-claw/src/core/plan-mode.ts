@@ -34,6 +34,9 @@ export interface Plan {
   plan_id: string;
   steps: PlanStep[];
   messages: Message[];
+  /** Owner user-Entra-ID. /approve / /reject / GET refuse if the calling
+   * user doesn't match. Closes cross-user plan hijack via leaked plan_id. */
+  user_entra_id: string;
   created_at: number;
 }
 
@@ -75,11 +78,16 @@ export const planStore = new PlanStore();
 // Build a new Plan from raw LLM planned steps.
 // ---------------------------------------------------------------------------
 
-export function createPlan(steps: PlanStep[], messages: Message[]): Plan {
+export function createPlan(
+  steps: PlanStep[],
+  messages: Message[],
+  userEntraId: string,
+): Plan {
   return {
     plan_id: randomUUID(),
     steps,
     messages: messages.map((m) => ({ ...m })), // shallow clone
+    user_entra_id: userEntraId,
     created_at: Date.now(),
   };
 }

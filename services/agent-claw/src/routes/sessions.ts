@@ -17,6 +17,7 @@ import type { PromptRegistry } from "../prompts/registry.js";
 import {
   loadSession,
   saveSession,
+  tryIncrementAutoResumeCount,
   OptimisticLockError,
   type SessionFinishReason,
 } from "../core/session-store.js";
@@ -55,6 +56,21 @@ export function registerSessionsRoute(
   deps: SessionsRouteDeps,
 ): void {
   const { pool, getUser } = deps;
+
+  // Per-route rate-limit config for the mutating session endpoints.
+  // /plan/run can chain up to AGENT_PLAN_MAX_AUTO_TURNS harness iterations
+  // per call, so we want a tighter cap than the global rate limit. Default
+  // to 1/4 of the chat limit (e.g. 7/min if chat is 30/min).
+  const sessionMutatingRateLimit = deps.config
+    ? {
+        config: {
+          rateLimit: {
+            max: Math.max(1, Math.floor(deps.config.AGENT_CHAT_RATE_LIMIT_MAX / 4)),
+            timeWindow: deps.config.AGENT_CHAT_RATE_LIMIT_WINDOW_MS,
+          },
+        },
+      }
+    : {};
   // -----------------------------------------------------------------------
   // GET /api/sessions/:id
   // -----------------------------------------------------------------------
@@ -137,7 +153,7 @@ export function registerSessionsRoute(
   // cap fires, or the session-budget trips. Each turn appends to the
   // session's message history. Returns the final state.
   // -----------------------------------------------------------------------
-  app.post<{ Params: { id: string } }>("/api/sessions/:id/plan/run", async (req, reply) => {
+  app.post<{ Params: { id: string } }>("/api/sessions/:id/plan/run", sessionMutatingRateLimit, async (req, reply) => {
     if (!deps.config || !deps.llm || !deps.registry) {
       return reply.code(500).send({ error: "harness_deps_missing" });
     }
@@ -226,7 +242,7 @@ export function registerSessionsRoute(
   // service role and an internal-only listener; if we expose this publicly
   // it'll need an `admin` role check via withUserContext.
   // -----------------------------------------------------------------------
-  app.post<{ Params: { id: string } }>("/api/sessions/:id/resume", async (req, reply) => {
+  app.post<{ Params: { id: string } }>("/api/sessions/:id/resume", sessionMutatingRateLimit, async (req, reply) => {
     if (!deps.config || !deps.llm || !deps.registry) {
       return reply.code(500).send({ error: "harness_deps_missing" });
     }
@@ -243,16 +259,29 @@ export function registerSessionsRoute(
     if (!state) {
       return reply.code(404).send({ error: "not_found" });
     }
-    if (state.lastFinishReason === "awaiting_user_input") {
-      return reply.code(409).send({
-        error: "awaiting_user_input",
-        detail: "session is paused on a clarifying question; needs a real user reply",
-      });
-    }
-    if (state.autoResumeCount >= state.autoResumeCap) {
+    // Atomic counter increment + cap check + awaiting-user-input guard.
+    // Doing this BEFORE the harness run means:
+    //   - Two parallel reanimator calls can't both pass the cap check
+    //   - A crash mid-harness still leaves the count bumped (the next tick
+    //     sees the correct value rather than re-firing)
+    //   - The awaiting_user_input check is enforced in SQL, not JS
+    const newCount = await tryIncrementAutoResumeCount(pool, user, sessionId);
+    if (newCount === null) {
+      // Either cap reached, awaiting_user_input set, or row missing — read
+      // the row again to give a precise reason to the caller.
+      const after = await loadSession(pool, user, sessionId);
+      if (!after) {
+        return reply.code(404).send({ error: "not_found" });
+      }
+      if (after.lastFinishReason === "awaiting_user_input") {
+        return reply.code(409).send({
+          error: "awaiting_user_input",
+          detail: "session is paused on a clarifying question; needs a real user reply",
+        });
+      }
       return reply.code(409).send({
         error: "auto_resume_cap_reached",
-        cap: state.autoResumeCap,
+        cap: after.autoResumeCap,
       });
     }
 
@@ -274,16 +303,11 @@ export function registerSessionsRoute(
       maxAutoTurns: 1, // resume is one turn at a time; cron can call again
     });
 
-    // Bump auto-resume counter after a successful run.
-    await saveSession(pool, user, sessionId, {
-      autoResumeCount: state.autoResumeCount + 1,
-    });
-
     return reply.code(200).send({
       session_id: sessionId,
       final_finish_reason: result.finalFinishReason,
       total_steps_used: result.totalSteps,
-      auto_resume_count: state.autoResumeCount + 1,
+      auto_resume_count: newCount,
     });
   });
 
@@ -300,7 +324,7 @@ export function registerSessionsRoute(
   // later by minting tokens with different scopes (e.g. "agent:summarize"
   // for a future summary daemon).
   // -----------------------------------------------------------------------
-  app.post<{ Params: { id: string } }>("/api/internal/sessions/:id/resume", async (req, reply) => {
+  app.post<{ Params: { id: string } }>("/api/internal/sessions/:id/resume", sessionMutatingRateLimit, async (req, reply) => {
     if (!deps.config || !deps.llm || !deps.registry) {
       return reply.code(500).send({ error: "harness_deps_missing" });
     }
@@ -336,20 +360,23 @@ export function registerSessionsRoute(
     if (!/^[0-9a-f-]{36}$/i.test(sessionId)) {
       return reply.code(400).send({ error: "invalid_input", detail: "session id must be a UUID" });
     }
-    const state = await loadSession(pool, claimedUser, sessionId);
-    if (!state) {
-      return reply.code(404).send({ error: "not_found" });
-    }
-    if (state.lastFinishReason === "awaiting_user_input") {
-      return reply.code(409).send({
-        error: "awaiting_user_input",
-        detail: "session is paused on a clarifying question; needs a real user reply",
-      });
-    }
-    if (state.autoResumeCount >= state.autoResumeCap) {
+    // Atomic counter + cap + awaiting check (same pattern as the public
+    // route). The harness only runs if the increment succeeded.
+    const newCount = await tryIncrementAutoResumeCount(pool, claimedUser, sessionId);
+    if (newCount === null) {
+      const after = await loadSession(pool, claimedUser, sessionId);
+      if (!after) {
+        return reply.code(404).send({ error: "not_found" });
+      }
+      if (after.lastFinishReason === "awaiting_user_input") {
+        return reply.code(409).send({
+          error: "awaiting_user_input",
+          detail: "session is paused on a clarifying question; needs a real user reply",
+        });
+      }
       return reply.code(409).send({
         error: "auto_resume_cap_reached",
-        cap: state.autoResumeCap,
+        cap: after.autoResumeCap,
       });
     }
 
@@ -369,15 +396,11 @@ export function registerSessionsRoute(
       maxAutoTurns: 1,
     });
 
-    await saveSession(pool, claimedUser, sessionId, {
-      autoResumeCount: state.autoResumeCount + 1,
-    });
-
     return reply.code(200).send({
       session_id: sessionId,
       final_finish_reason: result.finalFinishReason,
       total_steps_used: result.totalSteps,
-      auto_resume_count: state.autoResumeCount + 1,
+      auto_resume_count: newCount,
     });
   });
 }
@@ -532,6 +555,13 @@ async function _runChainedHarnessInner(
       currentMessages = [
         { role: "user", content: "Continue from the last step. Stop when the plan is complete." },
       ];
+      // Plan-progress walker: reset the inspection cursor since we just
+      // replaced currentMessages with a fresh 1-element array. Without this
+      // reset, the next iteration's `for (let i = inspectedUpTo; ...)` loop
+      // starts at the OLD length (e.g. 50) but currentMessages.length is
+      // now 1 — every tool call in the continuation turn is silently
+      // skipped for plan progress, and current_step_index never advances.
+      inspectedUpTo = 0;
     } catch (err) {
       // Use instanceof checks rather than err.name string-compares so a class
       // rename / minification can't silently change classification.

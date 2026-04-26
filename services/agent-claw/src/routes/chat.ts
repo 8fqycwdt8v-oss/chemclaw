@@ -460,7 +460,7 @@ async function handleChat(
           user: lastUserMessage?.content ?? "",
         });
         const steps = parsePlanSteps(planJson);
-        const plan = createPlan(steps, messages);
+        const plan = createPlan(steps, messages, user);
         planStore.save(plan);
         cleanupSkillForTurn?.();
         return void reply.send({
@@ -531,7 +531,7 @@ async function handleChat(
         //      /api/chat/plan/approve and existing tests.
         //   2. The DB-backed agent_plans table — used by Phase E chained
         //      execution via /api/sessions/:id/plan/run.
-        const plan = createPlan(steps, messages);
+        const plan = createPlan(steps, messages, user);
         planStore.save(plan);
 
         // DB persistence requires a session id. If we couldn't create one

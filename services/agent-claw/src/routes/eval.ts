@@ -67,21 +67,51 @@ const EvalBodySchema = z.object({
   args: z.string().min(1),
 });
 
+async function requireAdminEval(pool: Pool, userEntraId: string): Promise<boolean> {
+  return withSystemContext(pool, async (client) => {
+    // Cross-project admin check: a user is admin if they have role='admin'
+    // on any project (consistent with optimizer.ts gateAdmin behavior).
+    // Done in withSystemContext so we don't depend on the calling user's
+    // own RLS scope; the user_entra_id is the parameter, not the session
+    // context. (We're already in admin-gating territory.)
+    const r = await client.query<{ has_admin: boolean }>(
+      `SELECT EXISTS (
+         SELECT 1 FROM user_project_access
+          WHERE user_entra_id = $1
+            AND role = 'admin'
+       ) AS has_admin`,
+      [userEntraId],
+    );
+    return r.rows[0]?.has_admin === true;
+  });
+}
+
 export function registerEvalRoute(
   app: FastifyInstance,
-  { config, pool, promptRegistry }: EvalRouteDeps,
+  { config, pool, promptRegistry, getUser }: EvalRouteDeps,
 ): void {
   app.post("/api/eval", async (req, reply) => {
+    // Auth gate — eval routes expose prompt versions + shadow scores
+    // derived from real chats. Mirror the optimizer-route admin gate.
+    const user = getUser(req);
+    if (!(await requireAdminEval(pool, user))) {
+      return reply.code(403).send({
+        error: "forbidden",
+        detail: "/api/eval requires admin role on any project",
+      });
+    }
+
     const body = EvalBodySchema.safeParse(req.body);
     if (!body.success) {
-      return reply.code(400).send({ error: "args required" });
+      return reply.code(400).send({ error: "invalid_input", detail: "missing or empty `args`" });
     }
 
     const parsed = parseEvalArgs(body.data.args);
 
     if (parsed.subVerb === "unknown") {
       return reply.code(400).send({
-        error: `Unknown /eval sub-command: "${(parsed as { raw: string }).raw}". Use "golden" or "shadow <prompt_name>".`,
+        error: "unknown_subcommand",
+        detail: `Unknown /eval sub-command: "${(parsed as { raw: string }).raw}". Use "golden" or "shadow <prompt_name>".`,
       });
     }
 

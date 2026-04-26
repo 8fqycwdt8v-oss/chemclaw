@@ -80,6 +80,14 @@ def sign_mcp_token(
         raise McpAuthError(
             "MCP_AUTH_SIGNING_KEY is empty; refusing to mint an unsigned token"
         )
+    # HS256 minimum: 32 chars (~256 bits). Refusing weak keys at sign time
+    # catches misconfigured deploys before they ship a token an attacker
+    # could feasibly brute-force.
+    if len(key) < 32:
+        raise McpAuthError(
+            f"MCP_AUTH_SIGNING_KEY too short ({len(key)} chars); "
+            "HS256 requires >=32 characters of entropy"
+        )
     issued_at = now if now is not None else int(time.time())
     header = {"alg": "HS256", "typ": "JWT"}
     payload = {

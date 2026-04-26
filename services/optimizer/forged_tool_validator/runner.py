@@ -15,8 +15,8 @@ import uuid
 from datetime import datetime, timezone
 from typing import Any
 
-import psycopg2
-import psycopg2.extras
+import psycopg
+from psycopg.rows import dict_row
 from apscheduler.schedulers.blocking import BlockingScheduler
 
 from .sandbox_client import LocalSubprocessSandbox, SandboxClient
@@ -40,7 +40,7 @@ def _get_dsn() -> str:
 
 
 def _fetch_active_forged_tools(conn: Any) -> list[ForgedTool]:
-    with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+    with conn.cursor(row_factory=dict_row) as cur:
         cur.execute(
             """
             SELECT id::text, name, scripts_path
@@ -55,7 +55,7 @@ def _fetch_active_forged_tools(conn: Any) -> list[ForgedTool]:
         tool_id = row["id"]
 
         # Load test cases.
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 """
                 SELECT id::text, input_json, expected_output_json,
@@ -81,7 +81,7 @@ def _fetch_active_forged_tools(conn: Any) -> list[ForgedTool]:
             )
 
         # Load prompt_md to extract schemas (stored as markdown; parse JSON blocks).
-        with conn.cursor(cursor_factory=psycopg2.extras.RealDictCursor) as cur:
+        with conn.cursor(row_factory=dict_row) as cur:
             cur.execute(
                 "SELECT prompt_md FROM skill_library WHERE id = %s::uuid",
                 (tool_id,),
@@ -181,7 +181,7 @@ def run_validation(sandbox: SandboxClient | None = None) -> list[ValidationResul
     if sandbox is None:
         sandbox = LocalSubprocessSandbox()
 
-    conn = psycopg2.connect(_get_dsn())
+    conn = psycopg.connect(_get_dsn())
     try:
         tools = _fetch_active_forged_tools(conn)
         logger.info("forge-validator: validating %d active forged tools", len(tools))

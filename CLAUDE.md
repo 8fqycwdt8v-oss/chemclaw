@@ -62,7 +62,7 @@ make import.sample              # import sample ELN JSON
 ### Running individual services locally
 
 ```bash
-make run.agent                   # http://localhost:3100
+make run.agent                   # http://localhost:3101
 make run.frontend                # http://localhost:8501
 make run.mcp-rdkit               # http://localhost:8001
 make run.mcp-drfp                # http://localhost:8002
@@ -84,7 +84,7 @@ make test                       # pytest + vitest
 .venv/bin/pytest tests/unit/test_redactor.py::test_redaction_is_deterministic -v
 
 # TypeScript single test:
-npm run test --workspace services/agent -- tests/unit/some.test.ts
+npm run test --workspace services/agent-claw -- tests/unit/some.test.ts
 ```
 
 ### Smoke test
@@ -144,14 +144,18 @@ Auto-resume: `services/optimizer/session_reanimator/` polls every 5 min for sess
 - **Every prompt is redacted pre-egress** by the callback at `services/litellm_redactor/callback.py`. When adding new sensitive categories (new project-ID patterns, new compound-code formats), extend `services/litellm_redactor/redaction.py` and add a unit test in `tests/unit/test_redactor.py`.
 - The regex patterns in the redactor are length-bounded by construction — if you add new patterns, bound every quantifier (no unbounded `.*`) to avoid catastrophic backtracking.
 - **System prompts come from `prompt_registry`, not from hardcoded strings.** When adding a new agent mode, insert a new row (see `db/seed/02_prompt_registry.sql` for the canonical pattern) and reference it by name in code. The `PromptRegistry` cache TTL is 60s; call `invalidate()` in long-running processes if you hot-edit a prompt in the DB.
-- **MCP service Bearer-token authentication (ADR 006 Layer 2)** is implemented — the agent can mint HS256 JWTs via `services/agent-claw/src/security/mcp-tokens.ts` and MCP services verify via `services/mcp_tools/common/auth.py`. **Currently it is not wired end-to-end** (the agent doesn't yet call `signMcpToken` on outbound MCP requests, and `create_app()` doesn't yet add `Depends(require_mcp_token)` as a dependency). Wiring is tracked as a follow-up; setting `MCP_AUTH_REQUIRED=true` today would lock the cluster out. See `docs/adr/006-sandbox-isolation.md` and `docs/runbooks/autonomy-upgrade.md` for the rollout plan.
-
-## Secrets and egress
-
-- **All LLM calls route through LiteLLM** (`services/litellm/config.yaml`). Never import provider SDKs directly in application code; always go through `litellm`. The agent uses `@ai-sdk/openai` with `baseURL` pointing at LiteLLM's OpenAI-compatible endpoint — this is the single egress chokepoint.
-- **Every prompt is redacted pre-egress** by the callback at `services/litellm_redactor/callback.py`. When adding new sensitive categories (new project-ID patterns, new compound-code formats), extend `services/litellm_redactor/redaction.py` and add a unit test in `tests/unit/test_redactor.py`.
-- The regex patterns in the redactor are length-bounded by construction — if you add new patterns, bound every quantifier (no unbounded `.*`) to avoid catastrophic backtracking.
-- **System prompts come from `prompt_registry`, not from hardcoded strings.** When adding a new agent mode, insert a new row (see `db/seed/02_prompt_registry.sql` for the canonical pattern) and reference it by name in code. The `PromptRegistry` cache TTL is 60s; call `invalidate()` in long-running processes if you hot-edit a prompt in the DB.
+- **MCP service Bearer-token authentication (ADR 006 Layer 2)** — the agent
+  mints HS256 JWTs via `services/agent-claw/src/security/mcp-tokens.ts`,
+  attaches them to every `postJson` / `getJson` call via the AsyncLocalStorage
+  request context, and MCP services verify via `services/mcp_tools/common/app.py`
+  middleware. Set `MCP_AUTH_SIGNING_KEY` (≥32 chars; `openssl rand -hex 32`)
+  and flip `MCP_AUTH_REQUIRED=true` to enforce in production. In dev mode
+  (key unset / required false), missing tokens are accepted with a warning
+  so local dev keeps working without setup. The reanimator daemon mints
+  its own JWT (`agent:resume` scope) and posts to `/api/internal/sessions/:id/resume`,
+  which trusts only the signed `claims.user` — no `x-user-entra-id` forgery
+  surface. See `docs/runbooks/autonomy-upgrade.md` for the production
+  rollout sequence.
 
 ## When adding a new MCP tool service
 

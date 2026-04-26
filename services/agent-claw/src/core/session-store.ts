@@ -381,6 +381,35 @@ export async function updateTodo(
   });
 }
 
+/**
+ * Atomically increment auto_resume_count IF the cap hasn't been reached AND
+ * the session isn't paused on a clarifying question. Returns the new count
+ * on success, or null if the increment was refused (cap reached, awaiting
+ * user input, or row missing).
+ *
+ * Uses a single `UPDATE ... WHERE ... RETURNING` so two parallel resume
+ * calls cannot both pass the cap check and double-increment. Replaces the
+ * earlier read-then-write pattern that left a race window.
+ */
+export async function tryIncrementAutoResumeCount(
+  pool: Pool,
+  userEntraId: string,
+  sessionId: string,
+): Promise<number | null> {
+  return withUserContext(pool, userEntraId, async (client) => {
+    const r = await client.query<{ auto_resume_count: number }>(
+      `UPDATE agent_sessions
+          SET auto_resume_count = auto_resume_count + 1
+        WHERE id = $1::uuid
+          AND auto_resume_count < auto_resume_cap
+          AND (last_finish_reason IS NULL OR last_finish_reason <> 'awaiting_user_input')
+        RETURNING auto_resume_count`,
+      [sessionId],
+    );
+    return r.rows[0]?.auto_resume_count ?? null;
+  });
+}
+
 /** List all todos for a session, ordered. */
 export async function listTodos(
   pool: Pool,

@@ -6,10 +6,10 @@ BEGIN;
 -- Deactivate older prompts (rows preserved for history).
 UPDATE prompt_registry
    SET active = false
- WHERE name IN ('agent.system', 'agent.deep_research_mode');
+ WHERE prompt_name IN ('agent.system', 'agent.deep_research_mode');
 
 -- Insert unified agent.system v2.
-INSERT INTO prompt_registry (name, version, active, template)
+INSERT INTO prompt_registry (prompt_name, version, active, template, created_by)
 VALUES (
   'agent.system',
   2,
@@ -74,11 +74,13 @@ Pick tools based on the question, not a preset sequence:
 # Termination
 mark_research_done is one of several ways to end a turn, not the only way. For most questions
 the agent terminates with a direct assistant message after the supporting tool calls.
-$$
-);
+$$,
+  'system'
+)
+ON CONFLICT (prompt_name, version) DO NOTHING;
 
 -- Internal prompt for synthesize_insights.
-INSERT INTO prompt_registry (name, version, active, template)
+INSERT INTO prompt_registry (prompt_name, version, active, template, created_by)
 VALUES (
   'tool.synthesize_insights',
   1,
@@ -109,7 +111,9 @@ RULES:
   - Emit strong only when ≥5 reactions + ≥1 statistical signal support the claim.
   - Emit weak when evidence is thin; do not omit uncertain findings.
   - If the question cannot be answered, return {"insights": [], "summary": "<brief explanation>"}.
-$$
-);
+$$,
+  'system'
+)
+ON CONFLICT (prompt_name, version) DO NOTHING;
 
 COMMIT;
