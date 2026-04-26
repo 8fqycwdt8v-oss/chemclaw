@@ -47,8 +47,17 @@ def create_app(
     Pass `lifespan` if your service needs to manage resources (DB drivers,
     HTTP clients) across the app lifetime. The factory wraps the supplied
     lifespan so the standard start/stop logs still fire.
+
+    Bearer-token authentication (ADR 006 partial) is wired automatically.
+    By default it runs in dev mode — calls without a token are accepted with
+    a warning so existing tests still pass. Set MCP_AUTH_REQUIRED=true in
+    production to enforce verification on every /tools/* request.
     """
     configure_logging(log_level)
+    # Imported lazily so unit tests of `auth.py` don't drag in FastAPI.
+    from services.mcp_tools.common.auth import (  # noqa: F401 — used for the dependency below
+        require_mcp_token,
+    )
 
     @asynccontextmanager
     async def _default_lifespan(app: FastAPI) -> Any:

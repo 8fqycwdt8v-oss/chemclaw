@@ -1,6 +1,6 @@
 # ADR 006: Sandbox network isolation + MCP service authentication
 
-**Status:** proposed
+**Status:** Layer 2 (JWT auth) shipped 2026-04-26; Layers 1 (E2B firewall) and 3 (RPC bridge) remain open
 **Date:** 2026-04-25
 **Driver:** post-v1.0.0-claw security audit (finding C5 / Harness #3)
 
@@ -56,7 +56,22 @@ The firewall script:
 `SANDBOX_ALLOW_NET_EGRESS=true` is then renamed to mean "allow egress to
 the agent's egress proxy specifically" — never to the public internet.
 
-### Layer 2: MCP service authentication
+### Layer 2: MCP service authentication — SHIPPED 2026-04-26
+
+Implemented in:
+  - `services/agent-claw/src/security/mcp-tokens.ts` — `signMcpToken` /
+    `verifyMcpToken`. Round-trip + tamper / expiry / wrong-key tests in
+    `services/agent-claw/tests/unit/mcp-tokens.test.ts`.
+  - `services/mcp_tools/common/auth.py` — `sign_mcp_token` /
+    `verify_mcp_token` / `require_mcp_token` FastAPI dependency. Tests in
+    `services/mcp_tools/common/tests/test_auth.py`.
+  - `services/mcp_tools/common/app.py` — `create_app()` lazily imports
+    `require_mcp_token`; in production (`MCP_AUTH_REQUIRED=true`) every
+    `/tools/*` route demands a valid Bearer token. In dev mode (default),
+    missing tokens are accepted with a warning so existing tests + local
+    workflows keep working until ops flips the flag.
+
+Original design notes follow.
 
 Every MCP service requires a `Authorization: Bearer <token>` header.
 Tokens are short-lived (5-minute TTL), per-sandbox, and signed by the
