@@ -243,19 +243,115 @@ CREATE POLICY prompt_registry_authenticated_policy ON prompt_registry
   );
 
 -- --------------------------------------------------------------------
--- (4) Note on empty-user fall-through in 01_schema.sql.
+-- (4) W2.3 — Fail-closed empty-user RLS policies.
 --
--- The legacy policies in 01_schema.sql still treat empty-string
--- app.current_user_entra_id as "permissive for everyone". Removing
--- that branch today would break every service in docker-compose.yml
--- that still connects as the owner role with no `set_config(...)`
--- (most projectors, optimizer workers, etc.).
+-- After the docker-compose role migration (every system worker now
+-- connects as chemclaw_service which has BYPASSRLS), the empty-user
+-- "permissive" branch in 01_schema.sql's policies is no longer needed
+-- as a system-bypass mechanism — BYPASSRLS-by-role IS the bypass. The
+-- legacy `IS NULL OR = ''` predicate becomes a fail-OPEN footgun: a
+-- forgetful developer who skips `set_config(...)` would otherwise read
+-- every project's data as chemclaw_app.
 --
--- The migration to chemclaw_service for those services is staged
--- separately (see docs/runbooks/security-hardening-migration.md).
--- Until it lands, BYPASSRLS-by-role is the actual security boundary;
--- the empty-user policy text is decorative.
+-- We replace the legacy policies with strict ones that require a real
+-- non-empty user. System workers continue to bypass via BYPASSRLS.
 -- --------------------------------------------------------------------
+
+DROP POLICY IF EXISTS nce_projects_read_policy ON nce_projects;
+CREATE POLICY nce_projects_read_policy ON nce_projects
+  FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM user_project_access upa
+       WHERE upa.nce_project_id = nce_projects.id
+         AND upa.user_entra_id = current_setting('app.current_user_entra_id', true)
+    )
+  );
+
+DROP POLICY IF EXISTS synthetic_steps_read_policy ON synthetic_steps;
+CREATE POLICY synthetic_steps_read_policy ON synthetic_steps
+  FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1 FROM user_project_access upa
+       WHERE upa.nce_project_id = synthetic_steps.nce_project_id
+         AND upa.user_entra_id = current_setting('app.current_user_entra_id', true)
+    )
+  );
+
+DROP POLICY IF EXISTS experiments_read_policy ON experiments;
+CREATE POLICY experiments_read_policy ON experiments
+  FOR SELECT
+  USING (
+    EXISTS (
+      SELECT 1
+        FROM synthetic_steps ss
+        JOIN user_project_access upa ON upa.nce_project_id = ss.nce_project_id
+       WHERE ss.id = experiments.synthetic_step_id
+         AND upa.user_entra_id = current_setting('app.current_user_entra_id', true)
+    )
+  );
+
+-- INSERT/UPDATE/DELETE policies for the same tables — required when FORCE RLS
+-- is on. Same project-membership predicate; chemclaw_service still bypasses.
+
+DROP POLICY IF EXISTS nce_projects_modify_policy ON nce_projects;
+CREATE POLICY nce_projects_modify_policy ON nce_projects
+  FOR ALL
+  USING (
+    EXISTS (
+      SELECT 1 FROM user_project_access upa
+       WHERE upa.nce_project_id = nce_projects.id
+         AND upa.user_entra_id = current_setting('app.current_user_entra_id', true)
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM user_project_access upa
+       WHERE upa.nce_project_id = nce_projects.id
+         AND upa.user_entra_id = current_setting('app.current_user_entra_id', true)
+    )
+  );
+
+DROP POLICY IF EXISTS synthetic_steps_modify_policy ON synthetic_steps;
+CREATE POLICY synthetic_steps_modify_policy ON synthetic_steps
+  FOR ALL
+  USING (
+    EXISTS (
+      SELECT 1 FROM user_project_access upa
+       WHERE upa.nce_project_id = synthetic_steps.nce_project_id
+         AND upa.user_entra_id = current_setting('app.current_user_entra_id', true)
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1 FROM user_project_access upa
+       WHERE upa.nce_project_id = synthetic_steps.nce_project_id
+         AND upa.user_entra_id = current_setting('app.current_user_entra_id', true)
+    )
+  );
+
+DROP POLICY IF EXISTS experiments_modify_policy ON experiments;
+CREATE POLICY experiments_modify_policy ON experiments
+  FOR ALL
+  USING (
+    EXISTS (
+      SELECT 1
+        FROM synthetic_steps ss
+        JOIN user_project_access upa ON upa.nce_project_id = ss.nce_project_id
+       WHERE ss.id = experiments.synthetic_step_id
+         AND upa.user_entra_id = current_setting('app.current_user_entra_id', true)
+    )
+  )
+  WITH CHECK (
+    EXISTS (
+      SELECT 1
+        FROM synthetic_steps ss
+        JOIN user_project_access upa ON upa.nce_project_id = ss.nce_project_id
+       WHERE ss.id = experiments.synthetic_step_id
+         AND upa.user_entra_id = current_setting('app.current_user_entra_id', true)
+    )
+  );
 
 -- --------------------------------------------------------------------
 -- Forged-tool integrity: SHA-256 of the on-disk Python file, computed

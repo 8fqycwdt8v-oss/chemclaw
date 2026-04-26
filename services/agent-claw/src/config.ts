@@ -44,6 +44,13 @@ const ConfigSchema = z.object({
   POSTGRES_HOST: z.string().default("localhost"),
   POSTGRES_PORT: z.coerce.number().int().default(5432),
   POSTGRES_DB: z.string().default("chemclaw"),
+  // The agent connects as chemclaw_app (LOGIN, NO BYPASSRLS) so every read
+  // is RLS-enforced against the calling user's project membership. Owner
+  // role `chemclaw` and BYPASSRLS role `chemclaw_service` are not for
+  // user-facing traffic. Falls back to the legacy POSTGRES_USER/PASSWORD
+  // for backward compatibility during the migration window.
+  CHEMCLAW_APP_USER: z.string().default("chemclaw_app"),
+  CHEMCLAW_APP_PASSWORD: z.string().optional(),
   POSTGRES_USER: z.string().default("chemclaw"),
   POSTGRES_PASSWORD: z.string().min(1, "POSTGRES_PASSWORD must be non-empty"),
   // Server-side per-query cap (ms). Prevents runaway queries from holding connections.
