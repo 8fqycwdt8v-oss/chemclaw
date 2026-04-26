@@ -798,18 +798,57 @@ test environment). TypeScript tests mock HTTP calls via `vi.stubGlobal("fetch", 
 
 ## Source systems
 
-No source-system MCP adapters (ELN/LIMS/instrument) are bundled in this build.
+Two source-system MCP adapters are wired:
 
-The infrastructure to plug one in is preserved:
+### `mcp_eln_local` — local Postgres-backed mock ELN (port 8013, profile `testbed`)
 
-- **`source-cache` post-tool hook** matches any tool whose ID starts with
-  `query_eln_`, `fetch_eln_`, `query_lims_`, `fetch_lims_`, `query_instrument_`,
-  or `fetch_instrument_` and writes `ingestion_events` rows on every call.
-- **`kg_source_cache` projector** converts those rows into `:Fact` nodes with
-  `(source_system_id, fetched_at, valid_until)` provenance.
-- **Citation discipline** — when a future adapter is added, its tool wrappers
-  must return a `citation` field with `source_kind="external_url"` and a
-  `source_uri` pointing to the originating entry. The agent must surface that
-  citation when reporting source-derived facts.
-- **`mcp_instrument_template/README.md`** is a starting point for new
-  instrument adapters.
+Reads from the `mock_eln` Postgres schema (≥ 2000 deterministic experiments across 4 projects, 10 chemistry families, 10 OFAT campaigns; entry shapes mixed/pure-structured/pure-freetext at 80/7/8/5%; data quality clean/partial/noisy/failed at 50/25/15/10%). Used for testing and live demos — never for production data.
+
+Tools the agent calls:
+
+| Tool | When to use |
+|---|---|
+| `query_eln_experiments` | Browse entries by project, schema kind, since-date |
+| `fetch_eln_entry` | Need the full structured fields + freetext narrative + attachments for one entry |
+| `query_eln_canonical_reactions` | **Use this for "have we tried reaction X?" questions** — returns one row per *canonical reaction* with an `ofat_count` summary so OFAT campaigns don't drown the result with 200 near-duplicates |
+| `fetch_eln_canonical_reaction` | One canonical reaction + top-N OFAT children sorted by yield |
+| `fetch_eln_sample` | A specific sample with its analytical results |
+
+Citation URIs: `local-mock-eln://eln/entry/{id}` (no real tenant URL; the Streamlit "View source" panel renders inline).
+
+Two complementary tools — pick deliberately:
+- Use `query_eln_experiments` when you need raw entries (e.g., for pulling individual narratives).
+- Use `query_eln_canonical_reactions` when you're answering a chemistry question (similarity, prior-art, "what conditions worked?"). The OFAT-aware view collapses the long tail.
+
+### `mcp_logs_sciy` — LOGS-by-SciY adapter (port 8016, profile `sources`)
+
+Wraps SciY's LOGS Scientific Data Management System (the Bruker-owned, vendor-agnostic SDMS that ingests HPLC/NMR/MS/GC-MS data and exposes it via REST + the `logs-python` SDK). Two pluggable backends, selected by `LOGS_BACKEND` env:
+
+- `fake-postgres` (default) — reads the local `fake_logs` Postgres schema seeded with ~3000 datasets cross-linked to `mock_eln.samples` via `sample_id`. Used in dev + CI.
+- `real` — calls `<tenant>.logs-sciy.com` via `logs-python`. Currently a stub raising `NotImplementedError`; landing this is gated on tenant access (see plan §11 Q1).
+
+Tools the agent calls:
+
+| Tool | When to use |
+|---|---|
+| `query_instrument_runs` | Browse datasets by instrument kind, time, project, sample name |
+| `fetch_instrument_run` | One dataset with metadata + (per-detector) tracks |
+| `query_instrument_datasets` | All analytical datasets for one sample (cross-instrument view) |
+
+Citation URIs: `local-mock-logs://logs/dataset/{uid}` (fake mode), real LOGS URL (real mode).
+
+### Cross-source traversal
+
+Cross-links between the two sources let the agent answer end-to-end questions like *"find amide couplings in NCE-1234 with yield > 80% and surface their HPLC purity"*:
+
+1. `query_eln_canonical_reactions` filtered to `family='amide_coupling'`, `project_code='NCE-1234'`.
+2. For the resulting reactions, `fetch_eln_canonical_reaction` to get the OFAT children sorted by yield.
+3. For each high-yield child entry, `fetch_eln_sample` to get sample IDs.
+4. `query_instrument_datasets` (`sample_id=...`, `instrument_kind=['HPLC']`) to surface the chromatographic results.
+5. Final answer cites both `mock_eln` entries and `fake_logs` datasets.
+
+### Cache-and-project pipeline (unchanged)
+
+- **`source-cache` post-tool hook** matches any tool whose ID starts with `query_eln_`, `fetch_eln_`, `query_lims_`, `fetch_lims_`, `query_instrument_`, or `fetch_instrument_` and writes `ingestion_events` rows on every call.
+- **`kg_source_cache` projector** converts those rows into `:Fact` nodes with `(source_system_id, fetched_at, valid_until)` provenance.
+- Both new MCPs stamp `valid_until = now + 7 days` on every response so the stale-fact `pre_turn` warning fires when cached facts age out.

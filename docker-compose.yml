@@ -795,14 +795,76 @@ services:
       - no-new-privileges:true
 
   # -----------------------------------------------------------
-  # Source-system MCP adapters — profile: sources
-  # No source-system adapters are bundled in this build. The post-tool
-  # source-cache hook + kg_source_cache projector remain wired so a
-  # future ELN/LIMS/instrument MCP can register a builtin matching
-  # /^(query|fetch)_(eln|lims|instrument)_/ and inherit the caching
-  # pipeline for free. See services/mcp_tools/mcp_instrument_template/
-  # for a starting point.
+  # Source-system MCP adapters — profile: sources / testbed
+  #
+  # mcp-eln-local (testbed): Postgres-backed mock ELN. Reads the
+  # `mock_eln` schema in the existing chemclaw DB via the dedicated
+  # read-only role chemclaw_mock_eln_reader. Tool ids match
+  # /^(query|fetch)_eln_/ so the source-cache hook + kg_source_cache
+  # projector pick them up automatically.
   # -----------------------------------------------------------
+
+  mcp-eln-local:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_eln_local/Dockerfile
+    container_name: chemclaw-mcp-eln-local
+    restart: unless-stopped
+    profiles: ["testbed"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8013:8013"
+    environment:
+      MOCK_ELN_DSN: ${MOCK_ELN_DSN:-postgresql://chemclaw_mock_eln_reader:chemclaw_mock_eln_reader_dev_password_change_me@postgres:5432/chemclaw}
+      MOCK_ELN_ENABLED: ${MOCK_ELN_ENABLED:-true}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8013/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    security_opt:
+      - no-new-privileges:true
+
+  # -----------------------------------------------------------
+  # mcp-logs-sciy: LOGS-by-SciY analytical SDMS adapter. Default
+  # backend `fake-postgres` reads the local fake_logs schema for
+  # hermetic dev / CI; switch to `real` when a tenant is wired up.
+  # Tool ids match /^(query|fetch)_instrument_/ so the source-cache
+  # hook fires automatically.
+  # -----------------------------------------------------------
+  mcp-logs-sciy:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_logs_sciy/Dockerfile
+    container_name: chemclaw-mcp-logs-sciy
+    restart: unless-stopped
+    profiles: ["sources"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "8016:8016"
+    environment:
+      LOGS_BACKEND: ${LOGS_BACKEND:-fake-postgres}
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${MOCK_ELN_READER_USER:-chemclaw_mock_eln_reader}
+      POSTGRES_PASSWORD: ${MOCK_ELN_READER_PASSWORD:-chemclaw_mock_eln_reader_dev_password_change_me}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8016/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    security_opt:
+      - no-new-privileges:true
+
 
   # kg-source-cache — projector: source_fact_observed → :Fact in Neo4j
   kg-source-cache:

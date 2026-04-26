@@ -92,6 +92,14 @@ const ConfigSchema = z.object({
   MCP_XTB_URL: z.string().url().default("http://localhost:8010"),
   MCP_SIRIUS_URL: z.string().url().default("http://localhost:8012"),
 
+  // Source-system MCPs (Postgres-backed mock ELN, Phase F.2 reboot).
+  MCP_ELN_LOCAL_URL: z.string().url().default("http://localhost:8013"),
+  // LOGS-by-SciY analytical SDMS adapter. Backend-agnostic on the agent
+  // side; the MCP itself selects between the fake-postgres or real
+  // tenant via its own LOGS_BACKEND env var.
+  MCP_LOGS_SCIY_URL: z.string().url().default("http://localhost:8016"),
+  LOGS_BACKEND: z.enum(["fake-postgres", "real"]).default("fake-postgres"),
+
   // LiteLLM proxy — single egress chokepoint for all LLM traffic.
   LITELLM_BASE_URL: z.string().url().default("http://localhost:4000"),
   LITELLM_API_KEY: z

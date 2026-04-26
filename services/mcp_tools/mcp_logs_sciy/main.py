@@ -1,0 +1,331 @@
+"""mcp-logs-sciy — LOGS-by-SciY SDMS adapter.
+
+Routes vendor-shaped LOGS analytical metadata through a single FastAPI app
+backed by either a local Postgres ``fake_logs`` schema (dev / CI) or the
+real SciY tenant via ``logs-python`` (stub for now).
+
+Endpoints:
+- POST /datasets/query     — keyset-paginated dataset listing
+- POST /datasets/fetch     — single dataset by UID
+- POST /datasets/by_sample — datasets joined to a sample_id
+- POST /persons/query      — operator lookup (LOGS Person API parity)
+"""
+
+from __future__ import annotations
+
+import logging
+import os
+import re
+from contextlib import asynccontextmanager
+from datetime import datetime
+from typing import Annotated, Any, Literal
+
+from fastapi import Body, FastAPI, HTTPException
+from pydantic import BaseModel, Field, field_validator
+from pydantic_settings import BaseSettings, SettingsConfigDict
+
+from services.mcp_tools.common.app import create_app
+from services.mcp_tools.mcp_logs_sciy.backends import (
+    FakePostgresBackend,
+    RealLogsBackend,
+)
+
+log = logging.getLogger("mcp-logs-sciy")
+
+
+# ---------------------------------------------------------------------------
+# Settings
+# ---------------------------------------------------------------------------
+class LogsSettings(BaseSettings):
+    """Environment-driven configuration."""
+
+    model_config = SettingsConfigDict(env_file=None, extra="ignore")
+
+    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
+    host: str = Field(default="0.0.0.0", alias="MCP_LOGS_SCIY_HOST")
+    port: int = Field(default=8016, alias="MCP_LOGS_SCIY_PORT")
+
+    # Backend selection — "fake-postgres" for hermetic dev/CI, "real" for the
+    # logs-python SDK against a live LOGS tenant.
+    backend: Literal["fake-postgres", "real"] = Field(
+        default="fake-postgres", alias="LOGS_BACKEND"
+    )
+
+    # Fake-postgres backend settings.
+    postgres_host: str = Field(default="localhost", alias="POSTGRES_HOST")
+    postgres_port: int = Field(default=5432, alias="POSTGRES_PORT")
+    postgres_db: str = Field(default="chemclaw", alias="POSTGRES_DB")
+    postgres_user: str = Field(default="chemclaw_mock_eln_reader", alias="POSTGRES_USER")
+    postgres_password: str = Field(
+        default="chemclaw_mock_eln_reader_dev_password_change_me",
+        alias="POSTGRES_PASSWORD",
+    )
+
+    # Real backend settings (placeholders — not used until Phase 4).
+    real_tenant_url: str | None = Field(default=None, alias="LOGS_TENANT_URL")
+    real_api_key: str | None = Field(default=None, alias="LOGS_API_KEY")
+
+    @property
+    def postgres_dsn(self) -> str:
+        return (
+            f"postgresql://{self.postgres_user}:{self.postgres_password}"
+            f"@{self.postgres_host}:{self.postgres_port}/{self.postgres_db}"
+        )
+
+
+settings = LogsSettings()
+
+
+# ---------------------------------------------------------------------------
+# Schemas
+# ---------------------------------------------------------------------------
+INSTRUMENT_KINDS = ("HPLC", "NMR", "MS", "GC-MS", "LC-MS", "IR")
+InstrumentKind = Literal["HPLC", "NMR", "MS", "GC-MS", "LC-MS", "IR"]
+
+# Project / sample identifier shape — letters, digits, dash, underscore only.
+# Length-bounded by construction so the regex can't backtrack.
+_PROJECT_CODE_RE = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+_SAMPLE_ID_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,128}$")
+_UID_RE = re.compile(r"^[A-Za-z0-9_.\-]{1,128}$")
+
+
+class Track(BaseModel):
+    track_index: int
+    detector: str | None = None
+    unit: str | None = None
+    peaks: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class Person(BaseModel):
+    username: str
+    display_name: str | None = None
+    email: str | None = None
+
+
+class LogsDataset(BaseModel):
+    backend: Literal["fake-postgres", "real"]
+    uid: str
+    name: str
+    instrument_kind: InstrumentKind
+    instrument_serial: str | None = None
+    method_name: str | None = None
+    sample_id: str | None = None
+    sample_name: str | None = None
+    operator: str | None = None
+    measured_at: datetime
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    tracks: list[Track] = Field(default_factory=list)
+    project_code: str | None = None
+    citation_uri: str
+
+
+# ---- Requests --------------------------------------------------------------
+class DatasetsQueryRequest(BaseModel):
+    instrument_kind: list[InstrumentKind] | None = None
+    since: datetime | None = None
+    project_code: str | None = None
+    sample_name: str | None = None
+    limit: int = Field(default=50, ge=1, le=200)
+    cursor: str | None = None
+
+    @field_validator("project_code")
+    @classmethod
+    def _validate_project_code(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        if not _PROJECT_CODE_RE.fullmatch(v):
+            raise ValueError("project_code must match ^[A-Za-z0-9_-]{1,64}$")
+        return v
+
+    @field_validator("sample_name")
+    @classmethod
+    def _validate_sample_name(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            raise ValueError("sample_name must be non-empty")
+        if len(v) > 200:
+            raise ValueError("sample_name must be <= 200 chars")
+        return v
+
+    @field_validator("cursor")
+    @classmethod
+    def _validate_cursor(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        if not v or len(v) > 1024:
+            raise ValueError("cursor length out of range")
+        return v
+
+
+class DatasetsFetchRequest(BaseModel):
+    uid: str
+
+    @field_validator("uid")
+    @classmethod
+    def _validate_uid(cls, v: str) -> str:
+        if not _UID_RE.fullmatch(v):
+            raise ValueError("uid must match ^[A-Za-z0-9_.\\-]{1,128}$")
+        return v
+
+
+class DatasetsBySampleRequest(BaseModel):
+    sample_id: str
+
+    @field_validator("sample_id")
+    @classmethod
+    def _validate_sample_id(cls, v: str) -> str:
+        if not _SAMPLE_ID_RE.fullmatch(v):
+            raise ValueError("sample_id must match ^[A-Za-z0-9_.\\-]{1,128}$")
+        return v
+
+
+class PersonsQueryRequest(BaseModel):
+    name_contains: str | None = None
+    limit: int = Field(default=50, ge=1, le=200)
+
+    @field_validator("name_contains")
+    @classmethod
+    def _validate_name_contains(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        v = v.strip()
+        if not v:
+            raise ValueError("name_contains must be non-empty when provided")
+        if len(v) > 200:
+            raise ValueError("name_contains must be <= 200 chars")
+        return v
+
+
+# ---- Responses -------------------------------------------------------------
+class DatasetsQueryResponse(BaseModel):
+    datasets: list[LogsDataset]
+    next_cursor: str | None = None
+    valid_until: datetime
+
+
+class DatasetsFetchResponse(BaseModel):
+    dataset: LogsDataset
+    valid_until: datetime
+
+
+class DatasetsBySampleResponse(BaseModel):
+    datasets: list[LogsDataset]
+    valid_until: datetime
+
+
+class PersonsQueryResponse(BaseModel):
+    persons: list[Person]
+    valid_until: datetime
+
+
+# ---------------------------------------------------------------------------
+# Backend wiring
+# ---------------------------------------------------------------------------
+_backend_holder: dict[str, Any] = {}
+
+
+def _build_backend() -> FakePostgresBackend | RealLogsBackend:
+    if settings.backend == "fake-postgres":
+        return FakePostgresBackend(settings.postgres_dsn)
+    return RealLogsBackend(
+        tenant_url=settings.real_tenant_url, api_key=settings.real_api_key
+    )
+
+
+@asynccontextmanager
+async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
+    log.info("mcp-logs-sciy starting; backend=%s", settings.backend)
+    _backend_holder["backend"] = _build_backend()
+    try:
+        yield
+    finally:
+        _backend_holder.clear()
+
+
+def _backend() -> FakePostgresBackend | RealLogsBackend:
+    b = _backend_holder.get("backend")
+    if b is None:
+        raise RuntimeError("backend not initialised (lifespan not yet run)")
+    return b
+
+
+def _ready_check() -> bool:
+    # Lightweight sync probe — confirms the backend instance was wired by
+    # the lifespan. The deeper async ready check (Postgres SELECT for the
+    # fake backend, tenant auth for the real one) is exercised by the
+    # routes themselves; surfacing it through /readyz would require an
+    # event loop and add no signal beyond connectivity.
+    return _backend_holder.get("backend") is not None
+
+
+app = create_app(
+    name="mcp-logs-sciy",
+    version="0.1.0",
+    log_level=settings.log_level,
+    lifespan=_lifespan,
+    ready_check=_ready_check,
+)
+
+
+# ---------------------------------------------------------------------------
+# Routes
+# ---------------------------------------------------------------------------
+@app.post("/datasets/query", response_model=DatasetsQueryResponse, tags=["logs"])
+async def datasets_query(
+    req: Annotated[DatasetsQueryRequest, Body(...)],
+) -> DatasetsQueryResponse:
+    return DatasetsQueryResponse.model_validate(
+        await _backend().query_datasets(
+            instrument_kind=list(req.instrument_kind) if req.instrument_kind else None,
+            since=req.since,
+            project_code=req.project_code,
+            sample_name=req.sample_name,
+            limit=req.limit,
+            cursor=req.cursor,
+        )
+    )
+
+
+@app.post("/datasets/fetch", response_model=DatasetsFetchResponse, tags=["logs"])
+async def datasets_fetch(
+    req: Annotated[DatasetsFetchRequest, Body(...)],
+) -> DatasetsFetchResponse:
+    payload = await _backend().fetch_dataset(uid=req.uid)
+    if payload.get("dataset") is None:
+        raise HTTPException(status_code=404, detail=f"dataset not found: {req.uid}")
+    return DatasetsFetchResponse.model_validate(payload)
+
+
+@app.post(
+    "/datasets/by_sample", response_model=DatasetsBySampleResponse, tags=["logs"]
+)
+async def datasets_by_sample(
+    req: Annotated[DatasetsBySampleRequest, Body(...)],
+) -> DatasetsBySampleResponse:
+    return DatasetsBySampleResponse.model_validate(
+        await _backend().fetch_by_sample(sample_id=req.sample_id)
+    )
+
+
+@app.post("/persons/query", response_model=PersonsQueryResponse, tags=["logs"])
+async def persons_query(
+    req: Annotated[PersonsQueryRequest, Body(...)],
+) -> PersonsQueryResponse:
+    return PersonsQueryResponse.model_validate(
+        await _backend().query_persons(
+            name_contains=req.name_contains, limit=req.limit
+        )
+    )
+
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(
+        "services.mcp_tools.mcp_logs_sciy.main:app",
+        host=settings.host,
+        port=settings.port,
+        log_level=settings.log_level.lower(),
+    )

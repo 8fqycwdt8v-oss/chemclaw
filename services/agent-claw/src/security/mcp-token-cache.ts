@@ -33,6 +33,8 @@ export const SERVICE_SCOPES: Record<string, string[]> = {
   "mcp-chemprop": ["mcp_chemprop:invoke"],
   "mcp-xtb": ["mcp_xtb:invoke"],
   "mcp-sirius": ["mcp_sirius:invoke"],
+  "mcp-eln-local": ["mcp_eln:read"],
+  "mcp-logs-sciy": ["mcp_instrument:read"],
 };
 
 const DEFAULT_SCOPES = ["mcp:invoke"];

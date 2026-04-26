@@ -37,6 +37,7 @@ setup.python: ## Create .venv and install Python deps for all services
 	$(PIP) install -r services/projectors/chunk_embedder/requirements.txt
 	$(PIP) install -r services/ingestion/doc_ingester/requirements.txt
 	$(PIP) install -r services/litellm_redactor/requirements.txt
+	$(PIP) install -r services/mock_eln/seed/requirements.txt
 	@echo "Python env ready. Activate with: source $(VENV)/bin/activate"
 
 .PHONY: setup.node
@@ -88,6 +89,19 @@ db.init: ## Re-apply schema (idempotent)
 .PHONY: db.seed
 db.seed: ## Load sample seed data
 	docker compose exec -T postgres psql -U chemclaw -d chemclaw < db/seed/01_sample_data.sql
+
+.PHONY: seed.mock_eln
+seed.mock_eln: ## Generate mock-ELN fixtures and load them into Postgres (gated by app.mock_eln_enabled)
+	$(VENV)/bin/python -m services.mock_eln.seed.generator
+	# Apply via host-side psql so \copy can read the local gzipped fixtures
+	# from test-fixtures/mock_eln/world-default/. The compose postgres
+	# service exposes 5432 on the host.
+	PGPASSWORD=$${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me} \
+	psql -h $${POSTGRES_HOST:-localhost} -p $${POSTGRES_PORT:-5432} \
+	     -U $${POSTGRES_USER:-chemclaw} -d $${POSTGRES_DB:-chemclaw} \
+	     -v ON_ERROR_STOP=1 \
+	     -c "SET app.mock_eln_enabled = 'on';" \
+	     -f db/seed/20_mock_eln_data.sql
 
 .PHONY: db.init.tabicl-pca
 db.init.tabicl-pca: ## Cold-fit PCA model from all reactions in the database

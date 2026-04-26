@@ -190,11 +190,12 @@ The plan document is at `~/.claude/plans/go-through-the-three-vivid-sunset.md`.
 - **Phase D.5** (tool forging): `forge_tool`, `induce_forged_tool_from_trace`, `add_forged_tool_test`; `forged_tool_validation_runs` table; weak-from-strong transfer; scope promotion (private → project → org).
 - **Phase E** (self-improvement): DSPy GEPA nightly optimizer; golden set + held-out promotion gate; skill promotion loop; shadow serving (`shadow_until` column); `/eval` slash verb.
 - **Phase F.1** (chemistry MCPs): chemistry services on the `chemistry` profile: askcos (8007), aizynth (8008), chemprop (8009), xtb (8010), sirius (8012). The admetlab adapter has been removed from this build.
-- **Phase F.2** (source-system MCPs + retire legacy): **the source-system layer is currently empty**.
-  - The benchling / starlims / waters MCP adapters have been removed; their agent-claw builtins (`query/fetch_eln_*`, `query/fetch_lims_*`, `query/fetch_instrument_*`) are gone with them.
-  - The `source-cache` post-tool hook + `kg_source_cache` projector remain wired so any future ELN/LIMS/instrument MCP can register a builtin matching the regex `/^(query|fetch)_(eln|lims|instrument)_/` and inherit the caching pipeline. See `services/mcp_tools/mcp_instrument_template/README.md` for a starting point.
+- **Phase F.2** (source-system MCPs): **two adapters wired**, replacing the deleted vendor-specific ones.
+  - **`mcp_eln_local`** (port 8013, profile `testbed`) — local Postgres-backed mock ELN. Reads from the `mock_eln` schema seeded with ≥ 2000 deterministic experiments across 4 projects, 10 chemistry families, 10 OFAT campaigns. Entry shapes: 80% mixed (structured + freetext), 7% pure-structured, 8% pure-freetext, 5% extreme. Five agent-claw builtins including OFAT-aware `query_eln_canonical_reactions` that collapses 200-row OFAT campaigns into one canonical-reaction row with `ofat_count`. Plan + design: `~/.claude/plans/playful-honking-squid.md`.
+  - **`mcp_logs_sciy`** (port 8016, profile `sources`) — LOGS-by-SciY adapter (HPLC/NMR/MS analytical SDMS). Two backends: `fake-postgres` (default, reads `fake_logs` schema with ~3000 datasets cross-linked to `mock_eln.samples`) and `real` (stub; gated on tenant access). Three agent-claw builtins.
+  - The `source-cache` post-tool hook + `kg_source_cache` projector pick both up automatically via the unchanged regex `/^(query|fetch)_(eln|lims|instrument)_/`.
   - `eln_json_importer` retired from live path; preserved as `services/ingestion/eln_json_importer.legacy/` for one-shot bulk migrations from a JSON dump.
-  - Helm chart: `infra/helm/` with profile flags (chemistry/sources/optimizer/observability).
+  - Helm chart: `infra/helm/` with profile flags (chemistry/sources/optimizer/observability/testbed).
   - `services/agent/` deleted; Streamlit `AGENT_BASE_URL` defaults to port 3101.
   - `docs/adr/004-harness-engineering.md`, `docs/adr/005-data-layer-revision.md`, `docs/runbooks/harness-rollback.md`.
   - Tagged `v1.0.0-claw`.
@@ -202,13 +203,16 @@ The plan document is at `~/.claude/plans/go-through-the-three-vivid-sunset.md`.
 ## Test counts (current branch)
 
 ```
-cd services/agent-claw && npm test          →  635 passed
+cd services/agent-claw && npm test          →  667 passed
 cd services/agent-claw && npx tsc --noEmit  →  ok
 cd services/paperclip && npm test           →  17 passed
 python3 -m pytest tests/unit/test_redactor.py \
   tests/unit/optimizer/test_session_purger.py \
   services/mcp_tools/common/tests/ \
-  services/projectors/kg_source_cache/tests/   →  49 passed
+  services/projectors/kg_source_cache/tests/ \
+  services/mcp_tools/mcp_eln_local/tests/ \
+  services/mcp_tools/mcp_logs_sciy/tests/ \
+  services/mock_eln/seed/tests/                →  98 passed
 npm audit (root)                            →  0 vulnerabilities
 ```
 
