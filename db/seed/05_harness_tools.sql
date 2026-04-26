@@ -500,12 +500,6 @@ ON CONFLICT (service_name) DO UPDATE SET
   enabled  = EXCLUDED.enabled;
 
 INSERT INTO mcp_tools (service_name, base_url, enabled, health_status)
-VALUES ('mcp-admetlab', 'http://localhost:8011', true, 'unknown')
-ON CONFLICT (service_name) DO UPDATE SET
-  base_url = EXCLUDED.base_url,
-  enabled  = EXCLUDED.enabled;
-
-INSERT INTO mcp_tools (service_name, base_url, enabled, health_status)
 VALUES ('mcp-sirius', 'http://localhost:8012', true, 'unknown')
 ON CONFLICT (service_name) DO UPDATE SET
   base_url = EXCLUDED.base_url,
@@ -655,31 +649,6 @@ ON CONFLICT (name) DO UPDATE SET
 
 INSERT INTO tools (name, source, schema_json, description, enabled, version)
 VALUES (
-  'screen_admet',
-  'builtin',
-  '{
-    "type": "object",
-    "properties": {
-      "smiles_list": {
-        "type": "array",
-        "items": {"type": "string", "minLength": 1},
-        "minItems": 1,
-        "maxItems": 50,
-        "description": "List of SMILES to screen for ADMET liabilities (max 50)."
-      }
-    },
-    "required": ["smiles_list"]
-  }',
-  'Screen up to 50 compounds for ADMET liabilities using ADMETlab 3.0 (119 endpoints: absorption, distribution, metabolism, excretion, toxicity). Returns structural alerts.',
-  true,
-  1
-)
-ON CONFLICT (name) DO UPDATE SET
-  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
-  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
-
-INSERT INTO tools (name, source, schema_json, description, enabled, version)
-VALUES (
   'identify_unknown_from_ms',
   'builtin',
   '{
@@ -722,148 +691,9 @@ ON CONFLICT (name) DO UPDATE SET
   source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
   description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
 
--- ── Phase F.2: source-system MCP services ────────────────────────────────────
-
-INSERT INTO mcp_tools (service_name, base_url, enabled, health_status)
-VALUES
-  ('mcp-eln-benchling',    'http://localhost:8013', true, 'unknown'),
-  ('mcp-lims-starlims',    'http://localhost:8014', true, 'unknown'),
-  ('mcp-instrument-waters','http://localhost:8015', true, 'unknown')
-ON CONFLICT (service_name) DO UPDATE SET
-  base_url      = EXCLUDED.base_url,
-  enabled       = EXCLUDED.enabled;
-
--- ── query_eln_experiments ────────────────────────────────────────────────────
-
-INSERT INTO tools (name, source, schema_json, description, enabled, version)
-VALUES (
-  'query_eln_experiments',
-  'builtin',
-  '{
-    "type": "object",
-    "properties": {
-      "project_id": {"type": "string", "maxLength": 200, "description": "Filter by Benchling project ID."},
-      "schema_id":  {"type": "string", "maxLength": 200, "description": "Filter by notebook entry schema ID."},
-      "since":      {"type": "string", "maxLength": 50,  "description": "ISO-8601 timestamp; entries modified after this time."},
-      "limit":      {"type": "integer", "minimum": 1, "maximum": 200, "default": 20}
-    }
-  }',
-  'Query ELN notebook entries from Benchling. Returns experiment entries with fields and attached file references.',
-  true,
-  1
-)
-ON CONFLICT (name) DO UPDATE SET
-  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
-  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
-
--- ── fetch_eln_entry ──────────────────────────────────────────────────────────
-
-INSERT INTO tools (name, source, schema_json, description, enabled, version)
-VALUES (
-  'fetch_eln_entry',
-  'builtin',
-  '{
-    "type": "object",
-    "properties": {
-      "entry_id": {"type": "string", "minLength": 1, "maxLength": 200, "description": "Benchling entry ID (e.g., etr_abc123)."}
-    },
-    "required": ["entry_id"]
-  }',
-  'Fetch a single ELN notebook entry from Benchling by entry ID. Returns structured field values and attached file references.',
-  true,
-  1
-)
-ON CONFLICT (name) DO UPDATE SET
-  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
-  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
-
--- ── query_lims_results ───────────────────────────────────────────────────────
-
-INSERT INTO tools (name, source, schema_json, description, enabled, version)
-VALUES (
-  'query_lims_results',
-  'builtin',
-  '{
-    "type": "object",
-    "properties": {
-      "sample_id":  {"type": "string", "maxLength": 200, "description": "Filter by sample ID."},
-      "method_id":  {"type": "string", "maxLength": 200, "description": "Filter by analytical method ID."},
-      "since":      {"type": "string", "maxLength": 50,  "description": "ISO-8601 timestamp."},
-      "limit":      {"type": "integer", "minimum": 1, "maximum": 500, "default": 20}
-    }
-  }',
-  'Query LIMS test results from STARLIMS. Returns analytical results (purity, potency, etc.) filtered by sample, method, or time.',
-  true,
-  1
-)
-ON CONFLICT (name) DO UPDATE SET
-  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
-  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
-
--- ── fetch_lims_result ────────────────────────────────────────────────────────
-
-INSERT INTO tools (name, source, schema_json, description, enabled, version)
-VALUES (
-  'fetch_lims_result',
-  'builtin',
-  '{
-    "type": "object",
-    "properties": {
-      "result_id": {"type": "string", "minLength": 1, "maxLength": 200, "description": "STARLIMS result ID."}
-    },
-    "required": ["result_id"]
-  }',
-  'Fetch a single LIMS test result from STARLIMS by result ID. Returns full analytical result detail.',
-  true,
-  1
-)
-ON CONFLICT (name) DO UPDATE SET
-  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
-  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
-
--- ── query_instrument_runs ────────────────────────────────────────────────────
-
-INSERT INTO tools (name, source, schema_json, description, enabled, version)
-VALUES (
-  'query_instrument_runs',
-  'builtin',
-  '{
-    "type": "object",
-    "properties": {
-      "sample_name": {"type": "string", "maxLength": 500, "description": "Filter by sample name (partial match)."},
-      "method_name": {"type": "string", "maxLength": 500, "description": "Filter by chromatographic method name."},
-      "date_from":   {"type": "string", "maxLength": 50,  "description": "ISO-8601 date; runs on or after this date."},
-      "date_to":     {"type": "string", "maxLength": 50,  "description": "ISO-8601 date; runs on or before this date."},
-      "limit":       {"type": "integer", "minimum": 1, "maximum": 500, "default": 20}
-    }
-  }',
-  'Query HPLC runs from Waters Empower. Returns chromatographic runs with peak data filtered by sample, method, or date.',
-  true,
-  1
-)
-ON CONFLICT (name) DO UPDATE SET
-  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
-  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
-
--- ── fetch_instrument_run ─────────────────────────────────────────────────────
-
-INSERT INTO tools (name, source, schema_json, description, enabled, version)
-VALUES (
-  'fetch_instrument_run',
-  'builtin',
-  '{
-    "type": "object",
-    "properties": {
-      "run_id": {"type": "string", "minLength": 1, "maxLength": 200, "description": "Waters Empower run ID."}
-    },
-    "required": ["run_id"]
-  }',
-  'Fetch a single HPLC run with peak data from Waters Empower by run ID. Returns full chromatographic detail.',
-  true,
-  1
-)
-ON CONFLICT (name) DO UPDATE SET
-  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
-  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+-- ── Source-system MCP services ───────────────────────────────────────────────
+-- No source-system MCP adapters (ELN/LIMS/instrument) are bundled in this build.
+-- Future adapters can register here and re-use the source-cache hook +
+-- kg_source_cache projector.
 
 COMMIT;

@@ -90,18 +90,7 @@ const ConfigSchema = z.object({
   MCP_AIZYNTH_URL: z.string().url().default("http://localhost:8008"),
   MCP_CHEMPROP_URL: z.string().url().default("http://localhost:8009"),
   MCP_XTB_URL: z.string().url().default("http://localhost:8010"),
-  MCP_ADMETLAB_URL: z.string().url().default("http://localhost:8011"),
   MCP_SIRIUS_URL: z.string().url().default("http://localhost:8012"),
-
-  // Phase F.2 source-system MCPs.
-  MCP_ELN_BENCHLING_URL: z.string().url().default("http://localhost:8013"),
-  MCP_LIMS_STARLIMS_URL: z.string().url().default("http://localhost:8014"),
-  MCP_INSTRUMENT_WATERS_URL: z.string().url().default("http://localhost:8015"),
-
-  // Source-system web bases for citation URI assembly. Override per tenant.
-  BENCHLING_BASE_URL: z.string().url().default("https://your-tenant.benchling.com"),
-  STARLIMS_BASE_URL: z.string().url().default("https://your-starlims-host"),
-  EMPOWER_BASE_URL: z.string().url().default("https://your-empower-host"),
 
   // LiteLLM proxy — single egress chokepoint for all LLM traffic.
   LITELLM_BASE_URL: z.string().url().default("http://localhost:4000"),

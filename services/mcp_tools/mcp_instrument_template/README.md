@@ -1,32 +1,74 @@
 # Instrument MCP Adapter Template
 
-Use `mcp_instrument_waters` as the canonical reference to fork a new vendor adapter
-in under a day. The pattern is the same for Agilent OpenLAB, Sciex Analyst, Thermo
-Chromeleon, or any HTTP-accessible LIMS/CDS export.
+Starting point for adding a new instrument MCP adapter (Waters Empower,
+Agilent OpenLAB, Sciex Analyst, Thermo Chromeleon, or any HTTP-accessible
+LIMS/CDS export). No reference adapter is currently bundled in this build,
+so the steps below describe what an adapter must implement rather than
+which file to copy.
 
-## Steps to fork
+## What the adapter must expose
 
-1. Copy `services/mcp_tools/mcp_instrument_waters/` to `services/mcp_tools/mcp_instrument_<vendor>/`.
+Two endpoints, behind `services.mcp_tools.common.app.create_app(...)`:
 
-2. Update `main.py`:
-   - Change the module docstring, logger name (`mcp-instrument-<vendor>`), and `create_app(name=...)`.
-   - Replace `_WATERS_API_KEY` / `_WATERS_BASE_URL` with vendor-specific env vars.
-   - Update `_make_client()` — swap header names and base URL pattern as needed.
-   - Adjust `_parse_run()` / `_parse_peak()` to match the vendor's JSON shape.
-   - Keep `HplcRun` / `ChromatographicPeak` schemas **unchanged** so the agent builtin
-     `fetch_instrument_run` / `query_instrument_runs` does not need modification.
+| Method | Path | Purpose |
+|---|---|---|
+| `GET`  | `/run/{run_id}` | Fetch a single chromatographic run with peak data |
+| `POST` | `/search_runs`  | Page over runs with filters (sample, method, date range) |
 
-3. Update `Dockerfile`:
-   - Change the `COPY` path and the `CMD` module path to match the new package name.
-   - Change `EXPOSE` to the next free port (current assignments: Waters=8015, add 8016, 8017, …).
+Response schemas:
 
-4. Add the service to `docker-compose.yml` under `profiles: ["sources"]` (copy the `mcp-instrument-waters` block and update name/port/build path).
+- `HplcRun { id, sample_name, method_name, run_started_at, peaks: ChromatographicPeak[] }`
+- `ChromatographicPeak { rt_min, area_units, height_units, name?, m_z?, ... }`
 
-5. Register the new service in `db/seed/05_harness_tools.sql` — UPSERT a row in `mcp_tools` and tool rows for `fetch_instrument_run_<vendor>` / `query_instrument_runs_<vendor>`.
+Keep these schemas stable across vendors so the agent builtin (when one is
+re-introduced) doesn't have to fork per vendor.
 
-6. Add a AGENTS.md entry in the "Source systems" section so the agent knows when to prefer the new adapter.
+## Steps to add a new vendor
 
-7. Write tests by copying `tests/test_mcp_instrument_waters.py` and updating mock payloads for the vendor's field names.
+1. Create `services/mcp_tools/mcp_instrument_<vendor>/` with `main.py`,
+   `requirements.txt`, `Dockerfile`, `__init__.py`, and a `tests/` dir.
+
+2. In `main.py`:
+   - Use `create_app(name="mcp-instrument-<vendor>")` from
+     `services.mcp_tools.common.app` to inherit `/healthz`, `/readyz`,
+     request-ID middleware, and the standard `{error, detail}` envelope.
+   - Validate every input via Pydantic. **Strict regex** on every ID path
+     parameter (`^[A-Za-z0-9_\-\.]+$`) and ISO-8601 validation on
+     `since` / `date_from` / `date_to` to close path-traversal /
+     query-string injection on the upstream URL.
+   - Implement an async client (`async with _client_factory(): ...`)
+     that talks to the vendor API. Keep the route handlers free of
+     vendor-specific HTTP details.
+
+3. In `Dockerfile`:
+   - Build from `python:3.11-slim`, run as UID 1001.
+   - `EXPOSE` the next free port. Previously-used assignments to skip:
+     8011 (admetlab — removed), 8013 (benchling — removed),
+     8014 (starlims — removed), 8015 (waters — removed). Pick 8013+
+     freely; just record the port in `docker-compose.yml`.
+
+4. Add a service block under `profiles: ["sources"]` in `docker-compose.yml`
+   with `security_opt: [no-new-privileges:true]` and a healthcheck against
+   `/readyz`. The `kg-source-cache` projector and the `source-cache` hook
+   are already wired and will pick up the new adapter automatically as
+   long as its agent-claw builtin name matches
+   `/^(query|fetch)_(eln|lims|instrument)_/`.
+
+5. Register the service in `db/seed/05_harness_tools.sql`:
+   - UPSERT a row in `mcp_tools` (service_name, base_url).
+   - INSERT tool rows for any agent-claw builtins you add.
+
+6. Add a builtin under `services/agent-claw/src/tools/builtins/` that wraps
+   the MCP service. The builtin's tool ID must match the source-cache
+   regex above so the post-tool hook fires and produces
+   `source_fact_observed` ingestion events.
+
+7. Add a section to `AGENTS.md` describing when the agent should prefer
+   this adapter.
+
+8. Write tests for the MCP service. Mock outbound HTTP at the client
+   layer (`vi.stubGlobal("fetch", …)` for TS, `respx` or `httpx.MockTransport`
+   for Python).
 
 ## Auth patterns by vendor
 
@@ -37,12 +79,12 @@ Chromeleon, or any HTTP-accessible LIMS/CDS export.
 | Sciex Analyst | Basic auth | `SCIEX_USER`, `SCIEX_PASSWORD`, `SCIEX_BASE_URL` |
 | Thermo Chromeleon | Session cookie + CSRF | `THERMO_BASE_URL`, `THERMO_API_KEY` |
 
-For OAuth2 vendors, add a token-refresh helper in a separate `auth.py` file and
-call it from `_make_client()`. The route logic does not change.
+For OAuth2 vendors, put the token-refresh helper in a separate `auth.py`
+and call it from the client factory. The route logic does not change.
 
 ## CSV-export mode
 
-If the vendor does not expose a REST API, `_make_client()` can be replaced by a
-file-system reader that parses CSV exports from a mounted volume. Keep the same
-async context-manager interface (`async with _client_factory() as reader:`); the
-routes stay identical. See `mcp_instrument_waters` for the shape the routes expect.
+If a vendor does not expose a REST API, replace the HTTP client with a
+file-system reader that parses CSV exports from a mounted volume. Keep
+the same async context-manager interface (`async with _client_factory() as reader:`)
+so the routes do not change.

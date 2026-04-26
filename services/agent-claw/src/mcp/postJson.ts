@@ -97,7 +97,7 @@ export async function postJson<TReq, TRes>(
  *
  * Same defenses as postJson: bounded timeout, response validated via Zod
  * before returning. Use this for fetch-style endpoints where the request
- * has no body (e.g. mcp-eln-benchling GET /experiments/{id}).
+ * has no body.
  */
 export async function getJson<TRes>(
   url: string,

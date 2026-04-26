@@ -25,7 +25,6 @@ import { buildIdentifyUnknownFromMsTool } from "./tools/builtins/identify_unknow
 import { buildPredictMolecularPropertyTool } from "./tools/builtins/predict_molecular_property.js";
 import { buildPredictReactionYieldTool } from "./tools/builtins/predict_reaction_yield.js";
 import { buildQueryKgTool } from "./tools/builtins/query_kg.js";
-import { buildScreenAdmetTool } from "./tools/builtins/screen_admet.js";
 import { buildProposeRetrosynthesisTool } from "./tools/builtins/propose_retrosynthesis.js";
 // Pool-backed tools.
 import { buildAnalyzeCsvTool } from "./tools/builtins/analyze_csv.js";
@@ -39,13 +38,6 @@ import { buildSynthesizeInsightsTool } from "./tools/builtins/synthesize_insight
 import { buildComputeConfidenceEnsembleTool } from "./tools/builtins/compute_confidence_ensemble.js";
 import { buildProposeHypothesisTool } from "./tools/builtins/propose_hypothesis.js";
 import { buildDraftSectionTool } from "./tools/builtins/draft_section.js";
-// Phase F.2 source-system wrappers.
-import { buildFetchElnEntryTool } from "./tools/builtins/fetch_eln_entry.js";
-import { buildFetchInstrumentRunTool } from "./tools/builtins/fetch_instrument_run.js";
-import { buildFetchLimsResultTool } from "./tools/builtins/fetch_lims_result.js";
-import { buildQueryElnExperimentsTool } from "./tools/builtins/query_eln_experiments.js";
-import { buildQueryInstrumentRunsTool } from "./tools/builtins/query_instrument_runs.js";
-import { buildQueryLimsResultsTool } from "./tools/builtins/query_lims_results.js";
 // Autonomy upgrade — Claude-Code-like plan mode.
 import { buildManageTodosTool } from "./tools/builtins/manage_todos.js";
 import { buildAskUserTool } from "./tools/builtins/ask_user.js";
@@ -168,7 +160,6 @@ registry.registerBuiltin("identify_unknown_from_ms", () => asTool(buildIdentifyU
 registry.registerBuiltin("predict_molecular_property", () => asTool(buildPredictMolecularPropertyTool(cfg.MCP_CHEMPROP_URL)));
 registry.registerBuiltin("predict_reaction_yield", () => asTool(buildPredictReactionYieldTool(cfg.MCP_CHEMPROP_URL)));
 registry.registerBuiltin("query_kg", () => asTool(buildQueryKgTool(cfg.MCP_KG_URL)));
-registry.registerBuiltin("screen_admet", () => asTool(buildScreenAdmetTool(cfg.MCP_ADMETLAB_URL)));
 registry.registerBuiltin("propose_retrosynthesis", () =>
   asTool(buildProposeRetrosynthesisTool(cfg.MCP_ASKCOS_URL, cfg.MCP_AIZYNTH_URL)),
 );
@@ -188,25 +179,12 @@ registry.registerBuiltin("compute_confidence_ensemble", () => asTool(buildComput
 registry.registerBuiltin("propose_hypothesis", () => asTool(buildProposeHypothesisTool(pool)));
 registry.registerBuiltin("draft_section", () => asTool(buildDraftSectionTool()));
 
-// Phase F.2 source-system wrappers — citation enrichment lives in these factories.
-registry.registerBuiltin("fetch_eln_entry", () =>
-  asTool(buildFetchElnEntryTool(pool, cfg.MCP_ELN_BENCHLING_URL, cfg.BENCHLING_BASE_URL)),
-);
-registry.registerBuiltin("fetch_instrument_run", () =>
-  asTool(buildFetchInstrumentRunTool(pool, cfg.MCP_INSTRUMENT_WATERS_URL, cfg.EMPOWER_BASE_URL)),
-);
-registry.registerBuiltin("fetch_lims_result", () =>
-  asTool(buildFetchLimsResultTool(pool, cfg.MCP_LIMS_STARLIMS_URL, cfg.STARLIMS_BASE_URL)),
-);
-registry.registerBuiltin("query_eln_experiments", () =>
-  asTool(buildQueryElnExperimentsTool(pool, cfg.MCP_ELN_BENCHLING_URL, cfg.BENCHLING_BASE_URL)),
-);
-registry.registerBuiltin("query_instrument_runs", () =>
-  asTool(buildQueryInstrumentRunsTool(pool, cfg.MCP_INSTRUMENT_WATERS_URL, cfg.EMPOWER_BASE_URL)),
-);
-registry.registerBuiltin("query_lims_results", () =>
-  asTool(buildQueryLimsResultsTool(pool, cfg.MCP_LIMS_STARLIMS_URL, cfg.STARLIMS_BASE_URL)),
-);
+// Source-system wrappers (Phase F.2) intentionally omitted — the
+// admetlab/benchling/starlims/waters MCP services are no longer part
+// of this build. The post-tool source-cache hook + kg_source_cache
+// projector remain wired so any future ELN/LIMS/instrument MCP can
+// register a builtin matching the regex /^(query|fetch)_(eln|lims|instrument)_/
+// and inherit the caching pipeline for free.
 
 // Note: forge_tool, run_program, induce_forged_tool_from_trace, dispatch_sub_agent,
 // add_forged_tool_test are intentionally NOT registered here. They have either

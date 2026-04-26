@@ -32,11 +32,7 @@ export const SERVICE_SCOPES: Record<string, string[]> = {
   "mcp-aizynth": ["mcp_aizynth:invoke"],
   "mcp-chemprop": ["mcp_chemprop:invoke"],
   "mcp-xtb": ["mcp_xtb:invoke"],
-  "mcp-admetlab": ["mcp_admetlab:invoke"],
   "mcp-sirius": ["mcp_sirius:invoke"],
-  "mcp-eln-benchling": ["mcp_eln:read"],
-  "mcp-lims-starlims": ["mcp_lims:read"],
-  "mcp-instrument-waters": ["mcp_instrument:read"],
 };
 
 const DEFAULT_SCOPES = ["mcp:invoke"];

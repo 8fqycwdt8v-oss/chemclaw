@@ -12,10 +12,8 @@ at the bottom with notes for follow-up.
 services/agent-claw/  npm test       637 / 637 ✓ (was 634; 3 added for redact-secrets)
 services/agent-claw/  npx tsc --noEmit  ok
 tests/unit/test_redactor.py            7 /  7 ✓
-services/mcp_tools/mcp_eln_benchling/tests/      ✓
-services/mcp_tools/mcp_lims_starlims/tests/      ✓
-services/mcp_tools/mcp_instrument_waters/tests/  ✓
-services/projectors/kg_source_cache/tests/       ✓     (35 / 35 across the four)
+services/projectors/kg_source_cache/tests/       ✓
+tests/unit/optimizer/test_session_purger.py      ✓
 ```
 
 ## What shipped (P0 + P1 — substantive security and correctness)
@@ -70,11 +68,12 @@ services/projectors/kg_source_cache/tests/       ✓     (35 / 35 across the fou
   private/loopback/link-local IP block enforced on every redirect hop;
   manual redirect walking with full re-validation; cap of 5 redirects.
   (cff31d6)
-- `mcp_eln_benchling`, `mcp_lims_starlims`, `mcp_instrument_waters`:
-  strict regex on every ID Path field (`^[A-Za-z0-9_\-\.]+$`),
-  ISO-8601 validation on every `since`/`date_from`/`date_to`. Closes
-  the path-traversal / query-string injection surface that fed
-  attacker-supplied fragments into upstream URLs. (cff31d6)
+- *(Historical: source-system MCP adapters — benchling / starlims / waters —
+  hardened with strict ID regex (`^[A-Za-z0-9_\-\.]+$`) and ISO-8601
+  validation on `since`/`date_from`/`date_to` to close path-traversal /
+  query-string injection at cff31d6. These adapters were subsequently
+  removed from the build; the hardening pattern is preserved as a
+  template for any future ELN/LIMS/instrument adapter.)*
 - `mcp_kg`: migrated to `create_app(...)` for free request-ID
   middleware and the standardized `{error, detail}` envelope. (3695d70)
 - `services/mcp_tools/common/app.py`: standard `HTTPException` handler

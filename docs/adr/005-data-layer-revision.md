@@ -1,8 +1,10 @@
 # ADR 005 — Data Layer: On-Demand Structured-Source Reads
 
-**Status:** Accepted  
-**Date:** 2026-04-23  
+**Status:** Accepted (partially superseded — see note below)
+**Date:** 2026-04-23
 **Context:** ChemClaw Claw Code — Phase F.2
+
+> **2026-04-26 update — adapter implementations removed.** The three reference adapters described in this ADR (`mcp_eln_benchling`, `mcp_lims_starlims`, `mcp_instrument_waters`) have been removed from the build. The architectural decision — *on-demand reads + cache-and-project rather than bulk replication* — still stands and is preserved end-to-end (the `source-cache` post-tool hook and the `kg_source_cache` projector are still wired). Any future ELN/LIMS/instrument adapter that registers a builtin matching `/^(query|fetch)_(eln|lims|instrument)_/` inherits the pipeline; see `services/mcp_tools/mcp_instrument_template/README.md` for a starting point.
 
 ---
 
