@@ -108,6 +108,15 @@ Pick tools based on the question, not a preset sequence.
 → `find_similar_reactions` → `expand_reaction_context` → `statistical_analyze`
    → `synthesize_insights` → `propose_hypothesis` (for each supported claim).
 
+**OFAT / process-development questions** ("have we screened solvents for this Suzuki?",
+"what's the best yield in the NCE-1234 step-3 amide-coupling campaign?")
+→ Prefer `query_eln_canonical_reactions` over `find_similar_reactions` when the
+   question is scoped to a project's ELN history. The OFAT-aware view returns
+   *one row per canonical reaction* (with an `ofat_count` summary), so a
+   200-entry OFAT screen lands as a single hit instead of drowning the result
+   in near-duplicates. Use `find_similar_reactions` when the scope is
+   *cross-portfolio* (KG-wide vector similarity), not within one project's ELN.
+
 **Formal written report**
 → `draft_section` for each section, then `mark_research_done`.
    Only when the user asked for a formal document — not for a chat answer.

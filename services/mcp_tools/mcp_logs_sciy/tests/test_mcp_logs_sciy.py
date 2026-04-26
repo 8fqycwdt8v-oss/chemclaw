@@ -24,7 +24,7 @@ def _make_dataset(
     uid: str,
     *,
     instrument_kind: str = "HPLC",
-    sample_id: str | None = "S-001",
+    sample_id: str | None = "S-NCE-1234-00001",
     sample_name: str | None = "lot-001",
     project_code: str | None = "NCE-1234",
     measured_at: datetime | None = None,
@@ -139,19 +139,19 @@ def datasets() -> list[dict[str, Any]]:
         _make_dataset(
             "ds-001",
             instrument_kind="HPLC",
-            sample_id="S-001",
+            sample_id="S-NCE-1234-00001",
             measured_at=datetime(2026, 4, 1, 12, 0, tzinfo=timezone.utc),
         ),
         _make_dataset(
             "ds-002",
             instrument_kind="NMR",
-            sample_id="S-001",
+            sample_id="S-NCE-1234-00001",
             measured_at=datetime(2026, 4, 2, 12, 0, tzinfo=timezone.utc),
         ),
         _make_dataset(
             "ds-003",
             instrument_kind="MS",
-            sample_id="S-002",
+            sample_id="S-NCE-1234-00002",
             sample_name="lot-002",
             project_code="NCE-5678",
             measured_at=datetime(2026, 4, 3, 12, 0, tzinfo=timezone.utc),
@@ -249,7 +249,7 @@ def test_datasets_fetch_rejects_bad_uid(client):
 # /datasets/by_sample
 # ---------------------------------------------------------------------------
 def test_datasets_by_sample_returns_matching(client):
-    r = client.post("/datasets/by_sample", json={"sample_id": "S-001"})
+    r = client.post("/datasets/by_sample", json={"sample_id": "S-NCE-1234-00001"})
     assert r.status_code == 200
     body = r.json()
     assert len(body["datasets"]) == 2

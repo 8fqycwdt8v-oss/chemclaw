@@ -227,6 +227,43 @@ def test_seed_sql_contains_gating_and_copy(generated: dict[str, int]) -> None:
 
 
 # --------------------------------------------------------------------------
+# Adversarial freetext coverage (prompt-injection / fabrication probes)
+# --------------------------------------------------------------------------
+
+
+def test_adversarial_probes_present_in_seed(generated: dict[str, int]) -> None:
+    """A small fraction of entries (ADVERSARIAL_RATE ~ 0.5%) carry an
+    adversarial probe in their freetext. The agent's redact-secrets +
+    anti-fabrication hooks must handle these without obeying them; this
+    test only asserts the seed *contains* them so the safety machinery
+    actually runs against realistic content during integration testing.
+    """
+    fdir = generated["__fixtures_dir__"]  # type: ignore[index]
+    rows = _read_table(fdir, "entries")
+    freetext_idx = _col_index("entries", "freetext")
+    marker = "[chemist note pasted from external source"
+    matching = [r for r in rows if marker in (r[freetext_idx] or "")]
+    # Expected ~0.5% of ~1860 freetext-bearing entries → ~9 hits. Allow a
+    # generous lower bound to absorb RNG draw variance, but require at
+    # least 3 so an accidental drop-to-zero (e.g., the wrapper string
+    # changes) gets caught.
+    assert len(matching) >= 3, (
+        f"expected ≥3 adversarial-probe entries; found {len(matching)}. "
+        f"Either ADVERSARIAL_RATE got disabled, or the marker string "
+        f"in freetext_templates._ADVERSARIAL_PROBES rotation changed."
+    )
+    # Sanity: the probes themselves must not be redacted away in the seed.
+    # (Defense in depth — the agent-side redactor handles outbound text;
+    # the seed retains the literal so safety hooks have something to
+    # exercise on.)
+    obeyable_strings = ("Ignore all previous instructions", "[SYSTEM]")
+    assert any(
+        any(s in (r[freetext_idx] or "") for s in obeyable_strings)
+        for r in matching
+    ), "no recognisable adversarial pattern surfaced in the matching rows"
+
+
+# --------------------------------------------------------------------------
 # Cross-link integrity (regression for bd1b7b2 / fake_logs project_code mismatch)
 # --------------------------------------------------------------------------
 

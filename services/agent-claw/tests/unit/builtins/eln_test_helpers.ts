@@ -83,7 +83,7 @@ export const SAMPLE_REACTION_DETAIL = {
 export const SAMPLE_SAMPLE = {
   id: SAMPLE_ID_A,
   entry_id: ENTRY_ID_A,
-  sample_code: "S-001",
+  sample_code: "S-NCE-1234-00001",
   compound_id: null,
   amount_mg: 12.4,
   purity_pct: 98.7,

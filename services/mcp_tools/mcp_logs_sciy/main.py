@@ -22,7 +22,9 @@ from typing import Annotated, Any, Literal
 
 from fastapi import Body, FastAPI, HTTPException
 from pydantic import BaseModel, Field, field_validator
-from pydantic_settings import BaseSettings, SettingsConfigDict
+from pydantic_settings import SettingsConfigDict
+
+from services.mcp_tools.common.settings import ToolSettings
 
 from services.mcp_tools.common.app import create_app
 from services.mcp_tools.mcp_logs_sciy.backends import (
@@ -36,13 +38,15 @@ log = logging.getLogger("mcp-logs-sciy")
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
-class LogsSettings(BaseSettings):
-    """Environment-driven configuration."""
+class LogsSettings(ToolSettings):
+    """Environment-driven configuration. Inherits host/log_level from
+    ``ToolSettings`` so this MCP follows the same convention as every
+    other one (mcp_kg, mcp_drfp, …)."""
 
     model_config = SettingsConfigDict(env_file=None, extra="ignore")
 
-    log_level: str = Field(default="INFO", alias="LOG_LEVEL")
-    host: str = Field(default="0.0.0.0", alias="MCP_LOGS_SCIY_HOST")
+    # ToolSettings already declares host/port/log_level. We override port
+    # to the LOGS-specific 8016 default and let host/log_level inherit.
     port: int = Field(default=8016, alias="MCP_LOGS_SCIY_PORT")
 
     # Backend selection — "fake-postgres" for hermetic dev/CI, "real" for the

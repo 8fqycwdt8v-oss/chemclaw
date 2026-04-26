@@ -19,6 +19,8 @@ from typing import Any
 import psycopg
 from psycopg.rows import dict_row
 
+from services.mcp_tools.common.payload_caps import cap_jsonb
+
 log = logging.getLogger("mcp.logs_sciy.fake_postgres")
 
 # Citation URI template — must round-trip through the post-tool source-cache
@@ -72,7 +74,9 @@ def _row_to_dataset(row: dict[str, Any], tracks: list[dict[str, Any]]) -> dict[s
         "sample_name": row.get("sample_name"),
         "operator": row.get("operator"),
         "measured_at": measured_at_iso,
-        "parameters": row.get("parameters_jsonb") or {},
+        "parameters": cap_jsonb(
+            row.get("parameters_jsonb") or {}, field_name="parameters_jsonb"
+        ),
         "tracks": tracks,
         "project_code": row.get("project_code"),
         "citation_uri": citation_uri,
@@ -80,7 +84,7 @@ def _row_to_dataset(row: dict[str, Any], tracks: list[dict[str, Any]]) -> dict[s
 
 
 def _row_to_track(row: dict[str, Any]) -> dict[str, Any]:
-    peaks = row.get("peaks_jsonb") or []
+    peaks = cap_jsonb(row.get("peaks_jsonb") or [], field_name="peaks_jsonb")
     return {
         "track_index": row["track_index"],
         "detector": row.get("detector"),

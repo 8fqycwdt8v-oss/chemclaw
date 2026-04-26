@@ -67,6 +67,13 @@ SEED_SQL_PATH = REPO_ROOT / "db" / "seed" / "20_mock_eln_data.sql"
 # Stable UUID namespace so re-runs produce identical primary keys.
 UUID_NAMESPACE = uuid.UUID("4e8b1c2d-7a3f-4b5e-9c8a-1d2e3f4a5b6c")
 
+# Fraction of entries-with-freetext that get an adversarial probe in their
+# narrative (prompt-injection bait, fabricated fact_id, etc.). Keeps the
+# agent's redact-secrets + anti-fabrication safety hooks under continuous
+# regression coverage. ~0.5% of ~1860 freetext-bearing entries → ~9
+# adversarial entries in the default world.
+ADVERSARIAL_RATE = 0.005
+
 # Tables, in load order (FK-respecting).
 TABLE_ORDER = [
     "projects",
@@ -619,6 +626,11 @@ def generate(world: dict[str, Any], seed: int) -> GenState:
                 "outcome": "completed" if quality != "failed" else "failed",
             }
 
+            # ~0.5% of entries with freetext carry an adversarial probe
+            # (prompt-injection bait, fact-id fabrication, etc.) so the
+            # agent's safety hooks have continuous regression coverage.
+            adversarial = shape != "pure-structured" and rng.random() < ADVERSARIAL_RATE
+
             if shape == "pure-structured":
                 fields_jsonb = structured
                 freetext = ""
@@ -628,7 +640,10 @@ def generate(world: dict[str, Any], seed: int) -> GenState:
                 # marker so OFAT-aware aggregation works regardless of shape.
                 fields_jsonb = {"campaign_id": camp["id"]}
                 lo, hi = ft.LENGTH_BANDS[[b[0] for b in ft.LENGTH_BANDS].index(ftext_band)][1:]
-                freetext = ft.render_freetext(rng, ftext_fields, lo, hi, ftext_quality, pure_freetext=True)
+                freetext = ft.render_freetext(
+                    rng, ftext_fields, lo, hi, ftext_quality,
+                    pure_freetext=True, adversarial=adversarial,
+                )
                 ftext_len = len(freetext)
             else:  # mixed
                 # Apply data_quality_tier perturbation to structured fields
@@ -648,7 +663,10 @@ def generate(world: dict[str, Any], seed: int) -> GenState:
                 # Mixed-shape freetext is biased shorter
                 lo = min(lo, 50)
                 hi = min(hi, 500) if hi <= 1500 else hi
-                freetext = ft.render_freetext(rng, ftext_fields, lo, hi, ftext_quality, pure_freetext=False)
+                freetext = ft.render_freetext(
+                    rng, ftext_fields, lo, hi, ftext_quality,
+                    pure_freetext=False, adversarial=adversarial,
+                )
                 ftext_len = len(freetext)
 
             status = "signed" if rng.random() < 0.55 else rng.choice(["draft", "in_progress", "witnessed", "archived"])
@@ -741,6 +759,8 @@ def generate(world: dict[str, Any], seed: int) -> GenState:
                 "outcome": "completed" if quality != "failed" else "failed",
             }
 
+            adversarial = shape != "pure-structured" and rng.random() < ADVERSARIAL_RATE
+
             if shape == "pure-structured":
                 fields_jsonb = structured
                 freetext = ""
@@ -748,7 +768,10 @@ def generate(world: dict[str, Any], seed: int) -> GenState:
             elif shape == "pure-freetext":
                 fields_jsonb = {}
                 lo, hi = ft.LENGTH_BANDS[[b[0] for b in ft.LENGTH_BANDS].index(ftext_band)][1:]
-                freetext = ft.render_freetext(rng, ftext_fields, lo, hi, ftext_quality, pure_freetext=True)
+                freetext = ft.render_freetext(
+                    rng, ftext_fields, lo, hi, ftext_quality,
+                    pure_freetext=True, adversarial=adversarial,
+                )
                 ftext_len = len(freetext)
             else:
                 fields_jsonb = dict(structured)
@@ -765,7 +788,10 @@ def generate(world: dict[str, Any], seed: int) -> GenState:
                 lo, hi = ft.LENGTH_BANDS[[b[0] for b in ft.LENGTH_BANDS].index(ftext_band)][1:]
                 lo = min(lo, 50)
                 hi = min(hi, 500) if hi <= 1500 else hi
-                freetext = ft.render_freetext(rng, ftext_fields, lo, hi, ftext_quality, pure_freetext=False)
+                freetext = ft.render_freetext(
+                    rng, ftext_fields, lo, hi, ftext_quality,
+                    pure_freetext=False, adversarial=adversarial,
+                )
                 ftext_len = len(freetext)
 
             status = "signed" if rng.random() < 0.5 else rng.choice(["draft", "in_progress", "witnessed", "archived"])
