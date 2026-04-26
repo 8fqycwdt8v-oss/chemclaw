@@ -77,6 +77,17 @@ export function buildDispatchSubAgentTool(allTools: Tool[], llm: LlmProvider) {
         deps,
       );
 
+      // Phase G: persist sub-agent citations into the parent's seenFactIds.
+      // The sub-agent ran in an isolated context (so its tools couldn't
+      // accidentally pollute the parent's working memory), but its grounded
+      // citations are exactly the facts the parent's anti-fabrication hook
+      // should treat as verified going forward. Without this merge, the
+      // parent re-rejects facts the sub-agent already grounded — over-
+      // restrictive and forces redundant tool calls.
+      for (const factId of result.citations) {
+        ctx.seenFactIds.add(factId);
+      }
+
       return {
         type: input.type,
         text: result.text,

@@ -1,0 +1,5 @@
+-c ../../_constraints.txt
+psycopg[binary]
+httpx
+pydantic
+pydantic-settings

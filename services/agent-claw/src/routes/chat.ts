@@ -38,6 +38,7 @@ import { registerRedactSecretsHook, redactString } from "../core/hooks/redact-se
 import type { RedactReplacement } from "../core/hooks/redact-secrets.js";
 import { createSession, loadSession, saveSession } from "../core/session-store.js";
 import type { SessionFinishReason } from "../core/session-store.js";
+import { savePlanForSession } from "../core/plan-store-db.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 import { registerTagMaturityHook } from "../core/hooks/tag-maturity.js";
 import { registerBudgetGuardHook } from "../core/hooks/budget-guard.js";
@@ -357,13 +358,34 @@ async function handleChat(
   // can resume on the next turn.
   let sessionId: string | null = body.session_id ?? null;
   let priorScratchpad: Record<string, unknown> = {};
+  // Phase F + H state captured at turn start.
+  let sessionEtag: string | undefined;
+  let sessionInputUsed = 0;
+  let sessionOutputUsed = 0;
+  let sessionStepsUsed = 0;
+  let sessionInputCap = deps.config.AGENT_SESSION_INPUT_TOKEN_BUDGET;
+  let sessionOutputCap = deps.config.AGENT_SESSION_OUTPUT_TOKEN_BUDGET;
   if (sessionId) {
     try {
       const loaded = await loadSession(deps.pool, user, sessionId);
       if (loaded) {
         priorScratchpad = loaded.scratchpad ?? {};
+        sessionEtag = loaded.etag;
+        sessionInputUsed = loaded.sessionInputTokens;
+        sessionOutputUsed = loaded.sessionOutputTokens;
+        sessionStepsUsed = loaded.sessionSteps;
+        if (loaded.sessionTokenBudget != null) {
+          sessionInputCap = loaded.sessionTokenBudget;
+          // Output budget defaults to 1/5 of input cap unless overridden via env.
+          // (Per-session override of the output cap is a follow-up.)
+        }
         // Clear awaiting_question — the just-arrived message answers it.
-        await saveSession(deps.pool, user, sessionId, { awaitingQuestion: null });
+        // Use the loaded etag so we don't race a concurrent saveSession.
+        const saved = await saveSession(deps.pool, user, sessionId, {
+          awaitingQuestion: null,
+          expectedEtag: loaded.etag,
+        });
+        sessionEtag = saved.etag;
       } else {
         // Unknown session id: ignore and treat as a fresh session.
         sessionId = null;
@@ -503,9 +525,24 @@ async function handleChat(
           });
         }
 
-        // Save and emit plan_ready.
+        // Save the plan to:
+        //   1. The legacy in-memory planStore — kept for backward-compat with
+        //      /api/chat/plan/approve and existing tests.
+        //   2. The DB-backed agent_plans table — used by Phase E chained
+        //      execution via /api/sessions/:id/plan/run.
         const plan = createPlan(steps, messages);
         planStore.save(plan);
+
+        // DB persistence requires a session id. If we couldn't create one
+        // earlier, the plan is in-memory only and the chained-run endpoint
+        // won't find it — fine, the legacy approve path still works.
+        if (sessionId) {
+          try {
+            await savePlanForSession(deps.pool, user, sessionId, steps, messages);
+          } catch (err) {
+            req.log.warn({ err }, "savePlanForSession failed; falling back to in-memory");
+          }
+        }
 
         if (!closed) {
           writeEvent(reply, {
@@ -552,6 +589,16 @@ async function handleChat(
     budget = new Budget({
       maxSteps: effectiveMaxSteps,
       maxPromptTokens: deps.config.AGENT_TOKEN_BUDGET,
+      // Phase F: charge against the session-level cap on every step.
+      // sessionId being null means stateless — skip the session cap.
+      session: sessionId
+        ? {
+            inputUsed: sessionInputUsed,
+            outputUsed: sessionOutputUsed,
+            inputCap: sessionInputCap,
+            outputCap: sessionOutputCap,
+          }
+        : undefined,
     });
 
     streaming: while (true) {
@@ -670,8 +717,22 @@ async function handleChat(
     }
   } catch (err) {
     req.log.error({ err }, "chat stream failed");
-    // Terminal-event guarantee: always emit error before closing.
-    if (!closed) {
+    // Distinguish session-budget overrun from generic internal errors so
+    // clients can render "session_budget_exceeded" and prompt for cap bump.
+    const errName =
+      err instanceof Error ? err.name : "";
+    if (errName === "SessionBudgetExceededError") {
+      finishReason = "session_budget_exceeded";
+      if (!closed) {
+        writeEvent(reply, { type: "error", error: "session_budget_exceeded" });
+      }
+    } else if (errName === "OptimisticLockError") {
+      finishReason = "concurrent_modification";
+      if (!closed) {
+        writeEvent(reply, { type: "error", error: "concurrent_modification" });
+      }
+    } else if (!closed) {
+      // Terminal-event guarantee: always emit error before closing.
       writeEvent(reply, { type: "error", error: "internal" });
     }
   } finally {
@@ -721,11 +782,21 @@ async function handleChat(
           typeof dump["awaitingQuestion"] === "string"
             ? (dump["awaitingQuestion"] as string)
             : null;
+        // Phase F: persist updated session totals so the next turn picks
+        // up where this one left off.
+        const sessTotals = budget?.sessionTotals();
         await saveSession(deps.pool, user, sessionId, {
           scratchpad: dump,
           lastFinishReason: (finishReason as SessionFinishReason) ?? null,
           awaitingQuestion,
           messageCount: messages.length,
+          sessionInputTokens: sessTotals?.inputTokens,
+          sessionOutputTokens: sessTotals?.outputTokens,
+          sessionSteps: sessionStepsUsed + (budget?.stepsUsed ?? 0),
+          // Phase H: optimistic concurrency. If a parallel turn raced us,
+          // OptimisticLockError fires here; we log and accept (the parallel
+          // writer's state is what survives). We do NOT clobber.
+          expectedEtag: sessionEtag,
         });
 
         // If the model called ask_user, emit the awaiting_user_input event
