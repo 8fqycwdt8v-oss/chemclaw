@@ -1,0 +1,524 @@
+# Mock ELN — declarative world spec.
+#
+# Drives services/mock_eln/seed/generator.py. WORLD_SEED env var (default 42)
+# controls determinism — same yaml + same seed → byte-identical COPY files.
+#
+# Structure:
+#   projects[]            — 4 projects per the plan project mix
+#   chemistry_families[]  — 10 SMARTS-templated reaction families
+#   ofat_campaigns[]      — explicit OFAT specs naming a project + family +
+#                           condition sweeps + entry count
+#   condition_pools{}     — solvents/bases/ligands/temps/etc. used both for
+#                           OFAT sweeps and discovery-entry condition variation
+#   fragment_pools{}      — SMILES fragments fed into SMARTS templates to
+#                           produce canonical reactions per family
+#   timing                — global time bounds, weekday cadence, milestones
+
+# --------------------------------------------------------------------------
+# Time bounds (ISO 8601). Per-project overrides supported.
+# --------------------------------------------------------------------------
+timing:
+  global_started_at: "2024-04-01T08:00:00+00:00"
+  global_ended_at:   "2025-12-15T18:00:00+00:00"
+  # Cadence: ~10–20 entries / chemist / month, bursty around milestones,
+  # weekend gaps, holiday gaps near US holidays.
+  entries_per_chemist_per_month_min: 10
+  entries_per_chemist_per_month_max: 20
+  weekend_gap_probability: 0.92        # 92% chance no entry on weekend day
+  holiday_gap_dates:
+    - "2024-05-27"   # Memorial Day
+    - "2024-07-04"   # Independence Day
+    - "2024-09-02"   # Labor Day
+    - "2024-11-28"   # Thanksgiving
+    - "2024-11-29"
+    - "2024-12-24"
+    - "2024-12-25"
+    - "2024-12-31"
+    - "2025-01-01"
+    - "2025-05-26"
+    - "2025-07-04"
+    - "2025-09-01"
+    - "2025-11-27"
+    - "2025-11-28"
+
+# --------------------------------------------------------------------------
+# Distribution targets (used by generator; tests assert ±2pp)
+# --------------------------------------------------------------------------
+distributions:
+  entry_shape:
+    mixed: 0.80
+    pure-structured: 0.07
+    pure-freetext: 0.08
+    # Remaining 5% balances rounding — the generator distributes via cumulative
+    # bands; tests allow ±2pp. The plan reads 80/7/8/5 with the 5pp going to
+    # additional `mixed` to keep the dominant shape dominant.
+  data_quality_tier:
+    clean: 0.50
+    partial: 0.25
+    noisy: 0.15
+    failed: 0.10
+  freetext_length_band:
+    "30-80":     0.35
+    "80-400":    0.40
+    "400-1500":  0.20
+    "1500-6000": 0.05
+  freetext_quality:
+    clean: 0.60
+    abbreviated: 0.25
+    typos: 0.10
+    ocr_noise: 0.05
+
+# --------------------------------------------------------------------------
+# Projects (4 rows in mock_eln.projects)
+# --------------------------------------------------------------------------
+projects:
+  - code: "NCE-1234"
+    name: "Kinase Inhibitor Discovery + Process Dev"
+    therapeutic_area: "Oncology"
+    pi_email: "alice.chen@chemclaw.test"
+    started_at: "2024-04-01T08:00:00+00:00"
+    ended_at:   "2025-12-15T18:00:00+00:00"
+    entries: 600
+    reactions_canonical: 35
+    chemists:
+      - "alice.chen@chemclaw.test"
+      - "ben.gupta@chemclaw.test"
+      - "carol.diaz@chemclaw.test"
+      - "dave.kim@chemclaw.test"
+    notebook_kinds: ["discovery", "process-dev", "analytical"]
+
+  - code: "NCE-5678"
+    name: "Hit-to-Lead — CNS Series"
+    therapeutic_area: "Neurology"
+    pi_email: "erin.lim@chemclaw.test"
+    started_at: "2024-06-15T08:00:00+00:00"
+    ended_at:   "2025-09-30T18:00:00+00:00"
+    entries: 250
+    reactions_canonical: 25
+    chemists:
+      - "erin.lim@chemclaw.test"
+      - "frank.ng@chemclaw.test"
+    notebook_kinds: ["discovery"]
+
+  - code: "GEN-9999"
+    name: "Generic API Process Development"
+    therapeutic_area: "Anti-infective"
+    pi_email: "gina.park@chemclaw.test"
+    started_at: "2024-04-01T08:00:00+00:00"
+    ended_at:   "2025-11-30T18:00:00+00:00"
+    entries: 800
+    reactions_canonical: 50
+    chemists:
+      - "gina.park@chemclaw.test"
+      - "henry.li@chemclaw.test"
+      - "ivy.nguyen@chemclaw.test"
+      - "jack.olsen@chemclaw.test"
+    notebook_kinds: ["process-dev", "analytical"]
+
+  - code: "FOR-1111"
+    name: "Formulation + Analytical Method Dev"
+    therapeutic_area: "Cardiovascular"
+    pi_email: "kara.singh@chemclaw.test"
+    started_at: "2024-05-01T08:00:00+00:00"
+    ended_at:   "2025-10-15T18:00:00+00:00"
+    entries: 350
+    reactions_canonical: 40
+    chemists:
+      - "kara.singh@chemclaw.test"
+      - "luis.ortiz@chemclaw.test"
+      - "mara.silva@chemclaw.test"
+    notebook_kinds: ["analytical", "discovery"]
+
+# --------------------------------------------------------------------------
+# Chemistry families (SMARTS reactions + fragment pools)
+#
+# Every reaction is rdkit.Chem.AllChem.ReactionFromSmarts compatible.
+# Fragment SMILES are valid; reactions yield a single product with the
+# expected connectivity. Yields are drawn from a noisy-regression model:
+#   yield = base_yield(family, step) + condition_bonus + N(0, sigma).
+# --------------------------------------------------------------------------
+chemistry_families:
+  - name: "amide_coupling"
+    smarts: "[C:1](=[O:2])[OH].[N:3][H]>>[C:1](=[O:2])[N:3]"
+    fragment_pools:
+      acid:
+        - "CC(=O)O"
+        - "OC(=O)c1ccccc1"
+        - "OC(=O)c1ccc(F)cc1"
+        - "OC(=O)c1ccc(Cl)cc1"
+        - "OC(=O)c1cccnc1"
+        - "OC(=O)c1ccncc1"
+        - "OC(=O)CCC"
+        - "OC(=O)C1CCCCC1"
+        - "OC(=O)c1ccc(OC)cc1"
+        - "OC(=O)c1ccc(C)cc1"
+      amine:
+        - "NC"
+        - "NCC"
+        - "NCCC"
+        - "NCCN"
+        - "Nc1ccccc1"
+        - "Nc1ccc(F)cc1"
+        - "NCc1ccccc1"
+        - "N1CCCCC1"
+        - "N1CCNCC1"
+        - "N1CCOCC1"
+    base_yield_pct: 78.0
+    yield_sigma: 6.5
+
+  - name: "suzuki"
+    smarts: "[c:1][Br].[c:2][B]([OH])[OH]>>[c:1][c:2]"
+    fragment_pools:
+      aryl_halide:
+        - "Brc1ccccc1"
+        - "Brc1ccc(F)cc1"
+        - "Brc1ccc(Cl)cc1"
+        - "Brc1ccc(OC)cc1"
+        - "Brc1cccnc1"
+        - "Brc1ccncc1"
+        - "Brc1ccc(C(=O)C)cc1"
+        - "Brc1ccc(C#N)cc1"
+      aryl_boronic:
+        - "OB(O)c1ccccc1"
+        - "OB(O)c1ccc(F)cc1"
+        - "OB(O)c1ccc(C)cc1"
+        - "OB(O)c1ccc(OC)cc1"
+        - "OB(O)c1cccnc1"
+        - "OB(O)c1ccc(N)cc1"
+    base_yield_pct: 72.0
+    yield_sigma: 8.5
+
+  - name: "buchwald_hartwig"
+    smarts: "[c:1][Br].[N:2][H]>>[c:1][N:2]"
+    fragment_pools:
+      aryl_halide:
+        - "Brc1ccccc1"
+        - "Brc1ccc(C)cc1"
+        - "Brc1ccc(OC)cc1"
+        - "Brc1ccc(C(F)(F)F)cc1"
+        - "Brc1cccnc1"
+      amine:
+        - "Nc1ccccc1"
+        - "Nc1ccc(C)cc1"
+        - "N1CCCCC1"
+        - "N1CCN(C)CC1"
+        - "N1CCOCC1"
+        - "NCc1ccccc1"
+    base_yield_pct: 68.0
+    yield_sigma: 9.0
+
+  - name: "sn_ar"
+    smarts: "[c:1][F].[N:2][H]>>[c:1][N:2]"
+    fragment_pools:
+      aryl_fluoride:
+        - "Fc1ccc([N+](=O)[O-])cc1"
+        - "Fc1ccc(C#N)cc1"
+        - "Fc1ccncc1"
+        - "Fc1cccnc1"
+        - "Fc1ncccn1"
+      amine:
+        - "NCc1ccccc1"
+        - "NCC"
+        - "N1CCNCC1"
+        - "N1CCOCC1"
+        - "Nc1ccccc1"
+    base_yield_pct: 65.0
+    yield_sigma: 10.0
+
+  - name: "ester_hydrolysis"
+    smarts: "[C:1](=[O:2])[O:3][C].[OH2]>>[C:1](=[O:2])[O:3][H]"
+    fragment_pools:
+      ester:
+        - "COC(=O)c1ccccc1"
+        - "COC(=O)CCC"
+        - "COC(=O)C1CCCCC1"
+        - "CCOC(=O)c1ccccc1"
+        - "COC(=O)c1ccc(F)cc1"
+        - "COC(=O)c1ccc(OC)cc1"
+    base_yield_pct: 88.0
+    yield_sigma: 4.0
+
+  - name: "reductive_amination"
+    smarts: "[C:1](=O).[N:2][H]>>[C:1][N:2]"
+    fragment_pools:
+      aldehyde:
+        - "O=Cc1ccccc1"
+        - "O=Cc1ccc(F)cc1"
+        - "O=Cc1cccnc1"
+        - "O=CCC"
+        - "O=CC1CCCCC1"
+      amine:
+        - "NCc1ccccc1"
+        - "NCC"
+        - "NCCN"
+        - "N1CCNCC1"
+        - "Nc1ccccc1"
+    base_yield_pct: 75.0
+    yield_sigma: 7.0
+
+  - name: "boc_deprotection"
+    smarts: "[N:1]C(=O)OC(C)(C)C>>[N:1][H]"
+    fragment_pools:
+      boc_amine:
+        - "CC(C)(C)OC(=O)NCc1ccccc1"
+        - "CC(C)(C)OC(=O)N1CCCCC1"
+        - "CC(C)(C)OC(=O)N1CCN(C)CC1"
+        - "CC(C)(C)OC(=O)NCCN"
+        - "CC(C)(C)OC(=O)Nc1ccccc1"
+    base_yield_pct: 92.0
+    yield_sigma: 3.5
+
+  - name: "hydrogenation"
+    smarts: "[C:1]=[C:2]>>[C:1][C:2]"
+    fragment_pools:
+      alkene:
+        - "C=Cc1ccccc1"
+        - "C=Cc1ccc(F)cc1"
+        - "C=CCC"
+        - "C=CC1CCCCC1"
+        - "C=Cc1cccnc1"
+    base_yield_pct: 85.0
+    yield_sigma: 5.0
+
+  - name: "oxidation"
+    smarts: "[C:1][OH]>>[C:1]=O"
+    fragment_pools:
+      alcohol:
+        - "OCc1ccccc1"
+        - "OCc1ccc(F)cc1"
+        - "OCCC"
+        - "OCC1CCCCC1"
+        - "OCc1cccnc1"
+    base_yield_pct: 70.0
+    yield_sigma: 8.0
+
+  - name: "alkylation"
+    smarts: "[N:1][H].[C:2][Br]>>[N:1][C:2]"
+    fragment_pools:
+      amine:
+        - "N1CCCCC1"
+        - "N1CCNCC1"
+        - "Nc1ccccc1"
+        - "NCc1ccccc1"
+      alkyl_halide:
+        - "BrCc1ccccc1"
+        - "BrCC"
+        - "BrCCC"
+        - "BrCc1ccc(F)cc1"
+        - "BrCC(=O)OC"
+    base_yield_pct: 62.0
+    yield_sigma: 9.5
+
+# --------------------------------------------------------------------------
+# OFAT campaigns. Each lists project + family + entry count + which
+# condition axes are swept and over what value sets. The generator picks
+# one canonical reaction per campaign and stamps `entries.reaction_id`.
+# --------------------------------------------------------------------------
+ofat_campaigns:
+  - id: "NCE-1234-ofat-1"
+    project_code: "NCE-1234"
+    family: "amide_coupling"
+    entry_count: 100
+    sweep_axes: ["solvent", "base", "temperature_c", "equiv_amine"]
+  - id: "NCE-1234-ofat-2"
+    project_code: "NCE-1234"
+    family: "suzuki"
+    entry_count: 100
+    sweep_axes: ["solvent", "ligand", "temperature_c", "catalyst_loading_mol_pct"]
+  - id: "NCE-1234-ofat-3"
+    project_code: "NCE-1234"
+    family: "buchwald_hartwig"
+    entry_count: 100
+    sweep_axes: ["solvent", "base", "ligand", "temperature_c"]
+  - id: "NCE-1234-ofat-4"
+    project_code: "NCE-1234"
+    family: "sn_ar"
+    entry_count: 100
+    sweep_axes: ["solvent", "base", "temperature_c"]
+
+  - id: "GEN-9999-ofat-1"
+    project_code: "GEN-9999"
+    family: "amide_coupling"
+    entry_count: 200
+    sweep_axes: ["solvent", "base", "coupling_reagent", "temperature_c"]
+  - id: "GEN-9999-ofat-2"
+    project_code: "GEN-9999"
+    family: "ester_hydrolysis"
+    entry_count: 180
+    sweep_axes: ["solvent", "base", "temperature_c", "time_h"]
+  - id: "GEN-9999-ofat-3"
+    project_code: "GEN-9999"
+    family: "reductive_amination"
+    entry_count: 160
+    sweep_axes: ["solvent", "reductant", "temperature_c", "time_h"]
+  - id: "GEN-9999-ofat-4"
+    project_code: "GEN-9999"
+    family: "hydrogenation"
+    entry_count: 140
+    sweep_axes: ["solvent", "catalyst", "pressure_psi", "temperature_c"]
+  - id: "GEN-9999-ofat-5"
+    project_code: "GEN-9999"
+    family: "boc_deprotection"
+    entry_count: 120
+    sweep_axes: ["solvent", "acid", "temperature_c", "time_h"]
+
+  - id: "FOR-1111-ofat-1"
+    project_code: "FOR-1111"
+    family: "alkylation"
+    entry_count: 60
+    sweep_axes: ["solvent", "base", "temperature_c"]
+
+# --------------------------------------------------------------------------
+# Condition pools — used both for OFAT sweeps (the axes above index into
+# these) and for discovery-entry random condition variation.
+# --------------------------------------------------------------------------
+condition_pools:
+  solvent:
+    - "DMF"
+    - "DMSO"
+    - "THF"
+    - "2-MeTHF"
+    - "DCM"
+    - "EtOAc"
+    - "MeCN"
+    - "MeOH"
+    - "EtOH"
+    - "water"
+    - "toluene"
+    - "1,4-dioxane"
+  base:
+    - "Et3N"
+    - "DIPEA"
+    - "K2CO3"
+    - "Cs2CO3"
+    - "NaOH"
+    - "K3PO4"
+    - "DBU"
+    - "NaH"
+    - "KOtBu"
+  ligand:
+    - "XPhos"
+    - "SPhos"
+    - "RuPhos"
+    - "BINAP"
+    - "tBuXPhos"
+    - "DPPF"
+    - "PCy3"
+  catalyst:
+    - "Pd(OAc)2"
+    - "Pd(PPh3)4"
+    - "Pd2(dba)3"
+    - "Pd/C"
+    - "PtO2"
+    - "Rh/C"
+  reductant:
+    - "NaBH4"
+    - "NaBH(OAc)3"
+    - "STAB"
+    - "NaCNBH3"
+  acid:
+    - "HCl"
+    - "TFA"
+    - "H2SO4"
+    - "MsOH"
+  coupling_reagent:
+    - "HATU"
+    - "EDC"
+    - "TBTU"
+    - "T3P"
+    - "DCC"
+    - "PyBOP"
+  temperature_c: [0, 10, 25, 40, 50, 60, 80, 100, 110, 120]
+  pressure_psi: [15, 30, 50, 80, 120, 200]
+  time_h: [0.5, 1, 2, 4, 8, 16, 24, 48]
+  equiv_amine: [1.0, 1.1, 1.2, 1.5, 2.0, 3.0]
+  catalyst_loading_mol_pct: [0.5, 1.0, 2.5, 5.0, 10.0]
+
+# --------------------------------------------------------------------------
+# Condition bonuses per family — drives the noisy-regression yield. Bonuses
+# are additive in pp (percentage points). Only a subset of conditions per
+# family carries a real signal so OFAT exploration has something to learn.
+# Anything not listed contributes 0.
+# --------------------------------------------------------------------------
+condition_bonuses:
+  amide_coupling:
+    solvent: { DMF: 5.0, DMSO: 3.0, THF: -2.0, MeCN: 1.0, water: -8.0 }
+    base: { DIPEA: 4.0, Et3N: 2.0, NaOH: -10.0, NaH: -6.0 }
+    coupling_reagent: { HATU: 5.0, T3P: 3.5, EDC: 0.0, DCC: -1.5 }
+    temperature_c: { 25: 0.0, 40: 2.0, 60: -1.0, 80: -3.0, 100: -8.0 }
+  suzuki:
+    solvent: { "1,4-dioxane": 4.0, toluene: 3.0, EtOH: 2.0, water: -3.0 }
+    ligand: { SPhos: 5.0, XPhos: 4.0, BINAP: -2.0, DPPF: 1.0 }
+    temperature_c: { 80: 4.0, 100: 6.0, 110: 5.0, 120: 1.0, 25: -8.0 }
+    catalyst_loading_mol_pct: { 0.5: -3.0, 1.0: 0.0, 2.5: 3.0, 5.0: 4.0, 10.0: 2.0 }
+  buchwald_hartwig:
+    solvent: { toluene: 4.0, "1,4-dioxane": 3.0, THF: -2.0, DMF: -3.0 }
+    base: { Cs2CO3: 4.0, K3PO4: 3.0, NaOtBu: 2.0, KOtBu: 2.0, K2CO3: -1.0 }
+    ligand: { XPhos: 5.0, RuPhos: 4.0, BINAP: 2.0, DPPF: 0.0 }
+    temperature_c: { 80: 2.0, 100: 5.0, 110: 4.0, 120: 0.0 }
+  sn_ar:
+    solvent: { DMSO: 5.0, DMF: 4.0, MeCN: 1.0, THF: -3.0 }
+    base: { DIPEA: 3.0, K2CO3: 2.0, Cs2CO3: 4.0, Et3N: 0.0 }
+    temperature_c: { 80: 3.0, 100: 5.0, 110: 4.0, 120: 1.0, 25: -8.0 }
+  ester_hydrolysis:
+    solvent: { water: 5.0, MeOH: 4.0, EtOH: 4.0, THF: 1.0, DCM: -5.0 }
+    base: { NaOH: 5.0, K2CO3: 1.0, Et3N: -3.0 }
+    temperature_c: { 25: -3.0, 40: 0.0, 60: 3.0, 80: 4.0 }
+    time_h: { 0.5: -6.0, 1: -2.0, 2: 0.0, 4: 2.0, 8: 3.0, 16: 3.5 }
+  reductive_amination:
+    solvent: { DCM: 4.0, "1,2-DCE": 3.0, MeOH: 2.0, THF: 0.0, DMF: -2.0 }
+    reductant: { STAB: 5.0, "NaBH(OAc)3": 4.5, NaCNBH3: 3.0, NaBH4: -2.0 }
+    temperature_c: { 25: 2.0, 40: 1.0, 0: -3.0 }
+    time_h: { 2: 0.0, 4: 1.5, 8: 2.5, 16: 3.0 }
+  boc_deprotection:
+    solvent: { DCM: 4.0, "1,4-dioxane": 3.0, MeOH: 1.0 }
+    acid: { TFA: 4.0, HCl: 3.5, H2SO4: -2.0 }
+    temperature_c: { 25: 2.0, 40: 1.0, 0: -1.0 }
+    time_h: { 0.5: -1.0, 1: 0.0, 2: 1.0, 4: 1.5 }
+  hydrogenation:
+    solvent: { MeOH: 4.0, EtOH: 4.0, EtOAc: 2.0, THF: 1.0 }
+    catalyst: { "Pd/C": 4.0, PtO2: 3.0, "Rh/C": 2.0 }
+    pressure_psi: { 15: -2.0, 30: 0.0, 50: 2.0, 80: 3.0, 120: 3.5, 200: 3.0 }
+    temperature_c: { 25: 0.0, 40: 2.0, 60: 1.0 }
+  oxidation:
+    solvent: { DCM: 3.0, water: 2.0, MeCN: 2.0, THF: -2.0 }
+    temperature_c: { 0: 1.0, 25: 0.0, 40: -2.0 }
+  alkylation:
+    solvent: { DMF: 4.0, DMSO: 3.0, MeCN: 2.0, THF: -1.0 }
+    base: { K2CO3: 3.0, Cs2CO3: 4.0, NaH: 5.0, Et3N: 0.0 }
+    temperature_c: { 60: 3.0, 80: 4.0, 100: 2.0, 25: -3.0 }
+
+# --------------------------------------------------------------------------
+# Method registry seed (~30 rows in mock_eln.methods).
+# --------------------------------------------------------------------------
+methods:
+  - { code: "HPLC-A", name: "HPLC purity short-gradient", instrument_kind: "HPLC" }
+  - { code: "HPLC-B", name: "HPLC purity long-gradient", instrument_kind: "HPLC" }
+  - { code: "HPLC-PREP", name: "HPLC prep purification", instrument_kind: "HPLC" }
+  - { code: "UPLC-A", name: "UPLC ID + purity", instrument_kind: "HPLC" }
+  - { code: "LCMS-A", name: "LC-MS positive ESI", instrument_kind: "LC-MS" }
+  - { code: "LCMS-B", name: "LC-MS negative ESI", instrument_kind: "LC-MS" }
+  - { code: "GCMS-A", name: "GC-MS volatiles", instrument_kind: "GC-MS" }
+  - { code: "1H-NMR", name: "1H NMR (400 MHz, CDCl3)", instrument_kind: "NMR" }
+  - { code: "13C-NMR", name: "13C NMR (101 MHz, CDCl3)", instrument_kind: "NMR" }
+  - { code: "DEPT", name: "DEPT-135", instrument_kind: "NMR" }
+  - { code: "COSY", name: "1H-1H COSY", instrument_kind: "NMR" }
+  - { code: "HSQC", name: "HSQC", instrument_kind: "NMR" }
+  - { code: "HMBC", name: "HMBC", instrument_kind: "NMR" }
+  - { code: "IR-A", name: "ATR-IR", instrument_kind: "IR" }
+  - { code: "MP", name: "Melting point", instrument_kind: "MP" }
+  - { code: "TGA", name: "TGA stability", instrument_kind: "TGA" }
+  - { code: "DSC", name: "DSC thermal", instrument_kind: "DSC" }
+  - { code: "XRPD", name: "XRPD form ID", instrument_kind: "XRPD" }
+  - { code: "KF", name: "Karl Fischer water", instrument_kind: "Titration" }
+  - { code: "POT", name: "Potentiometric titration", instrument_kind: "Titration" }
+  - { code: "GC-A", name: "GC residual solvents", instrument_kind: "GC" }
+  - { code: "ICP", name: "ICP-MS metals", instrument_kind: "MS" }
+  - { code: "OPT-ROT", name: "Optical rotation", instrument_kind: "Polarimetry" }
+  - { code: "UV", name: "UV-Vis", instrument_kind: "UV-Vis" }
+  - { code: "DLS", name: "DLS particle size", instrument_kind: "DLS" }
+  - { code: "DSC-MOD", name: "Modulated DSC", instrument_kind: "DSC" }
+  - { code: "PSD-LS", name: "Laser diffraction PSD", instrument_kind: "PSD" }
+  - { code: "DISS-USP", name: "USP dissolution", instrument_kind: "Dissolution" }
+  - { code: "STAB-OVEN", name: "Forced-degradation 60C", instrument_kind: "Oven" }
+  - { code: "BIO-A", name: "Kinase inhibition assay", instrument_kind: "Bioassay" }
