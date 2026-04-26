@@ -1,0 +1,95 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+# No untrusted-input handling here — every `run:` step uses static text
+# or env vars defined at the job/step level. No github.event.*.title /
+# .body / .ref interpolation. See:
+# https://github.blog/security/vulnerability-research/how-to-catch-github-actions-workflow-injections-before-attackers-do/
+
+jobs:
+  typescript:
+    name: TypeScript (vitest + tsc + audit)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: 'npm'
+      - run: npm ci
+      - run: npm test --workspace services/agent-claw
+      - run: npx tsc --noEmit -p services/agent-claw
+      - run: npm test --workspace services/paperclip
+      - run: npx tsc --noEmit -p services/paperclip
+      - run: npm audit --audit-level=high
+
+  python:
+    name: Python (pytest + parse)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+      - name: Install touched-service deps
+        run: |
+          python3 -m pip install --upgrade pip
+          python3 -m pip install \
+            -r services/mcp_tools/mcp_eln_benchling/requirements.txt \
+            -r services/mcp_tools/mcp_lims_starlims/requirements.txt \
+            -r services/mcp_tools/mcp_instrument_waters/requirements.txt
+          python3 -m pip install -r services/projectors/kg_source_cache/requirements.txt
+          python3 -m pip install -r services/optimizer/session_reanimator/requirements.txt
+          python3 -m pip install pytest pytest-asyncio
+      - name: Pytest
+        run: |
+          python3 -m pytest -q \
+            tests/unit/test_redactor.py \
+            services/mcp_tools/mcp_eln_benchling/tests/ \
+            services/mcp_tools/mcp_lims_starlims/tests/ \
+            services/mcp_tools/mcp_instrument_waters/tests/ \
+            services/mcp_tools/common/tests/ \
+            services/projectors/kg_source_cache/tests/
+      - name: Parse-check Python services
+        run: |
+          python3 -m py_compile services/optimizer/session_reanimator/main.py
+          python3 -m py_compile services/projectors/common/base.py
+          python3 -m py_compile services/litellm_redactor/redaction.py
+
+  schema:
+    name: Schema (idempotent re-apply)
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: timescale/timescaledb-ha:pg16-ts2.17-all
+        env:
+          POSTGRES_DB: chemclaw
+          POSTGRES_USER: chemclaw
+          POSTGRES_PASSWORD: ci_test_pw
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      PGPASSWORD: ci_test_pw
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply migrations twice (idempotency check)
+        run: |
+          for f in db/init/*.sql; do
+            echo ">>> applying $f"
+            psql -h localhost -U chemclaw -d chemclaw -f "$f"
+          done
+          for f in db/init/*.sql; do
+            echo ">>> re-applying $f"
+            psql -h localhost -U chemclaw -d chemclaw -f "$f"
+          done

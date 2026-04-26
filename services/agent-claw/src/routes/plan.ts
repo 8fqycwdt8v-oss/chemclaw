@@ -11,13 +11,11 @@ import type { Config } from "../config.js";
 import type { LlmProvider } from "../llm/provider.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { PromptRegistry } from "../prompts/registry.js";
-import { Lifecycle } from "../core/lifecycle.js";
 import { Budget } from "../core/budget.js";
 import { runHarness } from "../core/harness.js";
 import { planStore } from "../core/plan-mode.js";
-import { registerRedactSecretsHook } from "../core/hooks/redact-secrets.js";
-import { registerTagMaturityHook } from "../core/hooks/tag-maturity.js";
-import { registerBudgetGuardHook } from "../core/hooks/budget-guard.js";
+import { buildDefaultLifecycle } from "../core/harness-builders.js";
+import { runWithRequestContext } from "../core/request-context.js";
 import type { ToolContext } from "../core/types.js";
 import type { Pool } from "pg";
 
@@ -81,10 +79,7 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
       scratchpad,
     };
 
-    const lifecycle = new Lifecycle();
-    registerRedactSecretsHook(lifecycle);
-    registerTagMaturityHook(lifecycle);
-    registerBudgetGuardHook(lifecycle);
+    const lifecycle = buildDefaultLifecycle();
 
     const budget = new Budget({
       maxSteps: deps.config.AGENT_CHAT_MAX_STEPS,
@@ -99,14 +94,17 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     try {
       writeEvent(reply, { type: "text_delta", delta: "Plan approved — executing…\n\n" });
 
-      const result = await runHarness({
-        messages: plan.messages,
-        tools,
-        llm: deps.llm,
-        budget,
-        lifecycle,
-        ctx,
-      });
+      // Wrap in AsyncLocalStorage so outbound MCP calls inherit the user.
+      const result = await runWithRequestContext({ userEntraId: user }, () =>
+        runHarness({
+          messages: plan.messages,
+          tools,
+          llm: deps.llm,
+          budget,
+          lifecycle,
+          ctx,
+        }),
+      );
 
       if (!closed) {
         writeEvent(reply, { type: "text_delta", delta: result.text });

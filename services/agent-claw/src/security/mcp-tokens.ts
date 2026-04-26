@@ -90,6 +90,29 @@ export function signMcpToken(opts: {
 }
 
 /**
+ * Convenience: extract + verify a Bearer token from a Fastify-style header.
+ * Returns null when the header is missing or malformed (route can decide
+ * whether that's a 401). Throws McpAuthError on a present-but-invalid token.
+ */
+export function verifyBearerHeader(
+  authorization: string | undefined,
+  opts: { signingKey?: string; now?: number; requiredScope?: string } = {},
+): McpTokenClaims | null {
+  if (!authorization) return null;
+  const parts = authorization.split(" ", 2);
+  if (parts.length !== 2 || parts[0]?.toLowerCase() !== "bearer" || !parts[1]?.trim()) {
+    return null;
+  }
+  const claims = verifyMcpToken(parts[1].trim(), opts);
+  if (opts.requiredScope && !claims.scopes.includes(opts.requiredScope)) {
+    throw new McpAuthError(
+      `token missing required scope ${opts.requiredScope} (has ${claims.scopes.join(",")})`,
+    );
+  }
+  return claims;
+}
+
+/**
  * Verify a JWT and return its claims.
  *
  * Constant-time signature comparison; throws on any malformation, bad signature,

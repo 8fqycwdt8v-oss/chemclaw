@@ -26,7 +26,7 @@ import type { Config } from "../config.js";
 import type { LlmProvider } from "../llm/provider.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import { Lifecycle } from "../core/lifecycle.js";
-import { Budget } from "../core/budget.js";
+import { Budget, SessionBudgetExceededError } from "../core/budget.js";
 import { buildAgent } from "../core/harness.js";
 import {
   parseSlash,
@@ -34,14 +34,19 @@ import {
   shortCircuitResponse,
   HELP_TEXT,
 } from "../core/slash.js";
-import { registerRedactSecretsHook, redactString } from "../core/hooks/redact-secrets.js";
+import { redactString } from "../core/hooks/redact-secrets.js";
 import type { RedactReplacement } from "../core/hooks/redact-secrets.js";
-import { createSession, loadSession, saveSession } from "../core/session-store.js";
+import { buildDefaultLifecycle } from "../core/harness-builders.js";
+import {
+  createSession,
+  loadSession,
+  saveSession,
+  OptimisticLockError,
+} from "../core/session-store.js";
 import type { SessionFinishReason } from "../core/session-store.js";
 import { savePlanForSession } from "../core/plan-store-db.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
-import { registerTagMaturityHook } from "../core/hooks/tag-maturity.js";
-import { registerBudgetGuardHook } from "../core/hooks/budget-guard.js";
+import { runWithRequestContext } from "../core/request-context.js";
 import { withUserContext } from "../db/with-user-context.js";
 import { PromptRegistry } from "../prompts/registry.js";
 import type { Message, ToolContext } from "../core/types.js";
@@ -154,18 +159,6 @@ function setupSse(reply: FastifyReply): void {
   reply.raw.setHeader("Connection", "keep-alive");
   reply.raw.setHeader("X-Accel-Buffering", "no");
   reply.hijack();
-}
-
-// ---------------------------------------------------------------------------
-// Lifecycle builders.
-// ---------------------------------------------------------------------------
-
-function buildDefaultLifecycle(): Lifecycle {
-  const lc = new Lifecycle();
-  registerRedactSecretsHook(lc);
-  registerTagMaturityHook(lc);
-  registerBudgetGuardHook(lc);
-  return lc;
 }
 
 // ---------------------------------------------------------------------------
@@ -387,11 +380,19 @@ async function handleChat(
         });
         sessionEtag = saved.etag;
       } else {
-        // Unknown session id: ignore and treat as a fresh session.
+        // Unknown session id: ignore and treat as a fresh session. This is
+        // a legitimate "row doesn't exist or wasn't visible to this user"
+        // case (e.g., session expired, or wrong tenant).
         sessionId = null;
       }
     } catch (err) {
-      req.log.warn({ err, sessionId }, "loadSession failed; treating as fresh");
+      // loadSession threw — that's a DB / RLS / connectivity error, not a
+      // missing-row case. Log at error level so misconfiguration is visible
+      // (e.g., chemclaw_app role missing FORCE-RLS bypass would cause every
+      // load to fail and every chat to silently lose continuity). We still
+      // fall through to "fresh session" so the user gets a working response,
+      // but the loud log makes the bug findable.
+      req.log.error({ err, sessionId }, "loadSession threw — DB/RLS error; treating as fresh");
       sessionId = null;
     }
   }
@@ -716,24 +717,32 @@ async function handleChat(
       break streaming;
     }
   } catch (err) {
-    req.log.error({ err }, "chat stream failed");
-    // Distinguish session-budget overrun from generic internal errors so
-    // clients can render "session_budget_exceeded" and prompt for cap bump.
-    const errName =
-      err instanceof Error ? err.name : "";
-    if (errName === "SessionBudgetExceededError") {
+    // Distinguish typed control-flow / quota errors so clients can render
+    // appropriate UI. instanceof checks instead of err.name strings —
+    // safer under minification and rename refactors.
+    if (err instanceof SessionBudgetExceededError) {
+      req.log.warn({ err }, "chat stream stopped: session budget exceeded");
       finishReason = "session_budget_exceeded";
       if (!closed) {
         writeEvent(reply, { type: "error", error: "session_budget_exceeded" });
       }
-    } else if (errName === "OptimisticLockError") {
+    } else if (err instanceof OptimisticLockError) {
+      req.log.warn({ err }, "chat stream stopped: concurrent modification");
       finishReason = "concurrent_modification";
       if (!closed) {
         writeEvent(reply, { type: "error", error: "concurrent_modification" });
       }
-    } else if (!closed) {
-      // Terminal-event guarantee: always emit error before closing.
-      writeEvent(reply, { type: "error", error: "internal" });
+    } else if (err instanceof AwaitingUserInputError) {
+      // ask_user fired during the streaming loop AFTER our inner break
+      // streaming caught and consumed it. Reaching this branch means
+      // the harness loop re-threw it; treat as a normal awaiting-input
+      // exit, NOT an error.
+      finishReason = "awaiting_user_input";
+    } else {
+      req.log.error({ err }, "chat stream failed");
+      if (!closed) {
+        writeEvent(reply, { type: "error", error: "internal" });
+      }
     }
   } finally {
     // post_turn fires even if the streaming loop threw — mirrors runHarness().
@@ -782,18 +791,47 @@ async function handleChat(
           typeof dump["awaitingQuestion"] === "string"
             ? (dump["awaitingQuestion"] as string)
             : null;
-        // Phase F: persist updated session totals so the next turn picks
-        // up where this one left off.
+        // Redact the awaitingQuestion BEFORE persistence + SSE emit. The
+        // model may have phrased its clarification in terms of a SMILES /
+        // NCE-ID / compound code — those leak into both the SSE event
+        // payload and the agent_sessions row otherwise. Replacements are
+        // appended to redact_log under scope="awaiting_question".
+        let safeAwaitingQuestion = awaitingQuestion;
+        if (awaitingQuestion) {
+          const replacements: RedactReplacement[] = [];
+          safeAwaitingQuestion = redactString(awaitingQuestion, replacements);
+          if (replacements.length > 0) {
+            const existing =
+              (ctx.scratchpad.get("redact_log") as Array<{
+                scope: string;
+                replacements: RedactReplacement[];
+                timestamp: string;
+              }>) ?? [];
+            ctx.scratchpad.set("redact_log", [
+              ...existing,
+              {
+                scope: "awaiting_question",
+                replacements,
+                timestamp: new Date().toISOString(),
+              },
+            ]);
+            // Re-dump scratchpad so the redact_log update is persisted.
+            dump["redact_log"] = ctx.scratchpad.get("redact_log");
+          }
+        }
+
+        // Persist updated session totals so the next turn picks up where
+        // this one left off.
         const sessTotals = budget?.sessionTotals();
         await saveSession(deps.pool, user, sessionId, {
           scratchpad: dump,
           lastFinishReason: (finishReason as SessionFinishReason) ?? null,
-          awaitingQuestion,
+          awaitingQuestion: safeAwaitingQuestion,
           messageCount: messages.length,
           sessionInputTokens: sessTotals?.inputTokens,
           sessionOutputTokens: sessTotals?.outputTokens,
           sessionSteps: sessionStepsUsed + (budget?.stepsUsed ?? 0),
-          // Phase H: optimistic concurrency. If a parallel turn raced us,
+          // Optimistic concurrency. If a parallel turn raced us,
           // OptimisticLockError fires here; we log and accept (the parallel
           // writer's state is what survives). We do NOT clobber.
           expectedEtag: sessionEtag,
@@ -801,12 +839,12 @@ async function handleChat(
 
         // If the model called ask_user, emit the awaiting_user_input event
         // before the final `finish` so clients render the prompt UI.
-        if (awaitingQuestion && !closed) {
+        if (safeAwaitingQuestion && !closed) {
           try {
             writeEvent(reply, {
               type: "awaiting_user_input",
               session_id: sessionId,
-              question: awaitingQuestion,
+              question: safeAwaitingQuestion,
             });
           } catch {
             // socket already gone
@@ -853,6 +891,12 @@ export function registerChatRoute(app: FastifyInstance, deps: ChatRouteDeps): vo
         },
       },
     },
-    (req, reply) => handleChat(req, reply, deps),
+    // Wrap the entire handler in an AsyncLocalStorage context so every
+    // outbound MCP call can read the calling user's identity transparently
+    // (see core/request-context.ts and mcp/postJson.ts:authHeaders).
+    (req, reply) =>
+      runWithRequestContext({ userEntraId: deps.getUser(req) }, () =>
+        handleChat(req, reply, deps),
+      ),
   );
 }
