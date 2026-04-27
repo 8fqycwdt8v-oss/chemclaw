@@ -1,6 +1,7 @@
 """FastAPI app for mcp-tabicl — featurize + predict_and_rank + pca_refit."""
 from __future__ import annotations
 
+import hmac
 import logging
 import os
 from pathlib import Path
@@ -35,7 +36,10 @@ class ReactionRowIn(BaseModel):
 
 
 class FeaturizeIn(BaseModel):
-    reaction_rows: list[ReactionRowIn] = Field(max_length=1001)  # enforce cap in code
+    # Hard cap at 1000 rows. Earlier the bound was max_length=1001 with a
+    # "enforce cap in code" comment that pointed at code that didn't exist —
+    # the off-by-one let an attacker submit 1001 rows without a runtime check.
+    reaction_rows: list[ReactionRowIn] = Field(min_length=1, max_length=1000)
     include_targets: bool = True
 
 
@@ -65,6 +69,15 @@ class PredictOut(BaseModel):
 
 class PcaRefitIn(BaseModel):
     drfp_matrix: list[list[int]] = Field(min_length=PCA_N_COMPONENTS, max_length=100_000)
+
+
+class PcaRefitOut(BaseModel):
+    """Stable response for the admin /pca_refit endpoint. The earlier
+    untyped `dict[str, Any]` return defeated the catalog/OpenAPI surface."""
+
+    status: str
+    n_rows: int
+    path: str
 
 
 def _ready_check(pca_path: Path) -> bool:
@@ -142,17 +155,21 @@ def build_app(*, pca_path: Path = DEFAULT_PCA_PATH) -> FastAPI:
             feature_importance=result.feature_importance,
         )
 
-    @app.post("/pca_refit")
+    @app.post("/pca_refit", response_model=PcaRefitOut)
     def _pca_refit(
         payload: PcaRefitIn,
         x_admin_token: str | None = Header(default=None, alias="x-admin-token"),
-    ) -> dict[str, Any]:
+    ) -> PcaRefitOut:
         expected = os.getenv(ADMIN_TOKEN_ENV)
-        if not expected or x_admin_token != expected:
+        # hmac.compare_digest is constant-time; `!=` leaks token length
+        # and prefix via timing in CPython under sustained probe load.
+        if not expected or not x_admin_token or not hmac.compare_digest(
+            x_admin_token, expected,
+        ):
             raise HTTPException(status_code=403, detail="admin token required")
         X = np.asarray(payload.drfp_matrix, dtype="float64")
         fit_and_save(X, pca_path)
-        return {"status": "ok", "n_rows": int(X.shape[0]), "path": str(pca_path)}
+        return PcaRefitOut(status="ok", n_rows=int(X.shape[0]), path=str(pca_path))
 
     return app
 

@@ -539,7 +539,7 @@ def _row_to_result(row: dict[str, Any]) -> Result:
         value_text=row.get("value_text"),
         unit=row.get("unit"),
         measured_at=row.get("measured_at"),
-        metadata=row.get("metadata") or {},
+        metadata=cap_jsonb(row.get("metadata") or {}, field_name="results.metadata"),
     )
 
 

@@ -163,9 +163,21 @@ def verify_mcp_token(
 def _require_or_skip() -> bool:
     """Whether to enforce verification on incoming MCP requests.
 
-    Defaults to False (dev mode). Production sets MCP_AUTH_REQUIRED=true.
+    Fails closed by default — production deploys that forget to set the
+    auth env explicitly will REJECT unsigned requests rather than silently
+    accept them (the prior default was a quiet fail-OPEN with only a log
+    warning, which is the wrong default for a network-reachable service).
+
+    Local dev / CI opts out via either:
+      - MCP_AUTH_REQUIRED=false  (legacy explicit; still honored)
+      - MCP_AUTH_DEV_MODE=true   (preferred — declares intent, not policy)
     """
-    return os.environ.get("MCP_AUTH_REQUIRED", "false").strip().lower() == "true"
+    raw = os.environ.get("MCP_AUTH_REQUIRED")
+    dev_mode = os.environ.get("MCP_AUTH_DEV_MODE", "").strip().lower() == "true"
+    if raw is None:
+        # Unset → enforce. Dev mode flag is the explicit opt-out.
+        return not dev_mode
+    return raw.strip().lower() == "true"
 
 
 # ---------------------------------------------------------------------------

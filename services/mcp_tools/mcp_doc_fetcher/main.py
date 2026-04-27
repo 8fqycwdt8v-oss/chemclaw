@@ -1,11 +1,15 @@
 """mcp-doc-fetcher — fidelity-preserving original-document access.
 
 Endpoints:
-  POST /fetch      — fetch raw bytes of a document by URI
-  POST /pdf_pages  — render specific pages of a PDF to base64 PNG
+  POST /fetch                — fetch raw bytes of a document by URI
+  POST /pdf_pages            — render specific pages of a PDF to base64 PNG
+  POST /byte_offset_to_page  — locate a citation byte-offset to its 1-indexed
+                               PDF page; called by the contextual_chunker
+                               projector (NOT yet exposed to the agent — no
+                               catalog row, no agent-claw builtin)
 
 Supported URI schemes (Phase B.1):
-  file://   — local filesystem  [WIRED]
+  file://   — local filesystem  [WIRED, jailed under MCP_DOC_FETCHER_FILE_ROOTS]
   https://  — HTTPS download    [WIRED]
   http://   — HTTP download     [WIRED]
   s3://     — S3-compatible     [STUBBED — returns 501]
@@ -14,8 +18,15 @@ Supported URI schemes (Phase B.1):
 
 Security:
   - URI scheme allowlist enforced before any I/O.
+  - file:// reads gated behind MCP_DOC_FETCHER_FILE_ROOTS allow-list (default
+    empty → file:// disabled). Symlink-resolved paths must sit under one of
+    the configured roots so a `/data/secret -> /etc/shadow` link can't escape.
   - max_bytes ceiling (default 25 MB, hard cap 100 MB).
-  - Deny-list for hosts configurable via MCP_DOC_FETCHER_DENY_HOSTS.
+  - Allow-list / deny-list for hosts via MCP_DOC_FETCHER_ALLOW_HOSTS /
+    MCP_DOC_FETCHER_DENY_HOSTS.
+  - Private/loopback/link-local IPs blocked unconditionally (except
+    explicit allow-list entries — intranet ELN/LIMS adapters legitimately
+    resolve to RFC1918).
   - Runs as UID 1001; no-new-privileges in compose.
 """
 
@@ -67,6 +78,28 @@ _RAW_ALLOW = os.environ.get("MCP_DOC_FETCHER_ALLOW_HOSTS", "")
 _ALLOW_HOSTS: frozenset[str] = frozenset(
     h.strip().lower() for h in _RAW_ALLOW.split(",") if h.strip()
 )
+
+# `file://` jail. Without this, an authenticated caller (or a forged-tool
+# token) could read /etc/passwd, k8s service-account secrets, etc. The
+# allow-list is a comma-separated list of absolute paths; only files under
+# one of these roots are readable. Default empty → all `file://` reads
+# refused. Local dev can set MCP_DOC_FETCHER_FILE_ROOTS=/tmp:/data to opt in.
+_RAW_FILE_ROOTS = os.environ.get("MCP_DOC_FETCHER_FILE_ROOTS", "")
+_FILE_ROOTS: tuple[Path, ...] = tuple(
+    Path(p).resolve()
+    for p in _RAW_FILE_ROOTS.split(":")
+    if p.strip()
+)
+
+
+def _is_under(p: Path, root: Path) -> bool:
+    """`Path.is_relative_to` is 3.9+; we run on 3.11 but this avoids a
+    surprise migration if anyone ever vendors this for an older Python."""
+    try:
+        p.relative_to(root)
+        return True
+    except ValueError:
+        return False
 _RAW_DENY = os.environ.get("MCP_DOC_FETCHER_DENY_HOSTS", "")
 _DENY_HOSTS: frozenset[str] = frozenset(
     h.strip().lower() for h in _RAW_DENY.split(",") if h.strip()
@@ -175,13 +208,36 @@ def _parse_and_validate_uri(uri: str) -> urllib.parse.ParseResult:
 
 
 def _fetch_file(parsed: urllib.parse.ParseResult, max_bytes: int) -> tuple[bytes, str]:
-    """Fetch a local file. Returns (bytes, content_type)."""
-    # urllib.parse.urlparse("file:///path/to/file") → path=/path/to/file
-    path = Path(urllib.parse.unquote(parsed.netloc + parsed.path))
-    if not path.exists():
-        raise ValueError(f"file not found: {path}")
-    if not path.is_file():
+    """Fetch a local file. Returns (bytes, content_type).
+
+    Jailed under MCP_DOC_FETCHER_FILE_ROOTS (colon-separated absolute paths).
+    Default empty → all `file://` reads refused so a fresh deploy is safe-
+    by-default; local dev opts in by setting the env. The realpath of the
+    requested file must be `is_relative_to` one of the configured roots —
+    this catches symlink-escapes (`/data/secret -> /etc/shadow`) since
+    `Path.resolve()` follows symlinks before the containment check.
+    """
+    raw = urllib.parse.unquote(parsed.netloc + parsed.path)
+    path = Path(raw)
+    if not _FILE_ROOTS:
+        raise ValueError(
+            "file:// access disabled — set MCP_DOC_FETCHER_FILE_ROOTS to a "
+            "colon-separated allow-list of absolute paths to enable"
+        )
+    try:
+        resolved = path.resolve(strict=True)  # follows symlinks; raises if missing
+    except (OSError, RuntimeError) as exc:
+        raise ValueError(f"file not found or unreadable: {path}") from exc
+    if not any(_is_under(resolved, root) for root in _FILE_ROOTS):
+        # Don't echo the resolved path back — that would itself be a small
+        # information leak about symlink targets and root layout.
+        raise ValueError(
+            f"file:// path {path!s} is outside the configured "
+            f"MCP_DOC_FETCHER_FILE_ROOTS allow-list"
+        )
+    if not resolved.is_file():
         raise ValueError(f"path is not a regular file: {path}")
+    path = resolved
 
     size = path.stat().st_size
     if size > max_bytes:

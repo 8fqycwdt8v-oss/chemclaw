@@ -91,8 +91,15 @@ class YieldPrediction(BaseModel):
     model_id: str
 
 
+_BoundedSmiles = Annotated[
+    str, Field(min_length=1, max_length=10_000, description="SMILES string"),
+]
+
+
 class PredictYieldIn(BaseModel):
-    rxn_smiles_list: list[str] = Field(min_length=1, max_length=_MAX_REACTIONS)
+    # Per-element bound (10k chars) prevents a 10 MB SMILES from sneaking
+    # past the list-level cap and OOM'ing the chemprop loader.
+    rxn_smiles_list: list[_BoundedSmiles] = Field(min_length=1, max_length=_MAX_REACTIONS)
 
 
 class PredictYieldOut(BaseModel):
@@ -136,7 +143,7 @@ class PropertyPrediction(BaseModel):
 
 
 class PredictPropertyIn(BaseModel):
-    smiles_list: list[str] = Field(min_length=1, max_length=_MAX_SMILES)
+    smiles_list: list[_BoundedSmiles] = Field(min_length=1, max_length=_MAX_SMILES)
     property: Literal["logP", "logS", "mp", "bp"]
 
 

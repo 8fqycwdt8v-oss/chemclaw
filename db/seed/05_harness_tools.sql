@@ -916,4 +916,79 @@ ON CONFLICT (name) DO UPDATE SET
   source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
   description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
 
+-- ── Autonomy primitives (multi-turn session features) ───────────────────────
+-- These two builtins drive the Claude-Code-like long-running flow:
+-- * `manage_todos` lets the LLM sketch a checklist + tick items as work
+--   proceeds; each write fires a todo_update SSE event for the UI.
+-- * `ask_user` pauses the harness with a clarifying question when something
+--   genuinely blocks progress — the next user message resumes the session.
+-- Previously absent from the seed catalog (only registered programmatically
+-- in services/agent-claw/src/index.ts), which meant `loadFromDb` couldn't
+-- materialize them at runtime — the harness ran without these tools
+-- advertised to the LLM whenever the catalog was the registry source.
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'manage_todos',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "op": {"type": "string", "enum": ["list", "add", "update", "remove"]},
+      "items": {"type": "array", "items": {"type": "string"}},
+      "id": {"type": "string"},
+      "content": {"type": "string"},
+      "status": {"type": "string", "enum": ["pending", "in_progress", "completed", "cancelled"]}
+    },
+    "required": ["op"]
+  }',
+  'Read or write the session-scoped todo list. Use `op:"add"` with an `items` array at the START of any 3+ step task to sketch a plan; use `op:"update"` with `{id, status}` to tick items off as you finish them. Each write emits a todo_update SSE event so the user sees live progress. The list survives across turns within one session_id.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'ask_user',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "question": {"type": "string", "minLength": 1, "maxLength": 500}
+    },
+    "required": ["question"]
+  }',
+  'Pause and surface a single clarifying question to the user. The harness terminates the turn with finish_reason="awaiting_user_input"; the next /api/chat post on the same session_id resumes the loop with the user''s answer. Call ONLY when the question genuinely blocks progress — speculation or polish is not a reason. Cost: 1 round-trip to the user.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+-- ── LOGS Person directory (lookup operators behind a fetched run) ──────────
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'query_instrument_persons',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "name_contains": {"type": "string", "minLength": 1, "maxLength": 200,
+                        "description": "Case-insensitive partial match on display_name."},
+      "limit": {"type": "integer", "minimum": 1, "maximum": 200, "default": 50}
+    }
+  }',
+  'List operators / analysts known to the analytical SDMS (LOGS) Person directory. Use to resolve the `operator` username on a fetched instrument run into display_name + email for citation attribution.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
 COMMIT;
