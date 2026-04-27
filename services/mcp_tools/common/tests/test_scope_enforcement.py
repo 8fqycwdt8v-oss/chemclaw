@@ -37,9 +37,12 @@ def enforced_env(monkeypatch: pytest.MonkeyPatch):
     yield
 
 
+_SERVICE_NAME = "mcp-test"
+
+
 def _app_with_scope(scope: str | None) -> TestClient:
     app = create_app(
-        name="mcp-test",
+        name=_SERVICE_NAME,
         version="0.1.0",
         log_level="WARNING",
         required_scope=scope,
@@ -52,11 +55,18 @@ def _app_with_scope(scope: str | None) -> TestClient:
     return TestClient(app)
 
 
-def _bearer(scopes: list[str]) -> dict[str, str]:
+def _bearer(scopes: list[str], *, audience: str | None = _SERVICE_NAME) -> dict[str, str]:
+    """Build an Authorization header.
+
+    `audience` defaults to the service name so the cycle-3 audience binding
+    is satisfied. Pass `audience=None` to test the rejection path explicitly,
+    or a different name to test cross-service replay.
+    """
     token = sign_mcp_token(
         sandbox_id="sbx_test",
         user_entra_id="alice@corp.com",
         scopes=scopes,
+        audience=audience,
         signing_key=KEY,
     )
     return {"Authorization": f"Bearer {token}"}
@@ -112,3 +122,68 @@ def test_token_with_multiple_scopes_passes_when_required_present(enforced_env):
         headers=_bearer(["mcp_kg:rw", "mcp_doc_fetcher:fetch", "mcp_chemprop:invoke"]),
     )
     assert r.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# Cycle-3: audience binding closes per-service replay
+# ---------------------------------------------------------------------------
+
+
+def test_token_without_aud_is_rejected_in_enforced_mode(enforced_env):
+    """A token minted before cycle-3 (no aud) must not be accepted.
+
+    Otherwise an attacker who possesses an old token could replay it
+    against a new deployment that expects aud-binding.
+    """
+    client = _app_with_scope("mcp_kg:rw")
+    r = client.post(
+        "/echo",
+        json={"x": 1},
+        headers=_bearer(["mcp_kg:rw"], audience=None),
+    )
+    assert r.status_code == 401
+    assert "aud" in r.json()["detail"].lower()
+
+
+def test_token_with_wrong_aud_is_rejected(enforced_env):
+    """A `mcp_kg:rw` token with aud=mcp-kg-blue must not be accepted by mcp-test."""
+    client = _app_with_scope("mcp_kg:rw")
+    r = client.post(
+        "/echo",
+        json={"x": 1},
+        headers=_bearer(["mcp_kg:rw"], audience="mcp-kg-blue"),
+    )
+    assert r.status_code == 401
+    assert "audience" in r.json()["detail"].lower() or "aud" in r.json()["detail"].lower()
+
+
+def test_dev_mode_accepts_wrong_scope_and_wrong_aud(monkeypatch: pytest.MonkeyPatch):
+    """The reviewer's gap: dev mode must skip BOTH scope AND aud checks.
+
+    A future refactor that accidentally enforces either in dev mode would
+    break local-dev workflows; this test pins the contract.
+    """
+    monkeypatch.setenv("MCP_AUTH_DEV_MODE", "true")
+    monkeypatch.delenv("MCP_AUTH_REQUIRED", raising=False)
+    monkeypatch.setenv("MCP_AUTH_SIGNING_KEY", KEY)
+    client = _app_with_scope("mcp_kg:rw")
+    # Wrong scope AND wrong aud — should still be allowed in dev mode.
+    r = client.post(
+        "/echo",
+        json={"x": 1},
+        headers=_bearer(["mcp_doc_fetcher:fetch"], audience="some-other-service"),
+    )
+    assert r.status_code == 200
+
+
+def test_create_app_refuses_scope_disagreement_with_catalog():
+    """If a service passes required_scope= that disagrees with SERVICE_SCOPES,
+    fail at startup, not silently in production."""
+    from services.mcp_tools.common.app import create_app
+
+    with pytest.raises(RuntimeError, match="reconcile"):
+        create_app(
+            name="mcp-rdkit",  # in SERVICE_SCOPES catalog
+            version="0.1.0",
+            required_scope="wrong:scope",  # disagrees
+        )

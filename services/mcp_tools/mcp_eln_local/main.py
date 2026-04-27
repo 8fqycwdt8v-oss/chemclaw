@@ -37,6 +37,7 @@ from typing import Annotated, Any, AsyncIterator
 import psycopg
 from fastapi import Body, FastAPI, HTTPException
 from psycopg.rows import dict_row
+import psycopg_pool
 from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import SettingsConfigDict
@@ -150,11 +151,17 @@ async def _acquire() -> AsyncIterator[psycopg.AsyncConnection]:
     a time), so under any concurrent load the shared-conn pattern would
     serialize requests at best and deadlock at worst.
 
-    Transient pool failures (psycopg.OperationalError, e.g. DB restart
-    mid-request) surface as 503 instead of an unstructured 500, so
+    Three classes of transient failure surface as a structured 503 so
     upstream clients can distinguish "service degraded, retry" from a
-    bug. The `ValueError → 400` exception handler in `common/app.py`
-    does not catch OperationalError, hence the explicit conversion.
+    bug. The `ValueError → 400` handler in `common/app.py` does not
+    catch any of these, hence the explicit conversion.
+
+      - `psycopg.OperationalError` — e.g. DB restart mid-request.
+      - `psycopg_pool.PoolTimeout` — all connections busy, timeout
+        elapsed (reachable under modest concurrent load with the
+        default pool_max_size=5).
+      - `psycopg_pool.PoolClosed` — pool shut down between the
+        `pool_holder.get` lookup and the `connection()` call.
     """
     pool = _pool_holder.get("pool")
     if pool is None:
@@ -165,7 +172,7 @@ async def _acquire() -> AsyncIterator[psycopg.AsyncConnection]:
     try:
         async with pool.connection() as conn:
             yield conn
-    except psycopg.OperationalError as exc:
+    except (psycopg.OperationalError, psycopg_pool.PoolTimeout, psycopg_pool.PoolClosed) as exc:
         raise HTTPException(
             status_code=503,
             detail={"error": "service_unavailable", "detail": f"mock_eln DB unavailable: {exc}"},

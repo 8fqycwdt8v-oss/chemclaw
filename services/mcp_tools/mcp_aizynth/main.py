@@ -18,6 +18,7 @@ from fastapi import Body
 from pydantic import BaseModel, Field
 
 from services.mcp_tools.common.app import create_app
+from services.mcp_tools.common.limits import MAX_SMILES_LEN
 from services.mcp_tools.common.settings import ToolSettings
 
 log = logging.getLogger("mcp-aizynth")
@@ -67,7 +68,7 @@ class RetroRoute(BaseModel):
 
 
 class AiZynthRetrosynthesisIn(BaseModel):
-    smiles: str = Field(min_length=1, max_length=10_000)
+    smiles: str = Field(min_length=1, max_length=MAX_SMILES_LEN)
     max_iterations: int = Field(default=100, ge=1, le=1000)
     stocks: list[str] | None = Field(default=None, max_length=20)
 

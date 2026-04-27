@@ -28,6 +28,10 @@ export interface McpTokenClaims {
   exp: number;
   /** Unix timestamp (seconds) — token issued at. */
   iat: number;
+  /** Target service identifier (e.g. "mcp-rdkit"). Cycle-3 — closes
+   *  per-service replay across blue/green or per-tenant deployments
+   *  that share a signing key. */
+  aud?: string;
 }
 
 export class McpAuthError extends Error {
@@ -62,11 +66,16 @@ export function signMcpToken(opts: {
   sandboxId: string;
   userEntraId: string;
   scopes: string[];
+  /** Target service (e.g. "mcp-rdkit"). Set by mcp-token-cache.ts. */
+  audience?: string;
   ttlSeconds?: number;
   signingKey?: string;
   now?: number;
 }): string {
-  const key = opts.signingKey ?? process.env["MCP_AUTH_SIGNING_KEY"] ?? "";
+  // .trim() prevents a misconfigured deploy with MCP_AUTH_SIGNING_KEY=" "
+  // from minting tokens whose effective entropy is zero. The length
+  // check below uses the trimmed value so "32 spaces" is rejected.
+  const key = (opts.signingKey ?? process.env["MCP_AUTH_SIGNING_KEY"] ?? "").trim();
   if (!key) {
     throw new McpAuthError(
       "MCP_AUTH_SIGNING_KEY is empty; refusing to mint an unsigned token",
@@ -77,8 +86,8 @@ export function signMcpToken(opts: {
   // review. Generate via `openssl rand -hex 32`.
   if (key.length < 32) {
     throw new McpAuthError(
-      `MCP_AUTH_SIGNING_KEY too short (${key.length} chars); ` +
-        "HS256 requires >=32 characters of entropy",
+      `MCP_AUTH_SIGNING_KEY too short (${key.length} chars after stripping ` +
+        "whitespace); HS256 requires >=32 characters of entropy",
     );
   }
   const ttlSeconds = opts.ttlSeconds ?? 300;
@@ -90,6 +99,7 @@ export function signMcpToken(opts: {
     scopes: opts.scopes,
     exp: issuedAt + ttlSeconds,
     iat: issuedAt,
+    ...(opts.audience !== undefined ? { aud: opts.audience } : {}),
   };
   const h = b64UrlEncode(TEXT_ENCODER.encode(JSON.stringify(header)));
   const p = b64UrlEncode(TEXT_ENCODER.encode(JSON.stringify(payload)));
@@ -129,9 +139,10 @@ export function verifyBearerHeader(
  */
 export function verifyMcpToken(
   token: string,
-  opts: { signingKey?: string; now?: number } = {},
+  opts: { signingKey?: string; now?: number; expectedAudience?: string } = {},
 ): McpTokenClaims {
-  const key = opts.signingKey ?? process.env["MCP_AUTH_SIGNING_KEY"] ?? "";
+  // .trim() mirrors signMcpToken: a whitespace-only key cannot verify either.
+  const key = (opts.signingKey ?? process.env["MCP_AUTH_SIGNING_KEY"] ?? "").trim();
   if (!key) {
     throw new McpAuthError("MCP_AUTH_SIGNING_KEY is empty; cannot verify token");
   }
@@ -183,11 +194,32 @@ export function verifyMcpToken(
   ) {
     throw new McpAuthError("scopes must be a string[]");
   }
+  let aud: string | undefined;
+  if (payload.aud === undefined) {
+    aud = undefined;
+  } else if (typeof payload.aud === "string") {
+    aud = payload.aud;
+  } else {
+    throw new McpAuthError("aud must be a string if present");
+  }
+  if (opts.expectedAudience !== undefined) {
+    if (aud === undefined) {
+      throw new McpAuthError(
+        `token missing aud claim; this service requires aud=${opts.expectedAudience}`,
+      );
+    }
+    if (aud !== opts.expectedAudience) {
+      throw new McpAuthError(
+        `audience mismatch: token aud=${aud}, expected=${opts.expectedAudience}`,
+      );
+    }
+  }
   return {
     sub: payload.sub,
     user: payload.user,
     scopes: payload.scopes,
     exp: payload.exp,
     iat: typeof payload.iat === "number" ? payload.iat : 0,
+    ...(aud !== undefined ? { aud } : {}),
   };
 }

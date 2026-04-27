@@ -24,6 +24,7 @@ from fastapi import Body
 from pydantic import BaseModel, Field
 
 from services.mcp_tools.common.app import create_app
+from services.mcp_tools.common.limits import MAX_SMILES_LEN
 from services.mcp_tools.common.settings import ToolSettings
 
 log = logging.getLogger("mcp-xtb")
@@ -133,7 +134,7 @@ def _parse_gnorm(stdout: str) -> float | None:
 # ---------------------------------------------------------------------------
 
 class OptimizeGeometryIn(BaseModel):
-    smiles: str = Field(min_length=1, max_length=10_000)
+    smiles: str = Field(min_length=1, max_length=MAX_SMILES_LEN)
     method: Literal["GFN2-xTB", "GFN-FF"] = "GFN2-xTB"
 
 
@@ -197,7 +198,7 @@ class ConformerEntry(BaseModel):
 
 
 class ConformerEnsembleIn(BaseModel):
-    smiles: str = Field(min_length=1, max_length=10_000)
+    smiles: str = Field(min_length=1, max_length=MAX_SMILES_LEN)
     n_conformers: int = Field(default=20, ge=1, le=_MAX_CONFORMERS)
 
 

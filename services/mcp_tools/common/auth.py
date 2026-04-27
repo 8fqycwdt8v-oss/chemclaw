@@ -31,7 +31,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Header, HTTPException, status
 
@@ -46,6 +46,7 @@ class McpTokenClaims:
     user: str  # user_entra_id — for RLS scoping inside the called tool
     scopes: tuple[str, ...]
     exp: int  # unix-timestamp
+    aud: str | None = None  # target service identifier (cycle 3 — ADR 006 Layer 2)
 
 
 class McpAuthError(Exception):
@@ -66,6 +67,7 @@ def sign_mcp_token(
     sandbox_id: str,
     user_entra_id: str,
     scopes: list[str] | tuple[str, ...],
+    audience: str | None = None,
     ttl_seconds: int = 300,
     signing_key: str | None = None,
     now: int | None = None,
@@ -74,8 +76,18 @@ def sign_mcp_token(
 
     `signing_key` defaults to the MCP_AUTH_SIGNING_KEY env var; in production
     that comes from a Kubernetes secret. `now` is overridable for tests.
+
+    `audience` (added cycle 3) binds the token to a single target MCP service;
+    the verifier rejects tokens whose `aud` claim doesn't match the calling
+    service's name. Without it, a `mcp_kg:rw` token could be replayed against
+    a peer mcp-kg deployment (blue/green or per-tenant). Pass the destination
+    service name (e.g. "mcp-rdkit") here.
     """
-    key = signing_key or os.environ.get("MCP_AUTH_SIGNING_KEY", "")
+    # Strip whitespace before either guard so a misconfigured deploy with
+    # MCP_AUTH_SIGNING_KEY=" " cannot mint or verify tokens with a key
+    # whose effective length is zero. Length check uses the stripped key
+    # so "32 spaces" is rejected as too short.
+    key = (signing_key or os.environ.get("MCP_AUTH_SIGNING_KEY", "")).strip()
     if not key:
         raise McpAuthError(
             "MCP_AUTH_SIGNING_KEY is empty; refusing to mint an unsigned token"
@@ -85,18 +97,20 @@ def sign_mcp_token(
     # could feasibly brute-force.
     if len(key) < 32:
         raise McpAuthError(
-            f"MCP_AUTH_SIGNING_KEY too short ({len(key)} chars); "
-            "HS256 requires >=32 characters of entropy"
+            f"MCP_AUTH_SIGNING_KEY too short ({len(key)} chars after stripping "
+            "whitespace); HS256 requires >=32 characters of entropy"
         )
     issued_at = now if now is not None else int(time.time())
     header = {"alg": "HS256", "typ": "JWT"}
-    payload = {
+    payload: dict[str, Any] = {
         "sub": sandbox_id,
         "user": user_entra_id,
         "scopes": list(scopes),
         "exp": issued_at + ttl_seconds,
         "iat": issued_at,
     }
+    if audience is not None:
+        payload["aud"] = audience
     h = _b64url_encode(json.dumps(header, separators=(",", ":")).encode("utf-8"))
     p = _b64url_encode(json.dumps(payload, separators=(",", ":")).encode("utf-8"))
     signing_input = f"{h}.{p}".encode("ascii")
@@ -108,14 +122,24 @@ def verify_mcp_token(
     token: str,
     *,
     signing_key: str | None = None,
+    expected_audience: str | None = None,
     now: int | None = None,
 ) -> McpTokenClaims:
     """Validate an HS256 JWT and return its claims.
 
     Raises `McpAuthError` on any failure: malformed, bad signature, expired,
-    missing required field. Constant-time signature comparison.
+    audience mismatch, missing required field. Constant-time signature
+    comparison.
+
+    `expected_audience` (added cycle 3) closes per-service replay: pass the
+    calling service's own name (e.g. "mcp-rdkit") and the token will be
+    rejected if its `aud` claim doesn't match. Tokens with no `aud` claim
+    are accepted only when `expected_audience` is None — in enforced mode
+    every service should pass this argument.
     """
-    key = signing_key or os.environ.get("MCP_AUTH_SIGNING_KEY", "")
+    # Mirror sign_mcp_token's whitespace handling so a misconfigured key
+    # cannot pass verification either.
+    key = (signing_key or os.environ.get("MCP_AUTH_SIGNING_KEY", "")).strip()
     if not key:
         raise McpAuthError("MCP_AUTH_SIGNING_KEY is empty; cannot verify token")
 
@@ -157,7 +181,26 @@ def verify_mcp_token(
     if not isinstance(scopes, list) or not all(isinstance(s, str) for s in scopes):
         raise McpAuthError("scopes must be a list of strings")
 
-    return McpTokenClaims(sub=sub, user=user, scopes=tuple(scopes), exp=exp)
+    aud_raw = payload.get("aud")
+    aud: str | None
+    if aud_raw is None:
+        aud = None
+    elif isinstance(aud_raw, str):
+        aud = aud_raw
+    else:
+        raise McpAuthError(f"aud must be a string if present, got {type(aud_raw).__name__}")
+
+    if expected_audience is not None:
+        if aud is None:
+            raise McpAuthError(
+                f"token missing aud claim; this service requires aud={expected_audience!r}"
+            )
+        if aud != expected_audience:
+            raise McpAuthError(
+                f"audience mismatch: token aud={aud!r}, expected={expected_audience!r}"
+            )
+
+    return McpTokenClaims(sub=sub, user=user, scopes=tuple(scopes), exp=exp, aud=aud)
 
 
 def _require_or_skip() -> bool:

@@ -56,14 +56,41 @@ def create_app(
 
     `required_scope` enforces ADR 006 Layer 2 scope checking. When auth is
     enforced and the verified token's `scopes` claim does not contain the
-    given string, the middleware returns 403. The agent mints per-service
-    scopes via `services/agent-claw/src/security/mcp-token-cache.ts`
-    `SERVICE_SCOPES`; the value passed here must match one of those.
-    Probe paths (/healthz, /readyz, /internal/*) are always exempt.
+    given string, the middleware returns 403. When `required_scope` is
+    omitted (None), the middleware looks up the service's scope from
+    `services.mcp_tools.common.scopes.SERVICE_SCOPES[name]`. The agent's
+    TS-side `SERVICE_SCOPES` mirror in
+    `services/agent-claw/src/security/mcp-token-cache.ts` must match — a
+    pact test asserts equality across the language boundary.
+
+    Cycle 3 also binds tokens to a specific service via the JWT `aud`
+    claim: the middleware passes `expected_audience=name` to the verifier,
+    which rejects tokens minted for a different service. This closes the
+    "lifted token replayed across blue/green deployments" gap that scope-
+    only enforcement leaves open.
+
+    Probe paths (/healthz, /readyz, /internal/*) are always exempt; the
+    `/internal/` exemption rejects path-traversal segments (`..`).
     """
     configure_logging(log_level)
     # Imported lazily so unit tests of `auth.py` don't drag in FastAPI.
     from services.mcp_tools.common.auth import require_mcp_token
+    from services.mcp_tools.common.scopes import SERVICE_SCOPES
+
+    # Single source of truth: prefer SERVICE_SCOPES[name] so a typo in any
+    # service's main.py can't ship a silent 403 in production. If the
+    # caller passes `required_scope=...` explicitly AND it disagrees with
+    # the catalog, refuse to start — fail-loud is better than a runtime
+    # surprise. `required_scope=None` is permitted for tests that build
+    # an unregistered service name like "mcp-test".
+    catalog_scope = SERVICE_SCOPES.get(name)
+    if required_scope is not None and catalog_scope is not None and required_scope != catalog_scope:
+        raise RuntimeError(
+            f"create_app(name={name!r}) got required_scope={required_scope!r} but "
+            f"SERVICE_SCOPES[{name!r}]={catalog_scope!r}; reconcile in "
+            "services/mcp_tools/common/scopes.py before starting."
+        )
+    effective_scope = required_scope if required_scope is not None else catalog_scope
 
     @asynccontextmanager
     async def _default_lifespan(app: FastAPI) -> Any:
@@ -95,9 +122,14 @@ def create_app(
 
     @app.middleware("http")
     async def mcp_auth_middleware(request: Request, call_next: Callable):
-        # Probes always pass.
+        # Probes always pass. The /internal/ prefix is a defence-in-depth
+        # path-traversal guard: a future ingress that disables
+        # merge-slashes (or a custom rewrite) could otherwise route
+        # /internal/../tools/foo through the bypass.
         path = request.url.path
-        if path in ("/healthz", "/readyz") or path.startswith("/internal/"):
+        if path in ("/healthz", "/readyz") or (
+            path.startswith("/internal/") and ".." not in path.split("/")
+        ):
             return await call_next(request)
 
         enforce = _require_or_skip()
@@ -126,14 +158,21 @@ def create_app(
             return await call_next(request)
 
         try:
-            claims = verify_mcp_token(parts[1].strip())
+            # In enforced mode, bind the token to this specific service via
+            # the JWT `aud` claim. Dev mode skips the audience check so
+            # tests that mint generic tokens still work.
+            audience_to_check = name if enforce else None
+            claims = verify_mcp_token(parts[1].strip(), expected_audience=audience_to_check)
             request.state.mcp_claims = claims
         except McpAuthError as exc:
             if enforce:
                 return JSONResponse(
                     status_code=status.HTTP_401_UNAUTHORIZED,
                     content={"error": "unauthenticated", "detail": str(exc)},
-                    headers={"WWW-Authenticate": "Bearer"},
+                    headers={
+                        "WWW-Authenticate": "Bearer",
+                        "x-request-id": getattr(request.state, "request_id", ""),
+                    },
                 )
             log.warning("MCP token verification failed (dev mode, allowing): %s", exc)
             request.state.mcp_claims = None
@@ -143,12 +182,12 @@ def create_app(
         # auth is enforced, the verified token must carry that scope or the
         # request is rejected with 403. In dev mode the check is skipped so
         # local-dev / hermetic tests don't need to mint scoped tokens.
-        if enforce and required_scope is not None:
-            if required_scope not in claims.scopes:
+        if enforce and effective_scope is not None:
+            if effective_scope not in claims.scopes:
                 log.warning(
                     "scope check failed: %s required %s, token has %s (user=%s)",
                     name,
-                    required_scope,
+                    effective_scope,
                     list(claims.scopes),
                     claims.user,
                 )
@@ -156,8 +195,9 @@ def create_app(
                     status_code=status.HTTP_403_FORBIDDEN,
                     content={
                         "error": "forbidden",
-                        "detail": f"token missing required scope {required_scope!r}",
+                        "detail": f"token missing required scope {effective_scope!r}",
                     },
+                    headers={"x-request-id": getattr(request.state, "request_id", "")},
                 )
 
         return await call_next(request)

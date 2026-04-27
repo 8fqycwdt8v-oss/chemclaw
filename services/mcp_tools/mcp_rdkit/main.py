@@ -23,6 +23,7 @@ from rdkit.Chem import AllChem, Crippen, Descriptors, Lipinski, rdMolDescriptors
 from rdkit.Chem.inchi import MolToInchiKey
 
 from services.mcp_tools.common.app import create_app
+from services.mcp_tools.common.limits import MAX_SMILES_LEN
 from services.mcp_tools.common.settings import ToolSettings
 
 # RDKit prints stern warnings to stderr on every bad SMILES parse; route
@@ -55,7 +56,7 @@ def _mol_from_smiles(smiles: str) -> Chem.Mol:
 # canonicalize_smiles
 # --------------------------------------------------------------------------
 class CanonicalizeIn(BaseModel):
-    smiles: str = Field(min_length=1, max_length=10_000)
+    smiles: str = Field(min_length=1, max_length=MAX_SMILES_LEN)
     kekulize: bool = False
 
 
@@ -82,7 +83,7 @@ async def canonicalize_smiles(req: Annotated[CanonicalizeIn, Body(...)]) -> Cano
 # inchikey_from_smiles
 # --------------------------------------------------------------------------
 class InchikeyIn(BaseModel):
-    smiles: str = Field(min_length=1, max_length=10_000)
+    smiles: str = Field(min_length=1, max_length=MAX_SMILES_LEN)
 
 
 class InchikeyOut(BaseModel):
@@ -99,7 +100,7 @@ async def inchikey_from_smiles(req: Annotated[InchikeyIn, Body(...)]) -> Inchike
 # morgan_fingerprint
 # --------------------------------------------------------------------------
 class MorganIn(BaseModel):
-    smiles: str = Field(min_length=1, max_length=10_000)
+    smiles: str = Field(min_length=1, max_length=MAX_SMILES_LEN)
     radius: int = Field(default=2, ge=1, le=4)
     n_bits: int = Field(default=2048, ge=512, le=4096)
 
@@ -123,7 +124,7 @@ async def morgan_fingerprint(req: Annotated[MorganIn, Body(...)]) -> MorganOut:
 # compute_descriptors
 # --------------------------------------------------------------------------
 class DescriptorsIn(BaseModel):
-    smiles: str = Field(min_length=1, max_length=10_000)
+    smiles: str = Field(min_length=1, max_length=MAX_SMILES_LEN)
     which: (
         list[Literal[
             "mw", "logp", "tpsa", "hbd", "hba", "rotatable_bonds",

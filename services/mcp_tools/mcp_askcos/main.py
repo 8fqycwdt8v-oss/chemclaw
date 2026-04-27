@@ -20,6 +20,7 @@ from fastapi import Body
 from pydantic import BaseModel, Field
 
 from services.mcp_tools.common.app import create_app
+from services.mcp_tools.common.limits import MAX_SMILES_LEN
 from services.mcp_tools.common.settings import ToolSettings
 
 log = logging.getLogger("mcp-askcos")
@@ -74,7 +75,7 @@ class RetroRoute(BaseModel):
 
 
 class RetrosynthesisIn(BaseModel):
-    smiles: str = Field(min_length=1, max_length=10_000)
+    smiles: str = Field(min_length=1, max_length=MAX_SMILES_LEN)
     max_depth: int = Field(default=3, ge=1, le=6)
     max_branches: int = Field(default=4, ge=1, le=10)
 
@@ -128,7 +129,7 @@ class ForwardProduct(BaseModel):
 
 
 class ForwardPredictionIn(BaseModel):
-    reactants_smiles: str = Field(min_length=1, max_length=10_000)
+    reactants_smiles: str = Field(min_length=1, max_length=MAX_SMILES_LEN)
     conditions: str | None = Field(default=None, max_length=1_000)
 
 

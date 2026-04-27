@@ -19,6 +19,7 @@ from fastapi import Body
 from pydantic import BaseModel, Field
 
 from services.mcp_tools.common.app import create_app
+from services.mcp_tools.common.limits import MAX_BATCH_SMILES, MAX_SMILES_LEN
 from services.mcp_tools.common.settings import ToolSettings
 
 log = logging.getLogger("mcp-chemprop")
@@ -83,7 +84,7 @@ def _chemprop_predict(smiles_list: list[str], model_path: Path) -> list[tuple[fl
 # /predict_yield
 # ---------------------------------------------------------------------------
 
-_MAX_REACTIONS = 100
+_MAX_REACTIONS = MAX_BATCH_SMILES
 
 class YieldPrediction(BaseModel):
     rxn_smiles: str
@@ -93,7 +94,7 @@ class YieldPrediction(BaseModel):
 
 
 _BoundedSmiles = Annotated[
-    str, Field(min_length=1, max_length=10_000, description="SMILES string"),
+    str, Field(min_length=1, max_length=MAX_SMILES_LEN, description="SMILES string"),
 ]
 
 
@@ -135,7 +136,7 @@ async def predict_yield(
 # /predict_property
 # ---------------------------------------------------------------------------
 
-_MAX_SMILES = 100
+_MAX_SMILES = MAX_BATCH_SMILES
 
 class PropertyPrediction(BaseModel):
     smiles: str

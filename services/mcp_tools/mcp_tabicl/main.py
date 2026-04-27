@@ -12,6 +12,7 @@ from fastapi import FastAPI, Header, HTTPException
 from pydantic import BaseModel, Field
 
 from services.mcp_tools.common.app import create_app
+from services.mcp_tools.common.limits import MAX_RXN_SMILES_LEN
 
 from .featurizer import ReactionRow, featurize
 from .inference import predict_and_rank
@@ -25,7 +26,7 @@ ADMIN_TOKEN_ENV = "MCP_TABICL_ADMIN_TOKEN"
 
 class ReactionRowIn(BaseModel):
     reaction_id: str = Field(min_length=1, max_length=64)
-    rxn_smiles: str = Field(min_length=3, max_length=20_000)
+    rxn_smiles: str = Field(min_length=3, max_length=MAX_RXN_SMILES_LEN)
     rxno_class: str | None = Field(default=None, max_length=200)
     solvent: str | None = Field(default=None, max_length=200)
     temp_c: float | None = None
