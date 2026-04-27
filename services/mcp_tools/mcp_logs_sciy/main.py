@@ -38,7 +38,10 @@ log = logging.getLogger("mcp-logs-sciy")
 # Sentinel password used in dev-compose for the read-only fake_logs reader.
 # If the configured DSN still contains this literal we refuse to start unless
 # `LOGS_ALLOW_DEV_PASSWORD=true` is set, mirroring the mcp_eln_local guard.
-_DEV_SENTINEL_PASSWORD = "chemclaw_mock_eln_reader_dev_password_change_me"
+# Imported from common/dev_sentinels.py so all services rotate together.
+from services.mcp_tools.common.dev_sentinels import DEV_MOCK_ELN_READER_PASSWORD
+
+_DEV_SENTINEL_PASSWORD = DEV_MOCK_ELN_READER_PASSWORD
 
 
 # ---------------------------------------------------------------------------

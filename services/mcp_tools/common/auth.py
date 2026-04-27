@@ -228,47 +228,65 @@ def _require_or_skip() -> bool:
 # ---------------------------------------------------------------------------
 
 
-async def require_mcp_token(
-    authorization: Annotated[str | None, Header()] = None,
-) -> McpTokenClaims | None:
-    """FastAPI dependency that validates the Authorization header.
+def make_require_mcp_token(expected_audience: str | None = None):
+    """Build a FastAPI dependency that validates the Authorization header.
 
-    In enforced mode (MCP_AUTH_REQUIRED=true), missing/invalid token yields a
-    401. In dev mode, returns None and emits a single warning so callers can
-    distinguish "no token" from "valid token" (and continue to work without
-    one). Routes that require auth always check for a non-None return.
+    `expected_audience` is the calling service's own name; the verifier
+    rejects tokens whose `aud` claim doesn't match (cycle 3 — closes
+    cross-service replay). In dev mode (MCP_AUTH_REQUIRED unset / "false"),
+    audience is not checked.
+
+    Most services use the auth middleware in `create_app()` directly and do
+    not need this dependency. It is exported for any future route that opts
+    out of the middleware path (e.g. an SSE handler that needs to short-
+    circuit before middleware finalises). The factory pattern forces
+    audience to be specified at registration time so a caller cannot
+    accidentally skip the cycle-3 binding.
     """
-    enforce = _require_or_skip()
-    if not authorization:
-        if enforce:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"error": "unauthenticated", "detail": "missing Authorization header"},
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        return None
 
-    parts = authorization.split(" ", 1)
-    if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
-        if enforce:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"error": "unauthenticated", "detail": "expected `Authorization: Bearer <token>`"},
-                headers={"WWW-Authenticate": "Bearer"},
-            )
-        return None
+    async def _dep(
+        authorization: Annotated[str | None, Header()] = None,
+    ) -> McpTokenClaims | None:
+        enforce = _require_or_skip()
+        if not authorization:
+            if enforce:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail={"error": "unauthenticated", "detail": "missing Authorization header"},
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            return None
 
-    token = parts[1].strip()
-    try:
-        claims = verify_mcp_token(token)
-    except McpAuthError as exc:
-        if enforce:
-            raise HTTPException(
-                status_code=status.HTTP_401_UNAUTHORIZED,
-                detail={"error": "unauthenticated", "detail": str(exc)},
-                headers={"WWW-Authenticate": "Bearer"},
-            ) from exc
-        log.warning("MCP token verification failed (dev mode, allowing): %s", exc)
-        return None
+        parts = authorization.split(" ", 1)
+        if len(parts) != 2 or parts[0].lower() != "bearer" or not parts[1].strip():
+            if enforce:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail={"error": "unauthenticated", "detail": "expected `Authorization: Bearer <token>`"},
+                    headers={"WWW-Authenticate": "Bearer"},
+                )
+            return None
 
-    return claims
+        token = parts[1].strip()
+        try:
+            audience_to_check = expected_audience if enforce else None
+            claims = verify_mcp_token(token, expected_audience=audience_to_check)
+        except McpAuthError as exc:
+            if enforce:
+                raise HTTPException(
+                    status_code=status.HTTP_401_UNAUTHORIZED,
+                    detail={"error": "unauthenticated", "detail": str(exc)},
+                    headers={"WWW-Authenticate": "Bearer"},
+                ) from exc
+            log.warning("MCP token verification failed (dev mode, allowing): %s", exc)
+            return None
+
+        return claims
+
+    return _dep
+
+
+# Backwards-compatible alias that does NOT bind to a specific audience.
+# Kept only for the internal-routes test path; new callers must use
+# `make_require_mcp_token(expected_audience=name)`.
+require_mcp_token = make_require_mcp_token(expected_audience=None)

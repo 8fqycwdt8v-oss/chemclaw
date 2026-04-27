@@ -12,6 +12,7 @@ sprint 3. For now, this is plain JSON REST.
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from collections.abc import Callable
 from contextlib import asynccontextmanager
@@ -74,7 +75,6 @@ def create_app(
     """
     configure_logging(log_level)
     # Imported lazily so unit tests of `auth.py` don't drag in FastAPI.
-    from services.mcp_tools.common.auth import require_mcp_token
     from services.mcp_tools.common.scopes import SERVICE_SCOPES
 
     # Single source of truth: prefer SERVICE_SCOPES[name] so a typo in any
@@ -91,6 +91,28 @@ def create_app(
             "services/mcp_tools/common/scopes.py before starting."
         )
     effective_scope = required_scope if required_scope is not None else catalog_scope
+
+    # Catalog-omission fail-OPEN guard (cycle 4): a future service registered
+    # with a name not in SERVICE_SCOPES and no explicit required_scope would
+    # silently disable the scope check, even with MCP_AUTH_REQUIRED=true.
+    # Refuse to start in that case unless the operator explicitly opts out
+    # by passing `required_scope=""` (empty-string sentinel meaning "this
+    # service has no required scope"). The internal test fixture passes
+    # `name="mcp-test"` with an explicit scope, so this guard skips it.
+    enforce_at_start = os.environ.get("MCP_AUTH_REQUIRED", "").strip().lower() == "true"
+    if (
+        enforce_at_start
+        and required_scope is None
+        and catalog_scope is None
+        and not name.startswith("mcp-test")  # tests use this prefix
+    ):
+        raise RuntimeError(
+            f"create_app(name={name!r}) is in enforced-auth mode but the service "
+            f"is not in SERVICE_SCOPES and required_scope is None — every request "
+            "would be accepted regardless of scope. Add the service to "
+            "services/mcp_tools/common/scopes.py or pass required_scope=\"\" "
+            "to opt out explicitly."
+        )
 
     @asynccontextmanager
     async def _default_lifespan(app: FastAPI) -> Any:
@@ -181,8 +203,10 @@ def create_app(
         # Scope enforcement (ADR 006 Layer 2). When required_scope is set and
         # auth is enforced, the verified token must carry that scope or the
         # request is rejected with 403. In dev mode the check is skipped so
-        # local-dev / hermetic tests don't need to mint scoped tokens.
-        if enforce and effective_scope is not None:
+        # local-dev / hermetic tests don't need to mint scoped tokens. The
+        # empty-string sentinel means "explicitly opted out"; skip both
+        # the catalog-omission startup guard and this runtime check.
+        if enforce and effective_scope:
             if effective_scope not in claims.scopes:
                 log.warning(
                     "scope check failed: %s required %s, token has %s (user=%s)",

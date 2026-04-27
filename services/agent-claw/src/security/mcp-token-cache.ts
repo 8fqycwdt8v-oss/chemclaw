@@ -39,7 +39,6 @@ export const SERVICE_SCOPES: Record<string, string> = {
   "mcp-logs-sciy": "mcp_instrument:read",
 };
 
-const DEFAULT_SCOPE = "mcp:invoke";
 const DEFAULT_TTL_SECONDS = 300; // 5 min — matches the verifier's expiry check
 const REFRESH_BUFFER_SECONDS = 60; // refresh 60s before expiry
 
@@ -77,8 +76,20 @@ export function getMcpToken(opts: {
     return cached.token;
   }
 
+  // Fail-loud on unknown service: the previous DEFAULT_SCOPE="mcp:invoke"
+  // fallback minted a token that no MCP would accept, producing a
+  // guaranteed-403 that LOOKS like an auth bug. Throwing here surfaces
+  // the typo at mint-time instead.
+  const scope = SERVICE_SCOPES[opts.service];
+  if (!scope) {
+    throw new McpAuthError(
+      `unknown MCP service ${JSON.stringify(opts.service)}; ` +
+        "add it to SERVICE_SCOPES in mcp-token-cache.ts and the Python mirror " +
+        "in services/mcp_tools/common/scopes.py",
+    );
+  }
+
   try {
-    const scope = SERVICE_SCOPES[opts.service] ?? DEFAULT_SCOPE;
     // audience binds this token to one specific MCP service so it can't
     // be replayed against a peer (blue/green deployment, per-tenant
     // copy). Without this, scope-only enforcement leaves a 5-minute

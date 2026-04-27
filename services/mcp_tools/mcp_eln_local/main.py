@@ -54,7 +54,11 @@ log = logging.getLogger("mcp-eln-local")
 # `chemclaw.mock_eln_reader_password` GUC is unset. If the configured
 # DSN still contains this literal we refuse to start unless explicitly
 # allowed via MOCK_ELN_ALLOW_DEV_PASSWORD=true (set in dev-compose).
-_DEV_SENTINEL_PASSWORD = "chemclaw_mock_eln_reader_dev_password_change_me"
+# Imported from common/dev_sentinels.py so all services that guard on
+# the same value rotate it together (cycle 4).
+from services.mcp_tools.common.dev_sentinels import DEV_MOCK_ELN_READER_PASSWORD
+
+_DEV_SENTINEL_PASSWORD = DEV_MOCK_ELN_READER_PASSWORD
 
 
 # --------------------------------------------------------------------------
