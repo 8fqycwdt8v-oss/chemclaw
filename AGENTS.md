@@ -86,7 +86,7 @@ These builtins let the agent plan, track progress, and pause for clarification a
 
 | Tool | What it does |
 |---|---|
-| `manage_todos` | Read or write the session's todo list. Supports `op: "list" \| "add" \| "update" \| "remove"`. Each write fires a `todo_update` SSE event so the frontend can render the live list. Use to sketch a multi-step plan up-front, then mark items as the work proceeds. |
+| `manage_todos` | Read or write the session's todo list. Supports `op: "list" \| "add" \| "update" \| "remove"`. Each write fires a `todo_update` SSE event so any SSE-consuming client (the future frontend; the CLI in `--verbose` mode) can render the live list. Use to sketch a multi-step plan up-front, then mark items as the work proceeds. |
 | `ask_user` | Pause execution and surface a question to the user. Throws `AwaitingUserInputError` inside the harness, which makes the turn end with `finish.finishReason="awaiting_user_input"` and emits an `awaiting_user_input` SSE event. The next user message on the same `session_id` resumes the loop with the answer threaded back into the conversation. Only call this when the question genuinely blocks progress — speculation is not a reason to ask. |
 
 ---
@@ -201,8 +201,9 @@ Multi-series line chart:
  "series": [{"name": "Project A", "y": [...]}, ...]}
 ```
 
-The Streamlit frontend renders fenced chart blocks natively. Use them when a
-visual is clearer than prose — not for every numeric result.
+SSE-consuming clients (the future frontend; the CLI ignores chart fences)
+can render fenced chart blocks. Continue to use them when a visual is
+clearer than prose — the contract is preserved for downstream renderers.
 
 ---
 
@@ -705,8 +706,10 @@ skill-promoter (services/optimizer/skill_promoter/)
                → write feedback_events row (signal='auto_demoted')
 ```
 
-All events are written to `skill_promotion_events` and visible in the Streamlit
-Optimizer page (`services/frontend/pages/optimizer.py`).
+All events are written to `skill_promotion_events` and exposed via the
+agent-claw `/api/optimizer` route. (The legacy Streamlit page at
+`services/frontend/pages/optimizer.py` was removed when the frontend
+moved to a separate repo.)
 
 ### `/eval` slash verb
 
