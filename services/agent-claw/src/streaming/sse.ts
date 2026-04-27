@@ -1,7 +1,8 @@
 // Shared SSE primitives used by /api/chat, /api/deep_research, and
 // /api/chat/plan/approve. The wire format is part of the public contract
-// with the Streamlit frontend (and any external client), so changes here
-// are versioning-relevant.
+// with any SSE-consuming client (the future frontend repo, the in-tree
+// CLI at tools/cli/, external integrations), so changes here are
+// versioning-relevant.
 //
 // Event taxonomy (discriminated by `type`):
 //   text_delta          — incremental assistant text

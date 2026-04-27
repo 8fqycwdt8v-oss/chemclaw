@@ -8,8 +8,9 @@
 //   'down' → signal='thumbs_down'
 //
 // The slash verb /feedback up|down "<reason>" already posts to /api/chat which
-// calls writeFeedback inline. This dedicated route allows the Streamlit frontend
-// to POST directly without going through the SSE chat path.
+// calls writeFeedback inline. This dedicated route allows any non-streaming
+// client (the future frontend repo, scripted tooling) to POST directly
+// without going through the SSE chat path.
 //
 // Langfuse score: best-effort via OTLP attribute on the trace span.
 // Failure is logged, not surfaced to the caller.

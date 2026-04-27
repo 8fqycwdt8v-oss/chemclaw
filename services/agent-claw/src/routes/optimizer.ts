@@ -1,4 +1,5 @@
-// GET /api/optimizer/* — Streamlit Optimizer page backend (Phase E).
+// GET /api/optimizer/* — Optimizer status backend (Phase E). Surfaced to
+// any SSE-consuming client; the legacy in-tree page (Phase E doc) was removed.
 //
 // Returns GEPA run history from prompt_registry (gepa_metadata),
 // skill promotion events, shadow comparisons, and golden-set score history.

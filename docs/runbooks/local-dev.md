@@ -163,10 +163,10 @@ The agent service is in your shell — it uses `localhost:5432` by default.
 If your Docker runs Postgres on a different port, make sure `POSTGRES_PORT`
 in `.env` matches what `docker compose ps` shows.
 
-### Streamlit shows "No projects visible"
+### `chemclaw chat` returns 'No projects visible'
 
 Either the schema wasn't applied, or your dev user has no
-`user_project_access` entries. Run `make db.seed` and refresh.
+`user_project_access` entries. Run `make db.seed`, then re-run.
 
 ### Neo4j browser can't log in
 
