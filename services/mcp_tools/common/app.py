@@ -41,6 +41,7 @@ def create_app(
     log_level: str = "INFO",
     ready_check: Callable[[], bool] | Callable[[], Any] | None = None,
     lifespan: Callable[[FastAPI], Any] | None = None,
+    required_scope: str | None = None,
 ) -> FastAPI:
     """Build a FastAPI app with the standard shape for an MCP tool service.
 
@@ -51,7 +52,14 @@ def create_app(
     Bearer-token authentication (ADR 006 partial) is wired automatically.
     By default it runs in dev mode — calls without a token are accepted with
     a warning so existing tests still pass. Set MCP_AUTH_REQUIRED=true in
-    production to enforce verification on every /tools/* request.
+    production to enforce verification on every non-probe request.
+
+    `required_scope` enforces ADR 006 Layer 2 scope checking. When auth is
+    enforced and the verified token's `scopes` claim does not contain the
+    given string, the middleware returns 403. The agent mints per-service
+    scopes via `services/agent-claw/src/security/mcp-token-cache.ts`
+    `SERVICE_SCOPES`; the value passed here must match one of those.
+    Probe paths (/healthz, /readyz, /internal/*) are always exempt.
     """
     configure_logging(log_level)
     # Imported lazily so unit tests of `auth.py` don't drag in FastAPI.
@@ -129,6 +137,28 @@ def create_app(
                 )
             log.warning("MCP token verification failed (dev mode, allowing): %s", exc)
             request.state.mcp_claims = None
+            return await call_next(request)
+
+        # Scope enforcement (ADR 006 Layer 2). When required_scope is set and
+        # auth is enforced, the verified token must carry that scope or the
+        # request is rejected with 403. In dev mode the check is skipped so
+        # local-dev / hermetic tests don't need to mint scoped tokens.
+        if enforce and required_scope is not None:
+            if required_scope not in claims.scopes:
+                log.warning(
+                    "scope check failed: %s required %s, token has %s (user=%s)",
+                    name,
+                    required_scope,
+                    list(claims.scopes),
+                    claims.user,
+                )
+                return JSONResponse(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    content={
+                        "error": "forbidden",
+                        "detail": f"token missing required scope {required_scope!r}",
+                    },
+                )
 
         return await call_next(request)
 

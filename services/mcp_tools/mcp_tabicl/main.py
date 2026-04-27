@@ -89,6 +89,7 @@ def build_app(*, pca_path: Path = DEFAULT_PCA_PATH) -> FastAPI:
         name="mcp-tabicl",
         version="0.1.0",
         ready_check=lambda: _ready_check(pca_path),
+        required_scope="mcp_tabicl:invoke",
     )
 
     def _require_pca() -> FittedPca:

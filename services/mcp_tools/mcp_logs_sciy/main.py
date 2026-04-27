@@ -35,6 +35,12 @@ from services.mcp_tools.mcp_logs_sciy.backends import (
 log = logging.getLogger("mcp-logs-sciy")
 
 
+# Sentinel password used in dev-compose for the read-only fake_logs reader.
+# If the configured DSN still contains this literal we refuse to start unless
+# `LOGS_ALLOW_DEV_PASSWORD=true` is set, mirroring the mcp_eln_local guard.
+_DEV_SENTINEL_PASSWORD = "chemclaw_mock_eln_reader_dev_password_change_me"
+
+
 # ---------------------------------------------------------------------------
 # Settings
 # ---------------------------------------------------------------------------
@@ -61,9 +67,14 @@ class LogsSettings(ToolSettings):
     postgres_db: str = Field(default="chemclaw", alias="POSTGRES_DB")
     postgres_user: str = Field(default="chemclaw_mock_eln_reader", alias="POSTGRES_USER")
     postgres_password: str = Field(
-        default="chemclaw_mock_eln_reader_dev_password_change_me",
+        default=_DEV_SENTINEL_PASSWORD,
         alias="POSTGRES_PASSWORD",
     )
+
+    # Explicit acknowledgement that we're running with the dev sentinel
+    # password. Defaults to false so production deployments fail-closed
+    # if the operator forgets to override POSTGRES_PASSWORD.
+    logs_allow_dev_password: bool = Field(default=False, alias="LOGS_ALLOW_DEV_PASSWORD")
 
     # Real backend settings (placeholders — not used until Phase 4).
     real_tenant_url: str | None = Field(default=None, alias="LOGS_TENANT_URL")
@@ -238,8 +249,25 @@ def _build_backend() -> FakePostgresBackend | RealLogsBackend:
     )
 
 
+def _check_dsn_safety() -> None:
+    """Refuse to start if the fake-postgres DSN still contains the dev
+    sentinel password and the operator hasn't explicitly opted into it."""
+    if (
+        settings.backend == "fake-postgres"
+        and _DEV_SENTINEL_PASSWORD in settings.postgres_password
+        and not settings.logs_allow_dev_password
+    ):
+        raise RuntimeError(
+            "mcp-logs-sciy refusing to start: POSTGRES_PASSWORD contains the "
+            "dev sentinel but LOGS_ALLOW_DEV_PASSWORD is not set. Either "
+            "override POSTGRES_PASSWORD with a real password, or set "
+            "LOGS_ALLOW_DEV_PASSWORD=true to acknowledge dev usage."
+        )
+
+
 @asynccontextmanager
 async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
+    _check_dsn_safety()
     log.info("mcp-logs-sciy starting; backend=%s", settings.backend)
     # Fail fast for the real backend if it hasn't been wired yet — better
     # than passing /readyz at boot only to 500 every actual request.
@@ -284,6 +312,7 @@ app = create_app(
     log_level=settings.log_level,
     lifespan=_lifespan,
     ready_check=_ready_check,
+    required_scope="mcp_instrument:read",
 )
 
 

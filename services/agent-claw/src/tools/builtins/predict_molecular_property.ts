@@ -3,6 +3,7 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
+import { MAX_SMILES_LEN, MAX_BATCH_SMILES } from "../_limits.js";
 
 // ---------- Schemas ----------------------------------------------------------
 
@@ -10,9 +11,9 @@ const PropertyEnum = z.enum(["logP", "logS", "mp", "bp"]);
 
 export const PredictMolecularPropertyIn = z.object({
   smiles_list: z
-    .array(z.string().min(1))
+    .array(z.string().min(1).max(MAX_SMILES_LEN))
     .min(1)
-    .max(100)
+    .max(MAX_BATCH_SMILES)
     .describe("List of SMILES to predict a property for (max 100)."),
   property: PropertyEnum.describe(
     "Molecular property to predict: logP, logS, mp (melting point °C), or bp (boiling point °C).",

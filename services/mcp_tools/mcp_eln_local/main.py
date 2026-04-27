@@ -149,6 +149,12 @@ async def _acquire() -> AsyncIterator[psycopg.AsyncConnection]:
     connection is not safe for concurrent operations (only one cursor at
     a time), so under any concurrent load the shared-conn pattern would
     serialize requests at best and deadlock at worst.
+
+    Transient pool failures (psycopg.OperationalError, e.g. DB restart
+    mid-request) surface as 503 instead of an unstructured 500, so
+    upstream clients can distinguish "service degraded, retry" from a
+    bug. The `ValueError → 400` exception handler in `common/app.py`
+    does not catch OperationalError, hence the explicit conversion.
     """
     pool = _pool_holder.get("pool")
     if pool is None:
@@ -156,8 +162,14 @@ async def _acquire() -> AsyncIterator[psycopg.AsyncConnection]:
             status_code=503,
             detail={"error": "service_unavailable", "detail": "mock_eln pool not initialized"},
         )
-    async with pool.connection() as conn:
-        yield conn
+    try:
+        async with pool.connection() as conn:
+            yield conn
+    except psycopg.OperationalError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "service_unavailable", "detail": f"mock_eln DB unavailable: {exc}"},
+        ) from exc
 
 
 app = create_app(
@@ -166,6 +178,7 @@ app = create_app(
     log_level=settings.log_level,
     ready_check=_ready_check,
     lifespan=_lifespan,
+    required_scope="mcp_eln:read",
 )
 
 

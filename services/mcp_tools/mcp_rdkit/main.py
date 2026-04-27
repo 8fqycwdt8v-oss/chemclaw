@@ -35,6 +35,7 @@ app = create_app(
     name="mcp-rdkit",
     version="0.1.0",
     log_level=settings.log_level,
+    required_scope="mcp_rdkit:invoke",
 )
 
 

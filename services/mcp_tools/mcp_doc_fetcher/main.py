@@ -178,6 +178,7 @@ app = create_app(
     name="mcp-doc-fetcher",
     version="0.1.0",
     log_level=settings.log_level,
+    required_scope="mcp_doc_fetcher:fetch",
 )
 
 # --------------------------------------------------------------------------

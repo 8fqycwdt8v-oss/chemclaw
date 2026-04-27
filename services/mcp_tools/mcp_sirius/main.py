@@ -43,6 +43,7 @@ app = create_app(
     version="0.1.0",
     log_level=settings.log_level,
     ready_check=_sirius_available,
+    required_scope="mcp_sirius:invoke",
 )
 
 

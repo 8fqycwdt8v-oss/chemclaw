@@ -23,7 +23,12 @@ from services.mcp_tools.common.settings import ToolSettings
 
 log = logging.getLogger("mcp-drfp")
 settings = ToolSettings()
-app = create_app(name="mcp-drfp", version="0.1.0", log_level=settings.log_level)
+app = create_app(
+    name="mcp-drfp",
+    version="0.1.0",
+    log_level=settings.log_level,
+    required_scope="mcp_drfp:invoke",
+)
 
 
 class ComputeDrfpIn(BaseModel):
