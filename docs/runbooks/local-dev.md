@@ -45,7 +45,7 @@ If you don't have `uv` / don't want the Makefile, manually:
 python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
-pip install -r services/frontend/requirements.txt
+pip install -e tools/cli
 pip install -r services/ingestion/eln_json_importer/requirements.txt
 npm install
 ```
@@ -115,20 +115,26 @@ Visit:
 - http://localhost:3100/readyz   → `{"status":"ok","postgres":"up"}`
 - http://localhost:3100/api/projects → list of projects visible to the dev user
 
-## 7. Start the frontend
+## 7. Talk to the agent
 
-In another terminal:
+The Streamlit frontend has been moved to a separate repository. For
+local testing, use the CLI in `tools/cli/`:
 
 ```bash
 source .venv/bin/activate
-make run.frontend
+chemclaw chat "list my projects"
 ```
 
-Visit http://localhost:8501. You should see:
+You should see a streamed response from the agent. By default the CLI
+sends `x-user-entra-id: dev@local.test` (override with `CHEMCLAW_USER`).
+For session continuation, use `chemclaw chat --resume "..."`. See
+`tools/cli/README.md` for the full command reference and exit codes.
 
-- **User** shown as `dev@local.test` in the sidebar.
-- **Agent service: ready** indicator.
-- Two projects listed (NCE-001, NCE-002), each with their experiments table.
+If you need a UI, hit the agent directly:
+
+- `http://localhost:3101/api/projects` — list projects (set
+  `x-user-entra-id` header).
+- `http://localhost:3101/healthz` — liveness probe.
 
 ## 8. Tear down
 
