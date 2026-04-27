@@ -168,16 +168,22 @@ store on `--resume` or from the explicit `--session` flag.
 
 ### SSE event handling
 
-| Event `type` | CLI behavior | Exit code on stream end |
-|---|---|---|
-| `token` | Print `text` to stdout, no newline, flush. | — |
-| `session` | Write `session_id` to `~/.chemclaw/last-session-<user>`. Print only with `--verbose`. | — |
-| `todo_update` | `--verbose` only: print `[dim]✓ <text>[/dim]` via rich. | — |
-| `awaiting_user_input` | Print `❓ <question>` (yellow); close stream. | **2** |
-| `tool_call` / `tool_result` | `--verbose` only: print compact `→ tool_name(...)` / `← <truncated result>`. | — |
-| `error` | Print `error.message` (red); close stream. | **1** |
-| `done` (or stream close) | Print trailing newline. | **0** |
-| Unknown type | Ignored unless `--verbose`. | — |
+The canonical event taxonomy is defined in
+`services/agent-claw/src/streaming/sse.ts`. Wire format is always
+`data: <json>\n\n` — single-line JSON, newlines pre-escaped server-side.
+
+| Event `type` | Payload fields | CLI behavior | Exit code on stream end |
+|---|---|---|---|
+| `text_delta` | `delta: string` | Print `delta` to stdout, no newline, flush. | — |
+| `session` | `session_id: string` | Write `session_id` to `~/.chemclaw/last-session-<user>`. Print only with `--verbose`. | — |
+| `todo_update` | `todos: [{ ordering, content, status }]` | `--verbose` only: render the list, marking by status (`done` / `in_progress` / `pending`). | — |
+| `awaiting_user_input` | `session_id: string; question: string` | Print `❓ <question>` (yellow); close stream. Also write `session_id` to the session store so a follow-up `--resume` works. | **2** |
+| `tool_call` | `toolId: string; input: unknown` | `--verbose` only: compact `→ <toolId>(<truncated input>)`. | — |
+| `tool_result` | `toolId: string; output: unknown` | `--verbose` only: compact `← <truncated output>`. | — |
+| `plan_step` / `plan_ready` | (see sse.ts) | `--verbose` only: short summary line. | — |
+| `error` | `error: string` | Print `error` (red); close stream. | **1** |
+| `finish` | `finishReason: string; usage: {...}` | Print trailing newline; with `--verbose`, print `[dim]<finishReason> · <tokens>[/dim]`. | **0** |
+| Unknown type | — | Ignored unless `--verbose`. | — |
 
 ### Error handling
 
@@ -220,13 +226,13 @@ session-store tests don't touch the real `~/.chemclaw`.
 
 | Test | Asserts |
 |---|---|
-| `test_sse_parses_simple_event` | parser yields `{"type":"token","text":"hi"}` |
+| `test_sse_parses_simple_event` | parser yields `{"type":"text_delta","delta":"hi"}` for `data: {"type":"text_delta","delta":"hi"}\n\n` |
 | `test_sse_handles_multiline_data` | per spec, multiple `data:` lines join with `\n` |
 | `test_sse_skips_keepalive_comments` | lines starting with `:` ignored |
 | `test_session_store_roundtrip` | write then read returns the same id |
 | `test_session_store_per_user_separation` | two users → two files, no cross-read |
 | `test_session_store_missing_returns_none` | unknown user returns None |
-| `test_chat_streams_tokens_to_stdout` | three token events → stdout has concatenated text |
+| `test_chat_streams_text_deltas_to_stdout` | three `text_delta` events → stdout has concatenated text |
 | `test_chat_writes_session_on_session_event` | session event lands in store |
 | `test_chat_resume_sends_session_id` | `--resume` after prior call → POST body has session_id |
 | `test_chat_resume_no_prior_exits_5` | clean store + `--resume` → exit 5 |
