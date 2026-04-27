@@ -34,12 +34,6 @@ paperclipLite:
     requests: { cpu: 50m, memory: 128Mi }
     limits:   { cpu: 500m, memory: 512Mi }
 
-frontend:
-  enabled: true
-  image: chemclaw/frontend:latest
-  port: 8501
-  replicas: 1
-
 litellm:
   enabled: true
   image: chemclaw/litellm:latest
