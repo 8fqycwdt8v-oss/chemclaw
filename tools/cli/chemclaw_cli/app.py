@@ -5,6 +5,7 @@ from __future__ import annotations
 import typer
 
 from chemclaw_cli import __version__
+from chemclaw_cli.commands.chat import chat as chat_command
 
 app = typer.Typer(
     name="chemclaw",
@@ -12,6 +13,8 @@ app = typer.Typer(
     no_args_is_help=True,
     add_completion=True,
 )
+
+app.command("chat")(chat_command)
 
 
 def _version_callback(value: bool) -> None:
