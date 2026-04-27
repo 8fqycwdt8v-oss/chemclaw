@@ -13,43 +13,31 @@
 
 \set ON_ERROR_STOP on
 
--- --------------------------------------------------------------------
+-- ---------------------------------------------------------------------------
 -- Backend gate. The seed only loads when LOGS_BACKEND=fake-postgres so
 -- production deploys pointed at a live tenant don't accidentally pollute
 -- the fake schema with fixtures.
--- --------------------------------------------------------------------
+--
+-- Earlier versions of this file used `:'LOGS_BACKEND'` interpolation inside
+-- a DO $$ ... $$ block — that doesn't work, psql variables aren't substituted
+-- inside dollar-quoted strings. The current version uses a top-level
+-- `\if :proceed` conditional wrapping the entire COPY block, which works
+-- because psql conditionals evaluate before any server-side execution.
+-- ---------------------------------------------------------------------------
+
+-- Default LOGS_BACKEND to empty when not passed.
 \if :{?LOGS_BACKEND}
-  \if :{?_skip_fake_logs}
-    -- noop
-  \else
-    \echo 'fake_logs seed: LOGS_BACKEND='':LOGS_BACKEND'''
-  \endif
 \else
   \set LOGS_BACKEND ''
 \endif
 
-DO $$
-BEGIN
-  IF current_setting('seed.logs_backend', true) IS NULL THEN
-    -- Allow callers to override via psql -v; fall back to env-derived default.
-    PERFORM set_config(
-      'seed.logs_backend',
-      coalesce(current_setting('seed.logs_backend', true), :'LOGS_BACKEND'),
-      false
-    );
-  END IF;
-END $$;
+-- Decide whether to run. Empty backend (i.e. caller forgot to pass it from
+-- a dev shell) is treated as "fake-postgres" — convenient for local apply.
+SELECT (:'LOGS_BACKEND' IN ('fake-postgres', '')) AS fake_logs_proceed \gset
 
-DO $$
-DECLARE
-  v_backend TEXT := coalesce(current_setting('seed.logs_backend', true), '');
-BEGIN
-  IF v_backend NOT IN ('fake-postgres', '') THEN
-    RAISE NOTICE 'fake_logs seed skipped: LOGS_BACKEND=% (only loads when fake-postgres)', v_backend;
-    -- Use a sentinel temp table so the rest of this script can short-circuit.
-    CREATE TEMP TABLE _fake_logs_skip(_ INT);
-  END IF;
-END $$;
+\if :fake_logs_proceed
+
+\echo 'fake_logs seed: loading (LOGS_BACKEND=' :LOGS_BACKEND ')'
 
 BEGIN;
 
@@ -72,17 +60,23 @@ TRUNCATE fake_logs.persons RESTART IDENTITY CASCADE;
 -- Sanity counts surface in psql output so a CI run can grep for them.
 DO $$
 DECLARE
-  v_persons INT;
+  v_persons  INT;
   v_datasets INT;
-  v_tracks INT;
-  v_files INT;
+  v_tracks   INT;
+  v_files    INT;
 BEGIN
-  SELECT count(*) INTO v_persons FROM fake_logs.persons;
+  SELECT count(*) INTO v_persons  FROM fake_logs.persons;
   SELECT count(*) INTO v_datasets FROM fake_logs.datasets;
-  SELECT count(*) INTO v_tracks FROM fake_logs.tracks;
-  SELECT count(*) INTO v_files FROM fake_logs.dataset_files;
+  SELECT count(*) INTO v_tracks   FROM fake_logs.tracks;
+  SELECT count(*) INTO v_files    FROM fake_logs.dataset_files;
   RAISE NOTICE 'fake_logs seed loaded: persons=%, datasets=%, tracks=%, files=%',
     v_persons, v_datasets, v_tracks, v_files;
 END $$;
 
 COMMIT;
+
+\else
+
+\echo 'fake_logs seed skipped: LOGS_BACKEND=' :LOGS_BACKEND ' (only loads when fake-postgres or unset)'
+
+\endif

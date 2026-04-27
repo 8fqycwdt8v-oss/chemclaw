@@ -820,6 +820,26 @@ ON CONFLICT (name) DO UPDATE SET
   source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
   description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
 
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'query_eln_samples_by_entry',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "entry_id": {"type": "string", "minLength": 1, "maxLength": 128,
+                   "description": "ELN entry id (UUID)."}
+    },
+    "required": ["entry_id"]
+  }',
+  'List every sample linked to one ELN entry. Use after fetch_eln_canonical_reaction or fetch_eln_entry to bridge into analytical data via query_instrument_datasets.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
 -- ── Phase F.2: LOGS-by-SciY analytical SDMS adapter ─────────────────────────
 
 INSERT INTO mcp_tools (service_name, base_url, enabled, health_status)

@@ -562,6 +562,17 @@ async function handleChat(
       }
 
       // Peek at what the LLM wants to do next.
+      //
+      // ARCHITECTURAL NOTE (P2 — see e2e-runs verdict): every text turn
+      // currently incurs TWO LLM round-trips — this `call()` to classify
+      // text-vs-tool, then `streamCompletion()` below to actually stream
+      // the tokens. The cost-correct refactor consumes streamCompletion()
+      // here, buffers the first chunk to detect tool_call vs text, and
+      // commits to either branch on the first chunk (the AI SDK guarantees
+      // text and tool_call are mutually exclusive in one response). It
+      // requires careful handling of pre_tool hooks before any tool_call
+      // SSE event is emitted, which is why the simple-but-redundant
+      // call()-then-stream pattern was kept until a separate refactor pass.
       const { result: stepResult, usage } = await deps.llm.call(messages, tools);
       budget.consumeStep(usage);
       stepsUsed++;
