@@ -12,7 +12,6 @@ sprint 3. For now, this is plain JSON REST.
 from __future__ import annotations
 
 import logging
-import os
 import uuid
 from collections.abc import Callable
 from contextlib import asynccontextmanager
@@ -75,16 +74,22 @@ def create_app(
     """
     configure_logging(log_level)
     # Imported lazily so unit tests of `auth.py` don't drag in FastAPI.
+    from services.mcp_tools.common.auth import _require_or_skip
     from services.mcp_tools.common.scopes import SERVICE_SCOPES
 
     # Single source of truth: prefer SERVICE_SCOPES[name] so a typo in any
-    # service's main.py can't ship a silent 403 in production. If the
-    # caller passes `required_scope=...` explicitly AND it disagrees with
-    # the catalog, refuse to start — fail-loud is better than a runtime
-    # surprise. `required_scope=None` is permitted for tests that build
-    # an unregistered service name like "mcp-test".
+    # service's main.py can't ship a silent 403 in production. The
+    # `required_scope=""` sentinel is the explicit opt-out for the rare
+    # service that legitimately has no required scope; it bypasses the
+    # reconciliation check below (an empty string can never match a real
+    # catalog entry). `required_scope=None` defers to the catalog.
     catalog_scope = SERVICE_SCOPES.get(name)
-    if required_scope is not None and catalog_scope is not None and required_scope != catalog_scope:
+    if (
+        required_scope is not None
+        and required_scope != ""  # explicit opt-out
+        and catalog_scope is not None
+        and required_scope != catalog_scope
+    ):
         raise RuntimeError(
             f"create_app(name={name!r}) got required_scope={required_scope!r} but "
             f"SERVICE_SCOPES[{name!r}]={catalog_scope!r}; reconcile in "
@@ -92,19 +97,23 @@ def create_app(
         )
     effective_scope = required_scope if required_scope is not None else catalog_scope
 
-    # Catalog-omission fail-OPEN guard (cycle 4): a future service registered
-    # with a name not in SERVICE_SCOPES and no explicit required_scope would
-    # silently disable the scope check, even with MCP_AUTH_REQUIRED=true.
-    # Refuse to start in that case unless the operator explicitly opts out
-    # by passing `required_scope=""` (empty-string sentinel meaning "this
-    # service has no required scope"). The internal test fixture passes
-    # `name="mcp-test"` with an explicit scope, so this guard skips it.
-    enforce_at_start = os.environ.get("MCP_AUTH_REQUIRED", "").strip().lower() == "true"
+    # Catalog-omission fail-OPEN guard (cycle 4, hardened cycle 5): a future
+    # service registered with a name not in SERVICE_SCOPES and no explicit
+    # required_scope would silently disable the scope check whenever auth
+    # is being enforced.
+    #
+    # Use the same `_require_or_skip()` policy as the runtime middleware so
+    # the startup guard fires under the EXACT same conditions enforcement
+    # is active — including the cycle-1 fail-closed default where
+    # MCP_AUTH_REQUIRED is unset and MCP_AUTH_DEV_MODE is not "true". A
+    # prior cycle-4 implementation read MCP_AUTH_REQUIRED directly,
+    # disagreed with the runtime policy, and re-opened the gap when an
+    # operator used the documented MCP_AUTH_DEV_MODE=false-style toggle.
     if (
-        enforce_at_start
+        _require_or_skip()
         and required_scope is None
         and catalog_scope is None
-        and not name.startswith("mcp-test")  # tests use this prefix
+        and not name.startswith("mcp-test")  # test fixture prefix
     ):
         raise RuntimeError(
             f"create_app(name={name!r}) is in enforced-auth mode but the service "

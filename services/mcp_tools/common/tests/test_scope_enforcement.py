@@ -187,3 +187,56 @@ def test_create_app_refuses_scope_disagreement_with_catalog():
             version="0.1.0",
             required_scope="wrong:scope",  # disagrees
         )
+
+
+# ---------------------------------------------------------------------------
+# Cycle-5: empty-string sentinel + startup-guard policy unification
+# ---------------------------------------------------------------------------
+
+
+def test_create_app_accepts_empty_string_opt_out_for_catalogued_service():
+    """`required_scope=""` is the documented opt-out. It must NOT trip the
+    catalog-disagreement RuntimeError even when the catalog has a real scope
+    for this service — empty string is a sentinel meaning "no scope check"."""
+    from services.mcp_tools.common.app import create_app
+
+    # mcp-rdkit is in the catalog with "mcp_rdkit:invoke". Empty-string
+    # opt-out should be accepted, not rejected as a disagreement.
+    app = create_app(
+        name="mcp-rdkit",
+        version="0.1.0",
+        required_scope="",  # explicit opt-out
+    )
+    assert app is not None
+
+
+def test_create_app_startup_guard_fires_under_fail_closed_default(monkeypatch: pytest.MonkeyPatch):
+    """Cycle-1 fail-closed default: MCP_AUTH_REQUIRED unset + MCP_AUTH_DEV_MODE
+    not "true" → enforce. The cycle-4 catalog-omission guard must fire under
+    this policy too — not just when MCP_AUTH_REQUIRED is the literal "true"."""
+    from services.mcp_tools.common.app import create_app
+
+    monkeypatch.delenv("MCP_AUTH_REQUIRED", raising=False)
+    monkeypatch.delenv("MCP_AUTH_DEV_MODE", raising=False)
+
+    with pytest.raises(RuntimeError, match="not in SERVICE_SCOPES"):
+        create_app(
+            name="mcp-uncatalogued-service",  # not in SERVICE_SCOPES
+            version="0.1.0",
+            # required_scope omitted — would silently disable scope check
+        )
+
+
+def test_create_app_startup_guard_skipped_in_dev_mode(monkeypatch: pytest.MonkeyPatch):
+    """Dev mode (MCP_AUTH_DEV_MODE=true) is the conftest default and must not
+    trip the catalog guard — local-dev workflows would break otherwise."""
+    from services.mcp_tools.common.app import create_app
+
+    monkeypatch.delenv("MCP_AUTH_REQUIRED", raising=False)
+    monkeypatch.setenv("MCP_AUTH_DEV_MODE", "true")
+
+    app = create_app(
+        name="mcp-uncatalogued-service",  # not in SERVICE_SCOPES
+        version="0.1.0",
+    )
+    assert app is not None
