@@ -1,8 +1,0 @@
-# Streamlit frontend deps — kept minimal for Phase 0 skeleton.
-streamlit>=1.40
-streamlit-autorefresh>=1.0
-psycopg[binary]>=3.2
-python-dotenv>=1.0
-httpx>=0.27
-pydantic>=2.8
-pydantic-settings>=2.4
