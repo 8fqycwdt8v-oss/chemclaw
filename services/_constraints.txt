@@ -13,10 +13,14 @@
 #
 # Production deployments should override these via pip install -c <file>
 # pointing at a frozen lockfile.
+#
+# Note: pip 26.x rejects `package[extra]` in constraint files. Extras (e.g.
+# `uvicorn[standard]`, `psycopg[binary]`) MUST appear in the per-service
+# requirements.txt — only the bare package + version specifier belong here.
 
 # Web framework
 fastapi>=0.115,<0.120
-uvicorn[standard]>=0.32,<0.40
+uvicorn>=0.32,<0.40
 
 # Validation / settings
 pydantic>=2.8,<3
@@ -26,7 +30,7 @@ pydantic-settings>=2.4,<3
 httpx>=0.27,<0.30
 
 # Postgres
-psycopg[binary]>=3.2,<4
+psycopg>=3.2,<4
 
 # Chemistry
 rdkit>=2024.9
