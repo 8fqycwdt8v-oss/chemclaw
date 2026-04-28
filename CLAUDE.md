@@ -238,10 +238,15 @@ The agent harness (`services/agent-claw/`) has five lifecycle hook points:
 | `pre_compact` | When context > 60% of budget | `compact-window` (invokes Haiku compactor) |
 | `post_turn` | After SSE stream closes | `redact-secrets` (defense-in-depth output scrub) |
 
-**Default lifecycle is built via `buildDefaultLifecycle()`** in `services/agent-claw/src/core/harness-builders.ts`. All three harness call paths (`/api/chat`, `/api/chat/plan/approve`, `/api/sessions/:id/plan/run`, `/api/sessions/:id/resume`) use the same factory so a hook addition picks up everywhere automatically. Same module exports `hydrateScratchpad` and `persistTurnState` — the rehydrate-from-session and end-of-turn save patterns shared across routes.
+**Lifecycle is a process-wide singleton** in `services/agent-claw/src/core/runtime.ts`. At server startup `index.ts` calls `loadHooks(lifecycle, deps)` from `core/hook-loader.ts`, which iterates `hooks/*.yaml` and registers each entry from `BUILTIN_REGISTRARS` into the singleton. All harness call paths (`/api/chat`, `/api/chat/plan/approve`, `/api/sessions/:id/plan/run`, `/api/sessions/:id/resume`, `/api/deep_research`) and sub-agents import the same singleton, so a hook addition picks up everywhere automatically. `core/session-state.ts` exports `hydrateScratchpad` and `persistTurnState` — the rehydrate-from-session and end-of-turn save patterns shared across routes.
 
 Hook files: `hooks/*.yaml` (definition) + `services/agent-claw/src/core/hooks/*.ts` (implementation).
 
-To add a hook: create both files; register in `lifecycle.ts`; write a vitest test. No harness changes needed.
+To add a hook:
+1. Add the implementation in `services/agent-claw/src/core/hooks/<name>.ts` (export a `register<Name>Hook(lifecycle, ...deps)` function).
+2. Add the YAML definition in `hooks/<name>.yaml` (declares the lifecycle phase).
+3. Register the registrar in the `BUILTIN_REGISTRARS` map in `core/hook-loader.ts`.
+4. Write a vitest test under `services/agent-claw/tests/unit/`.
+5. Bump `MIN_EXPECTED_HOOKS` in `index.ts` so the startup assertion catches a future regression where the new hook silently fails to load.
 
 To replay a projector: `DELETE FROM projection_acks WHERE projector_name='<name>';` then restart the container.
