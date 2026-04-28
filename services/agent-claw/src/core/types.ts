@@ -31,6 +31,13 @@ export interface ToolContext {
    * for backward compatibility, but the typed accessor is preferred.
    */
   seenFactIds: Set<string>;
+  /**
+   * Optional lifecycle dispatcher threaded through to tool.execute so a tool
+   * can fire fine-grained events (manage_todos → task_created/completed).
+   * The harness wires this on the way in; tests / sub-agents that don't have
+   * a Lifecycle in scope leave it undefined and tools tolerate the absence.
+   */
+  lifecycle?: Lifecycle;
 }
 
 // ---------------------------------------------------------------------------
@@ -147,7 +154,110 @@ export interface PostTurnPayload {
 }
 
 // ---------------------------------------------------------------------------
-// Re-export the five hook point names as a union so the registry is typed.
+// Phase 4B hook payloads — Claude-Code-shape additions.
+// ---------------------------------------------------------------------------
+
+export interface SessionStartPayload {
+  ctx: ToolContext;
+  sessionId: string;
+  source: "create" | "resume" | "compact";
+}
+
+export interface SessionEndPayload {
+  ctx: ToolContext;
+  sessionId: string;
+  finishReason: string;
+}
+
+export interface UserPromptSubmitPayload {
+  ctx: ToolContext;
+  prompt: string;
+  sessionId: string | null;
+}
+
+export interface PostToolFailurePayload {
+  ctx: ToolContext;
+  toolId: string;
+  input: unknown;
+  error: Error;
+  durationMs: number;
+}
+
+export interface PostToolBatchEntry {
+  toolId: string;
+  input: unknown;
+  output: unknown;
+}
+
+export interface PostToolBatchPayload {
+  ctx: ToolContext;
+  batch: PostToolBatchEntry[];
+}
+
+// TODO(phase-6-permissions): no dispatch site yet. Phase 6's permission
+// resolver will fire this when a tool needs an interactive permission
+// decision; for now the type exists so downstream hook authors can
+// register against it without a follow-up patch.
+export interface PermissionRequestPayload {
+  ctx: ToolContext;
+  toolId: string;
+  input: unknown;
+}
+
+// SubAgent shapes are re-exported from core/sub-agent.ts (which imports
+// these definitions). They live here to break the circular import that
+// would otherwise form between core/types.ts and core/sub-agent.ts.
+export type SubAgentType = "chemist" | "analyst" | "reader";
+
+export interface SubAgentTaskSpec {
+  /** What the sub-agent should accomplish. */
+  goal: string;
+  /** Named input values the sub-agent can reference in the goal. */
+  inputs: Record<string, unknown>;
+  /** Override step cap. */
+  max_steps?: number;
+  /** Override prompt token budget. */
+  max_tokens?: number;
+}
+
+export interface SubAgentResult {
+  text: string;
+  finishReason: string;
+  /** Fact/doc/rxn IDs collected by the seenFactIds set during the sub-turn. */
+  citations: string[];
+  stepsUsed: number;
+  usage: { promptTokens: number; completionTokens: number };
+}
+
+export interface SubAgentStartPayload {
+  ctx: ToolContext;
+  type: SubAgentType;
+  taskSpec: SubAgentTaskSpec;
+  parentUserEntraId: string;
+}
+
+export interface SubAgentStopPayload {
+  ctx: ToolContext;
+  type: SubAgentType;
+  result: SubAgentResult;
+  durationMs: number;
+}
+
+export interface TaskCreatedPayload {
+  ctx: ToolContext;
+  todoId: string;
+  content: string;
+  ordering: number;
+}
+
+export interface TaskCompletedPayload {
+  ctx: ToolContext;
+  todoId: string;
+  content: string;
+}
+
+// ---------------------------------------------------------------------------
+// Hook point names — Claude-Agent-SDK-shape union.
 // ---------------------------------------------------------------------------
 export type HookPoint =
   | "pre_turn"
@@ -155,7 +265,18 @@ export type HookPoint =
   | "post_tool"
   | "pre_compact"
   | "post_compact"
-  | "post_turn";
+  | "post_turn"
+  // Phase 4B additions:
+  | "session_start"
+  | "session_end"
+  | "user_prompt_submit"
+  | "post_tool_failure"
+  | "post_tool_batch"
+  | "permission_request"
+  | "subagent_start"
+  | "subagent_stop"
+  | "task_created"
+  | "task_completed";
 
 // ---------------------------------------------------------------------------
 // Map of hook point → payload type. Lifecycle uses this to type its on() /
@@ -169,6 +290,17 @@ export type HookPayloadMap = {
   pre_compact: PreCompactPayload;
   post_compact: PostCompactPayload;
   post_turn: PostTurnPayload;
+  // Phase 4B:
+  session_start: SessionStartPayload;
+  session_end: SessionEndPayload;
+  user_prompt_submit: UserPromptSubmitPayload;
+  post_tool_failure: PostToolFailurePayload;
+  post_tool_batch: PostToolBatchPayload;
+  permission_request: PermissionRequestPayload;
+  subagent_start: SubAgentStartPayload;
+  subagent_stop: SubAgentStopPayload;
+  task_created: TaskCreatedPayload;
+  task_completed: TaskCompletedPayload;
 };
 
 // ---------------------------------------------------------------------------

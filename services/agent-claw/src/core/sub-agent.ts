@@ -13,15 +13,22 @@
 import { runHarness } from "./harness.js";
 import { Budget } from "./budget.js";
 import type { Lifecycle } from "./lifecycle.js";
-import type { HarnessResult, Message, ToolContext } from "./types.js";
+import type {
+  HarnessResult,
+  Message,
+  SubAgentResult,
+  SubAgentTaskSpec,
+  SubAgentType,
+  ToolContext,
+} from "./types.js";
 import type { Tool } from "../tools/tool.js";
 import type { LlmProvider } from "../llm/provider.js";
 
-// ---------------------------------------------------------------------------
-// Sub-agent types + tool subsets
-// ---------------------------------------------------------------------------
-
-export type SubAgentType = "chemist" | "analyst" | "reader";
+// Re-export the SubAgent shape types from core/types.ts so existing
+// `import { SubAgentType } from "../core/sub-agent.js"` callers keep working.
+// Keeping these re-exports avoids touching dispatch_sub_agent.ts and the
+// sub-agent test file, while breaking the circular import with types.ts.
+export type { SubAgentResult, SubAgentTaskSpec, SubAgentType };
 
 /** Tools available to each sub-agent type. */
 export const SUB_AGENT_TOOL_SUBSETS: Record<SubAgentType, string[]> = {
@@ -51,19 +58,10 @@ const SUB_AGENT_DEFAULT_MAX_PROMPT_TOKENS = 40_000;
 const SUB_AGENT_DEFAULT_MAX_COMPLETION_TOKENS = 8_000;
 
 // ---------------------------------------------------------------------------
-// Task spec + result shapes
+// Citation — kept here for callers that import it from sub-agent.ts directly.
+// (The richer Citation lives in core/types.ts; this is the loose shape the
+// sub-agent harness threads through to dispatch_sub_agent's wire format.)
 // ---------------------------------------------------------------------------
-
-export interface SubAgentTaskSpec {
-  /** What the sub-agent should accomplish. */
-  goal: string;
-  /** Named input values the sub-agent can reference in the goal. */
-  inputs: Record<string, unknown>;
-  /** Override step cap. */
-  max_steps?: number;
-  /** Override prompt token budget. */
-  max_tokens?: number;
-}
 
 export interface Citation {
   source_id: string;
@@ -71,15 +69,6 @@ export interface Citation {
   source_uri?: string;
   snippet?: string;
   page?: number;
-}
-
-export interface SubAgentResult {
-  text: string;
-  finishReason: string;
-  /** Fact/doc/rxn IDs collected by the seenFactIds set during the sub-turn. */
-  citations: string[];
-  stepsUsed: number;
-  usage: { promptTokens: number; completionTokens: number };
 }
 
 // ---------------------------------------------------------------------------
@@ -175,7 +164,18 @@ export async function spawnSubAgent(
     maxCompletionTokens: SUB_AGENT_DEFAULT_MAX_COMPLETION_TOKENS,
   });
 
-  // ── 6. Run the sub-harness. ────────────────────────────────────────────────
+  // ── 6. subagent_start (Phase 4B). Fires against the parent's lifecycle
+  // BEFORE the sub-harness runs so observability hooks see start/stop pairs.
+  // ────────────────────────────────────────────────────────────────────────
+  const startMs = Date.now();
+  await lifecycle.dispatch("subagent_start", {
+    ctx: parentCtx,
+    type,
+    taskSpec,
+    parentUserEntraId: parentCtx.userEntraId,
+  });
+
+  // ── 7. Run the sub-harness. ────────────────────────────────────────────────
   let result: HarnessResult;
   try {
     result = await runHarness({
@@ -189,22 +189,41 @@ export async function spawnSubAgent(
   } catch (err) {
     // Sub-agent budget exceeded or other error — return partial result.
     const errMsg = err instanceof Error ? err.message : String(err);
-    return {
+    const failed: SubAgentResult = {
       text: `Sub-agent (${type}) failed: ${errMsg}`,
       finishReason: "error",
       citations: [...readSeenFactIds(subCtx, subSeenFactIds)],
       stepsUsed: budget.stepsUsed,
       usage: budget.summary(),
     };
+    // Phase 4B: still fire subagent_stop on failure paths so hook authors
+    // can record errored sub-agent invocations alongside successful ones.
+    await lifecycle.dispatch("subagent_stop", {
+      ctx: parentCtx,
+      type,
+      result: failed,
+      durationMs: Date.now() - startMs,
+    });
+    return failed;
   }
 
-  return {
+  const finalResult: SubAgentResult = {
     text: result.text,
     finishReason: result.finishReason,
     citations: [...readSeenFactIds(subCtx, subSeenFactIds)],
     stepsUsed: result.stepsUsed,
     usage: result.usage,
   };
+
+  // ── 8. subagent_stop (Phase 4B). Fires after the sub-harness returns.
+  await lifecycle.dispatch("subagent_stop", {
+    ctx: parentCtx,
+    type,
+    result: finalResult,
+    durationMs: Date.now() - startMs,
+  });
+
+  return finalResult;
 }
 
 /**

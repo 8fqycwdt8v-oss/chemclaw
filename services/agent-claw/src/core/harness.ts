@@ -41,6 +41,14 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
   let finalText = "";
   let finishReason = "stop";
 
+  // Phase 4B: thread the lifecycle onto ctx so tools (e.g. manage_todos)
+  // can dispatch fine-grained events (task_created, task_completed). Any
+  // pre-existing ctx.lifecycle is preserved — this only fills in the gap
+  // for callers that constructed ctx without one.
+  if (!ctx.lifecycle) {
+    ctx.lifecycle = lifecycle;
+  }
+
   // -------------------------------------------------------------------------
   // onSession — fires once at the very start of a streamed turn, before any
   // hook runs, so the SSE adapter can write the `session` event before the
