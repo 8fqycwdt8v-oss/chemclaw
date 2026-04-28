@@ -830,6 +830,20 @@ async function handleChat(
             // Re-dump scratchpad so the redact_log update is persisted.
             dump["redact_log"] = ctx.scratchpad.get("redact_log");
           }
+          // Enforce the 4000-char CHECK constraint added in
+          // db/init/16_db_audit_fixes.sql at write time, NOT at the DB
+          // boundary. Hitting the constraint mid-finally otherwise stalls
+          // the SSE close + leaves the session in an inconsistent state.
+          // 4000 ≈ 4 KB is more than enough for any legitimate ask_user
+          // clarification; longer questions get a "[truncated…]" suffix
+          // so the UI signals the cap was hit rather than silently
+          // chopping mid-sentence.
+          const AWAITING_QUESTION_MAX = 4000;
+          if (safeAwaitingQuestion && safeAwaitingQuestion.length > AWAITING_QUESTION_MAX) {
+            const suffix = " [truncated…]";
+            safeAwaitingQuestion =
+              safeAwaitingQuestion.slice(0, AWAITING_QUESTION_MAX - suffix.length) + suffix;
+          }
         }
 
         // Persist updated session totals so the next turn picks up where

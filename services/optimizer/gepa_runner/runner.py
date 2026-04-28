@@ -40,11 +40,25 @@ _last_run_details: dict[str, Any] = {}
 # ---------------------------------------------------------------------------
 
 def _get_dsn() -> str:
+    """Compose the DSN for the nightly GEPA optimiser.
+
+    Default user is ``chemclaw_service`` (LOGIN BYPASSRLS) — required since
+    ``db/init/12_security_hardening.sql`` and ``16_db_audit_fixes.sql``
+    applied FORCE ROW LEVEL SECURITY to ``prompt_registry`` and
+    ``feedback_events``. Connecting as the owner role (``chemclaw``) without
+    setting ``app.current_user_entra_id`` would silently return zero rows
+    from every SELECT and silently DROP every INSERT, leaving the
+    self-improvement loop dead while ``/healthz`` reported green. The
+    docker-compose block already exports ``POSTGRES_USER=chemclaw_service``
+    explicitly; this default ensures direct invocation (``python -m
+    services.optimizer.gepa_runner.runner`` in CI / manual smoke) doesn't
+    fall into the same hole.
+    """
     return (
         f"host={os.environ.get('POSTGRES_HOST', 'localhost')} "
         f"port={os.environ.get('POSTGRES_PORT', '5432')} "
         f"dbname={os.environ.get('POSTGRES_DB', 'chemclaw')} "
-        f"user={os.environ.get('POSTGRES_USER', 'chemclaw')} "
+        f"user={os.environ.get('POSTGRES_USER', 'chemclaw_service')} "
         f"password={os.environ.get('POSTGRES_PASSWORD', '')}"
     )
 
@@ -175,6 +189,27 @@ async def run_gepa_nightly(
         with psycopg.connect(dsn) as conn:
             prompts = _fetch_active_prompts(conn)
             logger.info("GEPA run starting — %d active prompts", len(prompts))
+
+            # Zero active prompts is almost always a misconfiguration: either
+            # the DB is freshly initialised (and `db.seed` hasn't run), or —
+            # more dangerously — we connected as a role that FORCE RLS gates
+            # to zero rows (the chemclaw owner role hits this on prompt_registry
+            # post-12_security_hardening.sql + 16_db_audit_fixes.sql). Surface
+            # this as `degraded` so /healthz doesn't lie about a working loop.
+            if not prompts:
+                details["__warning__"] = "no active prompts found in prompt_registry"
+                details["__hint__"] = (
+                    "if the schema has data, this is almost certainly an RLS "
+                    "issue: GEPA must connect as chemclaw_service, not the "
+                    "owner role (post-12_security_hardening.sql)"
+                )
+                logger.warning(
+                    "GEPA run found 0 active prompts — check POSTGRES_USER "
+                    "(must be chemclaw_service post-RLS hardening)"
+                )
+                _last_run_status = "degraded"
+                _last_run_details = details
+                return
 
             for prompt in prompts:
                 name = prompt["name"]

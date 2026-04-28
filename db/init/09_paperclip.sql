@@ -24,10 +24,25 @@ CREATE INDEX IF NOT EXISTS idx_paperclip_user_day
 CREATE INDEX IF NOT EXISTS idx_paperclip_status
   ON paperclip_state (status, reserved_at DESC);
 
--- RLS: users see only their own reservations (system context bypasses).
+-- RLS: users see only their own reservations.
+--
+-- Migration 16 (db_audit_fixes) idempotently DROP+CREATEs this policy with
+-- the corrected shape; we keep the source-of-truth here in sync so a fresh
+-- `db.init` doesn't briefly install the legacy fail-open form before 16
+-- patches it. The empty-string fall-through (`current_setting = ''`) is
+-- removed: production traffic always sets `app.current_user_entra_id` via
+-- `withUserContext`, and `chemclaw_service` (BYPASSRLS) covers system
+-- workers — no legitimate caller hits the empty-GUC path.
 ALTER TABLE paperclip_state ENABLE ROW LEVEL SECURITY;
+ALTER TABLE paperclip_state FORCE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS paperclip_own_policy ON paperclip_state;
 CREATE POLICY paperclip_own_policy ON paperclip_state
+  FOR ALL
   USING (
-    current_setting('app.current_user_entra_id', true) = ''
-    OR user_entra_id = current_setting('app.current_user_entra_id', true)
+    current_setting('app.current_user_entra_id', true) IS NOT NULL
+    AND current_setting('app.current_user_entra_id', true) <> ''
+    AND user_entra_id = current_setting('app.current_user_entra_id', true)
+  )
+  WITH CHECK (
+    user_entra_id = current_setting('app.current_user_entra_id', true)
   );
