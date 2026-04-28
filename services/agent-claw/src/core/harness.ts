@@ -15,6 +15,7 @@
 
 import { BudgetExceededError } from "./budget.js";
 import { stepOnce } from "./step.js";
+import { syncSeenFactIdsFromScratch } from "./session-state.js";
 import type { HarnessOptions, HarnessResult, Message, ToolContext } from "./types.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 
@@ -40,16 +41,10 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
 
   // Wire seenFactIds from scratch into ctx after pre_turn so that tools
   // can access it via the typed accessor. The init-scratch hook must have
-  // run first (registered before anti-fabrication).
-  const _seenFromScratch = ctx.scratchpad.get("seenFactIds");
-  if (_seenFromScratch instanceof Set) {
-    ctx.seenFactIds = _seenFromScratch as Set<string>;
-  } else if (!ctx.seenFactIds) {
-    // Fallback: if init-scratch wasn't registered, initialise here.
-    const _fresh = new Set<string>();
-    ctx.scratchpad.set("seenFactIds", _fresh);
-    ctx.seenFactIds = _fresh;
-  }
+  // run first (registered before anti-fabrication). Shared with the
+  // streaming routes (chat / deep-research) and sub-agent spawner so all
+  // four manual-pre_turn sites stay in lockstep.
+  syncSeenFactIdsFromScratch(ctx);
 
   // -------------------------------------------------------------------------
   // Main loop.

@@ -13,6 +13,38 @@ import {
 import type { Budget } from "./budget.js";
 
 /**
+ * Re-bind `ctx.seenFactIds` to whatever Set currently lives at
+ * `ctx.scratchpad["seenFactIds"]`.
+ *
+ * The init-scratch hook (pre_turn) replaces the scratchpad's seenFactIds
+ * with a fresh Set on every turn. Without this resync, the `ctx.seenFactIds`
+ * field still references the OLD Set seeded by `hydrateScratchpad` (or by
+ * the sub-agent spawner) — an orphan that no longer participates in the
+ * authoritative working memory. Tools that mutate via the scratchpad
+ * write to one Set; tools that read `ctx.seenFactIds` see the other.
+ *
+ * Call this after every manual `lifecycle.dispatch("pre_turn", ...)` that
+ * happens outside `runHarness`. `runHarness` itself uses this same helper.
+ *
+ * Fallback: if init-scratch wasn't registered (e.g., tests that use an
+ * empty Lifecycle), seed a fresh Set into the scratchpad and bind it. This
+ * keeps the post-condition "ctx.seenFactIds is the canonical Set" true
+ * regardless of hook configuration.
+ */
+export function syncSeenFactIdsFromScratch(ctx: ToolContext): void {
+  const fromScratch = ctx.scratchpad.get("seenFactIds");
+  if (fromScratch instanceof Set) {
+    ctx.seenFactIds = fromScratch as Set<string>;
+    return;
+  }
+  if (!ctx.seenFactIds) {
+    const fresh = new Set<string>();
+    ctx.scratchpad.set("seenFactIds", fresh);
+    ctx.seenFactIds = fresh;
+  }
+}
+
+/**
  * Hydrate a fresh scratchpad Map from a stored session's scratchpad jsonb.
  *
  * Drops the keys we re-initialise (`budget` is recomputed per turn,

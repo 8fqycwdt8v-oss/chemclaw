@@ -38,7 +38,7 @@ import {
 } from "../core/slash.js";
 import { redactString } from "../core/hooks/redact-secrets.js";
 import type { RedactReplacement } from "../core/hooks/redact-secrets.js";
-import { hydrateScratchpad } from "../core/session-state.js";
+import { hydrateScratchpad, syncSeenFactIdsFromScratch } from "../core/session-state.js";
 import { lifecycle } from "../core/runtime.js";
 import {
   createSession,
@@ -587,6 +587,11 @@ async function handleChat(
     // semantics (hooks, budget, tool execution) intact.
 
     await lifecycle.dispatch("pre_turn", { ctx, messages });
+    // init-scratch (registered as a pre_turn hook) replaces
+    // ctx.scratchpad["seenFactIds"] with a fresh Set every turn. Re-bind
+    // ctx.seenFactIds so direct field reads (e.g., dispatch_sub_agent's
+    // post-run citation merge) match the scratchpad's authoritative Set.
+    syncSeenFactIdsFromScratch(ctx);
 
     budget = new Budget({
       maxSteps: effectiveMaxSteps,

@@ -118,7 +118,14 @@ export async function spawnSubAgent(
   const allowedTools = new Set(SUB_AGENT_TOOL_SUBSETS[type]);
   const tools = deps.allTools.filter((t) => allowedTools.has(t.id));
 
-  // ── 2. Build a fresh sub-agent context (own seenFactIds, own scratchpad). ──
+  // ── 2. Build a fresh sub-agent context (own seenFactIds, own scratchpad).
+  // The Set we seed here is only the INITIAL reference: when the parent's
+  // process-wide Lifecycle includes init-scratch (it does in production),
+  // the pre_turn dispatch inside runHarness replaces scratchpad["seenFactIds"]
+  // with a fresh Set on every turn. The local `subSeenFactIds` becomes
+  // orphaned at that point, so we read citations back from the scratchpad
+  // at return time (see readSeenFactIds below) — the scratchpad is the
+  // canonical store after pre_turn.
   const subSeenFactIds = new Set<string>();
   const subScratchpad = new Map<string, unknown>();
   subScratchpad.set("seenFactIds", subSeenFactIds);
@@ -185,7 +192,7 @@ export async function spawnSubAgent(
     return {
       text: `Sub-agent (${type}) failed: ${errMsg}`,
       finishReason: "error",
-      citations: [...subSeenFactIds],
+      citations: [...readSeenFactIds(subCtx, subSeenFactIds)],
       stepsUsed: budget.stepsUsed,
       usage: budget.summary(),
     };
@@ -194,8 +201,20 @@ export async function spawnSubAgent(
   return {
     text: result.text,
     finishReason: result.finishReason,
-    citations: [...subSeenFactIds],
+    citations: [...readSeenFactIds(subCtx, subSeenFactIds)],
     stepsUsed: result.stepsUsed,
     usage: result.usage,
   };
+}
+
+/**
+ * Read the canonical seenFactIds Set out of the sub-agent's scratchpad.
+ * After init-scratch (pre_turn) runs, the scratchpad holds a different
+ * Set than the one we seeded — the seeded Set becomes orphaned. Falling
+ * back to the seed covers test setups that use an empty Lifecycle (no
+ * init-scratch registered).
+ */
+function readSeenFactIds(ctx: ToolContext, fallback: Set<string>): Set<string> {
+  const fromScratch = ctx.scratchpad.get("seenFactIds");
+  return fromScratch instanceof Set ? (fromScratch as Set<string>) : fallback;
 }
