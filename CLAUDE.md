@@ -220,32 +220,39 @@ The plan document is at `~/.claude/plans/go-through-the-three-vivid-sunset.md`.
 ## Test counts (current branch)
 
 ```
-cd services/agent-claw && npm test          →  667 passed
+cd services/agent-claw && npm test          →  704 passed
 cd services/agent-claw && npx tsc --noEmit  →  ok
 cd services/paperclip && npm test           →  17 passed
-python3 -m pytest tests/unit/test_redactor.py \
-  tests/unit/optimizer/test_session_purger.py \
-  services/mcp_tools/common/tests/ \
-  services/projectors/kg_source_cache/tests/ \
-  services/mcp_tools/mcp_eln_local/tests/ \
-  services/mcp_tools/mcp_logs_sciy/tests/ \
-  services/mock_eln/seed/tests/                →  81 passed
+.venv/bin/pytest services/mcp_tools/common/tests/ -q   →  33 passed
 npm audit (root)                            →  0 vulnerabilities
 ```
 
 ## Harness Primitives
 
-The agent harness (`services/agent-claw/`) has five lifecycle hook points:
+The agent harness (`services/agent-claw/`) has 16 lifecycle hook points. **`loadHooks(lifecycle, deps)`** in `services/agent-claw/src/core/hook-loader.ts` is the **single registration path** on the production startup path; YAML files in `hooks/` are the source of truth for which hooks run, and every hook name in YAML must have a matching entry in `BUILTIN_REGISTRARS`. The orphan `buildDefaultLifecycle()` factory was deleted in Phase 1B — all four harness call paths (`/api/chat`, `/api/chat/plan/approve`, `/api/sessions/:id/plan/run`, `/api/sessions/:id/resume`) plus sub-agents read the single global lifecycle that `loadHooks` populates at boot.
 
 | Hook point | When it fires | Current hooks |
 |---|---|---|
-| `pre_turn` | Before LLM call; after slash parsing | `init-scratch`, `apply-skills`, stale-fact check |
+| `session_start` | Once at session creation | `session-events` (telemetry) |
+| `session_end` | On session finalisation | (declared; no built-ins yet) |
+| `user_prompt_submit` | Before a user turn enters the loop | (declared; no built-ins yet) |
+| `pre_turn` | Before LLM call; after slash parsing | `init-scratch`, `apply-skills` |
 | `pre_tool` | Before a tool executes | `anti-fabrication`, `budget-guard`, `foundation-citation-guard` |
-| `post_tool` | After a tool returns | `tag-maturity`, `source-cache`, `compact-window`, `todo_update` SSE emit |
+| `post_tool` | After a tool returns | `tag-maturity`, `source-cache` |
+| `post_tool_failure` | After a tool throws | (declared; no built-ins yet) |
+| `post_tool_batch` | After a parallel readonly batch resolves | (declared; no built-ins yet) |
+| `permission_request` | When `ask`/`defer` decision returns (Phase 6) | (declared; resolver pending) |
+| `subagent_start` | Before a sub-agent runHarness call | (declared; no built-ins yet) |
+| `subagent_stop` | After a sub-agent returns | (declared; no built-ins yet) |
+| `task_created` | When `manage_todos` adds an item | (declared; no built-ins yet) |
+| `task_completed` | When a todo flips to `completed` | (declared; no built-ins yet) |
 | `pre_compact` | When context > 60% of budget | `compact-window` (invokes Haiku compactor) |
+| `post_compact` | After compaction returns | (declared; no built-ins yet) |
 | `post_turn` | After SSE stream closes | `redact-secrets` (defense-in-depth output scrub) |
 
 **Lifecycle is a process-wide singleton** in `services/agent-claw/src/core/runtime.ts`. At server startup `index.ts` calls `loadHooks(lifecycle, deps)` from `core/hook-loader.ts`, which iterates `hooks/*.yaml` and registers each entry from `BUILTIN_REGISTRARS` into the singleton. All harness call paths (`/api/chat`, `/api/chat/plan/approve`, `/api/sessions/:id/plan/run`, `/api/sessions/:id/resume`, `/api/deep_research`) and sub-agents import the same singleton, so a hook addition picks up everywhere automatically. `core/session-state.ts` exports `hydrateScratchpad` and `persistTurnState` — the rehydrate-from-session and end-of-turn save patterns shared across routes.
+
+Hook callbacks follow the Claude Agent SDK shape — `(input, toolUseID, { signal: AbortSignal }) => Promise<HookJSONOutput>` — and aggregate decisions via `deny > defer > ask > allow`. Each dispatch gets a per-call AbortController with a 60 s default timeout. See ADRs [007 (hook system rebuild)](docs/adr/007-hook-system-rebuild.md), [008 (collapsed ReAct loop)](docs/adr/008-collapsed-react-loop.md), [009 (permission and decision contract)](docs/adr/009-permission-and-decision-contract.md), [010 (deferred phases)](docs/adr/010-deferred-phases.md), and the [`docs/PARITY.md`](docs/PARITY.md) tracker for the full v1.2.0-harness story.
 
 Hook files: `hooks/*.yaml` (definition) + `services/agent-claw/src/core/hooks/*.ts` (implementation).
 
@@ -255,5 +262,7 @@ To add a hook:
 3. Register the registrar in the `BUILTIN_REGISTRARS` map in `core/hook-loader.ts`.
 4. Write a vitest test under `services/agent-claw/tests/unit/`.
 5. Bump `MIN_EXPECTED_HOOKS` in `index.ts` so the startup assertion catches a future regression where the new hook silently fails to load.
+
+The loader returns a `HookLoadResult.skipped` list at boot, so a YAML without a registrar (or vice versa) surfaces immediately.
 
 To replay a projector: `DELETE FROM projection_acks WHERE projector_name='<name>';` then restart the container.
