@@ -104,6 +104,17 @@ async function _runOneTool(opts: {
   }
   // "ask" / "defer" require route-level handling; for now treat as allow.
   // TODO(phase-6-permissions): wire ask/defer to a route-level prompt.
+  if (preResult.decision === "ask" || preResult.decision === "defer") {
+    // No logger is in scope at this layer (stepOnce is called from the
+    // harness loop, which is reached from many routes / sub-agent flows).
+    // Use console.warn so the gap is observable in dev + production.
+    // eslint-disable-next-line no-console
+    console.warn(
+      `[step] decision=${preResult.decision} treated as allow ` +
+        `(Phase 6 will implement the route-level resolver) ` +
+        `toolId=${toolId} reason=${preResult.reason ?? "(none)"}`,
+    );
+  }
 
   // updatedInput from a hook supersedes any in-place mutation.
   const effectiveInput =
