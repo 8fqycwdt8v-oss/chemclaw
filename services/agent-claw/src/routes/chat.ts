@@ -337,6 +337,9 @@ async function handleChat(
   // mint a new session — the SSE path emits a `session` event so the client
   // can resume on the next turn.
   let sessionId: string | null = body.session_id ?? null;
+  // Phase 4B: track whether the session existed at the start of this turn
+  // so the session_start dispatch can pass source ∈ {"create", "resume"}.
+  let sessionExisted = false;
   let priorScratchpad: Record<string, unknown> = {};
   // Phase F + H state captured at turn start.
   let sessionEtag: string | undefined;
@@ -349,6 +352,7 @@ async function handleChat(
     try {
       const loaded = await loadSession(deps.pool, user, sessionId);
       if (loaded) {
+        sessionExisted = true;
         priorScratchpad = loaded.scratchpad ?? {};
         sessionEtag = loaded.etag;
         sessionInputUsed = loaded.sessionInputTokens;
@@ -402,7 +406,36 @@ async function handleChat(
     userEntraId: user,
     seenFactIds,
     scratchpad,
+    lifecycle,
   };
+
+  // ── Phase 4B lifecycle dispatches ──────────────────────────────────────
+  // user_prompt_submit fires after ctx is built but before slash-mode
+  // branches (manual /compact, /plan) and before runHarness. session_start
+  // fires next, with source ∈ {"create", "resume"} based on whether the
+  // session row existed at the start of this turn. Both are best-effort:
+  // failures are logged and don't abort the turn.
+  try {
+    await lifecycle.dispatch("user_prompt_submit", {
+      ctx,
+      prompt: lastUserMessage?.content ?? "",
+      sessionId,
+    });
+  } catch (err) {
+    req.log.warn({ err }, "user_prompt_submit dispatch failed (non-fatal)");
+  }
+
+  if (sessionId) {
+    try {
+      await lifecycle.dispatch("session_start", {
+        ctx,
+        sessionId,
+        source: sessionExisted ? "resume" : "create",
+      });
+    } catch (err) {
+      req.log.warn({ err }, "session_start dispatch failed (non-fatal)");
+    }
+  }
 
   // ── Manual /compact slash branch ────────────────────────────────────────
   // Fires pre_compact (with trigger="manual" and any user-supplied
@@ -814,6 +847,21 @@ async function handleChat(
         }
       } catch (saveErr) {
         req.log.warn({ err: saveErr }, "saveSession failed");
+      }
+    }
+
+    // Phase 4B: session_end fires only on a clean stop. Awaiting-input,
+    // budget-exceeded, and concurrent-modification leave the session open
+    // for the next turn — those are not terminations.
+    if (sessionId && finishReason === "stop") {
+      try {
+        await lifecycle.dispatch("session_end", {
+          ctx,
+          sessionId,
+          finishReason,
+        });
+      } catch (err) {
+        req.log.warn({ err }, "session_end dispatch failed (non-fatal)");
       }
     }
 

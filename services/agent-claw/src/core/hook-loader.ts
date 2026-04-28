@@ -36,6 +36,7 @@ import { registerFoundationCitationGuardHook } from "./hooks/foundation-citation
 import { registerSourceCacheHook } from "./hooks/source-cache.js";
 import { registerCompactWindowHook } from "./hooks/compact-window.js";
 import { registerApplySkillsHook } from "./hooks/apply-skills.js";
+import { registerSessionEventsHook } from "./hooks/session-events.js";
 
 // ---------------------------------------------------------------------------
 // YAML schema (validated at load time).
@@ -48,6 +49,17 @@ const VALID_HOOK_POINTS = new Set<string>([
   "pre_compact",
   "post_compact",
   "post_turn",
+  // Phase 4B additions:
+  "session_start",
+  "session_end",
+  "user_prompt_submit",
+  "post_tool_failure",
+  "post_tool_batch",
+  "permission_request",
+  "subagent_start",
+  "subagent_stop",
+  "task_created",
+  "task_completed",
 ]);
 
 interface HookYaml {
@@ -98,6 +110,9 @@ const BUILTIN_REGISTRARS: Map<string, BuiltinRegistrar> = new Map([
     "apply-skills",
     (lc, deps) => registerApplySkillsHook(lc, deps.skillLoader, deps.allTools),
   ],
+  // Phase 4B: no-op session-events hook gives operators a YAML-discoverable
+  // attach point for session_start telemetry without forcing a code change.
+  ["session-events", (lc) => registerSessionEventsHook(lc)],
 ]);
 
 // ---------------------------------------------------------------------------

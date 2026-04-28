@@ -10,6 +10,7 @@ import type { Lifecycle } from "./lifecycle.js";
 import type { Message, StepResult, ToolContext } from "./types.js";
 import type { Tool } from "../tools/tool.js";
 import type { StreamSink, TodoSnapshot } from "./streaming-sink.js";
+import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 
 export interface StepOnceOptions {
   llm: LlmProvider;
@@ -133,7 +134,26 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
   streamSink?.onToolCall?.(toolId, parsedInput);
 
   // 3c. Execute.
-  const rawOutput = await tool.execute(ctx, parsedInput);
+  // Phase 4B: catch errors so observability hooks can record the failure
+  // before re-throw. AwaitingUserInputError is control-flow (not a failure)
+  // and propagates untouched.
+  const toolStartMs = Date.now();
+  let rawOutput: unknown;
+  try {
+    rawOutput = await tool.execute(ctx, parsedInput);
+  } catch (err) {
+    if (err instanceof AwaitingUserInputError) {
+      throw err;
+    }
+    await lifecycle.dispatch("post_tool_failure", {
+      ctx,
+      toolId,
+      input: parsedInput,
+      error: err instanceof Error ? err : new Error(String(err)),
+      durationMs: Date.now() - toolStartMs,
+    });
+    throw err;
+  }
 
   // 3d. Validate output.
   const parsedOutput = tool.outputSchema.parse(rawOutput);
@@ -146,6 +166,15 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
   });
   // Output may have been mutated by a hook.
   const effectiveOutput = postPayload.output;
+
+  // 3e-batch. Phase 4B: post_tool_batch fires once per tool today (Phase 5
+  // will introduce parallel execution and a real batch). Keeping the
+  // single-entry shape lets hook authors register against the batch event
+  // now and survive the Phase 5 transition without code changes.
+  await lifecycle.dispatch("post_tool_batch", {
+    ctx,
+    batch: [{ toolId, input: effectiveInput, output: effectiveOutput }],
+  });
 
   // 3e-sink. Notify the sink with the (post-hook) output.
   streamSink?.onToolResult?.(toolId, effectiveOutput);
