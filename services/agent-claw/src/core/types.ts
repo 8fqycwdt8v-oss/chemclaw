@@ -158,6 +158,20 @@ export type HookPoint =
   | "post_turn";
 
 // ---------------------------------------------------------------------------
+// Map of hook point → payload type. Lifecycle uses this to type its on() /
+// dispatch() generics. Lives here (not lifecycle.ts) so callers that build
+// typed HookCallbacks can import it without pulling in the dispatcher.
+// ---------------------------------------------------------------------------
+export type HookPayloadMap = {
+  pre_turn: PreTurnPayload;
+  pre_tool: PreToolPayload;
+  post_tool: PostToolPayload;
+  pre_compact: PreCompactPayload;
+  post_compact: PostCompactPayload;
+  post_turn: PostTurnPayload;
+};
+
+// ---------------------------------------------------------------------------
 // Citation — typed provenance record surfaced in tool-result events.
 //
 // Forward-compatible design:

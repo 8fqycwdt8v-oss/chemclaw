@@ -277,9 +277,9 @@ export async function sourceCachePostToolHook(
  * Register the source-cache hook into a Lifecycle instance.
  *
  * Adapter that wraps the positional `sourceCachePostToolHook(toolId, output,
- * pool, userEntraId)` into the lifecycle's `(payload: PostToolPayload) =>
- * Promise<void>` shape. The existing positional function stays untouched so
- * its current tests (`tests/unit/hooks-source-cache.test.ts`) keep passing.
+ * pool, userEntraId)` into the lifecycle's HookJSONOutput shape. The existing
+ * positional function stays untouched so its current tests
+ * (`tests/unit/hooks-source-cache.test.ts`) keep passing.
  */
 export function registerSourceCacheHook(lifecycle: Lifecycle, pool: Pool): void {
   lifecycle.on("post_tool", "source-cache", async (payload) => {
@@ -289,5 +289,6 @@ export function registerSourceCacheHook(lifecycle: Lifecycle, pool: Pool): void 
       pool,
       payload.ctx.userEntraId,
     );
+    return {};
   });
 }

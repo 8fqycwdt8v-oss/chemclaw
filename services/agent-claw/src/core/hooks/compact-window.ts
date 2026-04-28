@@ -60,5 +60,6 @@ export function registerCompactWindowHook(
 
     // Mutate the messages array in-place so the harness sees the change.
     messages.splice(0, messages.length, ...compacted);
+    return {};
   });
 }

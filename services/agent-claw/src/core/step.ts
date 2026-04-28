@@ -91,11 +91,39 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
     );
   }
 
-  // 3a. pre_tool — hooks may throw to abort, may mutate input.
+  // 3a. pre_tool — hooks may throw to abort (legacy budget-guard path), may
+  // mutate input via in-place writes, may return a permissionDecision, or
+  // may return updatedInput to rewrite the call.
   const prePayload = { ctx, toolId, input };
-  await lifecycle.dispatch("pre_tool", prePayload);
-  // Input may have been mutated by a hook.
-  const effectiveInput = prePayload.input;
+  const preResult = await lifecycle.dispatch("pre_tool", prePayload, {
+    toolUseID: toolId,
+    matcherTarget: toolId,
+  });
+
+  // 3a-deny. A pre_tool hook returned permissionDecision: "deny". Skip
+  // tool.execute and surface a synthetic rejection so the model sees the
+  // refusal and can adjust on the next step.
+  if (preResult.decision === "deny") {
+    const denyOutput = {
+      error: "denied_by_hook",
+      reason: preResult.reason ?? "denied without reason",
+    };
+    // Notify the sink so the UI shows the call was attempted but denied.
+    streamSink?.onToolCall?.(toolId, prePayload.input);
+    streamSink?.onToolResult?.(toolId, denyOutput);
+    return {
+      step: result,
+      toolOutput: denyOutput,
+      usage,
+    };
+  }
+  // "ask" / "defer" require route-level handling (interactive permission
+  // prompt) that's out of scope for Phase 4A. For now, treat them as allow.
+  // TODO(phase-6-permissions): wire ask/defer to a route-level prompt.
+
+  // updatedInput from a hook supersedes any in-place mutation.
+  const effectiveInput =
+    preResult.updatedInput !== undefined ? preResult.updatedInput : prePayload.input;
 
   // 3b. Validate input.
   const parsedInput = tool.inputSchema.parse(effectiveInput);
@@ -112,7 +140,10 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
 
   // 3e. post_tool.
   const postPayload = { ctx, toolId, input: effectiveInput, output: parsedOutput };
-  await lifecycle.dispatch("post_tool", postPayload);
+  await lifecycle.dispatch("post_tool", postPayload, {
+    toolUseID: toolId,
+    matcherTarget: toolId,
+  });
   // Output may have been mutated by a hook.
   const effectiveOutput = postPayload.output;
 
