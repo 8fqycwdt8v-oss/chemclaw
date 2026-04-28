@@ -448,9 +448,17 @@ const start = async () => {
       app.log.warn({ err }, "could not hydrate tool registry from DB — continuing with empty registry");
     }
 
-    // Load YAML hooks (non-fatal).
+    // Load YAML hooks (non-fatal). HookDeps is assembled from existing
+    // top-level singletons + AGENT_TOKEN_BUDGET so source-cache, compact-window,
+    // and apply-skills registrars receive their required dependencies.
     try {
-      const hookResult = await loadHooks(lifecycle);
+      const hookResult = await loadHooks(lifecycle, {
+        pool,
+        llm: llmProvider,
+        skillLoader,
+        allTools: registry.all(),
+        tokenBudget: cfg.AGENT_TOKEN_BUDGET,
+      });
       app.log.info(hookResult, "lifecycle hooks loaded");
     } catch (err) {
       app.log.warn({ err }, "hook loader failed — continuing without YAML hooks");

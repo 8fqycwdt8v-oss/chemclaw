@@ -4,13 +4,13 @@
 # context window into a single synopsis message when the token estimate
 # exceeds 60% of AGENT_TOKEN_BUDGET.
 #
-# The hook is registered programmatically via registerCompactWindowHook()
-# (services/agent-claw/src/core/hooks/compact-window.ts) rather than via
-# the generic YAML hook loader, because it needs the LLM provider injected.
-# This YAML descriptor documents the hook for operators and monitoring.
+# The hook is wired through the YAML loader; the loader passes the LLM
+# provider and AGENT_TOKEN_BUDGET via HookDeps so the registrar can build
+# the Haiku-class summarizer.
 
-point: pre_compact
 name: compact-window
+lifecycle: pre_compact
+enabled: true
 description: >
   Haiku-class summarizer that fires when projected token count exceeds
   60% of AGENT_TOKEN_BUDGET. Leaves the system prompt + 3 most-recent

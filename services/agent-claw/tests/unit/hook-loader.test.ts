@@ -6,6 +6,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { Lifecycle } from "../../src/core/lifecycle.js";
 import { loadHooks } from "../../src/core/hook-loader.js";
+import { mockHookDeps } from "../helpers/mocks.js";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -28,7 +29,7 @@ describe("loadHooks — empty directory", () => {
     const dir = await makeTmpDir();
     try {
       const lc = new Lifecycle();
-      const result = await loadHooks(lc, dir);
+      const result = await loadHooks(lc, mockHookDeps(), dir);
       expect(result.filesFound).toBe(0);
       expect(result.registered).toBe(0);
     } finally {
@@ -38,7 +39,7 @@ describe("loadHooks — empty directory", () => {
 
   it("returns zero registered when hooks dir does not exist", async () => {
     const lc = new Lifecycle();
-    const result = await loadHooks(lc, "/tmp/nonexistent-hooks-dir-xyz");
+    const result = await loadHooks(lc, mockHookDeps(), "/tmp/nonexistent-hooks-dir-xyz");
     expect(result.filesFound).toBe(0);
     expect(result.registered).toBe(0);
   });
@@ -62,7 +63,7 @@ enabled: true
 `,
     );
     const lc = new Lifecycle();
-    const result = await loadHooks(lc, dir);
+    const result = await loadHooks(lc, mockHookDeps(), dir);
     expect(result.registered).toBe(1);
     expect(result.skipped).toHaveLength(0);
     // post_turn should have 1 registered handler (redact-secrets ignores the
@@ -81,7 +82,7 @@ enabled: true
 `,
     );
     const lc = new Lifecycle();
-    const result = await loadHooks(lc, dir);
+    const result = await loadHooks(lc, mockHookDeps(), dir);
     expect(result.registered).toBe(1);
     expect(lc.count("post_tool")).toBe(1);
   });
@@ -97,7 +98,7 @@ enabled: true
 `,
     );
     const lc = new Lifecycle();
-    const result = await loadHooks(lc, dir);
+    const result = await loadHooks(lc, mockHookDeps(), dir);
     expect(result.registered).toBe(1);
     expect(lc.count("pre_tool")).toBe(1);
   });
@@ -113,7 +114,7 @@ enabled: false
 `,
     );
     const lc = new Lifecycle();
-    const result = await loadHooks(lc, dir);
+    const result = await loadHooks(lc, mockHookDeps(), dir);
     expect(result.registered).toBe(0);
     expect(result.skipped.length).toBeGreaterThan(0);
     expect(lc.count("post_turn")).toBe(0);
@@ -125,7 +126,7 @@ enabled: false
     await writeYaml(dir, "budget-guard.yaml", `name: budget-guard\nlifecycle: pre_tool\nenabled: true`);
 
     const lc = new Lifecycle();
-    const result = await loadHooks(lc, dir);
+    const result = await loadHooks(lc, mockHookDeps(), dir);
     expect(result.filesFound).toBe(3);
     expect(result.registered).toBe(3);
     // pre_tool has budget-guard = 1 handler (redact-secrets is post_turn now).
@@ -145,7 +146,7 @@ enabled: false
       `name: redact-secrets\nlifecycle: invalid_point\nenabled: true`,
     );
     const lc = new Lifecycle();
-    const result = await loadHooks(lc, dir);
+    const result = await loadHooks(lc, mockHookDeps(), dir);
     expect(result.registered).toBe(0);
     expect(result.skipped.some((s) => s.includes("invalid lifecycle"))).toBe(true);
 
@@ -155,7 +156,7 @@ enabled: false
   it("skips a YAML file with parse errors", async () => {
     await writeFile(join(dir, "broken.yaml"), ": : bad yaml {{{", "utf8");
     const lc = new Lifecycle();
-    const result = await loadHooks(lc, dir);
+    const result = await loadHooks(lc, mockHookDeps(), dir);
     expect(result.registered).toBe(0);
     expect(result.skipped.some((s) => s.includes("YAML parse error"))).toBe(true);
 
@@ -165,7 +166,7 @@ enabled: false
   it("skips a hook with unknown built-in name", async () => {
     await writeYaml(dir, "unknown.yaml", `name: not-a-builtin\nlifecycle: pre_tool\nenabled: true`);
     const lc = new Lifecycle();
-    const result = await loadHooks(lc, dir);
+    const result = await loadHooks(lc, mockHookDeps(), dir);
     expect(result.registered).toBe(0);
     expect(result.skipped.some((s) => s.includes('no built-in registrar'))).toBe(true);
 

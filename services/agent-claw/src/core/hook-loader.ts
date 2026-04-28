@@ -1,7 +1,13 @@
 // YAML hook loader.
 //
 // Reads hooks/*.yaml at startup (path from env HOOKS_DIR, default <repo-root>/hooks).
-// Each YAML defines a hook that gets registered into the Lifecycle dispatcher.
+// Each YAML defines a hook that gets registered into the Lifecycle dispatcher
+// via the BUILTIN_REGISTRARS map. Hooks with a `script` field dynamically
+// import the module — supported but no script-based hooks ship today.
+//
+// As of v1.2.0 this is the single source of truth for hook registration on
+// the production startup path. The 9 built-in hooks register here; new hooks
+// require both a YAML file in hooks/ AND an entry in BUILTIN_REGISTRARS.
 //
 // YAML shape:
 //   name: <string>
@@ -10,20 +16,26 @@
 //   script: <optional JS file path relative to this service>
 //   definition:
 //     <hook-type-specific fields>
-//
-// Built-in hooks are identified by name and registered from the compiled
-// TypeScript modules. Hooks with a `script` field dynamically import the
-// module — supported but no script-based hooks ship in Phase A.3.
 
 import { readdir, readFile } from "node:fs/promises";
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
 import { load as parseYaml } from "js-yaml";
+import type { Pool } from "pg";
 import type { Lifecycle } from "./lifecycle.js";
 import type { HookPoint } from "./types.js";
+import type { LlmProvider } from "../llm/provider.js";
+import type { SkillLoader } from "./skills.js";
+import type { Tool } from "../tools/tool.js";
 import { registerRedactSecretsHook } from "./hooks/redact-secrets.js";
 import { registerTagMaturityHook } from "./hooks/tag-maturity.js";
 import { registerBudgetGuardHook } from "./hooks/budget-guard.js";
+import { registerInitScratchHook } from "./hooks/init-scratch.js";
+import { registerAntiFabricationHook } from "./hooks/anti-fabrication.js";
+import { registerFoundationCitationGuardHook } from "./hooks/foundation-citation-guard.js";
+import { registerSourceCacheHook } from "./hooks/source-cache.js";
+import { registerCompactWindowHook } from "./hooks/compact-window.js";
+import { registerApplySkillsHook } from "./hooks/apply-skills.js";
 
 // ---------------------------------------------------------------------------
 // YAML schema (validated at load time).
@@ -46,15 +58,45 @@ interface HookYaml {
 }
 
 // ---------------------------------------------------------------------------
-// Built-in registrar map — keyed by hook name.
+// Hook dependencies — passed to every registrar so source-cache can get a
+// pool, compact-window can get an LLM + token budget, apply-skills can get
+// the skill loader + the live tool catalog, etc.
+//
+// `loadHooks` is the single source of truth for which hooks register; the
+// caller (index.ts) is responsible for assembling the deps object.
 // ---------------------------------------------------------------------------
 
-type BuiltinRegistrar = (lifecycle: Lifecycle) => void;
+export interface HookDeps {
+  pool: Pool;
+  llm: LlmProvider;
+  skillLoader: SkillLoader;
+  allTools: Tool[];
+  /** AGENT_TOKEN_BUDGET — used by the compact-window pre_compact hook. */
+  tokenBudget: number;
+}
+
+type BuiltinRegistrar = (lifecycle: Lifecycle, deps: HookDeps) => void;
 
 const BUILTIN_REGISTRARS: Map<string, BuiltinRegistrar> = new Map([
-  ["redact-secrets", registerRedactSecretsHook],
-  ["tag-maturity", registerTagMaturityHook],
-  ["budget-guard", registerBudgetGuardHook],
+  ["redact-secrets", (lc) => registerRedactSecretsHook(lc)],
+  ["tag-maturity", (lc) => registerTagMaturityHook(lc)],
+  ["budget-guard", (lc) => registerBudgetGuardHook(lc)],
+  ["init-scratch", (lc) => registerInitScratchHook(lc)],
+  ["anti-fabrication", (lc) => registerAntiFabricationHook(lc)],
+  ["foundation-citation-guard", (lc) => registerFoundationCitationGuardHook(lc)],
+  ["source-cache", (lc, deps) => registerSourceCacheHook(lc, deps.pool)],
+  [
+    "compact-window",
+    (lc, deps) =>
+      registerCompactWindowHook(lc, {
+        llm: deps.llm,
+        tokenBudget: deps.tokenBudget,
+      }),
+  ],
+  [
+    "apply-skills",
+    (lc, deps) => registerApplySkillsHook(lc, deps.skillLoader, deps.allTools),
+  ],
 ]);
 
 // ---------------------------------------------------------------------------
@@ -74,10 +116,12 @@ export interface HookLoadResult {
  * Load all hooks/*.yaml from hooksDir and register enabled hooks into lifecycle.
  *
  * @param lifecycle  The Lifecycle instance to register hooks into.
+ * @param deps       Dependencies passed to each registrar (pool, llm, skill loader, tool list, token budget).
  * @param hooksDir   Directory containing *.yaml files. Defaults to <repo-root>/hooks.
  */
 export async function loadHooks(
   lifecycle: Lifecycle,
+  deps: HookDeps,
   hooksDir?: string,
 ): Promise<HookLoadResult> {
   // Resolve default hooks dir: ../../../../hooks relative to this file in dist.
@@ -174,7 +218,7 @@ export async function loadHooks(
       continue;
     }
 
-    registrar(lifecycle);
+    registrar(lifecycle, deps);
     result.registered++;
   }
 
