@@ -25,6 +25,7 @@ import type {
 } from "./hook-output.js";
 import { mostRestrictive } from "./hook-output.js";
 import type { HookPayloadMap, HookPoint } from "./types.js";
+import { withHookSpan } from "../observability/hook-spans.js";
 
 // Internal: store each handler with a name + matcher + per-hook timeout.
 interface RegisteredHook<P> {
@@ -160,32 +161,46 @@ export class Lifecycle {
         // the background — we cannot kill its event-loop work — but the
         // dispatcher unblocks, the timeout error path runs, and the next
         // hook fires on schedule.
-        const handlerPromise = (
-          hook.handler as HookCallback<unknown>
-        )(payload, opts.toolUseID, { signal: ac.signal });
-        const abortPromise = new Promise<never>((_, reject) => {
-          if (ac.signal.aborted) {
-            reject(
-              ac.signal.reason ??
-                new Error(`hook timeout: ${hook.name}`),
-            );
-            return;
-          }
-          ac.signal.addEventListener(
-            "abort",
-            () => {
-              reject(
-                ac.signal.reason ??
-                  new Error(`hook timeout: ${hook.name}`),
+        //
+        // The Promise.race is wrapped in withHookSpan so the OTel exporter
+        // sees one span per hook invocation with name, point, matcher
+        // target, tool-use id, duration, and OK/ERROR status. A timeout
+        // (abort-rejection wins the race) shows up as an ERROR span.
+        const result: HookJSONOutput | undefined | void = await withHookSpan(
+          {
+            point,
+            hookName: hook.name,
+            matcherTarget: opts.matcherTarget,
+            toolUseId: opts.toolUseID,
+          },
+          () => {
+            const handlerPromise = (
+              hook.handler as HookCallback<unknown>
+            )(payload, opts.toolUseID, { signal: ac.signal });
+            const abortPromise = new Promise<never>((_, reject) => {
+              if (ac.signal.aborted) {
+                reject(
+                  ac.signal.reason ??
+                    new Error(`hook timeout: ${hook.name}`),
+                );
+                return;
+              }
+              ac.signal.addEventListener(
+                "abort",
+                () => {
+                  reject(
+                    ac.signal.reason ??
+                      new Error(`hook timeout: ${hook.name}`),
+                  );
+                },
+                { once: true },
               );
-            },
-            { once: true },
-          );
-        });
-        const result: HookJSONOutput | undefined | void = await Promise.race([
-          handlerPromise,
-          abortPromise,
-        ]);
+            });
+            return Promise.race([handlerPromise, abortPromise]) as Promise<
+              HookJSONOutput | undefined | void
+            >;
+          },
+        );
 
         // Tolerate hooks that return nothing (legacy void-returning shape
         // surfaced by older tests and any third-party hook that hasn't
@@ -224,6 +239,11 @@ export class Lifecycle {
           // the tool call by throwing.
           throw err;
         }
+        // TODO(observability): replace with a centralised pino logger when
+        // one is introduced (Phase 9 self-review: no shared logger module
+        // exists yet; the per-hook OTel span emits ERROR status with
+        // recordException so the failure is observable in Langfuse — this
+        // console.error remains as a developer-facing fallback).
         // eslint-disable-next-line no-console
         console.error(
           `[lifecycle] non-pre_tool hook "${hook.name}" at "${point}" threw — continuing with remaining hooks`,
