@@ -57,10 +57,18 @@ export function makeSseSink(
       // route didn't supply one (stateless turn), fall back to an empty
       // string — clients keying off session_id will simply not be able to
       // resume, which mirrors the pre-Phase-2B behaviour for stateless turns.
+      //
+      // Defense-in-depth: redact the question before emitting. The chat
+      // route also redacts via its own finally block (post-scratchpad lift),
+      // but routes that don't override this callback (e.g. /api/deep_research)
+      // would otherwise leak unredacted tokens onto the SSE wire. Replacements
+      // accumulate into the caller-owned redactionLog so the surrounding
+      // route can persist them via post_turn.
+      const safeQuestion = redactString(question, redactionLog);
       writeEvent(reply, {
         type: "awaiting_user_input",
         session_id: sessionIdForAwaitingInput ?? "",
-        question,
+        question: safeQuestion,
       });
     },
     onFinish: (
