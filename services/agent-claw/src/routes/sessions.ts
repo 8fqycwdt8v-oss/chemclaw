@@ -608,8 +608,16 @@ async function _runChainedHarnessInner(
   // Phase 4B: session_end fires once at the end of the chain when the
   // final finish reason is a clean stop. Awaiting-input / budget-exceeded
   // leave the session open for the next reanimator tick or user message.
-  // We need a ctx to dispatch with — rebuild a minimal one (the chain
-  // already persisted state through saveSession in the loop above).
+  //
+  // GOTCHA for future hook authors: the `endCtx` synthesized here is
+  // intentionally minimal — `seenFactIds` is empty and `scratchpad` is
+  // empty. The chain persisted real state through `saveSession` after
+  // each turn, but rebuilding ctx from disk for one terminal dispatch
+  // would be expensive and is not currently worth the complexity. If
+  // your `session_end` hook needs to read scratchpad, load it from the
+  // `agent_sessions.scratchpad` row directly (see `loadSession` in
+  // services/agent-claw/src/core/session-store.ts) — do NOT rely on
+  // `endCtx.scratchpad` being populated.
   if (sessionStartFired && finalFinishReason === "stop") {
     try {
       const endCtx: ToolContext = {

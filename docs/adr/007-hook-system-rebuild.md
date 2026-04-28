@@ -61,11 +61,17 @@ Concretely:
    decisions across all hooks at the same point with `deny > defer > ask
    > allow` precedence (`mostRestrictive` in `hook-output.ts`).
 4. Each hook gets a per-call `AbortController` with a 60 s default
-   timeout, matching the SDK's behaviour. Hooks that don't honour the
-   signal still hold the dispatcher hostage — this is best-effort abort.
-5. Optional regex matchers gate execution per dispatch — used today by
-   `source-cache` (only fires for `query_*` / `fetch_*` tool names) and
-   `tag-maturity` (only fires for retrieval-shaped tools).
+   timeout, matching the SDK's behaviour. The dispatcher `Promise.race`s
+   the handler against the abort signal, so a hook that ignores its
+   signal no longer stalls the dispatcher beyond `hook.timeout` — it
+   keeps running in the background but the loop unblocks.
+5. Optional regex matchers gate execution per dispatch via
+   `Lifecycle.on(point, name, handler, { matcher })`. The dispatcher
+   skips hooks whose matcher doesn't match `dispatchOptions.matcherTarget`.
+   No built-in hook uses this today — `source-cache` and `tag-maturity`
+   gate inside their handlers via internal Set/regex checks — but the
+   mechanism is real and is the recommended path for operator-authored
+   YAML hooks that should only fire for a subset of tools / events.
 6. The lifecycle was extended from 6 named points to 16 in Phase 4B
    (`session_start`, `session_end`, `user_prompt_submit`,
    `post_tool_failure`, `post_tool_batch`, `permission_request`,

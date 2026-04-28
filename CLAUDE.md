@@ -248,7 +248,7 @@ The agent harness (`services/agent-claw/`) has 16 lifecycle hook points. **`load
 | `task_completed` | When a todo flips to `completed` | (declared; no built-ins yet) |
 | `pre_compact` | When context > 60% of budget | `compact-window` (invokes Haiku compactor) |
 | `post_compact` | After compaction returns | (declared; no built-ins yet) |
-| `post_turn` | After SSE stream closes | `redact-secrets` (defense-in-depth output scrub) |
+| `post_turn` | After the loop exits; before the SSE stream closes (when streaming) — fires inside `runHarness`'s finally so scratchpad / redaction work runs before the route's reply ends | `redact-secrets` (defense-in-depth output scrub) |
 
 Hook callbacks follow the Claude Agent SDK shape — `(input, toolUseID, { signal: AbortSignal }) => Promise<HookJSONOutput>` — and aggregate decisions via `deny > defer > ask > allow`. Each dispatch gets a per-call AbortController with a 60 s default timeout. See ADRs [007 (hook system rebuild)](docs/adr/007-hook-system-rebuild.md), [008 (collapsed ReAct loop)](docs/adr/008-collapsed-react-loop.md), [009 (permission and decision contract)](docs/adr/009-permission-and-decision-contract.md), [010 (deferred phases)](docs/adr/010-deferred-phases.md), and the [`docs/PARITY.md`](docs/PARITY.md) tracker for the full v1.2.0-harness story.
 
