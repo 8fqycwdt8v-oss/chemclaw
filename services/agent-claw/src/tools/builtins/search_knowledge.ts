@@ -183,6 +183,7 @@ export function buildSearchKnowledgeTool(pool: Pool, mcpEmbedderUrl: string) {
       "Optionally filter by source_types. Returns top-k chunks with citations.",
     inputSchema: SearchKnowledgeIn,
     outputSchema: SearchKnowledgeOut,
+    annotations: { readOnly: true },
 
     execute: async (ctx, input) => {
       // Re-parse to materialise Zod .default() values so TypeScript sees

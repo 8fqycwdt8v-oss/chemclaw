@@ -83,8 +83,10 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
         break loop;
       }
 
-      // One LLM call (+ optional tool execution inside stepOnce).
-      const { step, toolOutput, usage } = await stepOnce({
+      // One LLM call (+ optional tool execution inside stepOnce). Phase 5:
+      // stepOnce returns toolOutputs as an array — single-tool turns get a
+      // 1-element array; multi-tool (parallel) turns get N entries.
+      const { step, toolOutputs, usage } = await stepOnce({
         llm,
         tools,
         messages,
@@ -140,18 +142,21 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
         break loop;
       }
 
-      // step.kind === "tool_call" — push the tool result to message history.
-      // The LLM will see it on the next iteration.
-      const toolResultContent =
-        toolOutput !== undefined
-          ? JSON.stringify(toolOutput)
-          : `{"error":"no_output"}`;
-
-      messages.push({
-        role: "tool",
-        content: toolResultContent,
-        toolId: step.toolId,
-      });
+      // step.kind === "tool_call" or "tool_calls" — push one tool result
+      // message per executed tool, in batch order. The LLM sees them all
+      // on the next iteration, matching how Claude Code's SDK exposes
+      // parallel tool calls.
+      for (const { toolId, output } of toolOutputs) {
+        const toolResultContent =
+          output !== undefined
+            ? JSON.stringify(output)
+            : `{"error":"no_output"}`;
+        messages.push({
+          role: "tool",
+          content: toolResultContent,
+          toolId,
+        });
+      }
     }
   } catch (err) {
     if (err instanceof BudgetExceededError) {

@@ -40,6 +40,7 @@ export function buildFetchFullDocumentTool(pool: Pool) {
       "Alias for fetch_original_document(format='markdown') — prefer that tool for bytes/pdf_pages access.",
     inputSchema: FetchFullDocumentIn,
     outputSchema: FetchFullDocumentOut,
+    annotations: { readOnly: true },
 
     execute: async (ctx, input) => {
       const row = await withUserContext(pool, ctx.userEntraId, async (client) => {

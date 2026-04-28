@@ -51,6 +51,7 @@ export function buildQueryElnCanonicalReactionsTool(mcpUrl: string) {
       "child entries). Use min_ofat_count to find process-development campaigns.",
     inputSchema: QueryElnCanonicalReactionsIn,
     outputSchema: QueryElnCanonicalReactionsOut,
+    annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
       const parsed = QueryElnCanonicalReactionsIn.parse(input);

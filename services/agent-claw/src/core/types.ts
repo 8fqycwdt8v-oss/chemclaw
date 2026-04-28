@@ -42,10 +42,18 @@ export interface ToolContext {
 
 // ---------------------------------------------------------------------------
 // The typed result of one step (one LLM call).
+//
+// `tool_call` (singular) is the legacy / single-tool shape kept for wire
+// compatibility with existing tests and the StubLlmProvider's enqueueToolCall.
+// `tool_calls` (plural) is emitted by providers that support multi-tool
+// responses (Phase 5 — the LiteLLM provider switches to this shape when the
+// underlying model returns 2+ tool calls in one assistant message). step.ts
+// normalises both to a single internal batch shape before execution.
 // ---------------------------------------------------------------------------
 export type StepResult =
   | { kind: "text"; text: string }
-  | { kind: "tool_call"; toolId: string; input: unknown };
+  | { kind: "tool_call"; toolId: string; input: unknown }
+  | { kind: "tool_calls"; calls: Array<{ toolId: string; input: unknown }> };
 
 // ---------------------------------------------------------------------------
 // Options passed to runHarness / buildAgent.
