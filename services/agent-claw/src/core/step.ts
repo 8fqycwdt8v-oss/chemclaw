@@ -9,6 +9,7 @@ import type { LlmProvider } from "../llm/provider.js";
 import type { Lifecycle } from "./lifecycle.js";
 import type { Message, StepResult, ToolContext } from "./types.js";
 import type { Tool } from "../tools/tool.js";
+import type { StreamSink, TodoSnapshot } from "./streaming-sink.js";
 
 export interface StepOnceOptions {
   llm: LlmProvider;
@@ -16,6 +17,13 @@ export interface StepOnceOptions {
   messages: Message[];
   lifecycle: Lifecycle;
   ctx: ToolContext;
+  /**
+   * Optional streaming sink. When set, text steps are driven via
+   * llm.streamCompletion (call-then-stream pattern: call() detects
+   * text-vs-tool-call, streamCompletion() drives token-by-token output)
+   * and tool brackets fire onToolCall / onToolResult.
+   */
+  streamSink?: StreamSink;
 }
 
 export interface StepOnceResult {
@@ -41,12 +49,33 @@ export interface StepOnceResult {
  * the message history.
  */
 export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
-  const { llm, tools, messages, lifecycle, ctx } = opts;
+  const { llm, tools, messages, lifecycle, ctx, streamSink } = opts;
 
   // 1. LLM call.
   const { result, usage } = await llm.call(messages, tools);
 
   if (result.kind === "text") {
+    // 1b. Text path with streaming sink — re-run the call as a stream so
+    //     tokens flow to the sink as they arrive. Call-then-stream pattern
+    //     (matches chat.ts:657 today): call() above already established
+    //     this is a text step; streamCompletion() drives output deltas.
+    //     2x round-trip on text turns is a known tradeoff vs. the more
+    //     complex stream-first approach.
+    if (streamSink) {
+      let streamed = "";
+      for await (const chunk of llm.streamCompletion(messages, tools)) {
+        if (chunk.type === "text_delta") {
+          streamSink.onTextDelta?.(chunk.delta);
+          streamed += chunk.delta;
+        }
+        // Other chunk types (tool_call, finish) are ignored — call() already
+        // told us this is a text step; the harness emits its own finish event.
+      }
+      // The streamed text is the canonical assistant response (matches
+      // chat.ts behaviour: streamed wins over the call() text when present).
+      const streamedStep: StepResult = { kind: "text", text: streamed };
+      return { step: streamedStep, usage };
+    }
     return { step: result, usage };
   }
 
@@ -71,6 +100,10 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
   // 3b. Validate input.
   const parsedInput = tool.inputSchema.parse(effectiveInput);
 
+  // 3b-sink. Notify the sink that a tool call is about to execute. Fires
+  // AFTER pre_tool so any input mutation by hooks is visible to the sink.
+  streamSink?.onToolCall?.(toolId, parsedInput);
+
   // 3c. Execute.
   const rawOutput = await tool.execute(ctx, parsedInput);
 
@@ -82,6 +115,26 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
   await lifecycle.dispatch("post_tool", postPayload);
   // Output may have been mutated by a hook.
   const effectiveOutput = postPayload.output;
+
+  // 3e-sink. Notify the sink with the (post-hook) output.
+  streamSink?.onToolResult?.(toolId, effectiveOutput);
+
+  // 3f-sink. manage_todos special-case: surface the latest checklist via
+  //          onTodoUpdate so the route can emit a `todo_update` SSE event.
+  //          The tool's output schema guarantees a `todos` array; we still
+  //          type-narrow defensively in case a hook mutates the output.
+  if (
+    streamSink?.onTodoUpdate &&
+    toolId === "manage_todos" &&
+    effectiveOutput &&
+    typeof effectiveOutput === "object" &&
+    "todos" in effectiveOutput &&
+    Array.isArray((effectiveOutput as { todos: unknown }).todos)
+  ) {
+    streamSink.onTodoUpdate(
+      (effectiveOutput as { todos: TodoSnapshot[] }).todos,
+    );
+  }
 
   return {
     step: result,
