@@ -3,14 +3,15 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
+import { MAX_RXN_SMILES_LEN, MAX_BATCH_SMILES } from "../_limits.js";
 
 // ---------- Schemas ----------------------------------------------------------
 
 export const PredictReactionYieldIn = z.object({
   rxn_smiles_list: z
-    .array(z.string().min(1))
+    .array(z.string().min(1).max(MAX_RXN_SMILES_LEN))
     .min(1)
-    .max(100)
+    .max(MAX_BATCH_SMILES)
     .describe("List of reaction SMILES to predict yield for (max 100)."),
 });
 export type PredictReactionYieldInput = z.infer<typeof PredictReactionYieldIn>;

@@ -15,7 +15,7 @@ import psycopg
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 
-from .promoter import run_promotion_pass
+from .promoter import run_promotion_pass, run_prompt_promotion_pass
 
 logger = logging.getLogger(__name__)
 
@@ -43,7 +43,9 @@ async def run_skill_promoter_job() -> None:
     try:
         dsn = _get_dsn()
         with psycopg.connect(dsn) as conn:
-            events = run_promotion_pass(conn)
+            skill_events = run_promotion_pass(conn)
+            prompt_events = run_prompt_promotion_pass(conn)
+            events = skill_events + prompt_events
         _last_events = [
             {
                 "skill_name": e.skill_name,

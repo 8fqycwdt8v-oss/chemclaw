@@ -29,7 +29,7 @@ setup.python: ## Create .venv and install Python deps for all services
 	@test -d $(VENV) || $(PYTHON) -m venv $(VENV)
 	$(PIP) install --upgrade pip
 	$(PIP) install -e ".[dev]"
-	$(PIP) install -r services/frontend/requirements.txt
+	$(PIP) install -e tools/cli
 	$(PIP) install -r services/ingestion/eln_json_importer.legacy/requirements.txt
 	$(PIP) install -r services/mcp_tools/mcp_rdkit/requirements.txt
 	$(PIP) install -r services/mcp_tools/mcp_drfp/requirements.txt
@@ -113,10 +113,6 @@ db.init.tabicl-pca: ## Cold-fit PCA model from all reactions in the database
 .PHONY: run.agent
 run.agent: ## Run agent service in dev mode (hot-reload)
 	npm run dev:agent
-
-.PHONY: run.frontend
-run.frontend: ## Run Streamlit frontend
-	$(VENV)/bin/streamlit run services/frontend/streamlit_app.py
 
 .PHONY: import.sample.legacy
 import.sample.legacy: ## [DEPRECATED] One-shot bulk import via legacy eln_json_importer.

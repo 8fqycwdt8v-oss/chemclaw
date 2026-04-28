@@ -17,6 +17,7 @@ import { z } from "zod";
 import type { Pool } from "pg";
 import type { Config } from "../config.js";
 import type { PromptRegistry } from "../prompts/registry.js";
+import type { LlmProvider } from "../llm/provider.js";
 import { withSystemContext } from "../db/with-user-context.js";
 import { parseEvalArgs } from "./eval-parser.js";
 
@@ -56,6 +57,10 @@ interface EvalRouteDeps {
   config: Config;
   pool: Pool;
   promptRegistry: PromptRegistry;
+  /** LLM provider — when present, /eval golden actually calls the active
+   * prompt against each fixture question. When absent, the route returns
+   * the structural-only signal (fixture coverage) so it stays callable. */
+  llm?: LlmProvider;
   getUser: (req: FastifyRequest) => string;
 }
 
@@ -88,8 +93,9 @@ async function requireAdminEval(pool: Pool, userEntraId: string): Promise<boolea
 
 export function registerEvalRoute(
   app: FastifyInstance,
-  { config, pool, promptRegistry, getUser }: EvalRouteDeps,
+  deps: EvalRouteDeps,
 ): void {
+  const { config, pool, promptRegistry, getUser } = deps;
   app.post("/api/eval", async (req, reply) => {
     // Auth gate — eval routes expose prompt versions + shadow scores
     // derived from real chats. Mirror the optimizer-route admin gate.
@@ -135,15 +141,42 @@ export function registerEvalRoute(
         (classBuckets[cls] ??= []).push(ex);
       }
 
-      // For each class, score using keyword-match heuristic (no live LLM call
-      // to avoid cost; production /eval should wire the LLM provider here).
+      // Score each example by calling the active prompt against the model
+      // and comparing against the fixture's expected answer. Fall back to
+      // structural fixture coverage when no LLM is wired (test path).
+      let activeTemplate: string | null = null;
+      if (deps.llm) {
+        try {
+          const active = await promptRegistry.getActive("agent.system");
+          activeTemplate = active.template;
+        } catch {
+          activeTemplate = null;
+        }
+      }
+
       const perClass: Record<string, { total: number; correct: number; rate: number }> = {};
       for (const [cls, examples] of Object.entries(classBuckets)) {
         let correct = 0;
         for (const ex of examples) {
-          // In production: call llm.complete with the active prompt + question.
-          // Here: score answer availability (fixture has ground-truth answers).
-          correct += ex.answer.length > 10 ? 1 : 0;
+          if (deps.llm && activeTemplate) {
+            try {
+              const completion = (await deps.llm.completeJson({
+                system: activeTemplate,
+                user: ex.question,
+                role: "executor",
+              })) as { answer?: string; text?: string } | string | null;
+              const predicted =
+                typeof completion === "string"
+                  ? completion
+                  : (completion?.answer ?? completion?.text ?? "");
+              const score = scoreResponse(predicted, ex.answer);
+              correct += score >= 1 ? 1 : 0;
+            } catch (callErr) {
+              req.log.warn({ err: callErr, q: ex.question.slice(0, 80) }, "/eval golden: LLM call failed");
+            }
+          } else {
+            correct += ex.answer.length > 10 ? 1 : 0;
+          }
         }
         perClass[cls] = { total: examples.length, correct, rate: correct / examples.length };
       }

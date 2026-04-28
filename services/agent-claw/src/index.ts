@@ -49,6 +49,7 @@ import { buildQueryElnSamplesByEntryTool } from "./tools/builtins/query_eln_samp
 import { buildQueryInstrumentRunsTool } from "./tools/builtins/query_instrument_runs.js";
 import { buildFetchInstrumentRunTool } from "./tools/builtins/fetch_instrument_run.js";
 import { buildQueryInstrumentDatasetsTool } from "./tools/builtins/query_instrument_datasets.js";
+import { buildQueryInstrumentPersonsTool } from "./tools/builtins/query_instrument_persons.js";
 // Autonomy upgrade — Claude-Code-like plan mode.
 import { buildManageTodosTool } from "./tools/builtins/manage_todos.js";
 import { buildAskUserTool } from "./tools/builtins/ask_user.js";
@@ -69,6 +70,8 @@ import { initTracer } from "./observability/otel.js";
 import { loadHooks } from "./core/hook-loader.js";
 import { lifecycle } from "./core/runtime.js";
 import { SkillLoader } from "./core/skills.js";
+import { PaperclipClient } from "./core/paperclip-client.js";
+import { ShadowEvaluator } from "./prompts/shadow-evaluator.js";
 
 // ---------------------------------------------------------------------------
 // Bootstrap
@@ -157,6 +160,14 @@ const registry = new ToolRegistry();
 const promptRegistry = new PromptRegistry(pool);
 const skillLoader = new SkillLoader();
 
+// Paperclip-lite client — reserves/releases per-turn budget against the
+// sidecar (port 3200). When PAPERCLIP_URL is unset the client is a no-op.
+const paperclipClient = new PaperclipClient({ paperclipUrl: cfg.PAPERCLIP_URL });
+
+// Shadow evaluator — fire-and-forgets a parallel call for any active shadow
+// prompts so the GEPA loop accumulates score data without affecting users.
+const shadowEvaluator = new ShadowEvaluator(promptRegistry, llmProvider, pool);
+
 // Register builtin factories so loadFromDb() can find them.
 // Cast through Tool (unknown) to satisfy the registry's covariant Tool<unknown,unknown> map.
 type ToolBuiltin = import("./tools/tool.js").Tool;
@@ -222,6 +233,9 @@ registry.registerBuiltin("fetch_instrument_run", () =>
 );
 registry.registerBuiltin("query_instrument_datasets", () =>
   asTool(buildQueryInstrumentDatasetsTool(cfg.MCP_LOGS_SCIY_URL)),
+);
+registry.registerBuiltin("query_instrument_persons", () =>
+  asTool(buildQueryInstrumentPersonsTool(cfg.MCP_LOGS_SCIY_URL)),
 );
 
 // LIMS adapters remain unwired in this build. The post-tool source-cache
@@ -305,6 +319,8 @@ const routeDeps = {
   registry,
   promptRegistry,
   skillLoader,
+  paperclip: paperclipClient,
+  shadowEvaluator,
   getUser: getUser as (req: import("fastify").FastifyRequest) => string,
 };
 
@@ -321,6 +337,7 @@ registerArtifactsRoutes(app, { pool, getUser: getUser as (req: import("fastify")
 registerLearnRoute(app, { pool, llm: llmProvider, getUser: getUser as (req: import("fastify").FastifyRequest) => string });
 registerFeedbackRoute(app, {
   pool,
+  promptRegistry,
   getUser: getUser as (req: import("fastify").FastifyRequest) => string,
   langfuseHost: cfg.LANGFUSE_HOST,
   langfusePublicKey: cfg.LANGFUSE_PUBLIC_KEY,
@@ -330,6 +347,7 @@ registerEvalRoute(app, {
   config: cfg,
   pool,
   promptRegistry,
+  llm: llmProvider,
   getUser: getUser as (req: import("fastify").FastifyRequest) => string,
 });
 registerOptimizerRoutes(app, {

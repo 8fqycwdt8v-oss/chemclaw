@@ -13,7 +13,7 @@ and reads source systems on-demand (Benchling ELN, STARLIMS LIMS, Waters Empower
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│  Streamlit (port 8501)  ·  slash palette  ·  plan-mode      │
+│  Frontend (separate repo, TBD)  ·  CLI (tools/cli)          │
 └──────────────────────────────┬──────────────────────────────┘
                                │ SSE (port 3101)
 ┌──────────────────────────────▼──────────────────────────────┐
@@ -54,7 +54,7 @@ make db.seed        # sample projects + dev user
 
 # In separate terminals:
 make run.agent      # agent-claw on http://localhost:3101
-make run.frontend   # Streamlit on http://localhost:8501
+chemclaw chat "ping"   # CLI wrapper around agent-claw /api/chat (see tools/cli/README.md)
 ```
 
 ### Slash commands

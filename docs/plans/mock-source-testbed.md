@@ -1,5 +1,10 @@
 # Mock-Source Testbed — Extensive Plan
 
+> **Historical (2026-04-27):** references to the in-tree Streamlit
+> frontend in this document are obsolete. The frontend has been removed
+> and is being rebuilt in a separate repository. See
+> `docs/superpowers/specs/2026-04-27-remove-frontend-add-cli-design.md`.
+
 **Status:** Draft (ideation + design — implementation deferred)
 **Date:** 2026-04-26
 **Author:** Round-7 follow-up

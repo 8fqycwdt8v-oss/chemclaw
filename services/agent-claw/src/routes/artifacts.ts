@@ -1,5 +1,5 @@
 // POST /api/artifacts/:id/maturity — promote or demote an artifact's maturity tier.
-// Phase C.6 — Streamlit "Promote to WORKING" button backend.
+// Phase C.6 — backend for the future frontend's "Promote to WORKING" affordance.
 //
 // Request body: { tier: "EXPLORATORY" | "WORKING" | "FOUNDATION" }
 // RLS-scoped: only the artifact owner can update.
@@ -85,7 +85,7 @@ export function registerArtifactsRoutes(
     },
   );
 
-  // GET /api/artifacts/:id — fetch an artifact (for Streamlit to display ensemble).
+  // GET /api/artifacts/:id — fetch an artifact (e.g. for a frontend to display ensemble).
   app.get<{ Params: { id: string } }>(
     "/api/artifacts/:id",
     async (req, reply) => {

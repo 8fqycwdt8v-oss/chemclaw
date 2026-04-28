@@ -63,6 +63,9 @@ import {
 import type { SkillLoader } from "../core/skills.js";
 import { VERB_TO_SKILL } from "../core/skills.js";
 import { writeEvent, setupSse } from "../streaming/sse.js";
+import { startRootTurnSpan, recordLlmUsage, recordSpanError } from "../observability/spans.js";
+import { PaperclipClient, PaperclipBudgetError, type ReservationHandle } from "../core/paperclip-client.js";
+import { ShadowEvaluator } from "../prompts/shadow-evaluator.js";
 // Re-exported so existing imports `import type { StreamEvent } from "./chat.js"`
 // keep compiling — the canonical home is now ../streaming/sse.ts.
 export type { StreamEvent } from "../streaming/sse.js";
@@ -99,6 +102,11 @@ export interface ChatRouteDeps {
   getUser: (req: FastifyRequest) => string;
   /** Skill loader — optional; if absent, skill filtering is skipped. */
   skillLoader?: SkillLoader;
+  /** Paperclip-lite client. When configured, reserves/releases per-turn
+   * budget against the sidecar; a 429 surfaces as HTTP 429 with Retry-After. */
+  paperclip?: PaperclipClient;
+  /** Shadow evaluator — fires off shadow prompts after the user response. */
+  shadowEvaluator?: ShadowEvaluator;
 }
 
 // ---------------------------------------------------------------------------
@@ -279,10 +287,12 @@ async function handleChat(
 
   // Build system prompt: base + active-skill prompts + plan-mode suffix.
   let systemPrompt = "";
+  let activePromptVersion: number | undefined;
   try {
     try {
-      const { template } = await deps.promptRegistry.getActive("agent.system");
-      systemPrompt = template;
+      const active = await deps.promptRegistry.getActive("agent.system");
+      systemPrompt = active.template;
+      activePromptVersion = active.version;
     } catch {
       req.log.warn("agent.system prompt not found in prompt_registry; using minimal fallback");
       systemPrompt = "You are ChemClaw, an autonomous chemistry knowledge agent.";
@@ -429,6 +439,33 @@ async function handleChat(
     }
   }
 
+  // ------- Paperclip reservation (Phase D) -------
+  // Reserve budget BEFORE opening SSE so a 429 surfaces with Retry-After.
+  let paperclipHandle: ReservationHandle | null = null;
+  if (deps.paperclip) {
+    try {
+      paperclipHandle = await deps.paperclip.reserve({
+        userEntraId: user,
+        sessionId: sessionId ?? "stateless",
+        estTokens: 12_000,
+        estUsd: 0.05,
+      });
+    } catch (err: unknown) {
+      if (err instanceof PaperclipBudgetError) {
+        cleanupSkillForTurn?.();
+        return void reply
+          .code(429)
+          .header("Retry-After", String(err.retryAfterSeconds))
+          .send({
+            error: "budget_exceeded",
+            reason: err.reason,
+            retry_after_seconds: err.retryAfterSeconds,
+          });
+      }
+      req.log.warn({ err }, "paperclip /reserve failed (non-fatal)");
+    }
+  }
+
   // ------- SSE streaming path -------
   setupSse(reply);
 
@@ -438,6 +475,17 @@ async function handleChat(
   if (sessionId) {
     writeEvent(reply, { type: "session", session_id: sessionId });
   }
+
+  // Open the OTel root span for the turn — emits the Langfuse `prompt:<name>`
+  // tag so the GEPA runner's tag-filtered fetch returns this trace.
+  const rootSpan = startRootTurnSpan({
+    traceId: body.agent_trace_id ?? sessionId ?? "unknown",
+    userEntraId: user,
+    model: deps.config.AGENT_MODEL,
+    promptName: "agent.system",
+    promptVersion: activePromptVersion,
+    sessionId: sessionId ?? undefined,
+  });
 
   let closed = false;
   const onClose = () => { closed = true; };
@@ -508,6 +556,9 @@ async function handleChat(
             usage: { promptTokens: 0, completionTokens: 0 },
           });
         }
+        // Reflect plan-ready into the local var so the outer finally's
+        // saveSession + shadow-eval gate see the correct terminal state.
+        finishReason = "plan_ready";
       } catch (err) {
         req.log.error({ err }, "plan-mode failed");
         if (!closed) writeEvent(reply, { type: "error", error: "plan_mode_failed" });
@@ -826,6 +877,43 @@ async function handleChat(
       } catch {
         // socket already gone
       }
+    }
+
+    // Record final LLM usage on the root span and close it.
+    try {
+      const usageSummary = budget?.summary() ?? { promptTokens: 0, completionTokens: 0 };
+      recordLlmUsage(rootSpan, {
+        promptTokens: usageSummary.promptTokens,
+        completionTokens: usageSummary.completionTokens,
+        model: deps.config.AGENT_MODEL,
+      });
+    } catch (spanErr) {
+      try { recordSpanError(rootSpan, spanErr); } catch { /* ignore */ }
+    }
+    try { rootSpan.end(); } catch { /* ignore */ }
+
+    if (paperclipHandle) {
+      try {
+        const usageSummary = budget?.summary() ?? { promptTokens: 0, completionTokens: 0 };
+        const totalTokens = usageSummary.promptTokens + usageSummary.completionTokens;
+        const actualUsd = totalTokens * 0.000005;
+        await paperclipHandle.release(totalTokens, actualUsd);
+      } catch (relErr) {
+        req.log.warn({ err: relErr }, "paperclip /release failed (non-fatal)");
+      }
+    }
+
+    if (deps.shadowEvaluator && finishReason === "stop") {
+      void deps.shadowEvaluator
+        .evaluateAsync({
+          promptName: "agent.system",
+          messages,
+          traceId: body.agent_trace_id ?? null,
+          userEntraId: user,
+        })
+        .catch((shadowErr: unknown) => {
+          req.log.debug({ err: shadowErr }, "shadow eval failed (non-fatal)");
+        });
     }
 
     cleanupSkillForTurn?.();

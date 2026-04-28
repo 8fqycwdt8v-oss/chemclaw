@@ -147,3 +147,108 @@ class TestRunPromotionPass:
 
         events = run_promotion_pass(conn)
         assert len(events) == 0
+
+
+# ---------------------------------------------------------------------------
+# Prompt-registry promotion (Phase E correction)
+# ---------------------------------------------------------------------------
+
+class TestPromptPromotionPass:
+    """Verify shadow_until → active flips happen with the right gate."""
+
+    def _make_prompt_conn(
+        self,
+        *,
+        shadow_rows: list[tuple[str, int]],
+        active_version: int | None = 1,
+        active_mean: float | None = 0.70,
+        shadow_mean: float = 0.85,
+        shadow_count: int = 50,
+    ) -> MagicMock:
+        conn = MagicMock()
+        events: list[tuple[str, Any]] = []
+
+        def execute(sql: str, params=None):
+            events.append((sql, params))
+            cursor = MagicMock()
+            text = sql.strip().upper()
+            if "FROM PROMPT_REGISTRY" in text and "ACTIVE = FALSE" in text and "SHADOW_UNTIL" in text:
+                cursor.fetchall.return_value = shadow_rows
+            elif "FROM PROMPT_REGISTRY" in text and "ACTIVE = TRUE" in text:
+                cursor.fetchone.return_value = (active_version,) if active_version else None
+            elif "AVG(SCORE)::FLOAT8 AS MEAN_SCORE" in text:
+                cursor.fetchone.return_value = (active_mean,)
+            elif "SELECT KEY, AVG(VALUE::FLOAT8)" in text:
+                cursor.fetchall.return_value = []
+            elif "AVG(SCORE)::FLOAT8, COUNT(*)" in text:
+                cursor.fetchone.return_value = (shadow_mean, shadow_count)
+            else:
+                cursor.fetchone.return_value = None
+                cursor.fetchall.return_value = []
+            return cursor
+
+        conn.execute = execute
+        conn.commit = MagicMock()
+        conn._events = events
+        return conn
+
+    def test_promotes_when_shadow_beats_active_by_delta(self):
+        from services.optimizer.skill_promoter.promoter import run_prompt_promotion_pass
+
+        conn = self._make_prompt_conn(
+            shadow_rows=[("agent.system", 2)],
+            active_mean=0.70,
+            shadow_mean=0.85,
+        )
+        events = run_prompt_promotion_pass(conn)
+        assert len(events) == 1
+        assert events[0].event_type == "shadow_promote"
+        assert events[0].skill_name == "agent.system"
+        assert events[0].version == 2
+        update_count = sum(
+            1 for sql, _ in conn._events if "UPDATE PROMPT_REGISTRY" in sql.upper()
+        )
+        # Atomic flip = deactivate prior active + activate candidate.
+        assert update_count >= 2
+
+    def test_rejects_when_shadow_below_floor(self):
+        from services.optimizer.skill_promoter.promoter import run_prompt_promotion_pass
+
+        conn = self._make_prompt_conn(
+            shadow_rows=[("agent.system", 2)],
+            active_mean=0.70,
+            shadow_mean=0.75,
+        )
+        events = run_prompt_promotion_pass(conn)
+        assert events[0].event_type == "shadow_reject"
+        assert "floor" in events[0].reason
+
+    def test_rejects_when_shadow_below_active_plus_delta(self):
+        from services.optimizer.skill_promoter.promoter import run_prompt_promotion_pass
+
+        conn = self._make_prompt_conn(
+            shadow_rows=[("agent.system", 2)],
+            active_mean=0.82,
+            shadow_mean=0.84,
+        )
+        events = run_prompt_promotion_pass(conn)
+        assert events[0].event_type == "shadow_reject"
+
+    def test_returns_no_events_when_no_expired_shadows(self):
+        from services.optimizer.skill_promoter.promoter import run_prompt_promotion_pass
+
+        conn = self._make_prompt_conn(shadow_rows=[])
+        events = run_prompt_promotion_pass(conn)
+        assert events == []
+
+    def test_rejects_when_no_shadow_runs_recorded(self):
+        from services.optimizer.skill_promoter.promoter import run_prompt_promotion_pass
+
+        conn = self._make_prompt_conn(
+            shadow_rows=[("agent.system", 2)],
+            shadow_mean=0.0,
+            shadow_count=0,
+        )
+        events = run_prompt_promotion_pass(conn)
+        assert events[0].event_type == "shadow_reject"
+        assert events[0].reason == "no_shadow_runs_recorded"

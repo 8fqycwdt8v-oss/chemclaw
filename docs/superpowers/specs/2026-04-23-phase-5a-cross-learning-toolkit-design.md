@@ -1,5 +1,11 @@
 # Phase 5 — Sub-project A: Cross-Project Reaction Learning Toolkit
 
+> **Historical (2026-04-27):** references to the in-tree Streamlit
+> chat page in this document are obsolete. The frontend has been removed
+> and is being rebuilt in a separate repository. The fenced-chart
+> contract described here remains valid for any SSE-consuming client.
+> See `docs/superpowers/specs/2026-04-27-remove-frontend-add-cli-design.md`.
+
 **Date:** 2026-04-23
 **Scope:** Phase 5 Sub-project A per `~/.claude/plans/chemos-knowledge-intelligence-tranquil-marshmallow.md`
 **Status:** Design approved pending final read-through.

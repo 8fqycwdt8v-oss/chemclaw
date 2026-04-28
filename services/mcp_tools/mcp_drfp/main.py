@@ -19,11 +19,17 @@ from fastapi import Body
 from pydantic import BaseModel, Field, field_validator
 
 from services.mcp_tools.common.app import create_app
+from services.mcp_tools.common.limits import MAX_RXN_SMILES_LEN
 from services.mcp_tools.common.settings import ToolSettings
 
 log = logging.getLogger("mcp-drfp")
 settings = ToolSettings()
-app = create_app(name="mcp-drfp", version="0.1.0", log_level=settings.log_level)
+app = create_app(
+    name="mcp-drfp",
+    version="0.1.0",
+    log_level=settings.log_level,
+    required_scope="mcp_drfp:invoke",
+)
 
 
 class ComputeDrfpIn(BaseModel):
@@ -31,7 +37,7 @@ class ComputeDrfpIn(BaseModel):
         ...,
         description="Reaction SMILES with reagents>>products (or reagents>catalysts>products).",
         min_length=3,
-        max_length=20_000,  # very long reactions are possible; cap conservative
+        max_length=MAX_RXN_SMILES_LEN,
     )
     n_folded_length: int = Field(default=2048, ge=512, le=4096)
     radius: int = Field(default=3, ge=1, le=5)

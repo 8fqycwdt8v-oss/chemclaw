@@ -1,5 +1,10 @@
 # Post-v1.0.0-claw hardening — Round 3 implementation plan
 
+> **Historical (2026-04-27):** references to the in-tree Streamlit
+> frontend in this document are obsolete. The frontend has been removed
+> and is being rebuilt in a separate repository. See
+> `docs/superpowers/specs/2026-04-27-remove-frontend-add-cli-design.md`.
+
 Tackles the five items left open at the end of `docs/runbooks/post-v1.0.0-hardening.md`:
 
 1. **vitest** major bump (clear 5 dev-only npm mediums)

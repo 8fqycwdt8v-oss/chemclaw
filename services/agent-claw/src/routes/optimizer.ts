@@ -1,4 +1,5 @@
-// GET /api/optimizer/* — Streamlit Optimizer page backend (Phase E).
+// GET /api/optimizer/* — Optimizer status backend (Phase E). Surfaced to
+// any SSE-consuming client; the legacy in-tree page (Phase E doc) was removed.
 //
 // Returns GEPA run history from prompt_registry (gepa_metadata),
 // skill promotion events, shadow comparisons, and golden-set score history.
@@ -73,14 +74,14 @@ export function registerOptimizerRoutes(
     if (!(await gateAdmin(pool, getUser, req, reply))) return;
     const r = await withSystemContext(pool, (client) =>
       client.query<{
-        name: string;
+        prompt_name: string;
         version: number;
         active: boolean;
         shadow_until: Date | null;
         gepa_metadata: Record<string, unknown> | null;
         created_at: Date;
       }>(
-        `SELECT name, version, active, shadow_until, gepa_metadata, created_at
+        `SELECT prompt_name, version, active, shadow_until, gepa_metadata, created_at
            FROM prompt_registry
           WHERE gepa_metadata IS NOT NULL
           ORDER BY created_at DESC

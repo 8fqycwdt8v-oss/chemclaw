@@ -1,5 +1,10 @@
 # Clean-slate audit — first and last run
 
+> **Historical (2026-04-27):** references to the in-tree Streamlit
+> frontend in this document are obsolete. The frontend has been removed
+> and is being rebuilt in a separate repository. See
+> `docs/superpowers/specs/2026-04-27-remove-frontend-add-cli-design.md`.
+
 **Operating premise:** treat this as if no prior review exists. Every audit agent is briefed without reference to prior findings. Synthesize fresh, fix what matters, ship production-ready.
 
 ## Goal

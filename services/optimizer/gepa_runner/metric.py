@@ -32,12 +32,20 @@ CITATION_WEIGHT = 0.20
 _FACT_ID_RE = re.compile(r'\b([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\b', re.I)
 
 
+_POSITIVE_SIGNALS = frozenset({"up", "thumbs_up", "+1", "1", "implicit_positive"})
+_NEGATIVE_SIGNALS = frozenset({"down", "thumbs_down", "-1", "correction", "implicit_negative", "auto_demoted"})
+
+
 def _feedback_score(feedback: str | None) -> float:
-    """Map feedback signal to [-1, +1] then normalise to [0, 1]."""
+    """Map feedback signal to [-1, +1] then normalise to [0, 1].
+
+    Recognises the full feedback_events vocabulary so GEPA does not silently
+    drop signals on the way in.
+    """
     raw = 0.0
-    if feedback in ("up", "thumbs_up", "+1", "1"):
+    if feedback in _POSITIVE_SIGNALS:
         raw = 1.0
-    elif feedback in ("down", "thumbs_down", "-1", "-1"):
+    elif feedback in _NEGATIVE_SIGNALS:
         raw = -1.0
     return (raw + 1.0) / 2.0  # map to [0, 1]
 

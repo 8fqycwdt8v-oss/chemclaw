@@ -14,8 +14,8 @@
 //
 // Phase B: when skills land, this route becomes an alias for
 //   POST /api/chat?skills=deep_research
-// and is deleted. The shim exists so the Streamlit client can reach the
-// deep-research path today without a frontend change.
+// and is deleted. The shim exists so any client can reach the
+// deep-research path today without changing query parameters.
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";

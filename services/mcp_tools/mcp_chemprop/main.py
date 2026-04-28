@@ -19,6 +19,7 @@ from fastapi import Body
 from pydantic import BaseModel, Field
 
 from services.mcp_tools.common.app import create_app
+from services.mcp_tools.common.limits import MAX_BATCH_SMILES, MAX_SMILES_LEN
 from services.mcp_tools.common.settings import ToolSettings
 
 log = logging.getLogger("mcp-chemprop")
@@ -43,6 +44,7 @@ app = create_app(
     version="0.1.0",
     log_level=settings.log_level,
     ready_check=_is_ready,
+    required_scope="mcp_chemprop:invoke",
 )
 
 
@@ -82,7 +84,7 @@ def _chemprop_predict(smiles_list: list[str], model_path: Path) -> list[tuple[fl
 # /predict_yield
 # ---------------------------------------------------------------------------
 
-_MAX_REACTIONS = 100
+_MAX_REACTIONS = MAX_BATCH_SMILES
 
 class YieldPrediction(BaseModel):
     rxn_smiles: str
@@ -91,8 +93,15 @@ class YieldPrediction(BaseModel):
     model_id: str
 
 
+_BoundedSmiles = Annotated[
+    str, Field(min_length=1, max_length=MAX_SMILES_LEN, description="SMILES string"),
+]
+
+
 class PredictYieldIn(BaseModel):
-    rxn_smiles_list: list[str] = Field(min_length=1, max_length=_MAX_REACTIONS)
+    # Per-element bound (10k chars) prevents a 10 MB SMILES from sneaking
+    # past the list-level cap and OOM'ing the chemprop loader.
+    rxn_smiles_list: list[_BoundedSmiles] = Field(min_length=1, max_length=_MAX_REACTIONS)
 
 
 class PredictYieldOut(BaseModel):
@@ -127,7 +136,7 @@ async def predict_yield(
 # /predict_property
 # ---------------------------------------------------------------------------
 
-_MAX_SMILES = 100
+_MAX_SMILES = MAX_BATCH_SMILES
 
 class PropertyPrediction(BaseModel):
     smiles: str
@@ -136,7 +145,7 @@ class PropertyPrediction(BaseModel):
 
 
 class PredictPropertyIn(BaseModel):
-    smiles_list: list[str] = Field(min_length=1, max_length=_MAX_SMILES)
+    smiles_list: list[_BoundedSmiles] = Field(min_length=1, max_length=_MAX_SMILES)
     property: Literal["logP", "logS", "mp", "bp"]
 
 

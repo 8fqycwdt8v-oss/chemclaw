@@ -1,5 +1,5 @@
 # Core deployments — always deployed regardless of profile flags.
-# Includes: agent-claw, paperclip-lite, frontend, litellm, litellm-redactor,
+# Includes: agent-claw, paperclip-lite, litellm, litellm-redactor,
 # and always-on projectors.
 
 # ── agent-claw ────────────────────────────────────────────────────────────────

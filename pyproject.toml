@@ -53,7 +53,7 @@ ignore_missing_imports = true
 exclude = ["tests/.*", "documentation/.*"]
 
 [tool.pytest.ini_options]
-testpaths = ["tests"]
+testpaths = ["tests", "tools/cli/tests"]
 asyncio_mode = "auto"
 addopts = "-ra --strict-markers"
 markers = [
