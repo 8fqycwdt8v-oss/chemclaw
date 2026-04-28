@@ -1,0 +1,31 @@
+{
+  "name": "pre-compact-fires",
+  "description": "When prompt usage crosses 60% of maxPromptTokens after a step, the harness dispatches pre_compact + post_compact mid-loop. Verifies both events appear between the tool round and the final text response. The scenario forces this by setting maxPromptTokens=1000 and overriding the first step's usage to 700 prompt tokens.",
+  "user_messages": ["do something heavy"],
+  "budget": { "maxPromptTokens": 1000, "maxSteps": 10 },
+  "step_usage_overrides": {
+    "0": { "promptTokens": 700, "completionTokens": 5 }
+  },
+  "steps": [
+    {
+      "llm_response": {
+        "kind": "tool_call",
+        "toolId": "search_knowledge",
+        "input": { "query": "heavy" }
+      },
+      "tool_output": { "ok": true }
+    },
+    { "llm_response": { "kind": "text", "text": "Compaction happened." } }
+  ],
+  "expected_events": [
+    { "type": "session" },
+    { "type": "hook", "point": "pre_turn" },
+    { "type": "tool_call", "toolId": "search_knowledge" },
+    { "type": "tool_result", "toolId": "search_knowledge" },
+    { "type": "hook", "point": "pre_compact" },
+    { "type": "hook", "point": "post_compact" },
+    { "type": "hook", "point": "post_turn" },
+    { "type": "finish", "finishReason": "stop" }
+  ],
+  "expected_finish_reason": "stop"
+}
