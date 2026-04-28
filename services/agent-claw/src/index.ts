@@ -68,7 +68,7 @@ import { registerSessionsRoute } from "./routes/sessions.js";
 import { PromptRegistry } from "./prompts/registry.js";
 import { initTracer } from "./observability/otel.js";
 import { loadHooks } from "./core/hook-loader.js";
-import { Lifecycle } from "./core/lifecycle.js";
+import { lifecycle } from "./core/runtime.js";
 import { SkillLoader } from "./core/skills.js";
 import { PaperclipClient } from "./core/paperclip-client.js";
 import { ShadowEvaluator } from "./prompts/shadow-evaluator.js";
@@ -158,7 +158,6 @@ const llmProvider = new LiteLLMProvider({
 });
 const registry = new ToolRegistry();
 const promptRegistry = new PromptRegistry(pool);
-const lifecycle = new Lifecycle();
 const skillLoader = new SkillLoader();
 
 // Paperclip-lite client — reserves/releases per-turn budget against the
@@ -466,9 +465,17 @@ const start = async () => {
       app.log.warn({ err }, "could not hydrate tool registry from DB — continuing with empty registry");
     }
 
-    // Load YAML hooks (non-fatal).
+    // Load YAML hooks (non-fatal). HookDeps is assembled from existing
+    // top-level singletons + AGENT_TOKEN_BUDGET so source-cache, compact-window,
+    // and apply-skills registrars receive their required dependencies.
     try {
-      const hookResult = await loadHooks(lifecycle);
+      const hookResult = await loadHooks(lifecycle, {
+        pool,
+        llm: llmProvider,
+        skillLoader,
+        allTools: registry.all(),
+        tokenBudget: cfg.AGENT_TOKEN_BUDGET,
+      });
       app.log.info(hookResult, "lifecycle hooks loaded");
     } catch (err) {
       app.log.warn({ err }, "hook loader failed — continuing without YAML hooks");

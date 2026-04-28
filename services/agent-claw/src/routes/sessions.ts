@@ -33,10 +33,8 @@ import {
 } from "../core/budget.js";
 import { runHarness } from "../core/harness.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
-import {
-  buildDefaultLifecycle,
-  hydrateScratchpad,
-} from "../core/harness-builders.js";
+import { hydrateScratchpad } from "../core/session-state.js";
+import { lifecycle } from "../core/runtime.js";
 import { runWithRequestContext } from "../core/request-context.js";
 import { verifyBearerHeader, McpAuthError } from "../security/mcp-tokens.js";
 import type { Message, ToolContext } from "../core/types.js";
@@ -486,8 +484,6 @@ async function _runChainedHarnessInner(
     );
     const ctx: ToolContext = { userEntraId: user, seenFactIds, scratchpad };
 
-    const lifecycle = buildDefaultLifecycle();
-
     const budget = new Budget({
       maxSteps: cfg.AGENT_CHAT_MAX_STEPS,
       maxPromptTokens: cfg.AGENT_TOKEN_BUDGET,
@@ -596,6 +592,7 @@ async function _runChainedHarnessInner(
   };
 }
 
-// hydrateScratchpad lives in core/harness-builders.ts so chat.ts and this
-// file share the same hydration logic. Keeping it co-located there with
-// buildDefaultLifecycle and persistTurnState avoids drift.
+// hydrateScratchpad lives in core/session-state.ts so chat.ts and this
+// file share the same hydration logic. The Lifecycle is sourced from
+// core/runtime.ts — single instance populated once at startup by
+// loadHooks() in index.ts; routes and sub-agents share it.

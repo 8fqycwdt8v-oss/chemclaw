@@ -1,4 +1,6 @@
 name: source-cache
+lifecycle: post_tool
+enabled: true
 description: >
   Cache-and-project hook. After any source-system tool call (query_eln_*,
   fetch_eln_*, query_lims_*, fetch_lims_*, query_instrument_*, fetch_instrument_*),
@@ -7,8 +9,6 @@ description: >
   these into :Fact nodes with temporal provenance (source_system_id, fetched_at,
   valid_until). Also checks for stale cached facts and injects a warning into the
   agent's working memory.
-phase: post_tool
-enabled: true
 tool_id_pattern: "^(query_eln|fetch_eln|query_lims|fetch_lims|query_instrument|fetch_instrument)_"
 implementation: services/agent-claw/src/core/hooks/source-cache.ts
 stale_check_phase: pre_turn

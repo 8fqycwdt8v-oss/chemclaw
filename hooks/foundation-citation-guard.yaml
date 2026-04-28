@@ -1,0 +1,10 @@
+name: foundation-citation-guard
+lifecycle: pre_tool
+enabled: true
+priority: 20
+definition:
+  description: |
+    When a tool input declares maturity_tier='FOUNDATION', verify the call
+    cites at least one fact_id present in ctx.scratchpad.seenFactIds. Returns
+    permissionDecision='deny' otherwise (later phase). For now, the existing
+    throw-based behavior remains.
