@@ -52,10 +52,10 @@ def _get_dsn() -> str:
 def _fetch_active_prompts(conn: psycopg.Connection) -> list[dict[str, Any]]:
     rows = conn.execute(
         """
-        SELECT id, name, version, template
+        SELECT id, prompt_name, version, template
         FROM prompt_registry
         WHERE active = true
-        ORDER BY name, version
+        ORDER BY prompt_name, version
         """
     ).fetchall()
     return [{"id": str(r[0]), "name": r[1], "version": r[2], "template": r[3]} for r in rows]
@@ -71,11 +71,11 @@ def _fetch_feedback_events(
         """
         SELECT signal, trace_id, created_at
         FROM feedback_events
-        WHERE prompt_version IS NOT NULL
+        WHERE prompt_name = %s
           AND created_at >= %s
         ORDER BY created_at DESC
         """,
-        (since,),
+        (prompt_name, since),
     ).fetchall()
     return [{"signal": r[0], "trace_id": str(r[1] or ""), "created_at": r[2]} for r in rows]
 
@@ -92,15 +92,17 @@ def _insert_candidate(
     conn.execute(
         """
         INSERT INTO prompt_registry
-          (id, name, version, template, active, shadow_until, gepa_metadata)
-        VALUES (%s, %s, %s, %s, false, %s, %s)
-        ON CONFLICT (name, version) DO NOTHING
+          (id, prompt_name, version, template, created_by,
+           active, shadow_until, gepa_metadata)
+        VALUES (%s, %s, %s, %s, %s, false, %s, %s)
+        ON CONFLICT (prompt_name, version) DO NOTHING
         """,
         (
             str(uuid.uuid4()),
             prompt_name,
             new_version,
             new_template,
+            "gepa-runner",
             shadow_until,
             json.dumps(gepa_metadata),
         ),

@@ -33,6 +33,15 @@ export interface RootSpanOptions {
   userEntraId: string;
   /** Model name used for this turn. */
   model?: string;
+  /** Active prompt name (e.g. "agent.system") — emitted as the
+   * `prompt:<name>` Langfuse tag so the GEPA runner can fetch this trace
+   * via `fetch_traces(tags=["prompt:agent.system"])`. */
+  promptName?: string;
+  /** Active prompt version, recorded alongside the prompt tag. */
+  promptVersion?: number;
+  /** Session id — emitted as `session.id` so Langfuse threads multi-turn
+   * sessions in its UI. */
+  sessionId?: string;
 }
 
 /**
@@ -44,8 +53,26 @@ export function startRootTurnSpan(opts: RootSpanOptions): Span {
   const span = tracer.startSpan(`chat_turn:${opts.traceId}`);
   span.setAttribute("chemclaw.trace_id", opts.traceId);
   span.setAttribute("chemclaw.user", opts.userEntraId);
+  // Langfuse OTel ingestion conventions — surface user/session/tags so the
+  // UI groups traces correctly and GEPA's tag filter actually returns rows.
+  span.setAttribute("user.id", opts.userEntraId);
   if (opts.model) {
     span.setAttribute("llm.model", opts.model);
+  }
+  if (opts.sessionId) {
+    span.setAttribute("session.id", opts.sessionId);
+    span.setAttribute("langfuse.session.id", opts.sessionId);
+  }
+  if (opts.promptName) {
+    const tags: string[] = [`prompt:${opts.promptName}`];
+    if (opts.promptVersion !== undefined) {
+      tags.push(`prompt_version:${opts.promptVersion}`);
+    }
+    span.setAttribute("langfuse.trace.tags", tags);
+    span.setAttribute("chemclaw.prompt_name", opts.promptName);
+    if (opts.promptVersion !== undefined) {
+      span.setAttribute("chemclaw.prompt_version", opts.promptVersion);
+    }
   }
   return span;
 }

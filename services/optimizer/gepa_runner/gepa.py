@@ -25,6 +25,10 @@ from .metric import GepaMetric, _golden_score
 
 logger = logging.getLogger(__name__)
 
+# Canonical positive feedback signals — matches feedback_events.signal
+# CHECK constraint plus the legacy short-form aliases.
+_POSITIVE_FEEDBACK = frozenset({"up", "thumbs_up", "+1", "1", "implicit_positive"})
+
 # ---------------------------------------------------------------------------
 # DSPy Signature
 # ---------------------------------------------------------------------------
@@ -148,7 +152,7 @@ def run_gepa(
     # Compute feedback rate.
     positive_feedback = sum(
         1 for ex in examples
-        if getattr(ex, "feedback", "") in ("up", "thumbs_up", "+1")
+        if getattr(ex, "feedback", "") in _POSITIVE_FEEDBACK
     )
     feedback_rate = positive_feedback / len(examples) if examples else 0.0
 
@@ -180,15 +184,33 @@ def run_gepa(
 # ---------------------------------------------------------------------------
 
 def _extract_template(module: dspy.Module, fallback: str) -> str:
-    """Pull the first system instruction from an optimised DSPy module."""
+    """Pull the first system instruction from an optimised DSPy module.
+
+    DSPy stores instructions on different attributes across versions:
+      * ``pred.signature.instructions`` (>=2.5)
+      * ``pred.extended_signature.instructions`` (older bootstrap path)
+      * ``pred.instructions`` (some optimisers attach it directly)
+      * ``module.signature.instructions`` (when the module wraps a single signature)
+    Walk all of them; return ``fallback`` only if none are populated.
+    """
     try:
-        for pred in module.predictors():
-            # dspy.Predict stores demos + instructions.
-            instructions = getattr(pred, "instructions", None) or getattr(
-                getattr(pred, "extended_signature", None), "instructions", None
-            )
-            if instructions and isinstance(instructions, str):
+        candidates: list[Any] = []
+        sig = getattr(module, "signature", None)
+        if sig is not None:
+            candidates.append(sig)
+        try:
+            for pred in module.predictors():
+                candidates.append(pred)
+                for attr in ("signature", "extended_signature"):
+                    sub = getattr(pred, attr, None)
+                    if sub is not None:
+                        candidates.append(sub)
+        except Exception:
+            pass
+        for c in candidates:
+            instructions = getattr(c, "instructions", None)
+            if isinstance(instructions, str) and instructions.strip():
                 return instructions
     except Exception:
-        pass
+        logger.exception("_extract_template traversal failed")
     return fallback
