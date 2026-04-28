@@ -465,9 +465,16 @@ const start = async () => {
       app.log.warn({ err }, "could not hydrate tool registry from DB — continuing with empty registry");
     }
 
-    // Load YAML hooks (non-fatal). HookDeps is assembled from existing
-    // top-level singletons + AGENT_TOKEN_BUDGET so source-cache, compact-window,
+    // Load YAML hooks. HookDeps is assembled from existing top-level
+    // singletons + AGENT_TOKEN_BUDGET so source-cache, compact-window,
     // and apply-skills registrars receive their required dependencies.
+    //
+    // Hard-fail startup if the minimum-expected number of hooks isn't
+    // loaded. A misconfigured HOOKS_DIR otherwise produces a process
+    // that starts without redact-secrets / budget-guard / etc., quietly
+    // letting compound codes through LiteLLM and unbudgeted tool calls
+    // through every endpoint.
+    const MIN_EXPECTED_HOOKS = 9;
     try {
       const hookResult = await loadHooks(lifecycle, {
         pool,
@@ -477,8 +484,15 @@ const start = async () => {
         tokenBudget: cfg.AGENT_TOKEN_BUDGET,
       });
       app.log.info(hookResult, "lifecycle hooks loaded");
+      if (hookResult.registered < MIN_EXPECTED_HOOKS) {
+        throw new Error(
+          `lifecycle hooks under-loaded: registered=${hookResult.registered}, expected>=${MIN_EXPECTED_HOOKS}; ` +
+            `check HOOKS_DIR (skipped=${JSON.stringify(hookResult.skipped)})`,
+        );
+      }
     } catch (err) {
-      app.log.warn({ err }, "hook loader failed — continuing without YAML hooks");
+      app.log.error({ err }, "hook loader failed — refusing to start without lifecycle hooks");
+      throw err;
     }
 
     // Load skill packs (non-fatal).
