@@ -1,0 +1,31 @@
+{
+  "name": "parallel-readonly-batch",
+  "description": "LLM emits a multi-tool batch (tool_calls plural). Phase 5: when every tool in the batch is read-only the harness runs them via Promise.all; pre_tool / post_tool dispatch fires per tool, and post_tool_batch fires ONCE for the whole batch. Verifies that both tools' brackets show up in the trace and post_tool_batch fires after them.",
+  "user_messages": ["fan out two reads"],
+  "steps": [
+    {
+      "llm_response": {
+        "kind": "tool_calls",
+        "calls": [
+          { "toolId": "search_knowledge", "input": { "query": "x" }, "output": { "ok": true, "n": 1 } },
+          { "toolId": "search_kg", "input": { "query": "y" }, "output": { "ok": true, "n": 2 } }
+        ]
+      }
+    },
+    { "llm_response": { "kind": "text", "text": "Both done." } }
+  ],
+  "expected_events": [
+    { "type": "session" },
+    { "type": "hook", "point": "pre_tool", "toolId": "search_knowledge" },
+    { "type": "hook", "point": "pre_tool", "toolId": "search_kg" },
+    { "type": "tool_call", "toolId": "search_knowledge" },
+    { "type": "tool_call", "toolId": "search_kg" },
+    { "type": "hook", "point": "post_tool", "toolId": "search_knowledge" },
+    { "type": "hook", "point": "post_tool", "toolId": "search_kg" },
+    { "type": "tool_result", "toolId": "search_knowledge" },
+    { "type": "tool_result", "toolId": "search_kg" },
+    { "type": "hook", "point": "post_tool_batch" },
+    { "type": "finish", "finishReason": "stop" }
+  ],
+  "expected_finish_reason": "stop"
+}

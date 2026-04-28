@@ -1,0 +1,28 @@
+{
+  "name": "tool-call-then-text",
+  "description": "Single user message; LLM calls one tool, gets a result, produces final text. Verifies the canonical event sequence: session -> pre_turn -> pre_tool -> tool_call -> post_tool -> tool_result -> post_tool_batch -> post_turn -> finish.",
+  "user_messages": ["What's in the project?"],
+  "steps": [
+    {
+      "llm_response": {
+        "kind": "tool_call",
+        "toolId": "search_knowledge",
+        "input": { "query": "project" }
+      },
+      "tool_output": { "results": ["a", "b"], "ok": true }
+    },
+    { "llm_response": { "kind": "text", "text": "Found two results." } }
+  ],
+  "expected_events": [
+    { "type": "session" },
+    { "type": "hook", "point": "pre_turn" },
+    { "type": "hook", "point": "pre_tool", "toolId": "search_knowledge" },
+    { "type": "tool_call", "toolId": "search_knowledge" },
+    { "type": "hook", "point": "post_tool", "toolId": "search_knowledge" },
+    { "type": "tool_result", "toolId": "search_knowledge" },
+    { "type": "hook", "point": "post_tool_batch" },
+    { "type": "hook", "point": "post_turn" },
+    { "type": "finish", "finishReason": "stop" }
+  ],
+  "expected_finish_reason": "stop"
+}

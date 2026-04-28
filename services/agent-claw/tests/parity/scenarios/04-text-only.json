@@ -1,0 +1,15 @@
+{
+  "name": "text-only",
+  "description": "User asks a question, LLM answers without any tool calls. Verifies the minimal turn shape: session -> pre_turn -> post_turn -> finish, with no pre_tool / post_tool dispatches because no tool was invoked.",
+  "user_messages": ["hi"],
+  "steps": [
+    { "llm_response": { "kind": "text", "text": "hello" } }
+  ],
+  "expected_events": [
+    { "type": "session" },
+    { "type": "hook", "point": "pre_turn" },
+    { "type": "hook", "point": "post_turn" },
+    { "type": "finish", "finishReason": "stop" }
+  ],
+  "expected_finish_reason": "stop"
+}
