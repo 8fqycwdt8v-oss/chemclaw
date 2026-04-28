@@ -84,6 +84,7 @@ app = create_app(
     version="0.1.0",
     log_level=settings.log_level,
     lifespan=_lifespan,
+    required_scope="mcp_kg:rw",
 )
 
 

@@ -20,24 +20,25 @@
 
 import { signMcpToken, McpAuthError } from "./mcp-tokens.js";
 
-/** Coarse per-service scope strings issued to outbound calls. */
-export const SERVICE_SCOPES: Record<string, string[]> = {
-  "mcp-rdkit": ["mcp_rdkit:invoke"],
-  "mcp-drfp": ["mcp_drfp:invoke"],
-  "mcp-kg": ["mcp_kg:rw"],
-  "mcp-embedder": ["mcp_embedder:invoke"],
-  "mcp-tabicl": ["mcp_tabicl:invoke"],
-  "mcp-doc-fetcher": ["mcp_doc_fetcher:fetch"],
-  "mcp-askcos": ["mcp_askcos:invoke"],
-  "mcp-aizynth": ["mcp_aizynth:invoke"],
-  "mcp-chemprop": ["mcp_chemprop:invoke"],
-  "mcp-xtb": ["mcp_xtb:invoke"],
-  "mcp-sirius": ["mcp_sirius:invoke"],
-  "mcp-eln-local": ["mcp_eln:read"],
-  "mcp-logs-sciy": ["mcp_instrument:read"],
+/** Coarse per-service scope strings issued to outbound calls.
+ *  Mirror of `services/mcp_tools/common/scopes.py` SERVICE_SCOPES.
+ *  A pact test asserts equality; keep both maps in sync by hand. */
+export const SERVICE_SCOPES: Record<string, string> = {
+  "mcp-rdkit": "mcp_rdkit:invoke",
+  "mcp-drfp": "mcp_drfp:invoke",
+  "mcp-kg": "mcp_kg:rw",
+  "mcp-embedder": "mcp_embedder:invoke",
+  "mcp-tabicl": "mcp_tabicl:invoke",
+  "mcp-doc-fetcher": "mcp_doc_fetcher:fetch",
+  "mcp-askcos": "mcp_askcos:invoke",
+  "mcp-aizynth": "mcp_aizynth:invoke",
+  "mcp-chemprop": "mcp_chemprop:invoke",
+  "mcp-xtb": "mcp_xtb:invoke",
+  "mcp-sirius": "mcp_sirius:invoke",
+  "mcp-eln-local": "mcp_eln:read",
+  "mcp-logs-sciy": "mcp_instrument:read",
 };
 
-const DEFAULT_SCOPES = ["mcp:invoke"];
 const DEFAULT_TTL_SECONDS = 300; // 5 min — matches the verifier's expiry check
 const REFRESH_BUFFER_SECONDS = 60; // refresh 60s before expiry
 
@@ -75,12 +76,29 @@ export function getMcpToken(opts: {
     return cached.token;
   }
 
+  // Fail-loud on unknown service: the previous DEFAULT_SCOPE="mcp:invoke"
+  // fallback minted a token that no MCP would accept, producing a
+  // guaranteed-403 that LOOKS like an auth bug. Throwing here surfaces
+  // the typo at mint-time instead.
+  const scope = SERVICE_SCOPES[opts.service];
+  if (!scope) {
+    throw new McpAuthError(
+      `unknown MCP service ${JSON.stringify(opts.service)}; ` +
+        "add it to SERVICE_SCOPES in mcp-token-cache.ts and the Python mirror " +
+        "in services/mcp_tools/common/scopes.py",
+    );
+  }
+
   try {
-    const scopes = SERVICE_SCOPES[opts.service] ?? DEFAULT_SCOPES;
+    // audience binds this token to one specific MCP service so it can't
+    // be replayed against a peer (blue/green deployment, per-tenant
+    // copy). Without this, scope-only enforcement leaves a 5-minute
+    // replay window if the token leaks.
     const token = signMcpToken({
       sandboxId: opts.sandboxId ?? "agent",
       userEntraId: opts.userEntraId,
-      scopes,
+      scopes: [scope],
+      audience: opts.service,
       ttlSeconds: DEFAULT_TTL_SECONDS,
       signingKey: key,
       now,

@@ -37,6 +37,7 @@ from typing import Annotated, Any, AsyncIterator
 import psycopg
 from fastapi import Body, FastAPI, HTTPException
 from psycopg.rows import dict_row
+import psycopg_pool
 from psycopg_pool import AsyncConnectionPool
 from pydantic import BaseModel, Field, field_validator
 from pydantic_settings import SettingsConfigDict
@@ -53,7 +54,11 @@ log = logging.getLogger("mcp-eln-local")
 # `chemclaw.mock_eln_reader_password` GUC is unset. If the configured
 # DSN still contains this literal we refuse to start unless explicitly
 # allowed via MOCK_ELN_ALLOW_DEV_PASSWORD=true (set in dev-compose).
-_DEV_SENTINEL_PASSWORD = "chemclaw_mock_eln_reader_dev_password_change_me"
+# Imported from common/dev_sentinels.py so all services that guard on
+# the same value rotate it together (cycle 4).
+from services.mcp_tools.common.dev_sentinels import DEV_MOCK_ELN_READER_PASSWORD
+
+_DEV_SENTINEL_PASSWORD = DEV_MOCK_ELN_READER_PASSWORD
 
 
 # --------------------------------------------------------------------------
@@ -149,6 +154,18 @@ async def _acquire() -> AsyncIterator[psycopg.AsyncConnection]:
     connection is not safe for concurrent operations (only one cursor at
     a time), so under any concurrent load the shared-conn pattern would
     serialize requests at best and deadlock at worst.
+
+    Three classes of transient failure surface as a structured 503 so
+    upstream clients can distinguish "service degraded, retry" from a
+    bug. The `ValueError → 400` handler in `common/app.py` does not
+    catch any of these, hence the explicit conversion.
+
+      - `psycopg.OperationalError` — e.g. DB restart mid-request.
+      - `psycopg_pool.PoolTimeout` — all connections busy, timeout
+        elapsed (reachable under modest concurrent load with the
+        default pool_max_size=5).
+      - `psycopg_pool.PoolClosed` — pool shut down between the
+        `pool_holder.get` lookup and the `connection()` call.
     """
     pool = _pool_holder.get("pool")
     if pool is None:
@@ -156,8 +173,14 @@ async def _acquire() -> AsyncIterator[psycopg.AsyncConnection]:
             status_code=503,
             detail={"error": "service_unavailable", "detail": "mock_eln pool not initialized"},
         )
-    async with pool.connection() as conn:
-        yield conn
+    try:
+        async with pool.connection() as conn:
+            yield conn
+    except (psycopg.OperationalError, psycopg_pool.PoolTimeout, psycopg_pool.PoolClosed) as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"error": "service_unavailable", "detail": f"mock_eln DB unavailable: {exc}"},
+        ) from exc
 
 
 app = create_app(
@@ -166,6 +189,7 @@ app = create_app(
     log_level=settings.log_level,
     ready_check=_ready_check,
     lifespan=_lifespan,
+    required_scope="mcp_eln:read",
 )
 
 
@@ -539,7 +563,7 @@ def _row_to_result(row: dict[str, Any]) -> Result:
         value_text=row.get("value_text"),
         unit=row.get("unit"),
         measured_at=row.get("measured_at"),
-        metadata=row.get("metadata") or {},
+        metadata=cap_jsonb(row.get("metadata") or {}, field_name="results.metadata"),
     )
 
 

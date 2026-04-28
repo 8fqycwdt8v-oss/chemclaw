@@ -49,6 +49,7 @@ import { buildQueryElnSamplesByEntryTool } from "./tools/builtins/query_eln_samp
 import { buildQueryInstrumentRunsTool } from "./tools/builtins/query_instrument_runs.js";
 import { buildFetchInstrumentRunTool } from "./tools/builtins/fetch_instrument_run.js";
 import { buildQueryInstrumentDatasetsTool } from "./tools/builtins/query_instrument_datasets.js";
+import { buildQueryInstrumentPersonsTool } from "./tools/builtins/query_instrument_persons.js";
 // Autonomy upgrade — Claude-Code-like plan mode.
 import { buildManageTodosTool } from "./tools/builtins/manage_todos.js";
 import { buildAskUserTool } from "./tools/builtins/ask_user.js";
@@ -223,6 +224,9 @@ registry.registerBuiltin("fetch_instrument_run", () =>
 );
 registry.registerBuiltin("query_instrument_datasets", () =>
   asTool(buildQueryInstrumentDatasetsTool(cfg.MCP_LOGS_SCIY_URL)),
+);
+registry.registerBuiltin("query_instrument_persons", () =>
+  asTool(buildQueryInstrumentPersonsTool(cfg.MCP_LOGS_SCIY_URL)),
 );
 
 // LIMS adapters remain unwired in this build. The post-tool source-cache
