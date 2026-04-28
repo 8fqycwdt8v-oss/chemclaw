@@ -41,6 +41,7 @@ jobs:
       - name: Install touched-service deps
         run: |
           python3 -m pip install --upgrade pip
+          python3 -m pip install -r services/mcp_tools/common/requirements.txt
           python3 -m pip install -r services/projectors/kg_source_cache/requirements.txt
           python3 -m pip install -r services/optimizer/session_reanimator/requirements.txt
           python3 -m pip install -r services/optimizer/session_purger/requirements.txt
