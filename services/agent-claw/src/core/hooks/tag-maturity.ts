@@ -11,6 +11,7 @@
 import type { Pool } from "pg";
 import type { PostToolPayload } from "../types.js";
 import type { Lifecycle } from "../lifecycle.js";
+import type { HookJSONOutput } from "../hook-output.js";
 
 // Tools whose output carries structured data worth persisting as an artifact.
 // All other tool outputs are stamped but NOT persisted (keep artifact table lean).
@@ -68,12 +69,12 @@ export function resolveMaturity(output: unknown): "EXPLORATORY" | "WORKING" | "F
 export async function tagMaturityHook(
   payload: PostToolPayload,
   pool?: Pool,
-): Promise<void> {
+): Promise<HookJSONOutput> {
   (payload as { output: unknown }).output = stampMaturity(payload.output);
 
   const output = payload.output;
   if (output === null || typeof output !== "object" || Array.isArray(output)) {
-    return; // only persist structured outputs
+    return {}; // only persist structured outputs
   }
 
   const maturity = resolveMaturity(output);
@@ -125,6 +126,7 @@ export async function tagMaturityHook(
       maturityMap.set(id, maturity);
     }
   }
+  return {};
 }
 
 /**
@@ -133,5 +135,5 @@ export async function tagMaturityHook(
  *              structured tool outputs (ARTIFACT_TOOL_IDS).
  */
 export function registerTagMaturityHook(lifecycle: Lifecycle, pool?: Pool): void {
-  lifecycle.on("post_tool", "tag-maturity", (payload) => tagMaturityHook(payload, pool));
+  lifecycle.on("post_tool", "tag-maturity", async (payload) => tagMaturityHook(payload, pool));
 }

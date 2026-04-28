@@ -20,6 +20,7 @@
 
 import type { PostTurnPayload } from "../types.js";
 import type { Lifecycle } from "../lifecycle.js";
+import type { HookJSONOutput } from "../hook-output.js";
 
 // ---------------------------------------------------------------------------
 // Compiled patterns (length-bounded — no unbounded quantifiers).
@@ -101,7 +102,11 @@ export function redactString(
  * This runs even on error paths because the chat route dispatches `post_turn`
  * from a `finally` block (see routes/chat.ts).
  */
-export async function redactSecretsHook(payload: PostTurnPayload): Promise<void> {
+export async function redactSecretsHook(
+  payload: PostTurnPayload,
+  _toolUseID?: string,
+  _options?: { signal: AbortSignal },
+): Promise<HookJSONOutput> {
   const replacements: RedactReplacement[] = [];
 
   const original = payload.finalText ?? "";
@@ -127,6 +132,7 @@ export async function redactSecretsHook(payload: PostTurnPayload): Promise<void>
       },
     ]);
   }
+  return {};
 }
 
 /**

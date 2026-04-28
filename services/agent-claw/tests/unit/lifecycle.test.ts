@@ -125,9 +125,17 @@ describe("Lifecycle hook dispatcher", () => {
 
   it("dispatching a point with no hooks is a no-op", async () => {
     const lifecycle = new Lifecycle();
-    // Should not throw even with no hooks registered.
-    await expect(
-      lifecycle.dispatch("pre_compact", { ctx: makeCtx(), messages: [] }),
-    ).resolves.toBeUndefined();
+    // Should not throw even with no hooks registered. Returns the empty
+    // dispatch-result shape (no decision, no updatedInput).
+    const fullPayload = {
+      ctx: makeCtx(),
+      messages: [],
+      trigger: "manual" as const,
+      pre_tokens: 0,
+    };
+    const result = await lifecycle.dispatch("pre_compact", fullPayload);
+    expect(result.decision).toBeUndefined();
+    expect(result.reason).toBeUndefined();
+    expect(result.updatedInput).toBeUndefined();
   });
 });
