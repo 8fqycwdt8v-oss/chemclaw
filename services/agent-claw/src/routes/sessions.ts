@@ -420,9 +420,15 @@ export function registerSessionsRoute(
 // ---------------------------------------------------------------------------
 // Shared helper: run the harness one or more times against a session,
 // auto-chaining until completion / max_steps cap / session-budget trip.
+//
+// Exported for integration tests (tests/integration/chained-execution.test.ts)
+// so the chained-loop logic can be exercised against a real Postgres without
+// having to spin up a full Fastify instance. The signature is part of the
+// internal API; callers outside this module should still prefer the route
+// endpoints.
 // ---------------------------------------------------------------------------
 
-interface ChainedHarnessOptions {
+export interface ChainedHarnessOptions {
   pool: Pool;
   user: string;
   sessionId: string;
@@ -446,7 +452,7 @@ interface ChainedHarnessOptions {
   };
 }
 
-interface ChainedHarnessResult {
+export interface ChainedHarnessResult {
   autoTurns: number;
   totalSteps: number;
   finalFinishReason: string;
@@ -454,7 +460,7 @@ interface ChainedHarnessResult {
   planFinalStepIndex?: number;
 }
 
-async function runChainedHarness(
+export async function runChainedHarness(
   opts: ChainedHarnessOptions,
 ): Promise<ChainedHarnessResult> {
   // Establish the AsyncLocalStorage context so every outbound MCP call
