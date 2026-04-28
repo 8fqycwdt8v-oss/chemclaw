@@ -35,8 +35,17 @@ export { type HarnessOptions, type HarnessResult };
  * for each step. Callers that need an unmodified copy should clone beforehand.
  */
 export async function runHarness(options: HarnessOptions): Promise<HarnessResult> {
-  const { messages, tools, llm, budget, lifecycle, ctx, streamSink, sessionId } =
-    options;
+  const {
+    messages,
+    tools,
+    llm,
+    budget,
+    lifecycle,
+    ctx,
+    streamSink,
+    sessionId,
+    permissions,
+  } = options;
 
   let finalText = "";
   let finishReason = "stop";
@@ -93,6 +102,7 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
         lifecycle,
         ctx,
         streamSink,
+        permissions,
       });
 
       // Record usage — BudgetExceededError propagates out of the loop.

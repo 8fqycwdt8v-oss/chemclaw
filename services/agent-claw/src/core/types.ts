@@ -56,6 +56,51 @@ export type StepResult =
   | { kind: "tool_calls"; calls: Array<{ toolId: string; input: unknown }> };
 
 // ---------------------------------------------------------------------------
+// Phase 6: Permission system primitives.
+//
+// PermissionMode controls how the resolver in core/permissions/resolver.ts
+// gates tool calls. allowedTools / disallowedTools are matched by exact
+// tool id; allowedTools also supports a single trailing "*" wildcard
+// (e.g. "mcp__github__*"). permissionCallback is the explicit escape hatch
+// when no rule matches and no permission_request hook produced a decision.
+// ---------------------------------------------------------------------------
+export type PermissionMode =
+  // Tools not covered by allow/deny rules → fire permission_request hook;
+  // if no resolution, deny.
+  | "default"
+  // Auto-approve filesystem-touching tools; other rules apply.
+  | "acceptEdits"
+  // No tool execution; route should emit a plan instead. Resolver returns
+  // "defer" so step.ts treats it as denied (defense-in-depth) — routes are
+  // expected to detect plan mode BEFORE entering the harness loop.
+  | "plan"
+  // Tools pre-approved via allowedTools run; everything else denied.
+  | "dontAsk"
+  // All tools run unchecked. ONLY for isolated/sandboxed environments.
+  | "bypassPermissions";
+
+export type PermissionResolution = "allow" | "deny" | "ask" | "defer";
+
+export interface PermissionContext {
+  toolId: string;
+  input: unknown;
+  ctx: ToolContext;
+}
+
+export type PermissionCallback = (
+  pctx: PermissionContext,
+) => Promise<PermissionResolution> | PermissionResolution;
+
+export interface PermissionOptions {
+  permissionMode?: PermissionMode;
+  /** Exact match OR `mcp__server__*` trailing-wildcard. */
+  allowedTools?: string[];
+  /** Exact match. */
+  disallowedTools?: string[];
+  permissionCallback?: PermissionCallback;
+}
+
+// ---------------------------------------------------------------------------
 // Options passed to runHarness / buildAgent.
 // ---------------------------------------------------------------------------
 export interface HarnessOptions {
@@ -80,6 +125,13 @@ export interface HarnessOptions {
   streamSink?: StreamSink;
   /** Optional session id; passed through to the sink's onSession callback. */
   sessionId?: string;
+  /**
+   * Phase 6: optional permission policy. When undefined, the harness behaves
+   * as before (only the pre_tool hooks gate tool calls). When set, the
+   * resolver in core/permissions/resolver.ts runs BEFORE pre_tool dispatch
+   * and can short-circuit the call with deny / defer.
+   */
+  permissions?: PermissionOptions;
 }
 
 // ---------------------------------------------------------------------------

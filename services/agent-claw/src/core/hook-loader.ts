@@ -6,7 +6,7 @@
 // import the module — supported but no script-based hooks ship today.
 //
 // As of v1.2.0 this is the single source of truth for hook registration on
-// the production startup path. The 9 built-in hooks register here; new hooks
+// the production startup path. The 11 built-in hooks register here; new hooks
 // require both a YAML file in hooks/ AND an entry in BUILTIN_REGISTRARS.
 //
 // YAML shape:
@@ -37,6 +37,7 @@ import { registerSourceCacheHook } from "./hooks/source-cache.js";
 import { registerCompactWindowHook } from "./hooks/compact-window.js";
 import { registerApplySkillsHook } from "./hooks/apply-skills.js";
 import { registerSessionEventsHook } from "./hooks/session-events.js";
+import { registerPermissionHook } from "./hooks/permission.js";
 
 // ---------------------------------------------------------------------------
 // YAML schema (validated at load time).
@@ -113,6 +114,11 @@ const BUILTIN_REGISTRARS: Map<string, BuiltinRegistrar> = new Map([
   // Phase 4B: no-op session-events hook gives operators a YAML-discoverable
   // attach point for session_start telemetry without forcing a code change.
   ["session-events", (lc) => registerSessionEventsHook(lc)],
+  // Phase 6: no-op permission hook — operators replace with custom policy.
+  // Registers at permission_request; the route-level resolver dispatches
+  // before pre_tool, so a custom policy here gates tools BEFORE the
+  // budget-guard / foundation-citation-guard pre_tool chain runs.
+  ["permission", (lc) => registerPermissionHook(lc)],
 ]);
 
 // ---------------------------------------------------------------------------

@@ -16,10 +16,16 @@
 
 import type { LlmProvider } from "../llm/provider.js";
 import type { Lifecycle } from "./lifecycle.js";
-import type { Message, StepResult, ToolContext } from "./types.js";
+import type {
+  Message,
+  PermissionOptions,
+  StepResult,
+  ToolContext,
+} from "./types.js";
 import type { Tool } from "../tools/tool.js";
 import type { StreamSink, TodoSnapshot } from "./streaming-sink.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
+import { resolveDecision } from "./permissions/resolver.js";
 
 export interface StepOnceOptions {
   llm: LlmProvider;
@@ -34,6 +40,12 @@ export interface StepOnceOptions {
    * and tool brackets fire onToolCall / onToolResult.
    */
   streamSink?: StreamSink;
+  /**
+   * Phase 6: optional permission policy. When set, the resolver runs
+   * before pre_tool dispatch and can short-circuit a tool call with
+   * deny / defer.
+   */
+  permissions?: PermissionOptions;
 }
 
 /**
@@ -72,8 +84,9 @@ async function _runOneTool(opts: {
   lifecycle: Lifecycle;
   ctx: ToolContext;
   streamSink?: StreamSink;
+  permissions?: PermissionOptions;
 }): Promise<StepToolOutput> {
-  const { tools, toolId, input, lifecycle, ctx, streamSink } = opts;
+  const { tools, toolId, input, lifecycle, ctx, streamSink, permissions } = opts;
 
   const tool = tools.find((t) => t.id === toolId);
   if (!tool) {
@@ -81,6 +94,40 @@ async function _runOneTool(opts: {
       `stepOnce: model requested unknown tool "${toolId}". ` +
         `Available: [${tools.map((t) => t.id).join(", ")}]`,
     );
+  }
+
+  // ---------------------------------------------------------------------
+  // Phase 6: route-level permission resolver.
+  //
+  // Runs BEFORE pre_tool dispatch. When permissions options are provided,
+  // the resolver consults permissionMode + allowedTools / disallowedTools,
+  // fires the permission_request hook (default mode), and falls back to
+  // permissionCallback. A deny or defer decision short-circuits tool
+  // execution with a synthetic rejection mirroring the pre_tool deny path.
+  //
+  // When `permissions` is undefined, the resolver is skipped entirely so
+  // legacy callers (sub-agents, deep-research, plan.ts) keep their prior
+  // semantics — only the pre_tool hook chain gates execution.
+  // ---------------------------------------------------------------------
+  if (permissions) {
+    const permResult = await resolveDecision({
+      tool,
+      input,
+      ctx,
+      options: permissions,
+      lifecycle,
+    });
+
+    if (permResult.decision === "deny" || permResult.decision === "defer") {
+      const denyOutput = {
+        error: `denied_by_permissions:${permResult.decision}`,
+        reason: permResult.reason ?? "",
+      };
+      streamSink?.onToolCall?.(toolId, input);
+      streamSink?.onToolResult?.(toolId, denyOutput);
+      return { toolId, output: denyOutput };
+    }
+    // "allow" / "ask" both proceed to pre_tool, which can downgrade to deny.
   }
 
   // pre_tool — hooks may throw to abort, mutate input via in-place writes,
@@ -196,7 +243,7 @@ async function _runOneTool(opts: {
  * the message history.
  */
 export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
-  const { llm, tools, messages, lifecycle, ctx, streamSink } = opts;
+  const { llm, tools, messages, lifecycle, ctx, streamSink, permissions } = opts;
 
   // 1. LLM call.
   const { result, usage } = await llm.call(messages, tools);
@@ -272,6 +319,7 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
           lifecycle,
           ctx,
           streamSink,
+          permissions,
         }),
       ),
     );
@@ -288,6 +336,7 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
         lifecycle,
         ctx,
         streamSink,
+        permissions,
       });
       toolOutputs.push(out);
     }
