@@ -469,9 +469,10 @@ async function handleChat(
   // ------- SSE streaming path -------
   setupSse(reply);
 
-  // NOTE: the harness's onSession callback (fired from runHarness BEFORE
-  // pre_turn) drives the `session` SSE event via the sink. We do NOT emit
-  // it here directly — that would double-fire when runHarness runs.
+  // NOTE: onSession fires BEFORE pre_turn (when both streamSink and
+  // sessionId are set) — runHarness drives the `session` SSE event via the
+  // sink. We do NOT emit it here directly — that would double-fire when
+  // runHarness runs.
 
   // Open the OTel root span for the turn — emits the Langfuse `prompt:<name>`
   // tag so the GEPA runner's tag-filtered fetch returns this trace.
@@ -489,11 +490,10 @@ async function handleChat(
   req.raw.on("close", onClose);
   req.raw.on("aborted", onClose);
 
-  // Hoisted out of the try block so the finally can read them when the loop
-  // exits via error. Mirrors runHarness() in core/harness.ts.
+  // finishReason and budget are hoisted out of the try block so the finally
+  // can read them when the loop exits via error. Mirrors runHarness() in
+  // core/harness.ts.
   let finishReason = "stop";
-  let finalText = "";
-  let stepsUsed = 0;
   // Streaming redaction log: each text_delta is scrubbed in flight via the
   // sink's onTextDelta (makeSseSink wraps redactString); replacements
   // accumulate here so the route's finally can persist them to scratchpad
@@ -624,9 +624,7 @@ async function handleChat(
       sessionId: sessionId ?? undefined,
     });
 
-    finalText = result.text;
     finishReason = result.finishReason;
-    stepsUsed = result.stepsUsed;
   } catch (err) {
     // Distinguish typed control-flow / quota errors so clients can render
     // appropriate UI. instanceof checks instead of err.name strings —
