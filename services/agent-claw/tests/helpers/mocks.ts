@@ -41,13 +41,20 @@ function throwingStub<T extends object>(label: string): T {
 
 /**
  * Build a minimal HookDeps stub for hook-loader tests.
+ *
+ * Each field defaults to a throwing-Proxy stub so a registrar that touches
+ * it at registration time fails loud. Pass `overrides` to substitute a real
+ * dependency for tests that actually dispatch the registered hooks (e.g.
+ * the all-hooks-fire integration test that needs a real SkillLoader because
+ * apply-skills reads loader.activeIds inside its pre_turn handler).
  */
-export function mockHookDeps(): HookDeps {
+export function mockHookDeps(overrides: Partial<HookDeps> = {}): HookDeps {
   return {
     pool: throwingStub("pool"),
     llm: throwingStub("llm"),
     skillLoader: throwingStub("skillLoader"),
     allTools: [],
     tokenBudget: 100_000,
+    ...overrides,
   };
 }
