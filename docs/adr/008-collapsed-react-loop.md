@@ -37,8 +37,8 @@ ReAct loop in the system. Streaming is plumbed via an optional callback:
 export interface StreamSink {
   onSession?(sessionId: string): void;
   onTextDelta?(delta: string): void;
-  onToolCall?(toolId: string, name: string, input: unknown): void;
-  onToolResult?(toolId: string, result: unknown): void;
+  onToolCall?(toolId: string, input: unknown): void;
+  onToolResult?(toolId: string, output: unknown): void;
   onTodoUpdate?(todos: TodoSnapshot[]): void;
   onAwaitingUserInput?(question: string): void;
   onFinish?(reason: FinishReason, budget: BudgetSummary): void;

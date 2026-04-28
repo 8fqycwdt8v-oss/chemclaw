@@ -57,7 +57,8 @@ Pinned by:
   point fires on the production harness path.
 - `tests/integration/chat-streaming-via-harness.test.ts` — `/api/chat`
   SSE wire format matches what `runHarness` produces directly.
-- `tests/unit/lifecycle.matcher.test.ts`,
-  `tests/unit/lifecycle.decision-precedence.test.ts` — hook matcher and
-  decision-aggregation rules.
+- `tests/unit/lifecycle-matchers.test.ts`,
+  `tests/unit/lifecycle-decisions.test.ts` — hook matcher and
+  decision-aggregation rules (the latter also asserts a never-resolving
+  hook is timed out within its configured window).
 - `services/mcp_tools/common/tests/test_auth.py` — MCP auth fail-closed.

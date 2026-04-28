@@ -248,7 +248,7 @@ The agent harness (`services/agent-claw/`) has 16 lifecycle hook points. **`load
 | `task_completed` | When a todo flips to `completed` | (declared; no built-ins yet) |
 | `pre_compact` | When context > 60% of budget | `compact-window` (invokes Haiku compactor) |
 | `post_compact` | After compaction returns | (declared; no built-ins yet) |
-| `post_turn` | After SSE stream closes | `redact-secrets` (defense-in-depth output scrub) |
+| `post_turn` | After the loop exits; before the SSE stream closes (when streaming) — fires inside `runHarness`'s finally so scratchpad / redaction work runs before the route's reply ends | `redact-secrets` (defense-in-depth output scrub) |
 
 **Lifecycle is a process-wide singleton** in `services/agent-claw/src/core/runtime.ts`. At server startup `index.ts` calls `loadHooks(lifecycle, deps)` from `core/hook-loader.ts`, which iterates `hooks/*.yaml` and registers each entry from `BUILTIN_REGISTRARS` into the singleton. All harness call paths (`/api/chat`, `/api/chat/plan/approve`, `/api/sessions/:id/plan/run`, `/api/sessions/:id/resume`, `/api/deep_research`) and sub-agents import the same singleton, so a hook addition picks up everywhere automatically. `core/session-state.ts` exports `hydrateScratchpad` and `persistTurnState` — the rehydrate-from-session and end-of-turn save patterns shared across routes.
 

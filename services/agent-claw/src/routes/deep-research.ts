@@ -24,13 +24,6 @@ import type { Config } from "../config.js";
 import type { LlmProvider } from "../llm/provider.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import { Budget } from "../core/budget.js";
-import {
-  parseSlash,
-  parseFeedbackArgs,
-  shortCircuitResponse,
-  HELP_TEXT,
-} from "../core/slash.js";
-import { withUserContext } from "../db/with-user-context.js";
 import { PromptRegistry } from "../prompts/registry.js";
 import { runWithRequestContext } from "../core/request-context.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
