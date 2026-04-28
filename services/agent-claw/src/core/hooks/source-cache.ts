@@ -165,8 +165,12 @@ async function insertSourceFacts(
 ): Promise<void> {
   if (facts.length === 0) return;
 
-  // Use system context for ingestion writes (projectors bypass RLS).
-  await withUserContext(pool, "", async (client) => {
+  // Use the agent's per-request user context. Earlier code path silently
+  // hard-coded "" here, which collides with the strict RLS policies in
+  // db/init/12_security_hardening.sql ("user_entra_id IS NOT NULL AND <> ''")
+  // — empty-string context fails the gate and the INSERT is silently
+  // rejected, dropping every source fact on the floor.
+  await withUserContext(pool, userEntraId, async (client) => {
     for (const fact of facts) {
       await client.query(
         `INSERT INTO ingestion_events (event_type, source_table, source_row_id, payload)
