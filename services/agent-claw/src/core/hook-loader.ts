@@ -46,6 +46,7 @@ const VALID_HOOK_POINTS = new Set<string>([
   "pre_tool",
   "post_tool",
   "pre_compact",
+  "post_compact",
   "post_turn",
 ]);
 

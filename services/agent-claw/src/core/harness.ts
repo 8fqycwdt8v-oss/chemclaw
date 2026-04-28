@@ -13,10 +13,17 @@
 //   fire post_turn
 //   return { text, finishReason, stepsUsed, usage }
 
-import { BudgetExceededError } from "./budget.js";
+import { BudgetExceededError, estimateTokenCount } from "./budget.js";
 import { stepOnce } from "./step.js";
 import { syncSeenFactIdsFromScratch } from "./session-state.js";
-import type { HarnessOptions, HarnessResult, Message, ToolContext } from "./types.js";
+import type {
+  HarnessOptions,
+  HarnessResult,
+  Message,
+  PostCompactPayload,
+  PreCompactPayload,
+  ToolContext,
+} from "./types.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 
 export { type HarnessOptions, type HarnessResult };
@@ -80,6 +87,42 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
 
       // Record usage — BudgetExceededError propagates out of the loop.
       budget.consumeStep(usage);
+
+      // ---------------------------------------------------------------------
+      // Mid-turn compaction: when prompt usage crosses the configured
+      // threshold (default 60% of maxPromptTokens), dispatch pre_compact /
+      // post_compact. The compact-window hook MUTATES payload.messages in
+      // place; the harness reads from the same `messages` reference on the
+      // next iteration so the LLM sees the compacted window.
+      //
+      // Token math: pre_tokens / post_tokens are heuristic
+      // (estimateTokenCount, ~4 chars/token). The trigger itself is gated
+      // on budget.shouldCompact() which uses model-reported usage from
+      // consumeStep, so the heuristic only feeds telemetry — not the
+      // trigger decision. After compaction we resetPromptTokens() to the
+      // post-compact estimate so the next consumeStep doesn't re-trip
+      // shouldCompact() on the now-shrunk window.
+      // ---------------------------------------------------------------------
+      if (budget.shouldCompact()) {
+        const preTokens = budget.promptTokens;
+        const prePayload: PreCompactPayload = {
+          ctx,
+          messages,
+          trigger: "auto",
+          pre_tokens: preTokens,
+          custom_instructions: null,
+        };
+        await lifecycle.dispatch("pre_compact", prePayload);
+        const postTokens = estimateTokenCount(messages);
+        budget.resetPromptTokens(postTokens);
+        const postPayload: PostCompactPayload = {
+          ctx,
+          trigger: "auto",
+          pre_tokens: preTokens,
+          post_tokens: postTokens,
+        };
+        await lifecycle.dispatch("post_compact", postPayload);
+      }
 
       if (step.kind === "text") {
         finalText = step.text;
