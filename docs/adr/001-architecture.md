@@ -30,7 +30,9 @@ use, code-generation for plots, external-LLM egress, OpenShift target.
   prediction).
 - **Egress**: LiteLLM proxy + PII/IP redactor. Single outbound path.
 - **Identity**: Azure AD / Entra ID via oauth2-proxy sidecar.
-- **Frontend**: Streamlit.
+- **Frontend**: ~~Streamlit~~ (removed 2026-04-27 — being rebuilt in a
+  separate repository; the in-tree client during the interim is the
+  Python CLI at `tools/cli/`).
 
 ## Rejected alternatives
 

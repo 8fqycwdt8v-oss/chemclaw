@@ -1,9 +1,9 @@
 // GET /api/documents/:id/original — proxy original-doc bytes to the caller.
 //
-// This is a thin convenience route for the Streamlit "Open original" button:
-// the browser makes a GET request here, receives the raw bytes with the correct
-// Content-Type header, and the Streamlit st.download_button / markdown link
-// can render or trigger a browser download.
+// This is a thin convenience route for the future frontend's "Open original"
+// affordance: the browser makes a GET request here, receives the raw bytes
+// with the correct Content-Type header, and renders or triggers a browser
+// download.
 //
 // Internally calls mcp-doc-fetcher /fetch with the document's original_uri.
 // Requires the caller to pass the user Entra-ID via X-Dev-User-Entra-Id (dev)

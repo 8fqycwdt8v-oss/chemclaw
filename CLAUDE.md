@@ -2,6 +2,16 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Required workflow for any non-trivial change
+
+This repository often has multiple parallel sessions touching the same checkout. To avoid stomping on each other's files (this has bitten us — see git reflog for resets that wiped in-progress work), **always**:
+
+1. **Start with `superpowers:using-git-worktrees`** — create a dedicated worktree (`git worktree add ../chemclaw-<task>`) for the task, on its own branch off `main`. Do all file edits there. The shared checkout is reserved for whatever the user is doing interactively.
+2. **Use `superpowers:brainstorming` → `superpowers:writing-plans` → `superpowers:executing-plans`** (or `superpowers:subagent-driven-development`) for anything bigger than a one-line edit. Don't shortcut into code.
+3. **Finish with `superpowers:finishing-a-development-branch`** — it presents merge / PR / cleanup options, removes the worktree, and ends the work cleanly. Don't leave orphan worktrees or half-merged branches behind.
+
+When you skip step 1 and the parent checkout's branch flips under you, your files vanish and you re-do work. Don't.
+
 ## What ChemClaw is
 
 Autonomous knowledge-intelligence agent for pharmaceutical chemical & analytical development. The central artifact is a **living bi-temporal knowledge graph** of compounds / reactions / experiments / conditions / documents with confidence-scored edges and explicit contradiction handling. Vector search is a complementary layer, not a replacement. The system is designed to act **proactively** (new data triggers autonomous investigation + outbound chat notifications) and to use scientific tools autonomously (RDKit, DFT, GFN2-xTB, TabPFN, etc.).
@@ -63,7 +73,7 @@ make import.sample              # import sample ELN JSON
 
 ```bash
 make run.agent                   # http://localhost:3101
-make run.frontend                # http://localhost:8501
+chemclaw chat "..."              # CLI wrapper (tools/cli/README.md). The Streamlit frontend was moved to a separate repo.
 make run.mcp-rdkit               # http://localhost:8001
 make run.mcp-drfp                # http://localhost:8002
 make run.reaction-vectorizer     # LISTEN/NOTIFY projector
@@ -106,7 +116,7 @@ Every project-scoped query must run in a transaction with `app.current_user_entr
 | Role | LOGIN | BYPASSRLS | Used for |
 |---|---|---|---|
 | `chemclaw` | yes | implicit (table owner) | DB init + migrations only — **never** for app traffic |
-| `chemclaw_app` | yes | NO | All app traffic (agent-claw, frontend, paperclip). Subject to FORCE RLS. |
+| `chemclaw_app` | yes | NO | All app traffic (agent-claw, paperclip). Subject to FORCE RLS. |
 | `chemclaw_service` | yes | YES | Projectors, ingestion workers, the optimizer cron, `session_reanimator`. |
 
 `FORCE ROW LEVEL SECURITY` is set on every project-scoped table, so even `chemclaw` (the owner) is RLS-enforced — there is no "owner shortcut."
@@ -114,7 +124,7 @@ Every project-scoped query must run in a transaction with `app.current_user_entr
 Use the helper functions:
 
 - **TypeScript agent**: `withUserContext(pool, userEntraId, async (client) => ...)` in `services/agent-claw/src/db/with-user-context.ts`. For globally-scoped catalog reads (prompt_registry, skill_library, mcp_tools), use `withSystemContext(pool, fn)` — same module — which sets the sentinel user `'__system__'` so RLS policies that gate on `current_setting('app.current_user_entra_id')` being non-empty pass without leaking into a real user's identity.
-- **Python Streamlit**: `connect(user_entra_id)` context manager in `services/frontend/db.py`.
+- **Local CLI testing**: `chemclaw chat "..."` (see `tools/cli/README.md`). The CLI sends `x-user-entra-id` from `$CHEMCLAW_USER` and agent-claw applies it to the per-request RLS context.
 - **Projectors and system workers**: connect as `chemclaw_service` (BYPASSRLS) so they can read across all projects without setting a per-row user. The `session_reanimator` follows this pattern.
 
 **Never bypass RLS by connecting as the DB owner from user-facing code.** If a query returns rows the user shouldn't see, the bug is a missing or wrong `SET LOCAL`, not a missing WHERE clause.
