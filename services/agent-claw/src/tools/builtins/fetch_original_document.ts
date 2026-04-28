@@ -130,6 +130,7 @@ export function buildFetchOriginalDocumentTool(pool: Pool, docFetcherUrl: string
       "use when you need to see a figure or table on a specific page.",
     inputSchema: FetchOriginalDocumentIn,
     outputSchema: FetchOriginalDocumentOut,
+    annotations: { readOnly: true },
 
     execute: async (ctx, input) => {
       // ── 1. Lookup document row (RLS-scoped). ──────────────────────────────

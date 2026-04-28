@@ -37,6 +37,7 @@ export function buildFetchElnEntryTool(mcpUrl: string) {
       "query_eln_experiments to drill into a specific run.",
     inputSchema: FetchElnEntryIn,
     outputSchema: FetchElnEntryOut,
+    annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
       const parsed = FetchElnEntryIn.parse(input);

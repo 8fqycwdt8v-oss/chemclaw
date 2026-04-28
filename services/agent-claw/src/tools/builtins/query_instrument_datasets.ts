@@ -38,6 +38,7 @@ export function buildQueryInstrumentDatasetsTool(mcpLogsSciyUrl: string) {
       "shares the sample identifier.",
     inputSchema: QueryInstrumentDatasetsIn,
     outputSchema: QueryInstrumentDatasetsOut,
+    annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
       return postJson(

@@ -107,6 +107,21 @@ export class StubLlmProvider implements LlmProvider {
   }
 
   /**
+   * Convenience: enqueue a multi-tool_calls step (Phase 5 parallel batch).
+   * The harness will run read-only tools in the batch via Promise.all and
+   * push one tool message per call into history.
+   */
+  enqueueToolCalls(
+    calls: Array<{ toolId: string; input: unknown }>,
+    usage: { promptTokens: number; completionTokens: number } = {
+      promptTokens: 10,
+      completionTokens: 5,
+    },
+  ): this {
+    return this.enqueue({ result: { kind: "tool_calls", calls }, usage });
+  }
+
+  /**
    * Enqueue chunks for the next streamCompletion() call.
    * Pass an array of StreamChunk objects; the stub emits them in order.
    * A "finish" chunk is appended automatically if the provided chunks

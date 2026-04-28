@@ -5,6 +5,22 @@ import { z } from "zod";
 import type { ToolContext } from "../core/types.js";
 
 // ---------------------------------------------------------------------------
+// ToolAnnotations — optional per-tool metadata that drives harness behaviour.
+// Phase 5 introduces `readOnly` to enable parallel batch execution: when the
+// LLM emits multiple tool calls in one assistant message, all read-only tools
+// in the batch run via Promise.all rather than serialised one-at-a-time.
+// ---------------------------------------------------------------------------
+export interface ToolAnnotations {
+  /** True if the tool only reads state (no DB writes, no external POST/PUT/DELETE,
+   *  no filesystem writes, no LLM calls that mutate). Read-only tools may run in
+   *  parallel within a tool batch. */
+  readOnly?: boolean;
+  /** True if the tool may interact with systems outside the agent's control
+   *  (network, third-party APIs). Informational; not currently used by the harness. */
+  openWorld?: boolean;
+}
+
+// ---------------------------------------------------------------------------
 // Core Tool interface.
 // I and O are inferred from the Zod schemas.
 // ---------------------------------------------------------------------------
@@ -22,6 +38,9 @@ export interface Tool<I = unknown, O = unknown> {
    * Throw any Error to signal failure; the harness surfaces it as a tool error.
    */
   execute: (ctx: ToolContext, input: I) => Promise<O>;
+  /** Optional metadata; absent annotations are treated as the conservative
+   *  default (state-mutating). */
+  annotations?: ToolAnnotations;
 }
 
 // ---------------------------------------------------------------------------

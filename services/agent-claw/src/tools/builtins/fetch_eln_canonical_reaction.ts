@@ -43,6 +43,7 @@ export function buildFetchElnCanonicalReactionTool(mcpUrl: string) {
       "query_eln_canonical_reactions to inspect the conditions explored.",
     inputSchema: FetchElnCanonicalReactionIn,
     outputSchema: FetchElnCanonicalReactionOut,
+    annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
       const parsed = FetchElnCanonicalReactionIn.parse(input);

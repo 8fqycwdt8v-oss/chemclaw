@@ -48,6 +48,7 @@ export function buildQueryElnSamplesByEntryTool(mcpUrl: string) {
       "samples before crossing into analytical data via query_instrument_datasets.",
     inputSchema: QueryElnSamplesByEntryIn,
     outputSchema: QueryElnSamplesByEntryOut,
+    annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
       const parsed = QueryElnSamplesByEntryIn.parse(input);

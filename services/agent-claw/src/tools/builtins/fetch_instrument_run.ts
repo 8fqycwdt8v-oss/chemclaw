@@ -36,6 +36,7 @@ export function buildFetchInstrumentRunTool(mcpLogsSciyUrl: string) {
       "dataset record including parameters and detector tracks.",
     inputSchema: FetchInstrumentRunIn,
     outputSchema: FetchInstrumentRunOut,
+    annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
       return postJson(

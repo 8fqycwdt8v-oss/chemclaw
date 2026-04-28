@@ -48,6 +48,7 @@ export function buildPredictMolecularPropertyTool(mcpChempropUrl: string) {
       "a list of SMILES using the chemprop v2 MPNN model. Returns predicted value with uncertainty.",
     inputSchema: PredictMolecularPropertyIn,
     outputSchema: PredictMolecularPropertyOut,
+    annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
       return postJson(
