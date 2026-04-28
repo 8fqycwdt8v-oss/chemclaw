@@ -5,6 +5,7 @@ import type { Tool } from "../tools/tool.js";
 import type { Lifecycle } from "./lifecycle.js";
 import type { Budget } from "./budget.js";
 import type { LlmProvider } from "../llm/provider.js";
+import type { StreamSink } from "./streaming-sink.js";
 
 // ---------------------------------------------------------------------------
 // Tool execution context threaded through every hook and tool.execute call.
@@ -55,6 +56,15 @@ export interface HarnessOptions {
   lifecycle: Lifecycle;
   /** User + scratchpad context threaded through hooks and tools. */
   ctx: ToolContext;
+  /**
+   * Optional streaming sink. When set, the harness drives text steps via
+   * llm.streamCompletion and emits onTextDelta per chunk plus tool / session /
+   * finish notifications. When undefined, runHarness behaves identically to
+   * today (single llm.call per step, no streaming).
+   */
+  streamSink?: StreamSink;
+  /** Optional session id; passed through to the sink's onSession callback. */
+  sessionId?: string;
 }
 
 // ---------------------------------------------------------------------------

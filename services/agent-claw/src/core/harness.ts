@@ -28,10 +28,21 @@ export { type HarnessOptions, type HarnessResult };
  * for each step. Callers that need an unmodified copy should clone beforehand.
  */
 export async function runHarness(options: HarnessOptions): Promise<HarnessResult> {
-  const { messages, tools, llm, budget, lifecycle, ctx } = options;
+  const { messages, tools, llm, budget, lifecycle, ctx, streamSink, sessionId } =
+    options;
 
   let finalText = "";
   let finishReason = "stop";
+
+  // -------------------------------------------------------------------------
+  // onSession — fires once at the very start of a streamed turn, before any
+  // hook runs, so the SSE adapter can write the `session` event before the
+  // first `text_delta` or `tool_call`. No-op when streamSink is undefined or
+  // no sessionId was supplied.
+  // -------------------------------------------------------------------------
+  if (streamSink && sessionId) {
+    streamSink.onSession?.(sessionId);
+  }
 
   // -------------------------------------------------------------------------
   // pre_turn — fires once before any LLM call this turn.
@@ -64,6 +75,7 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
         messages,
         lifecycle,
         ctx,
+        streamSink,
       });
 
       // Record usage — BudgetExceededError propagates out of the loop.
@@ -104,6 +116,9 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
       // session state. Callers (chat.ts, runChainedHarness) check the
       // finishReason and emit the awaiting_user_input SSE event.
       finishReason = "awaiting_user_input";
+      // Notify the sink (if any) BEFORE re-throwing so the SSE adapter can
+      // emit awaiting_user_input even though this propagates as an error.
+      streamSink?.onAwaitingUserInput?.(err.question);
       // Mirror BudgetExceededError's "throw + finally fires" pattern so the
       // SSE streaming path in chat.ts can short-circuit the streaming loop.
       // runChainedHarness explicitly catches this class.
@@ -121,6 +136,11 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
       finalText,
       stepsUsed: budget.stepsUsed,
     });
+
+    // onFinish — fires after post_turn so any post_turn hook errors don't
+    // prevent the sink notification (post_turn errors propagate out before
+    // this in current behaviour, so this also fires on the happy path).
+    streamSink?.onFinish?.(finishReason, budget.summary());
   }
 
   return {
