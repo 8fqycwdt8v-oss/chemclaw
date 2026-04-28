@@ -154,9 +154,38 @@ export class Lifecycle {
       );
 
       try {
-        const result: HookJSONOutput | undefined | void = await (
+        // Race the handler against an abort-rejection promise so that a
+        // misbehaving hook (one that ignores its AbortSignal) cannot stall
+        // the dispatcher beyond `hook.timeout`. The hook keeps running in
+        // the background — we cannot kill its event-loop work — but the
+        // dispatcher unblocks, the timeout error path runs, and the next
+        // hook fires on schedule.
+        const handlerPromise = (
           hook.handler as HookCallback<unknown>
         )(payload, opts.toolUseID, { signal: ac.signal });
+        const abortPromise = new Promise<never>((_, reject) => {
+          if (ac.signal.aborted) {
+            reject(
+              ac.signal.reason ??
+                new Error(`hook timeout: ${hook.name}`),
+            );
+            return;
+          }
+          ac.signal.addEventListener(
+            "abort",
+            () => {
+              reject(
+                ac.signal.reason ??
+                  new Error(`hook timeout: ${hook.name}`),
+              );
+            },
+            { once: true },
+          );
+        });
+        const result: HookJSONOutput | undefined | void = await Promise.race([
+          handlerPromise,
+          abortPromise,
+        ]);
 
         // Tolerate hooks that return nothing (legacy void-returning shape
         // surfaced by older tests and any third-party hook that hasn't

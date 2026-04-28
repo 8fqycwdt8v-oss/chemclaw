@@ -200,7 +200,61 @@ describe("Lifecycle AbortSignal", () => {
     expect(receivedSignal?.aborted).toBe(false);
   });
 
-  // Don't test the timeout firing — vitest's fake-timer interaction with
-  // AbortController has compatibility caveats; the timeout mechanism is
-  // verified indirectly by the existing 60s default working in production.
+  it("a never-resolving non-pre_tool hook is timed out within its configured window", async () => {
+    // Regression test for the AbortSignal-doesn't-actually-time-out bug:
+    // before the Promise.race fix, await hook.handler() blocked until the
+    // handler resolved regardless of the timer firing ac.abort(). A
+    // misbehaving hook that ignored its signal would stall the entire turn.
+    //
+    // After the fix, dispatch() returns within ~timeout ms even though the
+    // handler's Promise never resolves. The handler keeps running in the
+    // background — we don't try to kill its event-loop work — but the
+    // dispatcher unblocks and the next hook (or caller) proceeds.
+    const lc = new Lifecycle();
+    lc.on(
+      "post_tool",
+      "stuck",
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      (_payload, _id, _opts) => new Promise<never>(() => {
+        /* never resolves, ignores AbortSignal */
+      }),
+      { timeout: 100 },
+    );
+
+    const start = Date.now();
+    await lc.dispatch("post_tool", {
+      ctx,
+      toolId: "x",
+      input: {},
+      output: { ok: true },
+    });
+    const elapsed = Date.now() - start;
+
+    // Should be ~100ms (timeout), well below the previous default of 60s.
+    // 400ms gives generous headroom on a slow CI runner.
+    expect(elapsed).toBeLessThan(400);
+    expect(elapsed).toBeGreaterThanOrEqual(80);
+  });
+
+  it("a never-resolving pre_tool hook propagates timeout as a thrown error within its window", async () => {
+    const lc = new Lifecycle();
+    lc.on(
+      "pre_tool",
+      "stuck",
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      (_payload, _id, _opts) => new Promise<never>(() => {
+        /* never resolves */
+      }),
+      { timeout: 100 },
+    );
+
+    const start = Date.now();
+    await expect(
+      lc.dispatch("pre_tool", { ctx, toolId: "x", input: {} }),
+    ).rejects.toThrow(/hook timeout: stuck/);
+    const elapsed = Date.now() - start;
+
+    expect(elapsed).toBeLessThan(400);
+    expect(elapsed).toBeGreaterThanOrEqual(80);
+  });
 });

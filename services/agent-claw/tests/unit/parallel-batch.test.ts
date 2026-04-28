@@ -32,8 +32,24 @@ function makeMessages(): Message[] {
 }
 
 /**
+ * Shared counter for the concurrent-execution assertion. The first test
+ * uses this to prove parallelism deterministically: increment on enter,
+ * record max, decrement on exit. If three tools ran sequentially, max
+ * would be 1; in parallel, max is 3.
+ */
+interface ConcurrencyTracker {
+  current: number;
+  max: number;
+}
+
+/**
  * Build a fake tool that records its start time on `clock`, sleeps for
  * `delayMs`, then resolves. Annotated readOnly: true unless overridden.
+ *
+ * If `tracker` is provided, the tool also increments `tracker.current` on
+ * entry and decrements on exit, recording the peak in `tracker.max`. This
+ * lets a test assert "N tools ran concurrently" without relying on wall-
+ * clock timing.
  */
 function makeRecordingTool(opts: {
   id: string;
@@ -41,6 +57,7 @@ function makeRecordingTool(opts: {
   clock: number[];
   readOnly?: boolean;
   throwInside?: boolean;
+  tracker?: ConcurrencyTracker;
 }) {
   return defineTool({
     id: opts.id,
@@ -50,11 +67,23 @@ function makeRecordingTool(opts: {
     annotations: { readOnly: opts.readOnly ?? true },
     execute: async () => {
       opts.clock.push(Date.now());
-      await new Promise((resolve) => setTimeout(resolve, opts.delayMs));
-      if (opts.throwInside) {
-        throw new Error(`boom from ${opts.id}`);
+      if (opts.tracker) {
+        opts.tracker.current += 1;
+        if (opts.tracker.current > opts.tracker.max) {
+          opts.tracker.max = opts.tracker.current;
+        }
       }
-      return { id: opts.id };
+      try {
+        await new Promise((resolve) => setTimeout(resolve, opts.delayMs));
+        if (opts.throwInside) {
+          throw new Error(`boom from ${opts.id}`);
+        }
+        return { id: opts.id };
+      } finally {
+        if (opts.tracker) {
+          opts.tracker.current -= 1;
+        }
+      }
     },
   });
 }
@@ -66,10 +95,11 @@ function makeRecordingTool(opts: {
 describe("parallel batch execution", () => {
   it("read-only tools run in parallel via Promise.all", async () => {
     const startTimes: number[] = [];
+    const tracker: ConcurrencyTracker = { current: 0, max: 0 };
     const tools = [
-      makeRecordingTool({ id: "ro_a", delayMs: 50, clock: startTimes }),
-      makeRecordingTool({ id: "ro_b", delayMs: 50, clock: startTimes }),
-      makeRecordingTool({ id: "ro_c", delayMs: 50, clock: startTimes }),
+      makeRecordingTool({ id: "ro_a", delayMs: 20, clock: startTimes, tracker }),
+      makeRecordingTool({ id: "ro_b", delayMs: 20, clock: startTimes, tracker }),
+      makeRecordingTool({ id: "ro_c", delayMs: 20, clock: startTimes, tracker }),
     ];
 
     const llm = new StubLlmProvider()
@@ -100,12 +130,11 @@ describe("parallel batch execution", () => {
       "ro_c",
     ]);
 
-    // All three tools should have started within ~5ms of each other (parallel).
-    // If they ran sequentially we'd see ~50ms gaps. Use 25ms as a generous
-    // threshold so this isn't flaky on a busy CI runner.
-    expect(startTimes).toHaveLength(3);
-    const spread = Math.max(...startTimes) - Math.min(...startTimes);
-    expect(spread).toBeLessThan(25);
+    // Deterministic parallelism check: if all three tools were in flight
+    // simultaneously, the peak concurrency is 3. If they ran sequentially
+    // (e.g. via for-await), the peak would be 1. No wall-clock dependency
+    // → CI-stable on busy / slow runners.
+    expect(tracker.max).toBe(3);
   });
 
   it("state-mutating tool causes the entire batch to run sequentially", async () => {
