@@ -241,3 +241,198 @@ def run_once() -> None:
     with psycopg.connect(dsn) as conn:
         events = run_promotion_pass(conn)
     logger.info("Promotion pass complete — %d events", len(events))
+
+
+# ---------------------------------------------------------------------------
+# Prompt registry promotion / demotion (Phase E correction).
+# ---------------------------------------------------------------------------
+#
+# GEPA inserts shadow candidates with active=false and shadow_until=NOW()+7d.
+# When the window closes we either promote (atomic active flip + audit row)
+# or reject (clear shadow_until + audit row) based on shadow_run_scores.
+
+PROMPT_PROMOTION_FLOOR = 0.80
+PROMPT_PROMOTION_DELTA = 0.05
+PROMPT_PROMOTION_PER_CLASS_REGRESSION = 0.02
+
+
+def _fetch_active_prompt_score(
+    conn: psycopg.Connection, prompt_name: str
+) -> tuple[float | None, dict[str, float] | None]:
+    row = conn.execute(
+        """
+        SELECT version
+          FROM prompt_registry
+         WHERE prompt_name = %s AND active = TRUE
+         LIMIT 1
+        """,
+        (prompt_name,),
+    ).fetchone()
+    if not row:
+        return None, None
+    active_version = row[0]
+    score_row = conn.execute(
+        """
+        SELECT AVG(score)::float8 AS mean_score
+          FROM shadow_run_scores
+         WHERE prompt_name = %s AND version = %s
+        """,
+        (prompt_name, active_version),
+    ).fetchone()
+    mean = score_row[0] if score_row else None
+    per_class_rows = conn.execute(
+        """
+        SELECT key, AVG(value::float8)
+          FROM shadow_run_scores,
+               jsonb_each_text(per_class_scores) AS kv(key, value)
+         WHERE prompt_name = %s AND version = %s
+           AND per_class_scores IS NOT NULL
+         GROUP BY key
+        """,
+        (prompt_name, active_version),
+    ).fetchall()
+    per_class = {r[0]: float(r[1]) for r in per_class_rows} if per_class_rows else None
+    return mean, per_class
+
+
+def _evaluate_shadow_prompt(
+    conn: psycopg.Connection,
+    prompt_name: str,
+    shadow_version: int,
+    active_mean: float | None,
+    active_per_class: dict[str, float] | None,
+) -> tuple[bool, str, dict[str, Any]]:
+    score_row = conn.execute(
+        """
+        SELECT AVG(score)::float8, COUNT(*)
+          FROM shadow_run_scores
+         WHERE prompt_name = %s AND version = %s
+        """,
+        (prompt_name, shadow_version),
+    ).fetchone()
+    if not score_row or score_row[1] == 0:
+        return False, "no_shadow_runs_recorded", {"shadow_runs": 0}
+
+    shadow_mean = float(score_row[0])
+    shadow_runs = int(score_row[1])
+    metadata: dict[str, Any] = {
+        "shadow_mean_score": shadow_mean,
+        "shadow_runs": shadow_runs,
+        "active_mean_score": active_mean,
+    }
+
+    if shadow_mean < PROMPT_PROMOTION_FLOOR:
+        return (
+            False,
+            f"shadow_mean={shadow_mean:.3f} < floor={PROMPT_PROMOTION_FLOOR}",
+            metadata,
+        )
+
+    if active_mean is not None and shadow_mean < active_mean + PROMPT_PROMOTION_DELTA:
+        return (
+            False,
+            f"shadow_mean={shadow_mean:.3f} < active_mean={active_mean:.3f}+{PROMPT_PROMOTION_DELTA}",
+            metadata,
+        )
+
+    if active_per_class:
+        per_class_rows = conn.execute(
+            """
+            SELECT key, AVG(value::float8)
+              FROM shadow_run_scores,
+                   jsonb_each_text(per_class_scores) AS kv(key, value)
+             WHERE prompt_name = %s AND version = %s
+               AND per_class_scores IS NOT NULL
+             GROUP BY key
+            """,
+            (prompt_name, shadow_version),
+        ).fetchall()
+        shadow_per_class = {r[0]: float(r[1]) for r in per_class_rows}
+        for cls, active_score in active_per_class.items():
+            shadow_class_score = shadow_per_class.get(cls, active_score)
+            drop = active_score - shadow_class_score
+            if drop > PROMPT_PROMOTION_PER_CLASS_REGRESSION:
+                return (
+                    False,
+                    f"class={cls} regressed by {drop:.3f} > {PROMPT_PROMOTION_PER_CLASS_REGRESSION}",
+                    {**metadata, "regression_class": cls, "regression_drop": drop},
+                )
+
+    return (
+        True,
+        f"shadow_mean={shadow_mean:.3f} beats active by >= {PROMPT_PROMOTION_DELTA}",
+        metadata,
+    )
+
+
+def run_prompt_promotion_pass(conn: psycopg.Connection) -> list[PromotionEvent]:
+    """Promote (or reject) prompt_registry shadows whose shadow_until window
+    has expired. Writes one skill_promotion_events row per outcome."""
+    rows = conn.execute(
+        """
+        SELECT prompt_name, version
+          FROM prompt_registry
+         WHERE active = FALSE
+           AND shadow_until IS NOT NULL
+           AND shadow_until <= NOW()
+         ORDER BY prompt_name, version
+        """
+    ).fetchall()
+
+    events: list[PromotionEvent] = []
+    for prompt_name, version in rows:
+        active_mean, active_per_class = _fetch_active_prompt_score(conn, prompt_name)
+        promote, reason, metadata = _evaluate_shadow_prompt(
+            conn, prompt_name, version, active_mean, active_per_class
+        )
+
+        if promote:
+            conn.execute(
+                """
+                UPDATE prompt_registry
+                   SET active = FALSE
+                 WHERE prompt_name = %s AND active = TRUE
+                """,
+                (prompt_name,),
+            )
+            conn.execute(
+                """
+                UPDATE prompt_registry
+                   SET active = TRUE,
+                       shadow_until = NULL
+                 WHERE prompt_name = %s AND version = %s
+                """,
+                (prompt_name, version),
+            )
+            ev = PromotionEvent(
+                skill_name=prompt_name,
+                version=version,
+                event_type="shadow_promote",
+                reason=reason,
+                metadata={**metadata, "kind": "prompt"},
+            )
+            _log_promotion_event(conn, ev)
+            events.append(ev)
+            logger.info("Promoted prompt %s v%d (%s)", prompt_name, version, reason)
+        else:
+            conn.execute(
+                """
+                UPDATE prompt_registry
+                   SET shadow_until = NULL
+                 WHERE prompt_name = %s AND version = %s
+                """,
+                (prompt_name, version),
+            )
+            ev = PromotionEvent(
+                skill_name=prompt_name,
+                version=version,
+                event_type="shadow_reject",
+                reason=reason,
+                metadata={**metadata, "kind": "prompt"},
+            )
+            _log_promotion_event(conn, ev)
+            events.append(ev)
+            logger.info("Rejected prompt %s v%d (%s)", prompt_name, version, reason)
+
+    conn.commit()
+    return events

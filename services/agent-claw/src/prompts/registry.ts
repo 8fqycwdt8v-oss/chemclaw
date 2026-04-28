@@ -63,7 +63,7 @@ export class PromptRegistry {
       client.query<{ template: string; version: number }>(
         `SELECT template, version
            FROM prompt_registry
-          WHERE name = $1 AND active = TRUE
+          WHERE prompt_name = $1 AND active = TRUE
           LIMIT 1`,
         [name],
       ),
@@ -90,7 +90,7 @@ export class PromptRegistry {
       }>(
         `SELECT template, version, shadow_until
            FROM prompt_registry
-          WHERE name = $1
+          WHERE prompt_name = $1
             AND active = FALSE
             AND shadow_until > NOW()
           ORDER BY version DESC`,

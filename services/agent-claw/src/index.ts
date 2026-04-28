@@ -70,6 +70,8 @@ import { initTracer } from "./observability/otel.js";
 import { loadHooks } from "./core/hook-loader.js";
 import { Lifecycle } from "./core/lifecycle.js";
 import { SkillLoader } from "./core/skills.js";
+import { PaperclipClient } from "./core/paperclip-client.js";
+import { ShadowEvaluator } from "./prompts/shadow-evaluator.js";
 
 // ---------------------------------------------------------------------------
 // Bootstrap
@@ -158,6 +160,14 @@ const registry = new ToolRegistry();
 const promptRegistry = new PromptRegistry(pool);
 const lifecycle = new Lifecycle();
 const skillLoader = new SkillLoader();
+
+// Paperclip-lite client — reserves/releases per-turn budget against the
+// sidecar (port 3200). When PAPERCLIP_URL is unset the client is a no-op.
+const paperclipClient = new PaperclipClient({ paperclipUrl: cfg.PAPERCLIP_URL });
+
+// Shadow evaluator — fire-and-forgets a parallel call for any active shadow
+// prompts so the GEPA loop accumulates score data without affecting users.
+const shadowEvaluator = new ShadowEvaluator(promptRegistry, llmProvider, pool);
 
 // Register builtin factories so loadFromDb() can find them.
 // Cast through Tool (unknown) to satisfy the registry's covariant Tool<unknown,unknown> map.
@@ -310,6 +320,8 @@ const routeDeps = {
   registry,
   promptRegistry,
   skillLoader,
+  paperclip: paperclipClient,
+  shadowEvaluator,
   getUser: getUser as (req: import("fastify").FastifyRequest) => string,
 };
 
@@ -326,6 +338,7 @@ registerArtifactsRoutes(app, { pool, getUser: getUser as (req: import("fastify")
 registerLearnRoute(app, { pool, llm: llmProvider, getUser: getUser as (req: import("fastify").FastifyRequest) => string });
 registerFeedbackRoute(app, {
   pool,
+  promptRegistry,
   getUser: getUser as (req: import("fastify").FastifyRequest) => string,
   langfuseHost: cfg.LANGFUSE_HOST,
   langfusePublicKey: cfg.LANGFUSE_PUBLIC_KEY,
@@ -335,6 +348,7 @@ registerEvalRoute(app, {
   config: cfg,
   pool,
   promptRegistry,
+  llm: llmProvider,
   getUser: getUser as (req: import("fastify").FastifyRequest) => string,
 });
 registerOptimizerRoutes(app, {
