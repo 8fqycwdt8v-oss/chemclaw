@@ -69,10 +69,18 @@ export async function persistTurnState(
     if (k === "budget") continue; // recomputed every turn
     dump[k] = v instanceof Set ? Array.from(v) : v;
   }
-  const awaitingQuestion =
+  const rawAwaitingQuestion =
     typeof dump["awaitingQuestion"] === "string"
       ? (dump["awaitingQuestion"] as string)
       : null;
+  // Truncate to the 4000-codepoint CHECK constraint added in
+  // db/init/16_db_audit_fixes.sql, codepoint-safely (Array.from prevents
+  // a UTF-16 surrogate split that would otherwise produce invalid UTF-8
+  // and crash the INSERT mid-finally). Mirrors the redact-then-truncate
+  // pattern in routes/chat.ts:854 — kept here too so any future caller
+  // that reaches saveSession through this helper is safe by default
+  // without a copy-paste of the truncate math.
+  const awaitingQuestion = _truncateAwaitingQuestion(rawAwaitingQuestion);
 
   const sessTotals = budget?.sessionTotals();
   await saveSession(pool, userEntraId, sessionId, {
@@ -90,4 +98,19 @@ export async function persistTurnState(
   });
 
   return { awaitingQuestion };
+}
+
+const AWAITING_QUESTION_MAX_CODEPOINTS = 4000;
+const AWAITING_QUESTION_TRUNCATED_SUFFIX = " [truncated…]";
+
+function _truncateAwaitingQuestion(s: string | null): string | null {
+  if (s === null) return null;
+  const codepoints = Array.from(s);
+  if (codepoints.length <= AWAITING_QUESTION_MAX_CODEPOINTS) return s;
+  const suffixCps = Array.from(AWAITING_QUESTION_TRUNCATED_SUFFIX);
+  return (
+    codepoints
+      .slice(0, AWAITING_QUESTION_MAX_CODEPOINTS - suffixCps.length)
+      .join("") + AWAITING_QUESTION_TRUNCATED_SUFFIX
+  );
 }

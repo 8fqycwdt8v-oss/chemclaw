@@ -64,7 +64,12 @@ import type { SkillLoader } from "../core/skills.js";
 import { VERB_TO_SKILL } from "../core/skills.js";
 import { writeEvent, setupSse } from "../streaming/sse.js";
 import { startRootTurnSpan, recordLlmUsage, recordSpanError } from "../observability/spans.js";
-import { PaperclipClient, PaperclipBudgetError, type ReservationHandle } from "../core/paperclip-client.js";
+import {
+  PaperclipClient,
+  PaperclipBudgetError,
+  USD_PER_TOKEN_ESTIMATE,
+  type ReservationHandle,
+} from "../core/paperclip-client.js";
 import { ShadowEvaluator } from "../prompts/shadow-evaluator.js";
 // Re-exported so existing imports `import type { StreamEvent } from "./chat.js"`
 // keep compiling — the canonical home is now ../streaming/sse.ts.
@@ -830,6 +835,31 @@ async function handleChat(
             // Re-dump scratchpad so the redact_log update is persisted.
             dump["redact_log"] = ctx.scratchpad.get("redact_log");
           }
+          // Enforce the 4000-char CHECK constraint added in
+          // db/init/16_db_audit_fixes.sql at write time, NOT at the DB
+          // boundary. Hitting the constraint mid-finally otherwise stalls
+          // the SSE close + leaves the session in an inconsistent state.
+          //
+          // Use Array.from to slice on Unicode codepoints, NOT
+          // String.prototype.slice (which slices on UTF-16 code units and
+          // can leave a lone high-surrogate at the end of the string).
+          // PG's UTF-8 encoder rejects unpaired surrogates with
+          // "invalid byte sequence for encoding UTF8", which would surface
+          // as exactly the same mid-finally crash this fix is meant to
+          // prevent — moved from CHECK constraint into the driver. The
+          // " [truncated…]" suffix flags the cap was hit so the UI can
+          // signal it instead of chopping mid-sentence.
+          const AWAITING_QUESTION_MAX = 4000;
+          if (safeAwaitingQuestion) {
+            const codepoints = Array.from(safeAwaitingQuestion);
+            if (codepoints.length > AWAITING_QUESTION_MAX) {
+              const suffix = " [truncated…]";
+              const suffixCps = Array.from(suffix);
+              safeAwaitingQuestion =
+                codepoints.slice(0, AWAITING_QUESTION_MAX - suffixCps.length).join("") +
+                suffix;
+            }
+          }
         }
 
         // Persist updated session totals so the next turn picks up where
@@ -896,7 +926,7 @@ async function handleChat(
       try {
         const usageSummary = budget?.summary() ?? { promptTokens: 0, completionTokens: 0 };
         const totalTokens = usageSummary.promptTokens + usageSummary.completionTokens;
-        const actualUsd = totalTokens * 0.000005;
+        const actualUsd = totalTokens * USD_PER_TOKEN_ESTIMATE;
         await paperclipHandle.release(totalTokens, actualUsd);
       } catch (relErr) {
         req.log.warn({ err: relErr }, "paperclip /release failed (non-fatal)");

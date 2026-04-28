@@ -37,6 +37,12 @@ import { hydrateScratchpad } from "../core/session-state.js";
 import { lifecycle } from "../core/runtime.js";
 import { runWithRequestContext } from "../core/request-context.js";
 import { verifyBearerHeader, McpAuthError } from "../security/mcp-tokens.js";
+import {
+  PaperclipClient,
+  PaperclipBudgetError,
+  USD_PER_TOKEN_ESTIMATE,
+  type ReservationHandle,
+} from "../core/paperclip-client.js";
 import type { Message, ToolContext } from "../core/types.js";
 
 interface SessionsRouteDeps {
@@ -47,6 +53,11 @@ interface SessionsRouteDeps {
   llm?: LlmProvider;
   registry?: ToolRegistry;
   promptRegistry?: PromptRegistry;
+  /** Paperclip-lite client. When supplied, every chained-harness iteration
+   *  reserves and releases budget against the sidecar — without this, long
+   *  auto-resume chains can blow past the daily USD cap with no 429.
+   *  Mirrors the wiring in services/agent-claw/src/routes/chat.ts. */
+  paperclip?: PaperclipClient;
 }
 
 export function registerSessionsRoute(
@@ -179,6 +190,7 @@ export function registerSessionsRoute(
       cfg,
       llm,
       registry,
+      paperclip: deps.paperclip,
       log: req.log,
       // Phase F4: pass the plan so the runner can advance current_step_index
       // as tool calls match planned steps.
@@ -297,6 +309,7 @@ export function registerSessionsRoute(
       cfg,
       llm,
       registry,
+      paperclip: deps.paperclip,
       log: req.log,
       maxAutoTurns: 1, // resume is one turn at a time; cron can call again
     });
@@ -390,6 +403,7 @@ export function registerSessionsRoute(
       cfg,
       llm,
       registry,
+      paperclip: deps.paperclip,
       log: req.log,
       maxAutoTurns: 1,
     });
@@ -418,6 +432,11 @@ interface ChainedHarnessOptions {
   registry: ToolRegistry;
   log: { warn: (...args: unknown[]) => void; error: (...args: unknown[]) => void };
   maxAutoTurns?: number;
+  /** Per-iteration Paperclip reservation — required to keep daily-USD caps
+   *  enforced for chained-execution flows (plan/run + resume), parallel to
+   *  chat.ts. When omitted (PAPERCLIP_URL unset in dev), the in-process
+   *  Budget cap is the only gate. */
+  paperclip?: PaperclipClient;
   /** Phase F4 — when set, the runner advances `current_step_index` as tool
    * calls match planned step.tool names. Result includes the final index. */
   planForProgress?: {
@@ -475,6 +494,28 @@ async function _runChainedHarnessInner(
     if (!state) {
       finalFinishReason = "session_lost";
       break;
+    }
+
+    // Per-iteration Paperclip reservation. Mirrors chat.ts so the daily
+    // USD cap applies equally to chained-execution flows. A budget refusal
+    // ends the chain (rather than the whole request) — the user can retry
+    // at the next budget window. Network/5xx are non-fatal: log + continue.
+    let paperclipHandle: ReservationHandle | null = null;
+    if (opts.paperclip) {
+      try {
+        paperclipHandle = await opts.paperclip.reserve({
+          userEntraId: user,
+          sessionId,
+          estTokens: 12_000,
+          estUsd: 0.05,
+        });
+      } catch (err) {
+        if (err instanceof PaperclipBudgetError) {
+          finalFinishReason = "budget_exceeded";
+          break;
+        }
+        log.warn({ err }, "paperclip /reserve failed in chained-harness (non-fatal)");
+      }
     }
 
     const { scratchpad, seenFactIds } = hydrateScratchpad(
@@ -544,6 +585,26 @@ async function _runChainedHarnessInner(
         expectedEtag: state.etag,
       });
 
+      // Release this iteration's Paperclip reservation with TURN-DELTA
+      // actuals (not session-cumulative). `r.usage` is `budget.summary()`
+      // which returns just this iteration's prompt + completion tokens.
+      // Using `sessTotals` here would re-report prior turns' tokens on
+      // every iteration of the chain, causing the sidecar to over-count
+      // and trip the daily cap early. The USD estimate is the shared
+      // USD_PER_TOKEN_ESTIMATE constant (chat.ts uses the same).
+      // Network/release failure is non-fatal — the reservation will
+      // expire on its own TTL if /release never lands.
+      if (paperclipHandle) {
+        try {
+          const totalTokens = r.usage.promptTokens + r.usage.completionTokens;
+          const actualUsd = totalTokens * USD_PER_TOKEN_ESTIMATE;
+          await paperclipHandle.release(totalTokens, actualUsd);
+        } catch (relErr) {
+          log.warn({ err: relErr }, "paperclip /release failed (non-fatal)");
+        }
+        paperclipHandle = null;
+      }
+
       // Termination conditions.
       if (r.finishReason === "stop") break;
       if (r.finishReason === "awaiting_user_input") break;
@@ -559,6 +620,17 @@ async function _runChainedHarnessInner(
       // skipped for plan progress, and current_step_index never advances.
       inspectedUpTo = 0;
     } catch (err) {
+      // Release the reservation (best-effort) before classifying the error
+      // so a crashing iteration doesn't leak a hold on Paperclip's per-day
+      // budget for its whole TTL window.
+      if (paperclipHandle) {
+        try {
+          await paperclipHandle.release(0, 0);
+        } catch (relErr) {
+          log.warn({ err: relErr }, "paperclip /release failed in catch (non-fatal)");
+        }
+        paperclipHandle = null;
+      }
       // Use instanceof checks rather than err.name string-compares so a class
       // rename / minification can't silently change classification.
       if (err instanceof AwaitingUserInputError) {

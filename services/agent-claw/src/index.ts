@@ -362,6 +362,9 @@ registerSessionsRoute(app, {
   llm: llmProvider,
   registry,
   promptRegistry,
+  // Same Paperclip client as the chat route — so chained-execution flows
+  // are subject to the same daily-USD cap as a single chat turn.
+  paperclip: paperclipClient,
 });
 
 app.get("/readyz", async (_req, reply) => {

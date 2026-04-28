@@ -10,6 +10,14 @@
 // 429 from /reserve surfaces as a PaperclipBudgetError which the chat route
 // converts to a 429 HTTP response.
 
+/** Coarse USD-per-token estimate used when the LLM provider doesn't report
+ *  dollar cost back. Single source of truth for both chat.ts (interactive)
+ *  and sessions.ts (chained execution) — a previous divergence between
+ *  0.000005 and 0.000004 caused chained flows to under-report spend by 20%
+ *  and bypass the daily Paperclip cap. Update this in lockstep with
+ *  litellm-provider's price table when a real cost passthrough lands. */
+export const USD_PER_TOKEN_ESTIMATE = 0.000005;
+
 export class PaperclipBudgetError extends Error {
   readonly retryAfterSeconds: number;
   readonly reason: string;
