@@ -188,17 +188,21 @@ async function handleDeepResearch(
   req.raw.on("close", onClose);
   req.raw.on("aborted", onClose);
 
+  // Hoisted out of the try block so the finally can read them when the loop
+  // exits via error. Mirrors runHarness() and routes/chat.ts; ensures the
+  // post_turn (redact-secrets) hook fires even on streaming-error paths.
+  let finishReason = "stop";
+  let finalText = "";
+  let stepsUsed = 0;
+  let budget: Budget | undefined;
+
   try {
     await lifecycle.dispatch("pre_turn", { ctx, messages });
 
-    const budget = new Budget({
+    budget = new Budget({
       maxSteps: drMaxSteps,
       maxPromptTokens: deps.config.AGENT_TOKEN_BUDGET,
     });
-
-    let finishReason = "stop";
-    let finalText = "";
-    let stepsUsed = 0;
 
     streaming: while (true) {
       if (closed) break;
@@ -279,8 +283,6 @@ async function handleDeepResearch(
       break streaming;
     }
 
-    await lifecycle.dispatch("post_turn", { ctx, finalText, stepsUsed });
-
     if (!closed) {
       writeEvent(reply, {
         type: "finish",
@@ -294,6 +296,13 @@ async function handleDeepResearch(
       writeEvent(reply, { type: "error", error: "internal" });
     }
   } finally {
+    // post_turn fires even if the streaming loop threw — mirrors
+    // runHarness() and routes/chat.ts so redact-secrets always runs.
+    try {
+      await lifecycle.dispatch("post_turn", { ctx, finalText, stepsUsed });
+    } catch (postTurnErr) {
+      req.log.warn({ err: postTurnErr }, "post_turn dispatch failed");
+    }
     try {
       reply.raw.end();
     } catch {
