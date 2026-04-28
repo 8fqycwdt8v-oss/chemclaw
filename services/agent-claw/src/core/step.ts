@@ -26,6 +26,7 @@ import type { Tool } from "../tools/tool.js";
 import type { StreamSink, TodoSnapshot } from "./streaming-sink.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 import { resolveDecision } from "./permissions/resolver.js";
+import { withToolSpan } from "../observability/tool-spans.js";
 
 export interface StepOnceOptions {
   llm: LlmProvider;
@@ -85,6 +86,12 @@ async function _runOneTool(opts: {
   ctx: ToolContext;
   streamSink?: StreamSink;
   permissions?: PermissionOptions;
+  /**
+   * Phase 9: true when this call is a member of a parallel read-only batch
+   * (Phase 5). Set on the per-tool span as `tool.in_batch` so Langfuse can
+   * group sibling tool spans in a parallel run.
+   */
+  inBatch?: boolean;
 }): Promise<StepToolOutput> {
   const { tools, toolId, input, lifecycle, ctx, streamSink, permissions } = opts;
 
@@ -176,10 +183,21 @@ async function _runOneTool(opts: {
   // Execute. Catch errors so post_tool_failure fires before re-throw.
   // AwaitingUserInputError is control-flow (not a failure) and propagates
   // untouched.
+  //
+  // Phase 9: tool.execute is wrapped in withToolSpan so the OTel exporter
+  // sees one span per tool invocation with id, read-only annotation,
+  // in-batch flag, duration, and OK/ERROR status.
   const toolStartMs = Date.now();
   let rawOutput: unknown;
   try {
-    rawOutput = await tool.execute(ctx, parsedInput);
+    rawOutput = await withToolSpan(
+      {
+        toolId,
+        readOnly: tool.annotations?.readOnly,
+        inBatch: opts.inBatch ?? false,
+      },
+      () => tool.execute(ctx, parsedInput),
+    );
   } catch (err) {
     if (err instanceof AwaitingUserInputError) {
       throw err;
@@ -320,6 +338,7 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
           ctx,
           streamSink,
           permissions,
+          inBatch: true,
         }),
       ),
     );
