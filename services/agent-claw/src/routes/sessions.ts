@@ -40,6 +40,7 @@ import { verifyBearerHeader, McpAuthError } from "../security/mcp-tokens.js";
 import {
   PaperclipClient,
   PaperclipBudgetError,
+  USD_PER_TOKEN_ESTIMATE,
   type ReservationHandle,
 } from "../core/paperclip-client.js";
 import type { Message, ToolContext } from "../core/types.js";
@@ -584,16 +585,19 @@ async function _runChainedHarnessInner(
         expectedEtag: state.etag,
       });
 
-      // Release this iteration's Paperclip reservation with actuals so the
-      // sidecar can true-up daily totals. Mirror chat.ts: estimate USD from
-      // the budget's reported totals (LLM provider doesn't always return
-      // dollar cost). Network/release failure is non-fatal — the reservation
-      // will expire on its own TTL.
+      // Release this iteration's Paperclip reservation with TURN-DELTA
+      // actuals (not session-cumulative). `r.usage` is `budget.summary()`
+      // which returns just this iteration's prompt + completion tokens.
+      // Using `sessTotals` here would re-report prior turns' tokens on
+      // every iteration of the chain, causing the sidecar to over-count
+      // and trip the daily cap early. The USD estimate is the shared
+      // USD_PER_TOKEN_ESTIMATE constant (chat.ts uses the same).
+      // Network/release failure is non-fatal — the reservation will
+      // expire on its own TTL if /release never lands.
       if (paperclipHandle) {
         try {
-          const totalTokens =
-            (sessTotals?.inputTokens ?? 0) + (sessTotals?.outputTokens ?? 0);
-          const actualUsd = totalTokens * 0.000004;
+          const totalTokens = r.usage.promptTokens + r.usage.completionTokens;
+          const actualUsd = totalTokens * USD_PER_TOKEN_ESTIMATE;
           await paperclipHandle.release(totalTokens, actualUsd);
         } catch (relErr) {
           log.warn({ err: relErr }, "paperclip /release failed (non-fatal)");
