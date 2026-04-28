@@ -14,7 +14,8 @@ import type { PromptRegistry } from "../prompts/registry.js";
 import { Budget } from "../core/budget.js";
 import { runHarness } from "../core/harness.js";
 import { planStore } from "../core/plan-mode.js";
-import { buildDefaultLifecycle, hydrateScratchpad } from "../core/harness-builders.js";
+import { hydrateScratchpad } from "../core/session-state.js";
+import { lifecycle } from "../core/runtime.js";
 import { runWithRequestContext } from "../core/request-context.js";
 import { writeEvent, setupSse } from "../streaming/sse.js";
 import type { ToolContext } from "../core/types.js";
@@ -68,8 +69,6 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
       seenFactIds,
       scratchpad,
     };
-
-    const lifecycle = buildDefaultLifecycle();
 
     const budget = new Budget({
       maxSteps: deps.config.AGENT_CHAT_MAX_STEPS,

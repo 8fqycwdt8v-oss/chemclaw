@@ -67,7 +67,7 @@ import { registerSessionsRoute } from "./routes/sessions.js";
 import { PromptRegistry } from "./prompts/registry.js";
 import { initTracer } from "./observability/otel.js";
 import { loadHooks } from "./core/hook-loader.js";
-import { Lifecycle } from "./core/lifecycle.js";
+import { lifecycle } from "./core/runtime.js";
 import { SkillLoader } from "./core/skills.js";
 
 // ---------------------------------------------------------------------------
@@ -155,7 +155,6 @@ const llmProvider = new LiteLLMProvider({
 });
 const registry = new ToolRegistry();
 const promptRegistry = new PromptRegistry(pool);
-const lifecycle = new Lifecycle();
 const skillLoader = new SkillLoader();
 
 // Register builtin factories so loadFromDb() can find them.

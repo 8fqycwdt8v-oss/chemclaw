@@ -4,6 +4,7 @@ import { describe, it, expect } from "vitest";
 import { spawnSubAgent, SUB_AGENT_TOOL_SUBSETS } from "../../src/core/sub-agent.js";
 import { defineTool } from "../../src/tools/tool.js";
 import { StubLlmProvider } from "../../src/llm/provider.js";
+import { Lifecycle } from "../../src/core/lifecycle.js";
 import { z } from "zod";
 import type { ToolContext } from "../../src/core/types.js";
 
@@ -65,7 +66,7 @@ describe("spawnSubAgent — basic execution", () => {
       "reader",
       { goal: "What is the pH requirement in the SOP?", inputs: {} },
       makeParentCtx(),
-      { allTools: allStubTools, llm },
+      { allTools: allStubTools, llm, lifecycle: new Lifecycle() },
     );
 
     expect(result.text).toContain("pH 7.0");
@@ -81,7 +82,7 @@ describe("spawnSubAgent — basic execution", () => {
       "chemist",
       { goal: "Find the best reaction conditions for amide coupling.", inputs: {} },
       makeParentCtx(),
-      { allTools: allStubTools, llm },
+      { allTools: allStubTools, llm, lifecycle: new Lifecycle() },
     );
 
     expect(result.text).toContain("DCM");
@@ -96,7 +97,7 @@ describe("spawnSubAgent — basic execution", () => {
       "analyst",
       { goal: "Summarize the purity data.", inputs: { csv_text: "purity\n98.5\n98.2\n" } },
       makeParentCtx(),
-      { allTools: allStubTools, llm },
+      { allTools: allStubTools, llm, lifecycle: new Lifecycle() },
     );
 
     expect(result.text).toContain("purity");
@@ -124,7 +125,7 @@ describe("spawnSubAgent — basic execution", () => {
       "reader",
       { goal: "search for something", inputs: {} },
       makeParentCtx("rls-user@example.com"),
-      { allTools: [captureTool], llm },
+      { allTools: [captureTool], llm, lifecycle: new Lifecycle() },
     );
 
     expect(capturedUserId).toBe("rls-user@example.com");
@@ -141,7 +142,7 @@ describe("spawnSubAgent — basic execution", () => {
       "reader",
       { goal: "simple task", inputs: {} },
       parentCtx,
-      { allTools: allStubTools, llm },
+      { allTools: allStubTools, llm, lifecycle: new Lifecycle() },
     );
 
     // Sub-agent's citations should NOT contain the parent's fact IDs.
@@ -160,7 +161,7 @@ describe("spawnSubAgent — basic execution", () => {
       "reader",
       { goal: "loop", inputs: {}, max_steps: 2 },
       makeParentCtx(),
-      { allTools: allStubTools, llm },
+      { allTools: allStubTools, llm, lifecycle: new Lifecycle() },
     );
 
     expect(result.stepsUsed).toBeLessThanOrEqual(2);

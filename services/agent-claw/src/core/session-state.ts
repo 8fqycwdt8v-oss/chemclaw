@@ -1,13 +1,9 @@
-// Shared harness setup helpers — extracted from routes/chat.ts, routes/plan.ts,
-// and routes/sessions.ts so all three callers register the SAME default hooks
-// and hydrate scratchpad the SAME way. Drift between these three was a real
-// bug-bait (a hook added to chat.ts but not plan.ts would silently miss the
-// approve flow).
+// Session-state helpers shared by the chat / plan / sessions / deep-research
+// routes. Extracted from the (now-deleted) core/harness-builders.ts so that
+// `hydrateScratchpad` and `persistTurnState` live in a focused module
+// independent of the lifecycle wiring (which is now sourced from
+// core/runtime.ts).
 
-import { Lifecycle } from "./lifecycle.js";
-import { registerRedactSecretsHook } from "./hooks/redact-secrets.js";
-import { registerTagMaturityHook } from "./hooks/tag-maturity.js";
-import { registerBudgetGuardHook } from "./hooks/budget-guard.js";
 import type { Pool } from "pg";
 import type { ToolContext } from "./types.js";
 import {
@@ -15,19 +11,6 @@ import {
   type SessionFinishReason,
 } from "./session-store.js";
 import type { Budget } from "./budget.js";
-
-/**
- * Default lifecycle for chat / plan-approve / chained-resume routes.
- * Adding a new globally-applied hook? Add it here so every harness path
- * picks it up. Sub-agents register their own subset in core/sub-agent.ts.
- */
-export function buildDefaultLifecycle(): Lifecycle {
-  const lc = new Lifecycle();
-  registerRedactSecretsHook(lc);
-  registerTagMaturityHook(lc);
-  registerBudgetGuardHook(lc);
-  return lc;
-}
 
 /**
  * Hydrate a fresh scratchpad Map from a stored session's scratchpad jsonb.

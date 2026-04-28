@@ -12,10 +12,7 @@
 
 import { runHarness } from "./harness.js";
 import { Budget } from "./budget.js";
-import { Lifecycle } from "./lifecycle.js";
-import { registerTagMaturityHook } from "./hooks/tag-maturity.js";
-import { registerBudgetGuardHook } from "./hooks/budget-guard.js";
-import { registerRedactSecretsHook } from "./hooks/redact-secrets.js";
+import type { Lifecycle } from "./lifecycle.js";
 import type { HarnessResult, Message, ToolContext } from "./types.js";
 import type { Tool } from "../tools/tool.js";
 import type { LlmProvider } from "../llm/provider.js";
@@ -94,6 +91,13 @@ export interface SubAgentDeps {
   allTools: Tool[];
   /** LLM provider (shared with parent). */
   llm: LlmProvider;
+  /**
+   * Lifecycle to run the sub-harness against. Sub-agents share the
+   * parent's process-wide Lifecycle (populated once at startup by
+   * loadHooks() in index.ts) so every YAML-registered hook fires for
+   * sub-agent turns too — no per-spawner subset, no drift.
+   */
+  lifecycle: Lifecycle;
 }
 
 /**
@@ -151,16 +155,11 @@ export async function spawnSubAgent(
     { role: "user", content: userContent },
   ];
 
-  // ── 4. Build lifecycle — mirror parent buildDefaultLifecycle in chat.ts.
-  // Parent registers redact-secrets (post_turn), tag-maturity, budget-guard;
-  // sub-agent inherits the same set so its outbound text gets the same
-  // defense-in-depth scrub. Other hooks (anti-fabrication, citation-guard,
-  // source-cache) are not currently wired into either lifecycle by default —
-  // when they are, register them in BOTH places to avoid sub-agent drift.
-  const lifecycle = new Lifecycle();
-  registerRedactSecretsHook(lifecycle);
-  registerTagMaturityHook(lifecycle);
-  registerBudgetGuardHook(lifecycle);
+  // ── 4. Use the parent's process-wide Lifecycle. Drift is now impossible
+  // by construction — there is one Lifecycle instance per process, populated
+  // by loadHooks() at startup, and every harness invocation (routes AND
+  // sub-agents) dispatches against it.
+  const lifecycle = deps.lifecycle;
 
   // ── 5. Build budget. ───────────────────────────────────────────────────────
   const budget = new Budget({

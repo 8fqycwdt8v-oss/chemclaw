@@ -23,7 +23,6 @@ import type { Pool } from "pg";
 import type { Config } from "../config.js";
 import type { LlmProvider } from "../llm/provider.js";
 import type { ToolRegistry } from "../tools/registry.js";
-import { Lifecycle } from "../core/lifecycle.js";
 import { Budget } from "../core/budget.js";
 import {
   parseSlash,
@@ -31,14 +30,12 @@ import {
   shortCircuitResponse,
   HELP_TEXT,
 } from "../core/slash.js";
-import { registerRedactSecretsHook } from "../core/hooks/redact-secrets.js";
-import { registerTagMaturityHook } from "../core/hooks/tag-maturity.js";
-import { registerBudgetGuardHook } from "../core/hooks/budget-guard.js";
 import { withUserContext } from "../db/with-user-context.js";
 import { PromptRegistry } from "../prompts/registry.js";
 import { runWithRequestContext } from "../core/request-context.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
-import { hydrateScratchpad } from "../core/harness-builders.js";
+import { hydrateScratchpad } from "../core/session-state.js";
+import { lifecycle } from "../core/runtime.js";
 import type { Message, ToolContext } from "../core/types.js";
 import type { PreToolPayload } from "../core/types.js";
 import { writeEvent, setupSse } from "../streaming/sse.js";
@@ -101,18 +98,6 @@ function enforceBounds(
 }
 
 // ---------------------------------------------------------------------------
-// DR lifecycle (same hooks as default chat).
-// ---------------------------------------------------------------------------
-
-function buildDrLifecycle(): Lifecycle {
-  const lc = new Lifecycle();
-  registerRedactSecretsHook(lc);
-  registerTagMaturityHook(lc);
-  registerBudgetGuardHook(lc);
-  return lc;
-}
-
-// ---------------------------------------------------------------------------
 // Main handler.
 // ---------------------------------------------------------------------------
 
@@ -172,7 +157,6 @@ async function handleDeepResearch(
 
   // DR mode: 4× maxSteps, capped at 40.
   const drMaxSteps = Math.min(deps.config.AGENT_CHAT_MAX_STEPS * 4, 40);
-  const lifecycle = buildDrLifecycle();
   const tools = deps.registry.all();
 
   req.log.info({ skill: "deep_research", maxSteps: drMaxSteps }, "DR mode active");

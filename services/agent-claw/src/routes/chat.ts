@@ -28,7 +28,6 @@ import type { Pool } from "pg";
 import type { Config } from "../config.js";
 import type { LlmProvider } from "../llm/provider.js";
 import type { ToolRegistry } from "../tools/registry.js";
-import { Lifecycle } from "../core/lifecycle.js";
 import { Budget, SessionBudgetExceededError } from "../core/budget.js";
 import { buildAgent } from "../core/harness.js";
 import {
@@ -39,7 +38,8 @@ import {
 } from "../core/slash.js";
 import { redactString } from "../core/hooks/redact-secrets.js";
 import type { RedactReplacement } from "../core/hooks/redact-secrets.js";
-import { buildDefaultLifecycle, hydrateScratchpad } from "../core/harness-builders.js";
+import { hydrateScratchpad } from "../core/session-state.js";
+import { lifecycle } from "../core/runtime.js";
 import {
   createSession,
   loadSession,
@@ -383,8 +383,6 @@ async function handleChat(
     seenFactIds,
     scratchpad,
   };
-
-  const lifecycle = buildDefaultLifecycle();
 
   // Filter tools by active skills (if any skills are active).
   const allTools = deps.registry.all();
