@@ -5,6 +5,8 @@ import { spawnSubAgent, SUB_AGENT_TOOL_SUBSETS } from "../../src/core/sub-agent.
 import { defineTool } from "../../src/tools/tool.js";
 import { StubLlmProvider } from "../../src/llm/provider.js";
 import { Lifecycle } from "../../src/core/lifecycle.js";
+import { registerInitScratchHook } from "../../src/core/hooks/init-scratch.js";
+import { registerAntiFabricationHook } from "../../src/core/hooks/anti-fabrication.js";
 import { z } from "zod";
 import type { ToolContext } from "../../src/core/types.js";
 
@@ -167,4 +169,54 @@ describe("spawnSubAgent — basic execution", () => {
     expect(result.stepsUsed).toBeLessThanOrEqual(2);
     expect(["max_steps", "stop"]).toContain(result.finishReason);
   });
+
+  it(
+    "returns non-empty citations when run with the production lifecycle " +
+      "(init-scratch + anti-fabrication) — regression: init-scratch rebinds " +
+      "scratchpad.seenFactIds on pre_turn, so we must read citations back " +
+      "from the scratchpad, not from the orphaned local Set",
+    async () => {
+      // Production-shaped Lifecycle: init-scratch (pre_turn) + anti-fabrication
+      // (post_tool). The first replaces scratchpad.seenFactIds with a fresh
+      // Set every turn; the second harvests fact_ids out of tool output and
+      // writes them into that Set.
+      const lifecycle = new Lifecycle();
+      registerInitScratchHook(lifecycle);
+      registerAntiFabricationHook(lifecycle);
+
+      // query_kg-shaped stub: returns a `facts: [{ fact_id }]` array, which
+      // is exactly what anti-fabrication's extractFactIds() harvests.
+      const factA = "11111111-1111-4111-8111-111111111111";
+      const factB = "22222222-2222-4222-8222-222222222222";
+      const queryKgStub = defineTool({
+        id: "query_kg",
+        description: "stub query_kg that returns two facts",
+        inputSchema: z.object({ q: z.string().optional() }),
+        outputSchema: z.object({
+          facts: z.array(z.object({ fact_id: z.string() })),
+        }),
+        execute: async () => ({
+          facts: [{ fact_id: factA }, { fact_id: factB }],
+        }),
+      });
+
+      const llm = new StubLlmProvider();
+      llm.enqueueToolCall("query_kg", { q: "what facts" });
+      llm.enqueueText("Found two facts.");
+
+      const result = await spawnSubAgent(
+        "chemist",
+        { goal: "Find facts.", inputs: {} },
+        makeParentCtx(),
+        { allTools: [queryKgStub], llm, lifecycle },
+      );
+
+      // Without Fix #1, this assertion fails: citations is [] because the
+      // sub-agent reads from the orphaned local Set after init-scratch
+      // replaced scratchpad.seenFactIds with a fresh one.
+      expect(result.citations.length).toBeGreaterThan(0);
+      expect(result.citations).toContain(factA);
+      expect(result.citations).toContain(factB);
+    },
+  );
 });

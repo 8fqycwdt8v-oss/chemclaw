@@ -34,7 +34,7 @@ import { withUserContext } from "../db/with-user-context.js";
 import { PromptRegistry } from "../prompts/registry.js";
 import { runWithRequestContext } from "../core/request-context.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
-import { hydrateScratchpad } from "../core/session-state.js";
+import { hydrateScratchpad, syncSeenFactIdsFromScratch } from "../core/session-state.js";
 import { lifecycle } from "../core/runtime.js";
 import type { Message, ToolContext } from "../core/types.js";
 import type { PreToolPayload } from "../core/types.js";
@@ -165,6 +165,9 @@ async function handleDeepResearch(
     // Non-streaming path.
     try {
       await lifecycle.dispatch("pre_turn", { ctx, messages });
+      // Re-bind ctx.seenFactIds to the Set init-scratch installed in the
+      // scratchpad — see core/session-state.ts:syncSeenFactIdsFromScratch.
+      syncSeenFactIdsFromScratch(ctx);
       const budget = new Budget({
         maxSteps: drMaxSteps,
         maxPromptTokens: deps.config.AGENT_TOKEN_BUDGET,
@@ -198,6 +201,9 @@ async function handleDeepResearch(
 
   try {
     await lifecycle.dispatch("pre_turn", { ctx, messages });
+    // Re-bind ctx.seenFactIds to the Set init-scratch installed in the
+    // scratchpad — see core/session-state.ts:syncSeenFactIdsFromScratch.
+    syncSeenFactIdsFromScratch(ctx);
 
     budget = new Budget({
       maxSteps: drMaxSteps,
