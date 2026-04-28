@@ -159,13 +159,20 @@ Auto-resume: `services/optimizer/session_reanimator/` polls every 5 min for sess
   attaches them to every `postJson` / `getJson` call via the AsyncLocalStorage
   request context, and MCP services verify via `services/mcp_tools/common/app.py`
   middleware. Set `MCP_AUTH_SIGNING_KEY` (≥32 chars; `openssl rand -hex 32`)
-  and flip `MCP_AUTH_REQUIRED=true` to enforce in production. In dev mode
-  (key unset / required false), missing tokens are accepted with a warning
-  so local dev keeps working without setup. The reanimator daemon mints
-  its own JWT (`agent:resume` scope) and posts to `/api/internal/sessions/:id/resume`,
-  which trusts only the signed `claims.user` — no `x-user-entra-id` forgery
-  surface. See `docs/runbooks/autonomy-upgrade.md` for the production
-  rollout sequence.
+  in production. The reanimator daemon mints its own JWT (`agent:resume`
+  scope) and posts to `/api/internal/sessions/:id/resume`, which trusts only
+  the signed `claims.user` — no `x-user-entra-id` forgery surface. See
+  `docs/runbooks/autonomy-upgrade.md` for the production rollout sequence.
+- **MCP auth fail-closed in dev (Phase 7):** the default behaviour is to
+  require a signed Bearer token on every MCP request. To run locally
+  without minting tokens, explicitly set `MCP_AUTH_DEV_MODE=true` in your
+  `.env` (the pytest conftest does this automatically for the test suite).
+  There is NO automatic fallback — forgetting to set the dev-mode flag
+  means MCP services reject your requests with 401, which is the correct
+  production-safe behaviour. `MCP_AUTH_REQUIRED=true` is still honoured
+  for backward-compat and overrides dev mode when both are set; routes
+  no longer need to defensively check `if claims is None: deny` because
+  the middleware raises 401 before the route runs.
 
 ## When adding a new MCP tool service
 
