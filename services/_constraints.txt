@@ -14,9 +14,11 @@
 # Production deployments should override these via pip install -c <file>
 # pointing at a frozen lockfile.
 #
-# Note: pip 26.x rejects `package[extra]` in constraint files. Extras (e.g.
-# `uvicorn[standard]`, `psycopg[binary]`) MUST appear in the per-service
-# requirements.txt — only the bare package + version specifier belong here.
+# Note: pip 26.x rejects `package[extra]` in constraint files (extras have
+# been ignored-with-warning since pip 20.3 and were hard-removed per
+# https://github.com/pypa/pip/issues/8210). Extras (e.g. `uvicorn[standard]`,
+# `psycopg[binary]`) MUST appear in the per-service requirements.txt — only
+# the bare package + version specifier belong here.
 
 # Web framework
 fastapi>=0.115,<0.120
