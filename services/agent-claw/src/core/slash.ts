@@ -36,8 +36,12 @@ export interface SlashParseResult {
 // Verbs that produce an immediate response without calling the LLM.
 const SHORT_CIRCUIT_VERBS = new Set(["help", "skills", "feedback", "check", "learn", "forged", "eval"]);
 
-// Verbs that go through the harness (possibly with special hooks).
-const STREAMABLE_VERBS = new Set(["plan", "dr", "retro", "qc", "forge"]);
+// Verbs that go through the harness (possibly with special hooks). /compact
+// runs an explicit pre_compact dispatch BEFORE the normal harness turn — it
+// is streamable because the user expects assistant text on the same SSE
+// connection (the synopsis is written back into the message history, then
+// the harness produces the actual response against the compacted window).
+const STREAMABLE_VERBS = new Set(["plan", "dr", "retro", "qc", "forge", "compact"]);
 
 // All known verbs.
 const ALL_VERBS = new Set([...SHORT_CIRCUIT_VERBS, ...STREAMABLE_VERBS]);
@@ -99,7 +103,8 @@ export const HELP_TEXT = `Available commands:
   /forged show <id>                   — show code + tests for a forged tool
   /forged disable <id> <reason>       — disable a forged tool (owner or admin only)
   /eval golden                        — run active prompts against held-out fixture; per-class breakdown (Phase E)
-  /eval shadow <prompt_name>          — show shadow_run_scores summary for a shadow prompt (Phase E)`;
+  /eval shadow <prompt_name>          — show shadow_run_scores summary for a shadow prompt (Phase E)
+  /compact [instructions]             — manually compact the message window before the next turn`;
 
 // ---------------------------------------------------------------------------
 // /forged sub-command parser (Phase D.5)

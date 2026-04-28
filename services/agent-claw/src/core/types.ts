@@ -117,6 +117,27 @@ export interface PostToolPayload {
 export interface PreCompactPayload {
   ctx: ToolContext;
   messages: Message[];
+  /**
+   * Compaction trigger:
+   *   - "auto"   — runHarness saw budget.shouldCompact() return true after a step.
+   *   - "manual" — the user invoked /compact (chat.ts slash branch).
+   *
+   * Mirrors the Claude Agent SDK `SDKCompactBoundaryMessage.trigger` field.
+   */
+  trigger: "manual" | "auto";
+  /** Estimated prompt-token count BEFORE compaction. */
+  pre_tokens: number;
+  /** Optional user-supplied summarization steering (manual /compact path only). */
+  custom_instructions?: string | null;
+}
+
+export interface PostCompactPayload {
+  ctx: ToolContext;
+  trigger: "manual" | "auto";
+  /** Estimated prompt-token count BEFORE compaction. */
+  pre_tokens: number;
+  /** Estimated prompt-token count AFTER compaction. */
+  post_tokens: number;
 }
 
 export interface PostTurnPayload {
@@ -133,6 +154,7 @@ export type HookPoint =
   | "pre_tool"
   | "post_tool"
   | "pre_compact"
+  | "post_compact"
   | "post_turn";
 
 // ---------------------------------------------------------------------------

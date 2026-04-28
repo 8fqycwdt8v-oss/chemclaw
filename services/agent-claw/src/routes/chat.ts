@@ -28,7 +28,12 @@ import type { Pool } from "pg";
 import type { Config } from "../config.js";
 import type { LlmProvider } from "../llm/provider.js";
 import type { ToolRegistry } from "../tools/registry.js";
-import { Budget, BudgetExceededError, SessionBudgetExceededError } from "../core/budget.js";
+import {
+  Budget,
+  BudgetExceededError,
+  SessionBudgetExceededError,
+  estimateTokenCount,
+} from "../core/budget.js";
 import { buildAgent, runHarness } from "../core/harness.js";
 import {
   parseSlash,
@@ -52,7 +57,12 @@ import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 import { runWithRequestContext } from "../core/request-context.js";
 import { withUserContext } from "../db/with-user-context.js";
 import { PromptRegistry } from "../prompts/registry.js";
-import type { Message, ToolContext } from "../core/types.js";
+import type {
+  Message,
+  PostCompactPayload,
+  PreCompactPayload,
+  ToolContext,
+} from "../core/types.js";
 import {
   planStore,
   createPlan,
@@ -398,6 +408,39 @@ async function handleChat(
     seenFactIds,
     scratchpad,
   };
+
+  // ── Manual /compact slash branch ────────────────────────────────────────
+  // Fires pre_compact (with trigger="manual" and any user-supplied
+  // summarization steering) BEFORE the normal harness turn. The
+  // compact-window hook mutates `messages` in place; the harness then runs
+  // against the compacted window. This is the user-driven counterpart to
+  // the auto path inside runHarness's loop.
+  if (slashResult.verb === "compact") {
+    const customInstructions = slashResult.args.trim() || null;
+    const preTokens = estimateTokenCount(messages);
+    const prePayload: PreCompactPayload = {
+      ctx,
+      messages,
+      trigger: "manual",
+      pre_tokens: preTokens,
+      custom_instructions: customInstructions,
+    };
+    try {
+      await lifecycle.dispatch("pre_compact", prePayload);
+      const postTokens = estimateTokenCount(messages);
+      const postPayload: PostCompactPayload = {
+        ctx,
+        trigger: "manual",
+        pre_tokens: preTokens,
+        post_tokens: postTokens,
+      };
+      await lifecycle.dispatch("post_compact", postPayload);
+    } catch (err) {
+      // Compaction itself shouldn't abort the turn — log and proceed with
+      // the original message window.
+      req.log.warn({ err }, "manual /compact dispatch failed; proceeding uncompacted");
+    }
+  }
 
   // Filter tools by active skills (if any skills are active).
   const allTools = deps.registry.all();

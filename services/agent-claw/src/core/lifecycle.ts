@@ -9,6 +9,7 @@
 
 import type {
   HookPoint,
+  PostCompactPayload,
   PostToolPayload,
   PostTurnPayload,
   PreCompactPayload,
@@ -24,6 +25,7 @@ type HookPayloadMap = {
   pre_tool: PreToolPayload;
   post_tool: PostToolPayload;
   pre_compact: PreCompactPayload;
+  post_compact: PostCompactPayload;
   post_turn: PostTurnPayload;
 };
 

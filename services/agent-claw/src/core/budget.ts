@@ -23,6 +23,12 @@ export interface BudgetOptions {
   maxPromptTokens?: number;
   /** Maximum total completion tokens this turn. */
   maxCompletionTokens?: number;
+  /**
+   * Fraction of maxPromptTokens at or above which shouldCompact() returns
+   * true and the harness fires pre_compact / post_compact mid-turn.
+   * Default 0.6 mirrors Claude Code's automatic-compaction trigger.
+   */
+  compactionThreshold?: number;
   /** Cross-turn budget — when set, every consumeStep also charges against
    * the session totals. Loaded from agent_sessions at turn start. */
   session?: SessionBudgetSnapshot;
@@ -32,6 +38,7 @@ export class Budget {
   readonly maxSteps: number;
   readonly maxPromptTokens: number;
   readonly maxCompletionTokens: number;
+  readonly compactionThreshold: number;
 
   private _stepsUsed = 0;
   private _promptTokens = 0;
@@ -47,6 +54,7 @@ export class Budget {
     // the tighter real-world limits in Phase D.
     this.maxPromptTokens = opts.maxPromptTokens ?? 200_000;
     this.maxCompletionTokens = opts.maxCompletionTokens ?? 32_000;
+    this.compactionThreshold = opts.compactionThreshold ?? 0.6;
     this._session = opts.session;
   }
 
@@ -118,6 +126,27 @@ export class Budget {
     return this._stepsUsed >= this.maxSteps;
   }
 
+  /**
+   * Returns true when accumulated prompt tokens have reached the
+   * compaction threshold. Used by runHarness after each step to decide
+   * whether to dispatch pre_compact / post_compact. No-op when
+   * maxPromptTokens is not configured (we never compact unconditionally).
+   */
+  shouldCompact(): boolean {
+    if (!this.maxPromptTokens) return false;
+    return this._promptTokens >= this.compactionThreshold * this.maxPromptTokens;
+  }
+
+  /**
+   * After compaction shrinks the message list, the harness re-estimates
+   * the new prompt-token count and resets the accumulator so the next
+   * step's consumeStep starts from the post-compaction baseline rather
+   * than the pre-compaction running total.
+   */
+  resetPromptTokens(newCount: number): void {
+    this._promptTokens = Math.max(0, newCount);
+  }
+
   /** Summary for logging and HarnessResult.usage. */
   summary(): { promptTokens: number; completionTokens: number } {
     return {
@@ -157,4 +186,27 @@ export class SessionBudgetExceededError extends Error {
     this.name = "SessionBudgetExceededError";
     this.dimension = dimension;
   }
+}
+
+// ---------------------------------------------------------------------------
+// estimateTokenCount — heuristic 4-chars-per-token used by the harness's
+// pre_compact / post_compact dispatch sites (runHarness loop + manual
+// /compact slash branch in chat.ts) to compute pre_tokens / post_tokens
+// for the payload.
+//
+// This is intentionally a heuristic, not a tiktoken-accurate count: the
+// goal is "did compaction shrink the window meaningfully?" which a 4:1
+// char-to-token ratio answers within ±20% for English/scientific text.
+// If this ever needs accuracy, swap in the real tokenizer at the same
+// callsite — the threshold lives on Budget so the heuristic only feeds
+// payload telemetry, not the trigger decision (consumeStep tracks the
+// real model-reported usage).
+// ---------------------------------------------------------------------------
+
+import type { Message } from "./types.js";
+
+export function estimateTokenCount(messages: Message[]): number {
+  return Math.ceil(
+    messages.reduce((sum, m) => sum + m.content.length, 0) / 4,
+  );
 }
