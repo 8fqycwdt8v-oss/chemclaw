@@ -1,0 +1,15 @@
+name: permission
+lifecycle: permission_request
+enabled: true
+priority: 0
+# No script — uses the built-in TypeScript implementation in
+# services/agent-claw/src/core/hooks/permission.ts
+definition:
+  description: >
+    Default no-op permission hook. Operators can extend this hook to implement
+    custom permission policies (e.g., deny destructive Bash commands, ask for
+    approval on Write to production paths, etc.). The hook returns
+    permissionDecision via hookSpecificOutput; deny>defer>ask>allow precedence
+    aggregates across multiple permission hooks. When no hook produces a
+    decision, the route-level resolver falls back to permissionCallback or
+    denies by default.

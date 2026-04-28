@@ -1,9 +1,9 @@
 // Phase 1A coverage test — guarantees that every YAML hook descriptor in
-// `hooks/` resolves to a registered built-in handler, and that the 10 known
+// `hooks/` resolves to a registered built-in handler, and that the 11 known
 // hook implementations register at the right lifecycle points.
 //
-// Phase 4B added the no-op session-events hook, bringing the total to 10:
-// the 9 original hooks + session-events on session_start.
+// Phase 4B added the no-op session-events hook (10 total).
+// Phase 6 added the no-op permission hook on permission_request (11 total).
 //
 // This test is intentionally read-only against the on-disk `hooks/` directory
 // (the canonical source of truth). It locks in the invariant that adding a
@@ -31,7 +31,7 @@ describe("hook loader coverage", () => {
     expect(skipsForMissingRegistrar).toEqual([]);
   });
 
-  it("registers all 10 known hook implementations at the right points", async () => {
+  it("registers all 11 known hook implementations at the right points", async () => {
     const lc = new Lifecycle();
     await loadHooks(lc, mockHookDeps(), hooksDir);
     // Exact counts — `>=` would hide accidental double-registration.
@@ -41,7 +41,8 @@ describe("hook loader coverage", () => {
     expect(lc.count("pre_compact")).toBe(1); // compact-window
     expect(lc.count("post_turn")).toBe(1); // redact-secrets
     expect(lc.count("session_start")).toBe(1); // session-events (Phase 4B)
-    // Sanity sum: 2 + 2 + 3 + 1 + 1 + 1 = 10 hooks total.
+    expect(lc.count("permission_request")).toBe(1); // permission (Phase 6)
+    // Sanity sum: 2 + 2 + 3 + 1 + 1 + 1 + 1 = 11 hooks total.
     const totalRegistered = (
       [
         "pre_turn",
@@ -50,9 +51,10 @@ describe("hook loader coverage", () => {
         "pre_compact",
         "post_turn",
         "session_start",
+        "permission_request",
       ] as const
     ).reduce((sum, p) => sum + lc.count(p), 0);
-    expect(totalRegistered).toBe(10);
+    expect(totalRegistered).toBe(11);
   });
 
   it("each YAML file's `name` field is non-empty", async () => {

@@ -1,9 +1,10 @@
 # ADR 009 — Permission and Decision Contract
 
-**Status:** Accepted (contract). Route-level permission resolver
-deferred to Phase 6 (v1.3).
-**Date:** 2026-04-28
-**Context:** ChemClaw harness control-plane rebuild — Phase 4A (v1.2.0-harness)
+**Status:** Accepted. Route-level permission resolver landed in Phase 6
+(v1.2.0-harness, 2026-04-27).
+**Date:** 2026-04-28 (initial), 2026-04-27 (Phase 6 update)
+**Context:** ChemClaw harness control-plane rebuild — Phase 4A (contract)
++ Phase 6 (resolver, modes, workspace boundary)
 
 ---
 
@@ -58,9 +59,12 @@ route-level permission resolver (which interprets `permissionMode` +
    - `updatedInput` — re-parse through the tool's input schema before
      execution. Lets a hook normalise an input or substitute a safer
      variant.
-   - `ask` and `defer` are treated as `allow` with a TODO log line.
-     The route-level resolver in Phase 6 will handle them
-     (interactive elicit + budget-pause respectively).
+   - `ask` and `defer` are treated as `allow` with a TODO log line in
+     the `pre_tool` chain (legacy behaviour preserved).
+     **Phase 6 update:** the new route-level resolver returns
+     `defer` verbatim and short-circuits the call as a synthetic
+     rejection; `ask` is still treated as allow until interactive
+     elicit ships (see "Update (Phase 6)" below).
 4. The `permission_request` hook point exists in the lifecycle (Phase
    4B) so operators can wire telemetry around the future resolver
    without code changes.
@@ -105,3 +109,58 @@ relying on the eventual route-level handling.
 
 Related ADRs: 007 (hook system rebuild), 008 (collapsed ReAct loop),
 010 (deferred phases).
+
+---
+
+## Update (Phase 6) — Route-level resolver landed
+
+The route-level resolver promised in this ADR is now live as
+`services/agent-claw/src/core/permissions/resolver.ts`. It runs in
+`step.ts` BEFORE `pre_tool` dispatch when `HarnessOptions.permissions`
+is provided.
+
+**Precedence (locked):**
+
+1. `permissionMode === "bypassPermissions"` → allow.
+2. `disallowedTools` matches → deny (wins over allowedTools).
+3. `allowedTools` matches → allow. Trailing `*` wildcard supported
+   (e.g. `mcp__github__*`) for MCP tool fan-out.
+4. `permissionMode === "acceptEdits"` + tool is filesystem-touching
+   (today: `run_program`, plus the SDK-shape ids `Write` / `Edit` /
+   `MultiEdit` for parity) → allow.
+5. `permissionMode === "plan"` → defer (route is expected to detect
+   plan mode BEFORE entering the harness; defer here is defense-in-
+   depth).
+6. `permissionMode === "dontAsk"` → deny.
+7. `permissionMode === "default"` → fire `permission_request` hook
+   chain (deny>defer>ask>allow aggregation as before). If no hook
+   produces a decision, call `permissionCallback` (when set);
+   otherwise deny.
+
+**Interaction with `pre_tool` hooks:** the resolver can short-circuit
+to deny / defer (no `pre_tool` dispatch). On allow / ask, `pre_tool`
+runs as before — a `pre_tool` hook can still downgrade to deny. So the
+existing `foundation-citation-guard` deny path continues to work
+without change.
+
+**`ask` / `defer` semantics (Phase 6):** the resolver returns these
+verbatim. `step.ts` treats `defer` as a synthetic rejection (deny
+shape) so the model sees a `denied_by_permissions:defer` rejection
+and replans. `ask` is currently treated as allow with a console.warn
+(matching the pre-Phase-6 behaviour from the `pre_tool` chain) —
+interactive elicit is still future work.
+
+**Default no-op `permission_request` hook:** registered via
+`hooks/permission.yaml` + `core/hooks/permission.ts`. Returns `{}` so
+the resolver falls through to `permissionCallback` (or denies). Drop-in
+attachment surface for operators who want a YAML-discoverable place to
+plug in policy without code changes.
+
+**Workspace boundary helper:** Phase 6 also added
+`services/agent-claw/src/security/workspace-boundary.ts`
+(`assertWithinWorkspace`) for filesystem-touching tools that take
+user-supplied paths. The current chemclaw tool catalog has no such
+tool (run_program runs inside an E2B sandbox isolated from the host
+filesystem; mcp tools take SMILES / IDs / SQL filters, not paths), so
+the helper is exported but not yet wired into a tool. It exists ready
+for future filesystem-aware tools.
