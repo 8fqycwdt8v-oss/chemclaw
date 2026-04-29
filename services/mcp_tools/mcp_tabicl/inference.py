@@ -11,14 +11,15 @@ so the agent can ask "which columns matter?" without a second tool.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from typing import Any
 
 import numpy as np
 
 try:
-    from tabicl import TabICLRegressor, TabICLClassifier  # type: ignore[import-untyped]
+    from tabicl import TabICLRegressor, TabICLClassifier
 except ImportError:  # pragma: no cover — import error surfaces at /readyz
-    TabICLRegressor = None  # type: ignore[assignment]
-    TabICLClassifier = None  # type: ignore[assignment]
+    TabICLRegressor = None
+    TabICLClassifier = None
 
 
 @dataclass(frozen=True)
@@ -73,7 +74,7 @@ def predict_and_rank(
 
 
 def _permutation_importance(
-    model, X: np.ndarray, y: np.ndarray, names: list[str],
+    model: Any, X: np.ndarray, y: np.ndarray, names: list[str],
 ) -> dict[str, float]:
     """Simple permutation FI over the support set (80/20 split)."""
     rng = np.random.default_rng(0)
@@ -93,7 +94,7 @@ def _permutation_importance(
     return out
 
 
-def _mse(pred, y) -> float:
+def _mse(pred: np.ndarray, y: np.ndarray) -> float:
     pred = np.asarray(pred, dtype="float64")
     y = np.asarray(y, dtype="float64")
     return float(np.mean((pred - y) ** 2))
