@@ -1,0 +1,96 @@
+# Pre-commit hooks for ChemClaw.
+#
+# Install once after cloning:
+#
+#     pip install pre-commit
+#     pre-commit install
+#
+# Then every `git commit` runs the hooks below. Bypass for emergencies
+# only with `--no-verify`. See docs/contributing.md.
+
+repos:
+  # ----------------------------------------------------------------------
+  # Generic file hygiene
+  # ----------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v5.0.0
+    hooks:
+      - id: end-of-file-fixer
+        exclude: '^(documentation/|.*\.lcov|.*\.svg)'
+      - id: trailing-whitespace
+        exclude: '^(documentation/|.*\.svg|.*\.md)'
+      - id: check-yaml
+        # Helm chart templates use Go-template tokens that fail YAML parse.
+        exclude: '^(infra/helm/.*templates/|.*/k8s/.*templates/)'
+      - id: check-json
+      - id: check-added-large-files
+        args: ['--maxkb=1024']
+      - id: check-merge-conflict
+      - id: detect-private-key
+
+  # ----------------------------------------------------------------------
+  # Python: ruff lint (auto-fix on commit)
+  #
+  # `ruff-format` is intentionally NOT enabled here — applying it across
+  # the tree would reformat ~82 files in one go. PR-N (cleanup) runs
+  # `ruff format` once, then we re-enable the hook here. Until then,
+  # `ruff check --fix` covers the lint-error auto-fixes that are safe.
+  # ----------------------------------------------------------------------
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: ['--fix', '--exit-non-zero-on-fix']
+
+  # ----------------------------------------------------------------------
+  # Python: mypy on the same clean subset CI checks
+  # ----------------------------------------------------------------------
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.20.1
+    hooks:
+      - id: mypy
+        # Run only on the small clean subset (see .github/workflows/ci.yml).
+        # Pre-commit's `files:` regex is matched against staged paths.
+        files: ^services/optimizer/session_purger/.*\.py$
+        additional_dependencies:
+          - apscheduler
+          - psycopg
+          - psycopg-pool
+          - pydantic
+          - pydantic-settings
+
+  # ----------------------------------------------------------------------
+  # TypeScript: ESLint via local node_modules
+  # ----------------------------------------------------------------------
+  - repo: local
+    hooks:
+      - id: eslint-agent-claw
+        name: eslint (services/agent-claw)
+        entry: npm run lint --workspace services/agent-claw --silent --
+        language: system
+        files: ^services/agent-claw/(src|tests)/.*\.tsx?$
+        pass_filenames: false
+      - id: eslint-paperclip
+        name: eslint (services/paperclip)
+        entry: npm run lint --workspace services/paperclip --silent --
+        language: system
+        files: ^services/paperclip/(src|tests)/.*\.tsx?$
+        pass_filenames: false
+
+  # ----------------------------------------------------------------------
+  # Secrets: detect-secrets, baselined to avoid retroactive alerts
+  # ----------------------------------------------------------------------
+  - repo: https://github.com/Yelp/detect-secrets
+    rev: v1.5.0
+    hooks:
+      - id: detect-secrets
+        args:
+          - '--baseline'
+          - '.secrets.baseline'
+        exclude: '(^package-lock\.json$|^\.secrets\.baseline$|^test-fixtures/|/coverage/|^services/.*/coverage/|/__snapshots__/)'
+
+# ----------------------------------------------------------------------
+# Default behavior
+# ----------------------------------------------------------------------
+default_stages: [pre-commit]
+fail_fast: false

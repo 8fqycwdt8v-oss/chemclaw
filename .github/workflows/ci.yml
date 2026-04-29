@@ -14,26 +14,61 @@ on:
 
 jobs:
   typescript:
-    name: TypeScript (vitest + tsc + audit)
+    name: TypeScript (eslint + vitest + tsc + audit + diff-cover)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          # diff-cover compares against origin/main, which means we need
+          # the merge-base in history. fetch-depth: 0 grabs the full ref
+          # graph cheaply enough on a project this size.
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
           cache: 'npm'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install "diff-cover>=9.0"
       - run: npm ci
-      - run: npm test --workspace services/agent-claw
+      - name: ESLint (agent-claw)
+        run: npm run lint --workspace services/agent-claw
+      - name: ESLint (paperclip)
+        run: npm run lint --workspace services/paperclip
+      - name: Vitest with coverage (agent-claw)
+        run: npm run coverage --workspace services/agent-claw
       - run: npx tsc --noEmit -p services/agent-claw
-      - run: npm test --workspace services/paperclip
+      - name: Vitest with coverage (paperclip)
+        run: npm run coverage --workspace services/paperclip
       - run: npx tsc --noEmit -p services/paperclip
       - run: npm audit --audit-level=high
+      - name: Diff coverage (TypeScript - non-routes)
+        # Thresholds per docs/review/2026-04-29-codebase-audit/05-coverage-baseline.md §8.
+        if: github.event_name == 'pull_request'
+        run: |
+          diff-cover services/agent-claw/coverage/lcov.info \
+            --compare-branch=origin/main \
+            --fail-under=75 \
+            --fail-paths-not-found=false \
+            --exclude='services/agent-claw/src/routes/**' \
+            --exclude='services/agent-claw/src/index.ts' \
+            --exclude='services/agent-claw/src/config.ts'
+      - name: Diff coverage (TypeScript - routes carve-out)
+        if: github.event_name == 'pull_request'
+        run: |
+          diff-cover services/agent-claw/coverage/lcov.info \
+            --compare-branch=origin/main \
+            --fail-under=60 \
+            --include='services/agent-claw/src/routes/**'
 
   python:
-    name: Python (pytest + parse)
+    name: Python (ruff + pytest + parse + mypy + diff-cover)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-python@v5
         with:
           python-version: '3.11'
@@ -45,19 +80,43 @@ jobs:
           python3 -m pip install -r services/projectors/kg_source_cache/requirements.txt
           python3 -m pip install -r services/optimizer/session_reanimator/requirements.txt
           python3 -m pip install -r services/optimizer/session_purger/requirements.txt
-          python3 -m pip install pytest pytest-asyncio
-      - name: Pytest
+          python3 -m pip install pytest pytest-asyncio coverage \
+            "mypy>=1.11" "ruff>=0.6,<0.7" "diff-cover>=9.0"
+      - name: Ruff
+        run: ruff check .
+      - name: Pytest with coverage
         run: |
-          python3 -m pytest -q \
+          coverage erase
+          coverage run --rcfile=pyproject.toml -m pytest -q \
             tests/unit/test_redactor.py \
             tests/unit/optimizer/test_session_purger.py \
             services/mcp_tools/common/tests/ \
             services/projectors/kg_source_cache/tests/
+          coverage combine || true
+          coverage xml -o coverage.xml
       - name: Parse-check Python services
         run: |
           python3 -m py_compile services/optimizer/session_reanimator/main.py
           python3 -m py_compile services/projectors/common/base.py
           python3 -m py_compile services/litellm_redactor/redaction.py
+      - name: Mypy (clean subset — see PR-1 description)
+        # PR-1 introduces mypy in CI. Strict mypy is too strict for the
+        # full tree today (see audit 02-python-hotspots.md), so we run
+        # only on `services/optimizer/session_purger`, which is the one
+        # service that already passes `mypy --strict`. PR-N broadens this
+        # subset rule-by-rule as the underlying type debt is paid down.
+        run: mypy services/optimizer/session_purger
+      - name: Diff coverage (Python)
+        if: github.event_name == 'pull_request'
+        run: |
+          diff-cover coverage.xml \
+            --compare-branch=origin/main \
+            --fail-under=70 \
+            --exclude='services/optimizer/session_reanimator/**' \
+            --exclude='services/projectors/kg_hypotheses/**' \
+            --exclude='services/mcp_tools/mcp_drfp/**' \
+            --exclude='services/mcp_tools/mcp_rdkit/**' \
+            --exclude='services/ingestion/eln_json_importer.legacy/**'
 
   schema:
     name: Schema (idempotent re-apply)
