@@ -192,6 +192,7 @@ export function registerSessionsRoute(
       registry,
       paperclip: deps.paperclip,
       log: req.log,
+      signal: req.signal,
       // Phase F4: pass the plan so the runner can advance current_step_index
       // as tool calls match planned steps.
       planForProgress: {
@@ -311,6 +312,7 @@ export function registerSessionsRoute(
       registry,
       paperclip: deps.paperclip,
       log: req.log,
+      signal: req.signal,
       maxAutoTurns: 1, // resume is one turn at a time; cron can call again
     });
 
@@ -405,6 +407,7 @@ export function registerSessionsRoute(
       registry,
       paperclip: deps.paperclip,
       log: req.log,
+      signal: req.signal,
       maxAutoTurns: 1,
     });
 
@@ -450,6 +453,12 @@ export interface ChainedHarnessOptions {
     steps: ReadonlyArray<{ readonly tool: string }>;
     initialIndex: number;
   };
+  /** Optional upstream AbortSignal threaded through to runHarness on every
+   * chained iteration. The plan/run + resume routes pass `req.signal`
+   * so a client disconnect (or a signal-bearing internal caller) cancels
+   * both the LLM call and any in-flight MCP postJson / getJson fetches.
+   * Background callers (the reanimator daemon) leave this undefined. */
+  signal?: AbortSignal;
 }
 
 export interface ChainedHarnessResult {
@@ -464,10 +473,12 @@ export async function runChainedHarness(
   opts: ChainedHarnessOptions,
 ): Promise<ChainedHarnessResult> {
   // Establish the AsyncLocalStorage context so every outbound MCP call
-  // tags itself with the right user's identity. The chained-execution and
-  // resume endpoints both call this helper, so doing it here covers both.
+  // tags itself with the right user's identity AND the upstream signal —
+  // the chained loop spans many runHarness calls, and we want every
+  // postJson / getJson fired across all of them to share the same
+  // cancellation semantics.
   return runWithRequestContext(
-    { userEntraId: opts.user, sessionId: opts.sessionId },
+    { userEntraId: opts.user, sessionId: opts.sessionId, signal: opts.signal },
     () => _runChainedHarnessInner(opts),
   );
 }
@@ -580,6 +591,7 @@ async function _runChainedHarnessInner(
         budget,
         lifecycle,
         ctx,
+        signal: opts.signal,
       });
       totalSteps += r.stepsUsed;
       finalFinishReason = r.finishReason;

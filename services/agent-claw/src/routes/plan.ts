@@ -83,16 +83,21 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     try {
       writeEvent(reply, { type: "text_delta", delta: "Plan approved — executing…\n\n" });
 
-      // Wrap in AsyncLocalStorage so outbound MCP calls inherit the user.
-      const result = await runWithRequestContext({ userEntraId: user }, () =>
-        runHarness({
-          messages: plan.messages,
-          tools,
-          llm: deps.llm,
-          budget,
-          lifecycle,
-          ctx,
-        }),
+      // Wrap in AsyncLocalStorage so outbound MCP calls inherit the user
+      // and the upstream client's AbortSignal — a mid-stream disconnect
+      // here cancels both LLM calls and any in-flight MCP fetches.
+      const result = await runWithRequestContext(
+        { userEntraId: user, signal: req.signal },
+        () =>
+          runHarness({
+            messages: plan.messages,
+            tools,
+            llm: deps.llm,
+            budget,
+            lifecycle,
+            ctx,
+            signal: req.signal,
+          }),
       );
 
       if (!closed) {

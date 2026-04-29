@@ -126,6 +126,26 @@ export interface ChatRouteDeps {
 }
 
 // ---------------------------------------------------------------------------
+// AbortError detection
+// ---------------------------------------------------------------------------
+
+/**
+ * Recognise a thrown AbortError regardless of its concrete constructor.
+ * Mirrors core/harness.ts._isAbortError — duplicated to keep this file's
+ * import surface narrow (no import from core/harness.ts internals). The
+ * AI SDK, Node fetch, and our own DOMException all share the .name
+ * discriminator.
+ */
+function _isAbortLikeError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "name" in err &&
+    (err as { name?: unknown }).name === "AbortError"
+  );
+}
+
+// ---------------------------------------------------------------------------
 // Bounds check
 // ---------------------------------------------------------------------------
 
@@ -578,6 +598,7 @@ async function handleChat(
             deps.llm.completeJson({
               system: systemPrompt,
               user: lastUserMessage?.content ?? "",
+              signal: req.signal,
             }),
         );
         const steps = parsePlanSteps(planJson);
@@ -593,7 +614,7 @@ async function handleChat(
       }
       const result = await otelContext.with(
         trace.setSpan(otelContext.active(), rootSpan),
-        () => agent.run({ messages, ctx }),
+        () => agent.run({ messages, ctx, signal: req.signal }),
       );
       cleanupSkillForTurn?.();
       await closeNonStreamingTurn(result.usage.promptTokens, result.usage.completionTokens);
@@ -629,12 +650,12 @@ async function handleChat(
   // accumulate here so the route's finally can persist them to scratchpad
   // for observability.
   //
-  // TODO(disconnect-mid-stream): runHarness doesn't accept an AbortSignal,
-  // so a client close mid-stream cannot abort the harness loop. Writes to
-  // a closed reply silently no-op via Fastify, but the LLM call (and any
-  // outstanding tool calls) run to completion. A future phase should plumb
-  // an AbortController through runHarness if mid-stream cost becomes an
-  // issue.
+  // AbortSignal propagation: see runHarness({ signal }). The route forwards
+  // `req.signal` (Fastify's underlying Node IncomingMessage signal,
+  // Node 18+) into HarnessOptions so a client disconnect mid-stream cancels
+  // the LLM call, in-flight MCP postJson / getJson calls, and the harness
+  // loop. The harness throws an AbortError that the catch arm below maps
+  // to finishReason="cancelled" and the finally block persists.
   const _streamRedactions: RedactReplacement[] = [];
   let budget: Budget | undefined;
 
@@ -651,6 +672,7 @@ async function handleChat(
           deps.llm.completeJson({
             system: systemPrompt,
             user: lastUserMessage?.content ?? "",
+            signal: req.signal,
           }),
         );
         const steps = parsePlanSteps(planJson);
@@ -759,6 +781,10 @@ async function handleChat(
       ctx,
       streamSink: sink,
       sessionId: sessionId ?? undefined,
+      // Forward the upstream client's AbortSignal so a mid-stream disconnect
+      // (network drop, browser tab closed, curl --max-time) cancels LLM
+      // calls + MCP fetches instead of running them to completion.
+      signal: req.signal,
     });
 
     // v1.2 collapse: the hand-rolled call()→streamCompletion()→pre_tool /
@@ -802,6 +828,17 @@ async function handleChat(
       // finally block lifts the question from scratchpad and emits the
       // awaiting_user_input SSE event.
       finishReason = "awaiting_user_input";
+    } else if (
+      // Client disconnected mid-stream: harness threw an AbortError after
+      // its post_turn ran. Treat as a clean exit so the finally block
+      // persists scratchpad with finish_reason="cancelled" and emits the
+      // terminal `cancelled` event (best-effort — socket may already be
+      // gone, in which case the writeEvent silently no-ops).
+      _isAbortLikeError(err) ||
+      req.signal?.aborted
+    ) {
+      finishReason = "cancelled";
+      req.log.info({ err: err instanceof Error ? err.message : err }, "chat stream cancelled by client");
     } else {
       req.log.error({ err }, "chat stream failed");
       if (!closed) {
@@ -891,6 +928,25 @@ async function handleChat(
       }
     }
 
+    // Emit the `cancelled` event BEFORE the terminal `finish` so a
+    // disconnecting client (or any future SSE proxy that buffers the last
+    // few frames) sees both signals: the cancellation marker and the
+    // standard terminal frame. Best-effort — if the socket is already
+    // gone the writes silently fail and the route falls through to
+    // reply.raw.end(). When a peer truly drops there is nothing for the
+    // event to land on; the cancellation is recorded in the DB
+    // (last_finish_reason='cancelled') for the next session load.
+    if (finishReason === "cancelled" && !closed) {
+      try {
+        writeEvent(reply, {
+          type: "cancelled",
+          ...(sessionId ? { session_id: sessionId } : {}),
+        });
+      } catch {
+        // socket already gone
+      }
+    }
+
     if (!closed) {
       try {
         writeEvent(reply, {
@@ -966,10 +1022,13 @@ export function registerChatRoute(app: FastifyInstance, deps: ChatRouteDeps): vo
     },
     // Wrap the entire handler in an AsyncLocalStorage context so every
     // outbound MCP call can read the calling user's identity transparently
-    // (see core/request-context.ts and mcp/postJson.ts:authHeaders).
+    // (see core/request-context.ts and mcp/postJson.ts:authHeaders). Also
+    // thread the upstream client's AbortSignal so postJson / getJson abort
+    // their fetches when the client disconnects mid-stream.
     (req, reply) =>
-      runWithRequestContext({ userEntraId: deps.getUser(req) }, () =>
-        handleChat(req, reply, deps),
+      runWithRequestContext(
+        { userEntraId: deps.getUser(req), signal: req.signal },
+        () => handleChat(req, reply, deps),
       ),
   );
 }

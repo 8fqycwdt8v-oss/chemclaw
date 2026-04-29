@@ -38,6 +38,16 @@ export interface ToolContext {
    * a Lifecycle in scope leave it undefined and tools tolerate the absence.
    */
   lifecycle?: Lifecycle;
+  /**
+   * Optional AbortSignal carrying the upstream request's lifetime. Tools
+   * that perform long-running work (LLM calls, tool MCP postJson/getJson,
+   * subprocesses) should observe this so a client disconnect propagates
+   * down. The harness reads `signal` off `HarnessOptions`, sets it here,
+   * and forwards it into the AsyncLocalStorage RequestContext so
+   * postJson / getJson pick it up transparently. May be undefined when
+   * the caller has no upstream signal (background tasks, tests).
+   */
+  signal?: AbortSignal;
 }
 
 // ---------------------------------------------------------------------------
@@ -132,6 +142,16 @@ export interface HarnessOptions {
    * and can short-circuit the call with deny / defer.
    */
   permissions?: PermissionOptions;
+  /**
+   * Optional AbortSignal threaded into ctx + AsyncLocalStorage so that
+   * client disconnects mid-stream propagate to LLM calls, MCP postJson /
+   * getJson, and tool subprocesses. Routes pass `req.raw?.signal` from
+   * Fastify's underlying Node IncomingMessage (Node 18+). On abort, the
+   * harness lets the typed AbortError bubble out so the route's catch
+   * + finally can record the cancellation, persist scratchpad with
+   * finish_reason="cancelled", and emit the terminal SSE event.
+   */
+  signal?: AbortSignal;
 }
 
 // ---------------------------------------------------------------------------
