@@ -221,6 +221,37 @@ function startCleanupLoop(intervalMs = 60_000): void {
 }
 
 // ---------------------------------------------------------------------------
+// Horizontal-scaling refresh (Phase G next-pass — deep-review #12).
+// ---------------------------------------------------------------------------
+//
+// When paperclip-lite is scaled to N replicas, each holds an independent
+// in-process daily-USD ledger and the effective per-user daily cap becomes
+// N×configured (a 4-replica cluster lets a user spend $25 × 4 = $100/day).
+//
+// Strategy: every PAPERCLIP_REFRESH_INTERVAL_MS (default 60_000) re-read
+// today's totals from paperclip_state and replace the in-process map.
+// Replicas converge with bounded staleness — at worst one minute of
+// over-spend per replica per refresh cycle. This is a much simpler
+// design than a distributed lock and is sufficient for the small-team
+// pharma deployment profile (4 users typical, daily cap measured in $).
+
+const REFRESH_INTERVAL_MS = Number(process.env["PAPERCLIP_REFRESH_INTERVAL_MS"] ?? 60_000);
+
+function startLedgerRefreshLoop(p: PaperclipState, log: { info: (...a: unknown[]) => void; warn: (...a: unknown[]) => void }): void {
+  const run = async () => {
+    try {
+      const snapshot = await p.rehydrateDailyUsd();
+      budgetMgr.rehydrateDailyUsd(snapshot);
+      log.info({ entries: snapshot.size }, "paperclip refreshed daily-USD ledger");
+    } catch (err) {
+      log.warn({ err }, "paperclip ledger refresh failed (non-fatal)");
+    }
+    setTimeout(() => void run(), REFRESH_INTERVAL_MS);
+  };
+  setTimeout(() => void run(), REFRESH_INTERVAL_MS);
+}
+
+// ---------------------------------------------------------------------------
 // Startup (skipped in test imports)
 // ---------------------------------------------------------------------------
 
@@ -258,6 +289,14 @@ if (process.env["PAPERCLIP_SKIP_START"] !== "true") {
   });
 
   startCleanupLoop();
+
+  // Phase G #12: in multi-replica deployments, periodically pull
+  // today's totals from paperclip_state so replicas converge on a
+  // shared daily-USD view. Single-replica deployments still benefit
+  // — a manual UPDATE to paperclip_state propagates within a minute.
+  if (persistence) {
+    startLedgerRefreshLoop(persistence, app.log);
+  }
 }
 
 export { budgetMgr, heartbeat, metrics };

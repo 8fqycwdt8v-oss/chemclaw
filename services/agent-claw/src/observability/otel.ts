@@ -23,6 +23,7 @@ import {
   type TracerProvider,
   ProxyTracerProvider,
 } from "@opentelemetry/api";
+import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 
 const SERVICE_NAME = "chemclaw-agent-claw";
 const SERVICE_VERSION = "0.0.1";
@@ -82,7 +83,16 @@ export function initTracer(opts?: {
     spanProcessors: [new SimpleSpanProcessor(exporter)],
   });
 
-  provider.register();
+  // Register an AsyncLocalStorage-backed context manager so OTel context
+  // (active span) propagates across `await` boundaries. Without this, the
+  // default NoopContextManager loses the parent span as soon as a Promise
+  // suspends, and downstream LiteLLM auto-instrumentation can't parent its
+  // trace to the agent-claw root span. Phase G #6 — without ALS, plan-mode
+  // and non-streaming completeJson calls produce orphan Langfuse traces
+  // with no `prompt:` tag.
+  provider.register({
+    contextManager: new AsyncLocalStorageContextManager().enable(),
+  });
 }
 
 /**

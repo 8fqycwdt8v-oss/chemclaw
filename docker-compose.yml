@@ -430,6 +430,10 @@ services:
       # restart doesn't reset everyone's spend mid-day. chemclaw_service
       # has BYPASSRLS so the sidecar can write/read across all users.
       PAPERCLIP_PG_DSN: ${PAPERCLIP_PG_DSN:-postgresql://${CHEMCLAW_SERVICE_USER:-chemclaw_service}:${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}@postgres:5432/${POSTGRES_DB:-chemclaw}}
+      # Phase G #12: how often to refresh the in-process daily-USD ledger
+      # from paperclip_state so multi-replica deployments converge on a
+      # shared cap. Default 60s; staleness is bounded by this interval.
+      PAPERCLIP_REFRESH_INTERVAL_MS: "${PAPERCLIP_REFRESH_INTERVAL_MS:-60000}"
     ports:
       - "3200:3200"
     healthcheck:
