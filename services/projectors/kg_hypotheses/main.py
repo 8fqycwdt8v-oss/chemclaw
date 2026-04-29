@@ -145,9 +145,14 @@ class KgHypothesesProjector(BaseProjector):
         node_fact_id = str(uuid.uuid5(NAMESPACE_HYPOTHESIS, hid))
         async with self._driver.session() as session:
             if status == "refuted":
+                # Idempotent: keep the original valid_to on replay so the
+                # bi-temporal "refuted at" timestamp doesn't drift forward
+                # every time the projector re-processes the same event.
                 await session.run(
                     "MATCH (h:Hypothesis {fact_id: $fid}) "
-                    "SET h.valid_to = datetime(), h.refuted = true",
+                    "SET h.valid_to = CASE WHEN h.valid_to IS NULL THEN datetime() "
+                    "ELSE h.valid_to END, "
+                    "h.refuted = true",
                     fid=node_fact_id,
                 )
             elif status == "archived":

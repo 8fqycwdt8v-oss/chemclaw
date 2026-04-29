@@ -60,6 +60,7 @@ import { registerSkillsRoutes } from "./routes/skills.js";
 import { registerPlanRoutes } from "./routes/plan.js";
 import { registerDocumentsRoute } from "./routes/documents.js";
 import { registerArtifactsRoutes } from "./routes/artifacts.js";
+import { registerForgedToolsRoutes } from "./routes/forged-tools.js";
 import { registerLearnRoute } from "./routes/learn.js";
 import { registerFeedbackRoute } from "./routes/feedback.js";
 import { registerEvalRoute } from "./routes/eval.js";
@@ -334,6 +335,7 @@ registerSkillsRoutes(app, {
 registerPlanRoutes(app, routeDeps);
 registerDocumentsRoute(app, { config: cfg, pool, getUser: getUser as (req: import("fastify").FastifyRequest) => string });
 registerArtifactsRoutes(app, { pool, getUser: getUser as (req: import("fastify").FastifyRequest) => string });
+await registerForgedToolsRoutes(app, pool, getUser as (req: import("fastify").FastifyRequest) => string);
 registerLearnRoute(app, { pool, llm: llmProvider, getUser: getUser as (req: import("fastify").FastifyRequest) => string });
 registerFeedbackRoute(app, {
   pool,

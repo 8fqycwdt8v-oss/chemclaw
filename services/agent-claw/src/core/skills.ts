@@ -354,25 +354,6 @@ export class SkillLoader {
 }
 
 // ---------------------------------------------------------------------------
-// Singleton loader (shared across the process).
-// ---------------------------------------------------------------------------
-
-let _singleton: SkillLoader | undefined;
-
-export function getSkillLoader(): SkillLoader {
-  if (!_singleton) {
-    _singleton = new SkillLoader();
-    _singleton.load();
-  }
-  return _singleton;
-}
-
-/** Reset the singleton (test use only). */
-export function _resetSkillLoader(): void {
-  _singleton = undefined;
-}
-
-// ---------------------------------------------------------------------------
 // Slash verb → skill mapping
 // ---------------------------------------------------------------------------
 

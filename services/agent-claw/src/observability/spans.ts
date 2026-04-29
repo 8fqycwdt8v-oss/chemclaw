@@ -2,8 +2,6 @@
 //
 // Provides:
 //   - startRootTurnSpan(opts) — opens a root span for one chat turn
-//   - startToolSpan(parent, toolId) — opens a child span for one tool call
-//   - startSubAgentSpan(parent, type) — opens a child span for a sub-agent
 //   - recordLlmUsage(span, ...) — attaches token/cost attributes to a span
 //   - recordSpanError(span, err) — marks a span as errored
 //
@@ -11,16 +9,8 @@
 // When OTel is not configured, all operations are no-ops (the tracer returns
 // a no-op span that ignores setAttribute / end calls).
 
-import { context, trace, SpanStatusCode, type Span, type Context } from "@opentelemetry/api";
+import { SpanStatusCode, type Span } from "@opentelemetry/api";
 import { getTracer } from "./otel.js";
-
-// ---------------------------------------------------------------------------
-// Internal helper: extract an OTel Context with the given span set as current.
-// ---------------------------------------------------------------------------
-
-function contextWithSpan(span: Span): Context {
-  return trace.setSpan(context.active(), span);
-}
 
 // ---------------------------------------------------------------------------
 // Root span — one per chat turn
@@ -74,39 +64,6 @@ export function startRootTurnSpan(opts: RootSpanOptions): Span {
       span.setAttribute("chemclaw.prompt_version", opts.promptVersion);
     }
   }
-  return span;
-}
-
-// ---------------------------------------------------------------------------
-// Tool span — child span per tool call
-// ---------------------------------------------------------------------------
-
-/**
- * Open a child span for one tool execution.
- * Caller must call span.end() when the tool returns.
- *
- * @param parentSpan - The root turn span; the tool span is parented to it.
- */
-export function startToolSpan(parentSpan: Span, toolId: string): Span {
-  const tracer = getTracer();
-  const ctx: Context = contextWithSpan(parentSpan);
-  const span = tracer.startSpan(`tool:${toolId}`, undefined, ctx);
-  span.setAttribute("chemclaw.tool_id", toolId);
-  return span;
-}
-
-// ---------------------------------------------------------------------------
-// Sub-agent span — child span for spawned sub-agents
-// ---------------------------------------------------------------------------
-
-/**
- * Open a child span for a sub-agent invocation.
- */
-export function startSubAgentSpan(parentSpan: Span, agentType: string): Span {
-  const tracer = getTracer();
-  const ctx: Context = contextWithSpan(parentSpan);
-  const span = tracer.startSpan(`sub_agent:${agentType}`, undefined, ctx);
-  span.setAttribute("chemclaw.sub_agent_type", agentType);
   return span;
 }
 
