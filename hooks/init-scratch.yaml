@@ -1,6 +1,5 @@
 name: init-scratch
 lifecycle: pre_turn
 enabled: true
-priority: 0
 definition:
   description: Seed ctx.scratchpad.seenFactIds with an empty Set<string>.

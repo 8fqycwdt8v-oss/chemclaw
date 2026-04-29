@@ -194,6 +194,72 @@ describe("runHarness — loop semantics", () => {
     expect(result.stepsUsed).toBe(3);
   });
 
+  it("post_turn fires when a tool throws (regression: redact-secrets must run on error paths)", async () => {
+    // The cycle-1 fix moved post_turn dispatch into runHarness's finally
+    // so redact-secrets always runs even when the tool loop throws. This
+    // test pins that contract — without it, a future refactor that moves
+    // post_turn back into the happy path would silently break the
+    // post-turn redaction guarantee on every tool error path.
+    const postTurnSpy = vi.fn();
+    const lifecycle = new Lifecycle();
+    lifecycle.on("post_turn", "test", async (payload) => {
+      postTurnSpy(payload.stepsUsed);
+    });
+
+    const llm = new StubLlmProvider().enqueueToolCall("fail_tool", {});
+    const opts = makeOptions(llm, { lifecycle, tools: [echoTool, failTool] });
+
+    await expect(runHarness(opts)).rejects.toThrow();
+    expect(postTurnSpy, "post_turn fired despite tool throw").toHaveBeenCalledOnce();
+  });
+
+  it("post_turn fires when AwaitingUserInputError surfaces (ask_user mid-loop)", async () => {
+    // Same finally-block guarantee for the AwaitingUserInputError control-
+    // flow exception. ask_user pauses the loop via throw; redact-secrets
+    // must still run so the awaiting_question doesn't leak.
+    const { AwaitingUserInputError } = await import(
+      "../../src/tools/builtins/ask_user.js"
+    );
+    const postTurnSpy = vi.fn();
+    const lifecycle = new Lifecycle();
+    lifecycle.on("post_turn", "test", async (payload) => {
+      postTurnSpy(payload.stepsUsed);
+    });
+
+    const askThrowTool = defineTool({
+      id: "ask_user_test",
+      description: "Throws AwaitingUserInputError to simulate ask_user.",
+      inputSchema: z.object({}),
+      outputSchema: z.object({}),
+      execute: async () => {
+        throw new AwaitingUserInputError("Which solvent?");
+      },
+    });
+
+    const llm = new StubLlmProvider().enqueueToolCall("ask_user_test", {});
+    const opts = makeOptions(llm, { lifecycle, tools: [askThrowTool] });
+
+    await expect(runHarness(opts)).rejects.toBeInstanceOf(AwaitingUserInputError);
+    expect(postTurnSpy, "post_turn fired despite AwaitingUserInputError").toHaveBeenCalledOnce();
+  });
+
+  it("post_turn rejection does NOT replace the original loop error", async () => {
+    // M-1 from the post-merge review: a misbehaving post_turn hook (e.g.
+    // redact-secrets throwing on a malformed scratchpad) must not swallow
+    // the original BudgetExceededError / tool error. The harness wraps
+    // the post_turn dispatch in its own try/catch.
+    const lifecycle = new Lifecycle();
+    lifecycle.on("post_turn", "buggy", async () => {
+      throw new Error("post_turn handler is buggy");
+    });
+
+    const llm = new StubLlmProvider().enqueueToolCall("fail_tool", {});
+    const opts = makeOptions(llm, { lifecycle, tools: [echoTool, failTool] });
+
+    // The original tool-thrown error must propagate, NOT the post_turn one.
+    await expect(runHarness(opts)).rejects.toThrow(/intentional tool failure/i);
+  });
+
   it("token usage accumulates across all steps", async () => {
     const llm = new StubLlmProvider()
       .enqueue({

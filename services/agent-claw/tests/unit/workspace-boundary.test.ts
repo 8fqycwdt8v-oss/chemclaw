@@ -83,4 +83,70 @@ describe("assertWithinWorkspace", () => {
     });
     expect(real).toBe(realpathSync(okFile));
   });
+
+  // ---------- H5: edge cases the original suite missed ---------------------
+
+  it("rejects composed '..' traversal even after path.resolve normalisation", () => {
+    // Construct a path that LOOKS like it sits inside workspaceRoot but
+    // resolves outside via embedded `..` segments. realpathSync must
+    // canonicalise BEFORE the boundary check so this fails.
+    const outsideFile = join(outsideRoot, "secret.txt");
+    writeFileSync(outsideFile, "secret");
+    const traversal = join(workspaceRoot, "..", "..", outsideRoot, "secret.txt");
+    expect(() =>
+      assertWithinWorkspace(traversal, { allowedRoots: [workspaceRoot] }),
+    ).toThrow(WorkspaceBoundaryError);
+  });
+
+  it("rejects everything when allowedRoots is empty", () => {
+    const okFile = join(workspaceRoot, "ok.txt");
+    writeFileSync(okFile, "fine");
+    expect(() =>
+      assertWithinWorkspace(okFile, { allowedRoots: [] }),
+    ).toThrow(WorkspaceBoundaryError);
+  });
+
+  it("rejects a path containing a NUL byte (lstat refuses it)", () => {
+    // Node.js fs APIs reject paths with embedded NULs — the helper surfaces
+    // that as a WorkspaceBoundaryError instead of leaking the raw TypeError
+    // to the caller.
+    const nulPath = `${workspaceRoot}/ok.txt\0secret`;
+    expect(() =>
+      assertWithinWorkspace(nulPath, { allowedRoots: [workspaceRoot] }),
+    ).toThrow();
+  });
+
+  it("rejects when a parent directory is a symlink to outside the root", () => {
+    // Create: outsideRoot/dir/file.txt
+    //         workspaceRoot/proxy -> outsideRoot/dir
+    //         input: workspaceRoot/proxy/file.txt
+    // The leaf isn't a symlink (lstat returns false) but realpath escapes
+    // the workspace root via the parent symlink. The boundary check on the
+    // canonical path must reject.
+    const outsideDir = join(outsideRoot, "dir");
+    const outsideFile = join(outsideDir, "file.txt");
+    const fs = require("node:fs");
+    fs.mkdirSync(outsideDir, { recursive: true });
+    writeFileSync(outsideFile, "secret");
+    const proxyLink = join(workspaceRoot, "proxy");
+    symlinkSync(outsideDir, proxyLink);
+    const sneakyInput = join(proxyLink, "file.txt");
+
+    expect(() =>
+      assertWithinWorkspace(sneakyInput, { allowedRoots: [workspaceRoot] }),
+    ).toThrow(WorkspaceBoundaryError);
+  });
+
+  it("rejects a path that does not exist (lstat throws ENOENT)", () => {
+    const ghost = join(workspaceRoot, "does-not-exist.txt");
+    expect(() =>
+      assertWithinWorkspace(ghost, { allowedRoots: [workspaceRoot] }),
+    ).toThrow(WorkspaceBoundaryError);
+  });
+
+  it("rejects an empty-string input (lstat throws ENOENT)", () => {
+    expect(() =>
+      assertWithinWorkspace("", { allowedRoots: [workspaceRoot] }),
+    ).toThrow(WorkspaceBoundaryError);
+  });
 });

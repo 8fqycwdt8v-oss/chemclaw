@@ -10,6 +10,26 @@
 // Pre-turn stale-fact warning: checks ingestion_events for any
 // source_fact_observed payloads where valid_until < now() and injects
 // a warning into ctx.scratchpad so the harness can surface it.
+//
+// Wire shapes recognised (typed contracts from `services/agent-claw/src/tools/builtins/`):
+//
+//   ELN — `_eln_shared.ts:ElnEntrySchema`
+//     query_eln_experiments         → { items: ElnEntry[], next_cursor }
+//     fetch_eln_entry               → ElnEntry (top-level)
+//     query_eln_canonical_reactions → { items: CanonicalReaction[] }
+//     fetch_eln_canonical_reaction  → CanonicalReactionDetail (top-level;
+//                                     CanonicalReaction + ofat_children: ElnEntry[])
+//     query_eln_samples_by_entry    → { entry_id, samples: Sample[] }
+//     fetch_eln_sample              → Sample (top-level)
+//
+//   Instrument — `_logs_schemas.ts:LogsDataset`
+//     query_instrument_runs     → { datasets: LogsDataset[], next_cursor, valid_until }
+//     query_instrument_datasets → { datasets: LogsDataset[], valid_until }
+//     fetch_instrument_run      → { dataset: LogsDataset, valid_until }
+//
+// LIMS adapters do not exist on this branch (the regex prefix is
+// future-proofing); when they are added the helper `extractLimsFacts`
+// can be re-introduced.
 
 import type { Pool } from "pg";
 import type { PostToolPayload } from "../types.js";
@@ -19,30 +39,25 @@ import { withUserContext } from "../../db/with-user-context.js";
 // Tool IDs that trigger the source-cache hook.
 const SOURCE_TOOL_PATTERN = /^(query_eln|fetch_eln|query_lims|fetch_lims|query_instrument|fetch_instrument)_/;
 
-// Default TTL for cached facts (7 days).
+// Default TTL for cached facts (7 days). Used as a fallback when the wire
+// shape doesn't include a `valid_until` field of its own.
 const DEFAULT_TTL_DAYS = 7;
 
-// Predicates extracted from ELN experiment fields.
+// Predicates extracted from ELN entry fields_jsonb (or legacy `fields`).
+// Keys are matched case-sensitively against the jsonb top-level keys.
 const ELN_FIELD_PREDICATES: Record<string, string> = {
   yield_pct: "HAS_YIELD",
-  purity_pct: "HAS_PURITY",
   yield: "HAS_YIELD",
+  purity_pct: "HAS_PURITY",
   purity: "HAS_PURITY",
   temperature_c: "HAS_TEMPERATURE",
   temp_c: "HAS_TEMPERATURE",
   solvent: "HAS_SOLVENT",
   reaction_time_h: "HAS_REACTION_TIME",
-};
-
-// Predicates extracted from LIMS results.
-const LIMS_RESULT_PREDICATES: Record<string, string> = {
-  result_value: "HAS_RESULT_VALUE",
-  purity_pct: "HAS_PURITY",
-};
-
-// Predicates extracted from instrument runs.
-const INSTRUMENT_RUN_PREDICATES: Record<string, string> = {
-  total_area: "HAS_TOTAL_AREA",
+  reaction_time_hours: "HAS_REACTION_TIME",
+  catalyst: "HAS_CATALYST",
+  base: "HAS_BASE",
+  equiv: "HAS_EQUIV",
 };
 
 export interface SourceFactPayload {
@@ -65,94 +80,268 @@ function validUntilIso(daysFromNow: number = DEFAULT_TTL_DAYS): string {
   return d.toISOString();
 }
 
+// Coerce an unknown jsonb value to the fact's `object_value` slot — keeps
+// numbers numeric, casts everything else to string. Returns `undefined`
+// for nullish so the caller can skip emitting a fact for an absent field.
+function toObjectValue(v: unknown): string | number | undefined {
+  if (v === null || v === undefined) return undefined;
+  if (typeof v === "number") return v;
+  if (typeof v === "string") return v;
+  if (typeof v === "boolean") return v ? "true" : "false";
+  return JSON.stringify(v);
+}
+
 // ---------- Fact extraction --------------------------------------------------
 
-function extractElnFacts(entry: Record<string, unknown>, entryId: string): SourceFactPayload[] {
+/**
+ * Extract facts from one ELN entry. Handles BOTH the new typed shape
+ * (`fields_jsonb` as a flat Record per `_eln_shared.ts:ElnEntrySchema`) AND
+ * the legacy shape (`fields[key].value` as a {value, displayValue} envelope)
+ * — the legacy shape is preserved so that mock outputs / older tools still
+ * extract correctly during a migration window.
+ */
+function extractElnEntryFacts(entry: Record<string, unknown>): SourceFactPayload[] {
   const facts: SourceFactPayload[] = [];
   const now = nowIso();
-  const validUntil = validUntilIso();
-  const sourceTs = (entry["modified_at"] as string | undefined) ?? now;
+  const entryValidUntil =
+    typeof entry["valid_until"] === "string"
+      ? (entry["valid_until"] as string)
+      : validUntilIso();
+  const sourceTs =
+    (entry["modified_at"] as string | undefined) ??
+    (entry["created_at"] as string | undefined) ??
+    now;
+  const subjectId = String(entry["id"] ?? "");
+  if (!subjectId) return facts;
 
-  const fields = entry["fields"] as Record<string, { value?: unknown; displayValue?: unknown }> | undefined;
-  if (!fields) return facts;
-
-  for (const [fieldKey, predicate] of Object.entries(ELN_FIELD_PREDICATES)) {
-    const fieldObj = fields[fieldKey];
-    if (fieldObj && fieldObj.value !== undefined && fieldObj.value !== null) {
-      facts.push({
-        source_system_id: "benchling",
-        source_system_timestamp: sourceTs,
-        fetched_at: now,
-        valid_until: validUntil,
-        predicate,
-        subject_id: String(entryId),
-        object_value: fieldObj.value as string | number,
-      });
-    }
-  }
-  return facts;
-}
-
-function extractLimsFacts(result: Record<string, unknown>): SourceFactPayload[] {
-  const facts: SourceFactPayload[] = [];
-  const now = nowIso();
-  const validUntil = validUntilIso();
-  const sourceTs = (result["completed_at"] as string | undefined) ?? now;
-  const subjectId = String(result["id"] ?? "unknown");
-
-  if (result["result_value"] !== undefined && result["result_value"] !== null) {
-    const predicate = (result["analysis_name"] as string | undefined)
-      ? `HAS_${(result["analysis_name"] as string).toUpperCase().replace(/\s+/g, "_")}`
-      : "HAS_RESULT_VALUE";
-    facts.push({
-      source_system_id: "starlims",
-      source_system_timestamp: sourceTs,
-      fetched_at: now,
-      valid_until: validUntil,
-      predicate,
-      subject_id: subjectId,
-      object_value: result["result_value"] as string | number,
-    });
-  }
-  return facts;
-}
-
-function extractInstrumentFacts(run: Record<string, unknown>): SourceFactPayload[] {
-  const facts: SourceFactPayload[] = [];
-  const now = nowIso();
-  const validUntil = validUntilIso();
-  const sourceTs = (run["run_date"] as string | undefined) ?? now;
-  const subjectId = String(run["id"] ?? "unknown");
-
-  if (run["total_area"] !== undefined && run["total_area"] !== null) {
-    facts.push({
-      source_system_id: "waters",
-      source_system_timestamp: sourceTs,
-      fetched_at: now,
-      valid_until: validUntil,
-      predicate: "HAS_TOTAL_AREA",
-      subject_id: subjectId,
-      object_value: run["total_area"] as number,
-    });
-  }
-
-  // One fact per peak area_pct if present.
-  const peaks = run["peaks"] as Array<Record<string, unknown>> | undefined;
-  if (peaks) {
-    for (const peak of peaks) {
-      if (peak["area_pct"] !== undefined && peak["peak_name"]) {
+  // New typed shape: fields_jsonb is a flat Record<string, unknown>.
+  const fieldsJsonb = entry["fields_jsonb"];
+  if (fieldsJsonb && typeof fieldsJsonb === "object" && !Array.isArray(fieldsJsonb)) {
+    const fj = fieldsJsonb as Record<string, unknown>;
+    for (const [key, predicate] of Object.entries(ELN_FIELD_PREDICATES)) {
+      const v = toObjectValue(fj[key]);
+      if (v !== undefined) {
         facts.push({
-          source_system_id: "waters",
+          source_system_id: "eln",
           source_system_timestamp: sourceTs,
           fetched_at: now,
-          valid_until: validUntil,
-          predicate: "HAS_PEAK_AREA_PCT",
-          subject_id: `${subjectId}:${peak["peak_name"]}`,
-          object_value: peak["area_pct"] as number,
+          valid_until: entryValidUntil,
+          predicate,
+          subject_id: subjectId,
+          object_value: v,
         });
       }
     }
   }
+
+  // Legacy shape: fields[key] = { value, displayValue }.
+  const fields = entry["fields"];
+  if (fields && typeof fields === "object" && !Array.isArray(fields)) {
+    const f = fields as Record<string, { value?: unknown; displayValue?: unknown } | unknown>;
+    for (const [key, predicate] of Object.entries(ELN_FIELD_PREDICATES)) {
+      const fieldObj = f[key];
+      if (fieldObj && typeof fieldObj === "object" && "value" in (fieldObj as object)) {
+        const v = toObjectValue((fieldObj as { value?: unknown }).value);
+        if (v !== undefined) {
+          facts.push({
+            source_system_id: "eln",
+            source_system_timestamp: sourceTs,
+            fetched_at: now,
+            valid_until: entryValidUntil,
+            predicate,
+            subject_id: subjectId,
+            object_value: v,
+          });
+        }
+      }
+    }
+  }
+
+  return facts;
+}
+
+/**
+ * Extract facts from one canonical reaction (`_eln_shared.ts:CanonicalReactionSchema`).
+ * mean_yield is the headline aggregate; ofat_children (when present in the
+ * Detail variant) recurse through extractElnEntryFacts.
+ */
+function extractCanonicalReactionFacts(rxn: Record<string, unknown>): SourceFactPayload[] {
+  const facts: SourceFactPayload[] = [];
+  const now = nowIso();
+  const validUntil =
+    typeof rxn["valid_until"] === "string" ? (rxn["valid_until"] as string) : validUntilIso();
+  const sourceTs =
+    (rxn["last_activity_at"] as string | undefined) ?? now;
+  const subjectId = String(rxn["reaction_id"] ?? "");
+  if (!subjectId) return facts;
+
+  const meanYield = toObjectValue(rxn["mean_yield"]);
+  if (meanYield !== undefined) {
+    facts.push({
+      source_system_id: "eln",
+      source_system_timestamp: sourceTs,
+      fetched_at: now,
+      valid_until: validUntil,
+      predicate: "HAS_MEAN_YIELD",
+      subject_id: subjectId,
+      object_value: meanYield,
+    });
+  }
+
+  const ofatCount = toObjectValue(rxn["ofat_count"]);
+  if (ofatCount !== undefined) {
+    facts.push({
+      source_system_id: "eln",
+      source_system_timestamp: sourceTs,
+      fetched_at: now,
+      valid_until: validUntil,
+      predicate: "HAS_OFAT_COUNT",
+      subject_id: subjectId,
+      object_value: ofatCount,
+    });
+  }
+
+  return facts;
+}
+
+/**
+ * Extract facts from one ELN sample (`_eln_shared.ts:SampleSchema`). The
+ * top-level `purity_pct` and `amount_mg` are emitted directly; nested
+ * `results[]` (each a `ResultSchema` with `metric` + `value_num`) are
+ * emitted with predicates derived from `metric`.
+ */
+function extractSampleFacts(sample: Record<string, unknown>): SourceFactPayload[] {
+  const facts: SourceFactPayload[] = [];
+  const now = nowIso();
+  const validUntil =
+    typeof sample["valid_until"] === "string"
+      ? (sample["valid_until"] as string)
+      : validUntilIso();
+  const sourceTs =
+    (sample["created_at"] as string | undefined) ?? now;
+  const subjectId = String(sample["id"] ?? "");
+  if (!subjectId) return facts;
+
+  const purity = toObjectValue(sample["purity_pct"]);
+  if (purity !== undefined) {
+    facts.push({
+      source_system_id: "eln",
+      source_system_timestamp: sourceTs,
+      fetched_at: now,
+      valid_until: validUntil,
+      predicate: "HAS_PURITY",
+      subject_id: subjectId,
+      object_value: purity,
+    });
+  }
+
+  const amount = toObjectValue(sample["amount_mg"]);
+  if (amount !== undefined) {
+    facts.push({
+      source_system_id: "eln",
+      source_system_timestamp: sourceTs,
+      fetched_at: now,
+      valid_until: validUntil,
+      predicate: "HAS_AMOUNT_MG",
+      subject_id: subjectId,
+      object_value: amount,
+    });
+  }
+
+  // Nested results: each row has metric + value_num (or value_text).
+  if (Array.isArray(sample["results"])) {
+    for (const r of sample["results"] as Record<string, unknown>[]) {
+      const metric = typeof r["metric"] === "string" ? (r["metric"] as string) : null;
+      if (!metric) continue;
+      const value = toObjectValue(r["value_num"] ?? r["value_text"]);
+      if (value === undefined) continue;
+      const measuredAt =
+        (r["measured_at"] as string | undefined) ?? sourceTs;
+      const predicate = `HAS_${metric.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`;
+      facts.push({
+        source_system_id: "eln",
+        source_system_timestamp: measuredAt,
+        fetched_at: now,
+        valid_until: validUntil,
+        predicate,
+        subject_id: `${subjectId}:${String(r["id"] ?? metric)}`,
+        object_value: value,
+      });
+    }
+  }
+
+  return facts;
+}
+
+/**
+ * Extract facts from one analytical dataset (`_logs_schemas.ts:LogsDataset`).
+ * The dataset itself is opaque (no fixed numeric facts) but `parameters` is
+ * a typed Record we can mine for instrument-kind-relevant numbers, and the
+ * cross-link to `sample_id` is itself a useful fact.
+ */
+function extractInstrumentFacts(dataset: Record<string, unknown>): SourceFactPayload[] {
+  const facts: SourceFactPayload[] = [];
+  const now = nowIso();
+  const validUntil = validUntilIso();
+  const sourceTs =
+    (dataset["measured_at"] as string | undefined) ?? now;
+  const subjectId = String(dataset["uid"] ?? dataset["id"] ?? "");
+  if (!subjectId) return facts;
+
+  // Cross-link fact: dataset → sample.
+  const sampleId = dataset["sample_id"];
+  if (typeof sampleId === "string" && sampleId.length > 0) {
+    facts.push({
+      source_system_id: "logs-sciy",
+      source_system_timestamp: sourceTs,
+      fetched_at: now,
+      valid_until: validUntil,
+      predicate: "MEASURED_FROM_SAMPLE",
+      subject_id: subjectId,
+      object_value: sampleId,
+    });
+  }
+
+  // Instrument kind as a categorical fact.
+  const kind = toObjectValue(dataset["instrument_kind"]);
+  if (kind !== undefined) {
+    facts.push({
+      source_system_id: "logs-sciy",
+      source_system_timestamp: sourceTs,
+      fetched_at: now,
+      valid_until: validUntil,
+      predicate: "HAS_INSTRUMENT_KIND",
+      subject_id: subjectId,
+      object_value: kind,
+    });
+  }
+
+  // Mine parameters jsonb for known numeric facts; mirrors the ELN
+  // fields_jsonb extraction pattern.
+  const params = dataset["parameters"];
+  if (params && typeof params === "object" && !Array.isArray(params)) {
+    const p = params as Record<string, unknown>;
+    for (const [key, predicate] of Object.entries({
+      total_area: "HAS_TOTAL_AREA",
+      area_pct: "HAS_AREA_PCT",
+      retention_time_min: "HAS_RETENTION_TIME",
+      purity_pct: "HAS_PURITY",
+    })) {
+      const v = toObjectValue(p[key]);
+      if (v !== undefined) {
+        facts.push({
+          source_system_id: "logs-sciy",
+          source_system_timestamp: sourceTs,
+          fetched_at: now,
+          valid_until: validUntil,
+          predicate,
+          subject_id: subjectId,
+          object_value: v,
+        });
+      }
+    }
+  }
+
   return facts;
 }
 
@@ -221,6 +410,10 @@ export async function checkStaleFacts(
  *
  * Extracts structured facts from source-system tool outputs and inserts them
  * into ingestion_events for the kg_source_cache projector to consume.
+ *
+ * Shape detection is structural (no `source_system` discriminator field) so
+ * the hook works against the typed Zod contracts emitted by the FastAPI MCP
+ * adapters in `services/agent-claw/src/tools/builtins/`.
  */
 export async function sourceCachePostToolHook(
   toolId: string,
@@ -234,40 +427,76 @@ export async function sourceCachePostToolHook(
   const out = output as Record<string, unknown>;
   const facts: SourceFactPayload[] = [];
 
-  // ELN tools return { entries: [...], source_system: "benchling" }
-  // or a single { id, fields, source_system: "benchling" }
-  if (out["source_system"] === "benchling") {
-    if (Array.isArray(out["entries"])) {
-      for (const entry of out["entries"] as Record<string, unknown>[]) {
-        facts.push(...extractElnFacts(entry, String(entry["id"] ?? "")));
+  // Top-level ELN entry (`fetch_eln_entry`): has id + fields_jsonb (or legacy fields).
+  if (
+    typeof out["id"] === "string" &&
+    (typeof out["fields_jsonb"] === "object" ||
+      typeof out["fields"] === "object" ||
+      typeof out["entry_shape"] === "string")
+  ) {
+    facts.push(...extractElnEntryFacts(out));
+  }
+
+  // Top-level ELN sample (`fetch_eln_sample`): has id + sample_code + entry_id.
+  if (
+    typeof out["id"] === "string" &&
+    typeof out["sample_code"] === "string" &&
+    typeof out["entry_id"] === "string"
+  ) {
+    facts.push(...extractSampleFacts(out));
+  }
+
+  // Top-level CanonicalReactionDetail (`fetch_eln_canonical_reaction`):
+  // has reaction_id; may include ofat_children which are ElnEntries.
+  if (typeof out["reaction_id"] === "string") {
+    facts.push(...extractCanonicalReactionFacts(out));
+    if (Array.isArray(out["ofat_children"])) {
+      for (const child of out["ofat_children"] as Record<string, unknown>[]) {
+        facts.push(...extractElnEntryFacts(child));
       }
-    } else if (out["id"] && out["fields"]) {
-      facts.push(...extractElnFacts(out, String(out["id"])));
     }
   }
 
-  // LIMS tools return { results: [...], source_system: "starlims" }
-  // or a single { id, result_value, source_system: "starlims" }
-  if (out["source_system"] === "starlims") {
-    if (Array.isArray(out["results"])) {
-      for (const result of out["results"] as Record<string, unknown>[]) {
-        facts.push(...extractLimsFacts(result));
+  // `items: [...]` envelope (query_eln_experiments,
+  // query_eln_canonical_reactions). The element shape determines extraction.
+  if (Array.isArray(out["items"])) {
+    for (const item of out["items"] as Record<string, unknown>[]) {
+      if (typeof item["reaction_id"] === "string") {
+        facts.push(...extractCanonicalReactionFacts(item));
+        if (Array.isArray(item["ofat_children"])) {
+          for (const child of item["ofat_children"] as Record<string, unknown>[]) {
+            facts.push(...extractElnEntryFacts(child));
+          }
+        }
+      } else if (typeof item["id"] === "string") {
+        facts.push(...extractElnEntryFacts(item));
       }
-    } else if (out["id"]) {
-      facts.push(...extractLimsFacts(out));
     }
   }
 
-  // Instrument tools return { runs: [...], source_system: "waters" }
-  // or a single { id, peaks, source_system: "waters" }
-  if (out["source_system"] === "waters") {
-    if (Array.isArray(out["runs"])) {
-      for (const run of out["runs"] as Record<string, unknown>[]) {
-        facts.push(...extractInstrumentFacts(run));
-      }
-    } else if (out["id"]) {
-      facts.push(...extractInstrumentFacts(out));
+  // `samples: [...]` envelope (query_eln_samples_by_entry).
+  if (Array.isArray(out["samples"])) {
+    for (const sample of out["samples"] as Record<string, unknown>[]) {
+      facts.push(...extractSampleFacts(sample));
     }
+  }
+
+  // `datasets: [...]` envelope (query_instrument_runs, query_instrument_datasets).
+  if (Array.isArray(out["datasets"])) {
+    for (const ds of out["datasets"] as Record<string, unknown>[]) {
+      facts.push(...extractInstrumentFacts(ds));
+    }
+  }
+
+  // `dataset: ...` envelope (fetch_instrument_run wraps a single LogsDataset).
+  if (out["dataset"] && typeof out["dataset"] === "object" && !Array.isArray(out["dataset"])) {
+    facts.push(...extractInstrumentFacts(out["dataset"] as Record<string, unknown>));
+  }
+
+  // Top-level LogsDataset (rare — included for symmetry; the typed adapters
+  // wrap in `{ dataset }` instead).
+  if (typeof out["uid"] === "string" && typeof out["instrument_kind"] === "string") {
+    facts.push(...extractInstrumentFacts(out));
   }
 
   await insertSourceFacts(pool, userEntraId, facts);
@@ -277,12 +506,10 @@ export async function sourceCachePostToolHook(
  * Register the source-cache hook into a Lifecycle instance.
  *
  * Adapter that wraps the positional `sourceCachePostToolHook(toolId, output,
- * pool, userEntraId)` into the lifecycle's HookJSONOutput shape. The existing
- * positional function stays untouched so its current tests
- * (`tests/unit/hooks-source-cache.test.ts`) keep passing.
+ * pool, userEntraId)` into the lifecycle's HookJSONOutput shape.
  */
 export function registerSourceCacheHook(lifecycle: Lifecycle, pool: Pool): void {
-  lifecycle.on("post_tool", "source-cache", async (payload) => {
+  lifecycle.on("post_tool", "source-cache", async (payload: PostToolPayload) => {
     await sourceCachePostToolHook(
       payload.toolId,
       payload.output,

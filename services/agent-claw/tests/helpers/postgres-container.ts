@@ -28,10 +28,22 @@ import { resolve } from "node:path";
 
 let _container: StartedPostgreSqlContainer | null = null;
 let _pool: Pool | null = null;
+let _appPool: Pool | null = null;
 let _startupError: Error | null = null;
 
+const APP_PASSWORD = "test_app_password";
+
 /**
- * Start (or reuse) a Postgres container and return a connected Pool.
+ * Start (or reuse) a Postgres container and return connected Pools.
+ *
+ * Two pools are returned:
+ * - `pool` is owner-authenticated (chemclaw / superuser) and is used for
+ *   fixture inserts that need to bypass RLS and FK constraints.
+ * - `appPool` is authenticated as `chemclaw_app` (NOSUPERUSER, FORCE RLS),
+ *   matching the production agent-claw connection. Integration tests that
+ *   exercise the real query paths MUST use `appPool` so RLS predicates
+ *   actually run — using `pool` short-circuits RLS and produces false
+ *   confidence (H3 in the post-merge review).
  *
  * The container is shared across all tests in a single `vitest` run for
  * speed. Tests that need true isolation should namespace their inserts
@@ -42,11 +54,17 @@ let _startupError: Error | null = null;
  */
 export async function startTestPostgres(
   repoRoot: string,
-): Promise<{ pool: Pool; container: StartedPostgreSqlContainer }> {
+): Promise<{
+  pool: Pool;
+  appPool: Pool;
+  container: StartedPostgreSqlContainer;
+}> {
   if (_startupError) {
     throw _startupError;
   }
-  if (_container && _pool) return { pool: _pool, container: _container };
+  if (_container && _pool && _appPool) {
+    return { pool: _pool, appPool: _appPool, container: _container };
+  }
 
   try {
     // Use the same image production uses so vector + vectorscale extensions
@@ -81,15 +99,24 @@ export async function startTestPostgres(
       END;
       $func$ LANGUAGE plpgsql;
     `);
-    // The roles 13_agent_sessions.sql grants to. We make them NOSUPERUSER
-    // NOLOGIN — tests connect as the container's superuser so they sidestep
-    // RLS via withUserContext + set_config, which is the contract the real
-    // agent uses.
+    // The roles 13_agent_sessions.sql grants to.
+    // chemclaw_app is LOGIN with a password so the integration tests can
+    // connect AS the app role and exercise FORCE ROW LEVEL SECURITY, the
+    // way production does. Without this, tests that connect as the owner
+    // run with implicit BYPASSRLS and produce false confidence (H3).
+    //
+    // Password is an inline literal because Postgres DO-blocks can't bind
+    // parameters via the wire protocol. APP_PASSWORD is a static test
+    // constant (no secret leakage), so the splice is safe — and it's
+    // wrapped in single-quote-doubling defensively.
+    const escapedPwd = APP_PASSWORD.replace(/'/g, "''");
     await _pool.query(`
       DO $$
       BEGIN
         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'chemclaw_app') THEN
-          CREATE ROLE chemclaw_app NOSUPERUSER NOLOGIN;
+          CREATE ROLE chemclaw_app NOSUPERUSER LOGIN PASSWORD '${escapedPwd}';
+        ELSE
+          ALTER ROLE chemclaw_app WITH NOSUPERUSER LOGIN PASSWORD '${escapedPwd}';
         END IF;
         IF NOT EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'chemclaw_service') THEN
           CREATE ROLE chemclaw_service NOSUPERUSER NOLOGIN BYPASSRLS;
@@ -117,7 +144,26 @@ export async function startTestPostgres(
       }
     }
 
-    return { pool: _pool, container: _container };
+    // Build the appPool AFTER the schema files run so the role's GRANTs
+    // are in place. Reuses host/port/db from the container; substitutes
+    // user/password for chemclaw_app.
+    const host = _container.getHost();
+    const port = _container.getMappedPort(5432);
+    const db = _container.getDatabase();
+    _appPool = new Pool({
+      host,
+      port,
+      database: db,
+      user: "chemclaw_app",
+      password: APP_PASSWORD,
+      max: 8,
+    });
+    // Smoke-check the appPool can connect (catches missing GRANT immediately
+    // with a clear error rather than the first query bombing midway through
+    // a test).
+    await _appPool.query("SELECT 1");
+
+    return { pool: _pool, appPool: _appPool, container: _container };
   } catch (err) {
     _startupError = err as Error;
     // If startup fails (e.g. Docker not running), surface it so the test
@@ -126,8 +172,16 @@ export async function startTestPostgres(
   }
 }
 
-/** Tear down the shared container + pool. Idempotent. */
+/** Tear down the shared container + pools. Idempotent. */
 export async function stopTestPostgres(): Promise<void> {
+  if (_appPool) {
+    try {
+      await _appPool.end();
+    } catch {
+      // ignore — container is going away regardless
+    }
+    _appPool = null;
+  }
   if (_pool) {
     try {
       await _pool.end();

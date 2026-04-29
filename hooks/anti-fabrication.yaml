@@ -1,7 +1,6 @@
 name: anti-fabrication
 lifecycle: post_tool
 enabled: true
-priority: 10
 definition:
   description: |
     Harvest fact_ids from tool outputs into ctx.scratchpad.seenFactIds. Tools

@@ -33,7 +33,7 @@ import {
 } from "../core/budget.js";
 import { runHarness } from "../core/harness.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
-import { hydrateScratchpad } from "../core/session-state.js";
+import { hydrateScratchpad, persistTurnState } from "../core/session-state.js";
 import { lifecycle } from "../core/runtime.js";
 import { runWithRequestContext } from "../core/request-context.js";
 import { verifyBearerHeader, McpAuthError } from "../security/mcp-tokens.js";
@@ -529,42 +529,50 @@ async function _runChainedHarnessInner(
       }
     }
 
-    const { scratchpad, seenFactIds } = hydrateScratchpad(
-      state.scratchpad,
-      sessionId,
-      cfg.AGENT_TOKEN_BUDGET,
-    );
-    const ctx: ToolContext = { userEntraId: user, seenFactIds, scratchpad, lifecycle };
-
-    // Phase 4B: dispatch session_start once at the top of the chain. Both
-    // chain entry points (POST /plan/run and POST /resume) operate on a
-    // pre-existing session row, so source="resume".
-    if (!sessionStartFired) {
-      sessionStartFired = true;
-      try {
-        await lifecycle.dispatch("session_start", {
-          ctx,
-          sessionId,
-          source: "resume",
-        });
-      } catch (err) {
-        log.warn({ err }, "session_start dispatch failed (non-fatal)");
-      }
-    }
-
-    const budget = new Budget({
-      maxSteps: cfg.AGENT_CHAT_MAX_STEPS,
-      maxPromptTokens: cfg.AGENT_TOKEN_BUDGET,
-      session: {
-        inputUsed: state.sessionInputTokens,
-        outputUsed: state.sessionOutputTokens,
-        inputCap:
-          state.sessionTokenBudget ?? cfg.AGENT_SESSION_INPUT_TOKEN_BUDGET,
-        outputCap: cfg.AGENT_SESSION_OUTPUT_TOKEN_BUDGET,
-      },
-    });
-
+    // The whole iteration body (hydrate → session_start → Budget → runHarness
+     // → persistTurnState) lives inside this try so that the catch + finally
+     // below can release a held Paperclip reservation on every exit path —
+     // including the previously-unprotected window where hydrateScratchpad,
+     // session_start dispatch, or `new Budget(...)` could throw between the
+     // reserve and the harness call. Without this, an exception there
+     // silently leaked the reservation for its TTL window and starved the
+     // daily-USD cap (H-4 in the post-merge review).
     try {
+      const { scratchpad, seenFactIds } = hydrateScratchpad(
+        state.scratchpad,
+        sessionId,
+        cfg.AGENT_TOKEN_BUDGET,
+      );
+      const ctx: ToolContext = { userEntraId: user, seenFactIds, scratchpad, lifecycle };
+
+      // Phase 4B: dispatch session_start once at the top of the chain. Both
+      // chain entry points (POST /plan/run and POST /resume) operate on a
+      // pre-existing session row, so source="resume".
+      if (!sessionStartFired) {
+        sessionStartFired = true;
+        try {
+          await lifecycle.dispatch("session_start", {
+            ctx,
+            sessionId,
+            source: "resume",
+          });
+        } catch (err) {
+          log.warn({ err }, "session_start dispatch failed (non-fatal)");
+        }
+      }
+
+      const budget = new Budget({
+        maxSteps: cfg.AGENT_CHAT_MAX_STEPS,
+        maxPromptTokens: cfg.AGENT_TOKEN_BUDGET,
+        session: {
+          inputUsed: state.sessionInputTokens,
+          outputUsed: state.sessionOutputTokens,
+          inputCap:
+            state.sessionTokenBudget ?? cfg.AGENT_SESSION_INPUT_TOKEN_BUDGET,
+          outputCap: cfg.AGENT_SESSION_OUTPUT_TOKEN_BUDGET,
+        },
+      });
+
       const r = await runHarness({
         messages: currentMessages,
         tools,
@@ -595,22 +603,26 @@ async function _runChainedHarnessInner(
         inspectedUpTo = currentMessages.length;
       }
 
-      // Persist updated session state.
-      const sessTotals = budget.sessionTotals();
-      const dump: Record<string, unknown> = {};
-      for (const [k, v] of ctx.scratchpad.entries()) {
-        if (k === "budget") continue;
-        dump[k] = v instanceof Set ? Array.from(v) : v;
-      }
-      await saveSession(pool, user, sessionId, {
-        scratchpad: dump,
-        lastFinishReason: r.finishReason as SessionFinishReason,
-        messageCount: currentMessages.length,
-        sessionInputTokens: sessTotals?.inputTokens,
-        sessionOutputTokens: sessTotals?.outputTokens,
-        sessionSteps: state.sessionSteps + r.stepsUsed,
-        expectedEtag: state.etag,
-      });
+      // Persist updated session state via the shared persistTurnState
+      // helper. Routes through the same redact-then-truncate path as
+      // routes/chat.ts so a mid-chain ask_user with a SMILES / NCE-ID /
+      // compound code in the question doesn't leak into the agent_sessions
+      // row, the awaiting_user_input SSE event, or the reanimator's
+      // downstream consumers. The previous inline dump bypassed redaction
+      // — see C-3 in the post-merge review.
+      await persistTurnState(
+        pool,
+        user,
+        sessionId,
+        ctx,
+        budget,
+        r.finishReason,
+        {
+          expectedEtag: state.etag,
+          messageCount: currentMessages.length,
+          priorSessionSteps: state.sessionSteps,
+        },
+      );
 
       // Release this iteration's Paperclip reservation with TURN-DELTA
       // actuals (not session-cumulative). `r.usage` is `budget.summary()`
@@ -687,21 +699,39 @@ async function _runChainedHarnessInner(
   // final finish reason is a clean stop. Awaiting-input / budget-exceeded
   // leave the session open for the next reanimator tick or user message.
   //
-  // GOTCHA for future hook authors: the `endCtx` synthesized here is
-  // intentionally minimal — `seenFactIds` is empty and `scratchpad` is
-  // empty. The chain persisted real state through `saveSession` after
-  // each turn, but rebuilding ctx from disk for one terminal dispatch
-  // would be expensive and is not currently worth the complexity. If
-  // your `session_end` hook needs to read scratchpad, load it from the
-  // `agent_sessions.scratchpad` row directly (see `loadSession` in
-  // services/agent-claw/src/core/session-store.ts) — do NOT rely on
-  // `endCtx.scratchpad` being populated.
+  // We reload the session row before dispatching so `endCtx.scratchpad`
+  // reflects the persisted state at chain end (post the last
+  // `persistTurnState`). Previously this synthesized an empty Map and
+  // empty Set — third-party `session_end` hooks would silently see a
+  // blank ctx and either no-op or write degenerate telemetry. The
+  // reload is one extra DB roundtrip per chain (chains are rare; cost
+  // is negligible). If the load fails we fall back to the empty-ctx
+  // shape so a hook author who tolerates an empty Map keeps working.
   if (sessionStartFired && finalFinishReason === "stop") {
     try {
+      let endScratchpad = new Map<string, unknown>();
+      let endSeenFactIds = new Set<string>();
+      try {
+        const finalState = await loadSession(pool, user, sessionId);
+        if (finalState) {
+          const hydrated = hydrateScratchpad(
+            finalState.scratchpad,
+            sessionId,
+            cfg.AGENT_TOKEN_BUDGET,
+          );
+          endScratchpad = hydrated.scratchpad;
+          endSeenFactIds = hydrated.seenFactIds;
+        }
+      } catch (loadErr) {
+        log.warn(
+          { err: loadErr },
+          "session_end: final loadSession failed; falling back to empty ctx",
+        );
+      }
       const endCtx: ToolContext = {
         userEntraId: user,
-        seenFactIds: new Set<string>(),
-        scratchpad: new Map<string, unknown>(),
+        seenFactIds: endSeenFactIds,
+        scratchpad: endScratchpad,
         lifecycle,
       };
       await lifecycle.dispatch("session_end", {

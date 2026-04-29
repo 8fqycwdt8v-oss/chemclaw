@@ -220,7 +220,7 @@ The plan document is at `~/.claude/plans/go-through-the-three-vivid-sunset.md`.
 ## Test counts (current branch)
 
 ```
-cd services/agent-claw && npm test          →  759 passed (102 files)
+cd services/agent-claw && npm test          →  772 passed (102 files)
 cd services/agent-claw && npx tsc --noEmit  →  ok
 cd services/paperclip && npm test           →  17 passed
 .venv/bin/pytest services/mcp_tools/common/tests/ -q   →  33 passed

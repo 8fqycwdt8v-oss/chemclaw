@@ -43,7 +43,7 @@ import {
 } from "../core/slash.js";
 import { redactString } from "../core/hooks/redact-secrets.js";
 import type { RedactReplacement } from "../core/hooks/redact-secrets.js";
-import { hydrateScratchpad } from "../core/session-state.js";
+import { hydrateScratchpad, persistTurnState } from "../core/session-state.js";
 import { lifecycle } from "../core/runtime.js";
 import {
   createSession,
@@ -773,94 +773,28 @@ async function handleChat(
       }
     }
 
-    // Persist session state. Emits a `session` event already happened at
-    // stream open. We dump the current scratchpad (sans budget — recomputed
-    // each turn) and the finish reason so the next turn (or the resume
-    // endpoint) can pick up cleanly. seenFactIds is serialized as an array.
+    // Persist session state. The `session` event already fired at stream
+    // open. `persistTurnState` dumps the scratchpad (sans budget), redacts
+    // and truncates `awaitingQuestion` (so SMILES / NCE-IDs / compound codes
+    // never leak into the agent_sessions row or the SSE event), and writes
+    // via saveSession with optimistic concurrency. The same helper is used
+    // by the chained-execution loop in routes/sessions.ts so both paths
+    // honour the same redaction contract.
     if (sessionId) {
       try {
-        const dump: Record<string, unknown> = {};
-        for (const [k, v] of ctx.scratchpad.entries()) {
-          if (k === "budget") continue; // recomputed every turn
-          dump[k] = v instanceof Set ? Array.from(v) : v;
-        }
-        // The awaitingQuestion field is set by the ask_user tool; if present
-        // in scratchpad we lift it to the dedicated column for the
-        // awaiting_user_input SSE event below.
-        const awaitingQuestion =
-          typeof dump["awaitingQuestion"] === "string"
-            ? (dump["awaitingQuestion"] as string)
-            : null;
-        // Redact the awaitingQuestion BEFORE persistence + SSE emit. The
-        // model may have phrased its clarification in terms of a SMILES /
-        // NCE-ID / compound code — those leak into both the SSE event
-        // payload and the agent_sessions row otherwise. Replacements are
-        // appended to redact_log under scope="awaiting_question".
-        let safeAwaitingQuestion = awaitingQuestion;
-        if (awaitingQuestion) {
-          const replacements: RedactReplacement[] = [];
-          safeAwaitingQuestion = redactString(awaitingQuestion, replacements);
-          if (replacements.length > 0) {
-            const existing =
-              (ctx.scratchpad.get("redact_log") as Array<{
-                scope: string;
-                replacements: RedactReplacement[];
-                timestamp: string;
-              }>) ?? [];
-            ctx.scratchpad.set("redact_log", [
-              ...existing,
-              {
-                scope: "awaiting_question",
-                replacements,
-                timestamp: new Date().toISOString(),
-              },
-            ]);
-            // Re-dump scratchpad so the redact_log update is persisted.
-            dump["redact_log"] = ctx.scratchpad.get("redact_log");
-          }
-          // Enforce the 4000-char CHECK constraint added in
-          // db/init/16_db_audit_fixes.sql at write time, NOT at the DB
-          // boundary. Hitting the constraint mid-finally otherwise stalls
-          // the SSE close + leaves the session in an inconsistent state.
-          //
-          // Use Array.from to slice on Unicode codepoints, NOT
-          // String.prototype.slice (which slices on UTF-16 code units and
-          // can leave a lone high-surrogate at the end of the string).
-          // PG's UTF-8 encoder rejects unpaired surrogates with
-          // "invalid byte sequence for encoding UTF8", which would surface
-          // as exactly the same mid-finally crash this fix is meant to
-          // prevent — moved from CHECK constraint into the driver. The
-          // " [truncated…]" suffix flags the cap was hit so the UI can
-          // signal it instead of chopping mid-sentence.
-          const AWAITING_QUESTION_MAX = 4000;
-          if (safeAwaitingQuestion) {
-            const codepoints = Array.from(safeAwaitingQuestion);
-            if (codepoints.length > AWAITING_QUESTION_MAX) {
-              const suffix = " [truncated…]";
-              const suffixCps = Array.from(suffix);
-              safeAwaitingQuestion =
-                codepoints.slice(0, AWAITING_QUESTION_MAX - suffixCps.length).join("") +
-                suffix;
-            }
-          }
-        }
-
-        // Persist updated session totals so the next turn picks up where
-        // this one left off.
-        const sessTotals = budget?.sessionTotals();
-        await saveSession(deps.pool, user, sessionId, {
-          scratchpad: dump,
-          lastFinishReason: (finishReason as SessionFinishReason) ?? null,
-          awaitingQuestion: safeAwaitingQuestion,
-          messageCount: messages.length,
-          sessionInputTokens: sessTotals?.inputTokens,
-          sessionOutputTokens: sessTotals?.outputTokens,
-          sessionSteps: sessionStepsUsed + (budget?.stepsUsed ?? 0),
-          // Optimistic concurrency. If a parallel turn raced us,
-          // OptimisticLockError fires here; we log and accept (the parallel
-          // writer's state is what survives). We do NOT clobber.
-          expectedEtag: sessionEtag,
-        });
+        const { awaitingQuestion: safeAwaitingQuestion } = await persistTurnState(
+          deps.pool,
+          user,
+          sessionId,
+          ctx,
+          budget,
+          finishReason,
+          {
+            expectedEtag: sessionEtag,
+            messageCount: messages.length,
+            priorSessionSteps: sessionStepsUsed,
+          },
+        );
 
         // If the model called ask_user, emit the awaiting_user_input event
         // before the final `finish` so clients render the prompt UI.

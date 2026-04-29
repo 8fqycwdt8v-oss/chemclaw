@@ -93,7 +93,9 @@ type BuiltinRegistrar = (lifecycle: Lifecycle, deps: HookDeps) => void;
 
 const BUILTIN_REGISTRARS: Map<string, BuiltinRegistrar> = new Map([
   ["redact-secrets", (lc) => registerRedactSecretsHook(lc)],
-  ["tag-maturity", (lc) => registerTagMaturityHook(lc)],
+  // Pool is needed for the artifact-row INSERT path (ARTIFACT_TOOL_IDS like
+  // propose_hypothesis). Without it the hook silently skips persistence.
+  ["tag-maturity", (lc, deps) => registerTagMaturityHook(lc, deps.pool)],
   ["budget-guard", (lc) => registerBudgetGuardHook(lc)],
   ["init-scratch", (lc) => registerInitScratchHook(lc)],
   ["anti-fabrication", (lc) => registerAntiFabricationHook(lc)],

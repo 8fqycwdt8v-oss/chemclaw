@@ -1,7 +1,6 @@
 name: permission
 lifecycle: permission_request
 enabled: true
-priority: 0
 # No script — uses the built-in TypeScript implementation in
 # services/agent-claw/src/core/hooks/permission.ts
 definition:

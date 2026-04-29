@@ -1,7 +1,6 @@
 name: session-events
 lifecycle: session_start
 enabled: true
-priority: 0
 # No script — uses the built-in TypeScript implementation in
 # services/agent-claw/src/core/hooks/session-events.ts
 definition:

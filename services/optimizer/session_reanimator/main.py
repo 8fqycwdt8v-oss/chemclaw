@@ -66,6 +66,12 @@ class Settings(BaseSettings):
     # — useful in dev where MCP_AUTH_SIGNING_KEY isn't configured.
     mcp_auth_signing_key: str = ""
 
+    # When false (default), an unset / empty mcp_auth_signing_key is fatal at
+    # startup — production must mint a real JWT, never fall back to the
+    # spoofable x-user-entra-id header against the public resume route. Set
+    # to true ONLY in dev / local-stack to permit the legacy header path.
+    chemclaw_dev_mode: bool = False
+
     # Polling cadence.
     poll_interval_seconds: int = 300  # 5 min
     batch_size: int = 10
@@ -81,6 +87,29 @@ class Settings(BaseSettings):
             f"dbname={self.postgres_db} user={self.postgres_user} "
             f"password={self.postgres_password}"
         )
+
+    def assert_production_safe(self) -> None:
+        """Refuse to start in production with no signing key.
+
+        The daemon's JWT-bound /api/internal/sessions/:id/resume call is the
+        ONLY path the agent's RLS contract trusts; the legacy header path
+        against /api/sessions/:id/resume is spoofable by anything that can
+        reach the agent's HTTP port. A production deployment with the
+        signing key accidentally unset (e.g., bad secret refs in helm)
+        would silently downgrade to the spoofable path. This guard makes
+        that misconfiguration loud at startup.
+        """
+        if self.chemclaw_dev_mode:
+            return
+        if not self.mcp_auth_signing_key.strip():
+            raise RuntimeError(
+                "session_reanimator: mcp_auth_signing_key is unset in "
+                "production-mode (chemclaw_dev_mode=false). The daemon "
+                "would silently fall back to the spoofable x-user-entra-id "
+                "header path against the public resume route. Set "
+                "MCP_AUTH_SIGNING_KEY (>=32 chars) or, ONLY for dev / "
+                "local-stack, set CHEMCLAW_DEV_MODE=true."
+            )
 
 
 # ---------------------------------------------------------------------------
@@ -183,11 +212,14 @@ async def resume_session(
 async def amain() -> None:
     settings = Settings()
     logging.basicConfig(level=settings.log_level)
+    # Hard-fail in production-mode if no signing key — see Settings docstring.
+    settings.assert_production_safe()
     log.info(
-        "session-reanimator starting; agent=%s poll=%ds batch=%d",
+        "session-reanimator starting; agent=%s poll=%ds batch=%d dev_mode=%s",
         settings.agent_base_url,
         settings.poll_interval_seconds,
         settings.batch_size,
+        settings.chemclaw_dev_mode,
     )
 
     async with httpx.AsyncClient() as client:

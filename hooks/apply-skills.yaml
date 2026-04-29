@@ -1,7 +1,6 @@
 name: apply-skills
 lifecycle: pre_turn
 enabled: true
-priority: 5
 definition:
   description: |
     Inspect the user message + active session state, select up to 8 matching

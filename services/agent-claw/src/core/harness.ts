@@ -196,16 +196,29 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
     // -------------------------------------------------------------------------
     // post_turn — fires even if the loop exited via error.
     // Callers that catch BudgetExceededError will still see this fire.
+    //
+    // Wrapped in its own try/catch so a misbehaving post_turn hook (e.g.
+    // redact-secrets throwing on a malformed scratchpad) doesn't replace
+    // the original loop error with the post_turn error. Without this wrap
+    // the operator sees "post_turn dispatch failed" and loses the actual
+    // BudgetExceededError / tool failure that started the cascade. Any
+    // post_turn rejection is best-effort and is logged via the sink.
     // -------------------------------------------------------------------------
-    await lifecycle.dispatch("post_turn", {
-      ctx,
-      finalText,
-      stepsUsed: budget.stepsUsed,
-    });
+    try {
+      await lifecycle.dispatch("post_turn", {
+        ctx,
+        finalText,
+        stepsUsed: budget.stepsUsed,
+      });
+    } catch (postTurnErr) {
+      // Surface via the sink if available so the route can record it; do
+      // NOT rethrow — the original loop error must be the one that
+      // propagates to the route's catch.
+      streamSink?.onPostTurnError?.(postTurnErr);
+    }
 
-    // onFinish — fires after post_turn so any post_turn hook errors don't
-    // prevent the sink notification (post_turn errors propagate out before
-    // this in current behaviour, so this also fires on the happy path).
+    // onFinish — fires after post_turn (success or failure) so the SSE
+    // adapter always sees a terminal callback and can close the stream.
     streamSink?.onFinish?.(finishReason, budget.summary());
   }
 

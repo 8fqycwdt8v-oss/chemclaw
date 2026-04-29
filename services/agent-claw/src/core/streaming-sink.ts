@@ -34,6 +34,12 @@ export interface StreamSink {
   onTodoUpdate?: (todos: TodoSnapshot[]) => void;
   /** Fires when ask_user pauses the loop. */
   onAwaitingUserInput?: (question: string) => void;
+  /**
+   * Fires when a post_turn hook throws. Best-effort observability — the
+   * harness swallows the error so the original loop error propagates,
+   * but the route may want to log or emit a `warning` SSE event.
+   */
+  onPostTurnError?: (err: unknown) => void;
   /** Fires once at end of turn with the finish reason + usage. */
   onFinish?: (
     reason: string,
