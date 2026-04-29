@@ -15,23 +15,14 @@ Usage:
     WORLD_SEED=42 python -m services.mock_eln.seed.generator
 
 The seed loader is gated by `current_setting('app.mock_eln_enabled', true)`.
-To apply it:
-    psql -v mock_eln_enabled=on -f db/seed/20_mock_eln_data.sql
-or:
-    SET app.mock_eln_enabled = 'on';
-    \\i db/seed/20_mock_eln_data.sql
 
-Counts (typical):
-    projects          4
-    notebooks        ~30
-    compounds       ~600
-    reactions       ~150 (canonical)
-    methods          ~30
-    entries        2000+
-    samples        ~3000
-    results        ~5000
-    attachments    ~3500
-    audit_trail   ~12000
+Module structure (after PR-7 split):
+    generator.py             — paths, constants, generic helpers, GenState,
+                               generate() orchestrator, write_seed_sql, run, __main__
+    chemistry_families.py    — RDKit reaction expansion + per-project chemistry
+    ofat_campaigns.py        — OFAT campaign reaction setup + entry emission
+    entry_shapes.py          — shape-rendering helper + Discovery entries +
+                               sample_yield / pick_conditions closures
 """
 
 from __future__ import annotations
@@ -42,6 +33,7 @@ import io
 import json
 import os
 import random
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -49,10 +41,10 @@ from pathlib import Path
 from typing import Any
 
 import yaml
-from rdkit import Chem
-from rdkit.Chem import AllChem
 
-from services.mock_eln.seed import freetext_templates as ft
+from .chemistry_families import emit_per_project_chemistry
+from .entry_shapes import emit_derived_data, emit_discovery_entries
+from .ofat_campaigns import emit_ofat_entries, setup_ofat_reactions
 
 # --------------------------------------------------------------------------
 # Constants & paths
@@ -133,12 +125,15 @@ COLUMNS: dict[str, list[str]] = {
     ],
 }
 
+# Allow-list pattern for the relative fixtures path interpolated into the
+# seed loader's ``\\copy ... FROM PROGRAM 'gunzip -c {rel}'`` line. Keeps
+# the loader robust even if a future caller passes a non-canonical path.
+_REL_PATH_RE = re.compile(r"^[A-Za-z0-9_./\-]+$")
+
 
 # --------------------------------------------------------------------------
-# Helpers
+# Generic helpers
 # --------------------------------------------------------------------------
-
-
 def stable_uuid(*parts: Any) -> str:
     key = "|".join(str(p) for p in parts)
     return str(uuid.uuid5(UUID_NAMESPACE, key))
@@ -187,61 +182,8 @@ def dist_assign(
 
 
 # --------------------------------------------------------------------------
-# Reaction expansion via RDKit
-# --------------------------------------------------------------------------
-
-
-def smarts_react(smarts: str, reactants: list[str]) -> str | None:
-    """Run an RDKit SMARTS reaction and return a canonical SMILES of the
-    first product. Returns None on failure (silently — caller falls back)."""
-    try:
-        rxn = AllChem.ReactionFromSmarts(smarts)
-        mols = [Chem.MolFromSmiles(s) for s in reactants]
-        if any(m is None for m in mols):
-            return None
-        ps = rxn.RunReactants(tuple(mols))
-        if not ps:
-            return None
-        for product_set in ps:
-            for product in product_set:
-                try:
-                    Chem.SanitizeMol(product)
-                except Exception:
-                    continue
-                smi = Chem.MolToSmiles(product, canonical=True)
-                if smi:
-                    return smi
-        return None
-    except Exception:
-        return None
-
-
-def canonical_smiles(s: str) -> str | None:
-    m = Chem.MolFromSmiles(s)
-    if m is None:
-        return None
-    return Chem.MolToSmiles(m, canonical=True)
-
-
-def build_reaction_smiles(family: dict[str, Any], rng: random.Random) -> tuple[str, str | None, list[str]]:
-    """Pick fragments and produce a canonical reaction SMILES of the form
-    'reactant1.reactant2>>product'. Returns (rxn_smi, product_smi, reactants)."""
-    pools = family["fragment_pools"]
-    pool_names = list(pools.keys())
-    picked = [rng.choice(pools[name]) for name in pool_names]
-    canonical_reactants = [canonical_smiles(r) or r for r in picked]
-    product = smarts_react(family["smarts"], picked)
-    if product is None:
-        product = canonical_reactants[0]  # fallback so we still emit a row
-    rxn = ".".join(canonical_reactants) + ">>" + product
-    return rxn, product, canonical_reactants
-
-
-# --------------------------------------------------------------------------
 # State
 # --------------------------------------------------------------------------
-
-
 @dataclass
 class GenState:
     rows: dict[str, list[dict[str, Any]]] = field(default_factory=dict)
@@ -256,8 +198,6 @@ class GenState:
 # --------------------------------------------------------------------------
 # CSV writer
 # --------------------------------------------------------------------------
-
-
 def _coerce_csv(v: Any) -> str:
     if v is None:
         return ""
@@ -290,8 +230,6 @@ def write_csv_gz(path: Path, columns: list[str], rows: list[dict[str, Any]]) -> 
 # --------------------------------------------------------------------------
 # Date / cadence helpers
 # --------------------------------------------------------------------------
-
-
 def is_holiday(d: datetime, holidays: set[str]) -> bool:
     return d.strftime("%Y-%m-%d") in holidays
 
@@ -353,10 +291,8 @@ def burst_dates(
 
 
 # --------------------------------------------------------------------------
-# Generator
+# Generator orchestration
 # --------------------------------------------------------------------------
-
-
 def generate(world: dict[str, Any], seed: int) -> GenState:
     state = GenState()
     rng = random.Random(seed)
@@ -404,121 +340,16 @@ def generate(world: dict[str, Any], seed: int) -> GenState:
     pools: dict[str, list[Any]] = world["condition_pools"]
     holidays = set(world["timing"]["holiday_gap_dates"])
 
-    # ---- per project: notebooks + reactions + compounds ----
-    project_reactions: dict[str, list[dict[str, Any]]] = {}
-    project_compounds: dict[str, list[dict[str, Any]]] = {}
-    project_notebooks: dict[str, list[dict[str, Any]]] = {}
+    # ---- per project chemistry: notebooks + reactions + compounds ----
+    project_notebooks, project_compounds, project_reactions = emit_per_project_chemistry(
+        state, project_records, families, stable_uuid, iso, parse_iso, jstr, rng
+    )
 
-    for p in project_records:
-        pcode = p["code"]
-        pid = p["_id"]
-        # Notebooks: cap to 8 per project (so total ~30 across 4 projects).
-        nb_kinds = p["notebook_kinds"]
-        n_notebooks = min(8, max(3, len(nb_kinds) * 3))
-        nbs = []
-        for i in range(n_notebooks):
-            kind = nb_kinds[i % len(nb_kinds)]
-            nbid = stable_uuid("notebook", pcode, i)
-            row = {
-                "id": nbid,
-                "project_id": pid,
-                "name": f"{pcode} NB-{i + 1:02d} ({kind})",
-                "kind": kind,
-                "metadata": jstr({"chemists": p["chemists"]}),
-                "created_at": iso(parse_iso(p["started_at"])),
-                "updated_at": iso(parse_iso(p["started_at"])),
-            }
-            state.add("notebooks", row)
-            nbs.append(row)
-        project_notebooks[pcode] = nbs
-
-        # Compounds: ~150 per project. Generate via SMARTS expansion across
-        # families round-robin so we build a believable compound library.
-        n_compounds = max(120, p["reactions_canonical"] * 4)
-        compounds: list[dict[str, Any]] = []
-        family_names = list(families.keys())
-        for i in range(n_compounds):
-            fam = families[family_names[i % len(family_names)]]
-            _, product, _ = build_reaction_smiles(fam, rng)
-            smi = product or "C"
-            try:
-                m = Chem.MolFromSmiles(smi)
-                inchikey = Chem.MolToInchiKey(m) if m else None
-                mw = Chem.Descriptors.MolWt(m) if m else None
-            except Exception:
-                inchikey = None
-                mw = None
-            cid = stable_uuid("compound", pcode, i)
-            row = {
-                "id": cid,
-                "smiles_canonical": smi,
-                "inchikey": inchikey,
-                "mw": round(float(mw), 3) if mw else None,
-                "external_id": f"{pcode}-CMPD-{i + 1:04d}",
-                "project_id": pid,
-                "metadata": jstr({"family": fam["name"]}),
-                "created_at": iso(parse_iso(p["started_at"])),
-            }
-            state.add("compounds", row)
-            compounds.append(row)
-        project_compounds[pcode] = compounds
-
-        # Canonical reactions per project — tagged with family round-robin.
-        n_rxn = p["reactions_canonical"]
-        rxns: list[dict[str, Any]] = []
-        for i in range(n_rxn):
-            fam = families[family_names[i % len(family_names)]]
-            rxn_smi, _, _ = build_reaction_smiles(fam, rng)
-            rid = stable_uuid("reaction", pcode, i)
-            row = {
-                "id": rid,
-                "canonical_smiles_rxn": rxn_smi,
-                "family": fam["name"],
-                "step_number": (i % 5) + 1,
-                "project_id": pid,
-                "metadata": jstr({"source": "smarts_expansion"}),
-                "created_at": iso(parse_iso(p["started_at"])),
-            }
-            state.add("reactions", row)
-            rxns.append(row)
-        project_reactions[pcode] = rxns
-
-    # ---- OFAT campaigns: pick or create a canonical reaction per family in
-    # the campaign's project; stamp entries with that reaction_id and per-
-    # entry condition variation. ----
-    ofat_campaigns_index: dict[str, dict[str, Any]] = {}
-    for camp in world["ofat_campaigns"]:
-        proj_code = camp["project_code"]
-        family_name = camp["family"]
-        # Find an existing reaction with this family, else add one.
-        candidate = None
-        for r in project_reactions[proj_code]:
-            if r["family"] == family_name:
-                candidate = r
-                break
-        if candidate is None:
-            fam = families[family_name]
-            rxn_smi, _, _ = build_reaction_smiles(fam, rng)
-            rid = stable_uuid("reaction-ofat", camp["id"])
-            pid = stable_uuid("project", proj_code)
-            candidate = {
-                "id": rid,
-                "canonical_smiles_rxn": rxn_smi,
-                "family": family_name,
-                "step_number": 1,
-                "project_id": pid,
-                "metadata": jstr({"source": "ofat_campaign", "campaign": camp["id"]}),
-                "created_at": iso(
-                    parse_iso(
-                        next(p for p in world["projects"] if p["code"] == proj_code)[
-                            "started_at"
-                        ]
-                    )
-                ),
-            }
-            state.add("reactions", candidate)
-            project_reactions[proj_code].append(candidate)
-        ofat_campaigns_index[camp["id"]] = {**camp, "_reaction": candidate}
+    # ---- OFAT campaign reaction setup ----
+    ofat_campaigns_index = setup_ofat_reactions(
+        state, world, project_reactions, families,
+        stable_uuid, iso, parse_iso, jstr, rng,
+    )
 
     # ---- Entries: OFAT children + discovery. ----
     proj_entry_targets = {p["code"]: p["entries"] for p in world["projects"]}
@@ -531,7 +362,6 @@ def generate(world: dict[str, Any], seed: int) -> GenState:
     distrib_freetext = world["distributions"]["freetext_length_band"]
     distrib_quality_text = world["distributions"]["freetext_quality"]
 
-    # Compute discovery-entry counts per project
     proj_discovery_count = {
         p["code"]: max(0, proj_entry_targets[p["code"]] - proj_ofat_count[p["code"]])
         for p in world["projects"]
@@ -545,464 +375,36 @@ def generate(world: dict[str, Any], seed: int) -> GenState:
     freetext_assignments = dist_assign(rng, total_entries, distrib_freetext)
     freetext_quality_assignments = dist_assign(rng, total_entries, distrib_quality_text)
 
-    entry_index = 0  # consumed in order so determinism holds
-
-    def sample_yield(family_name: str, conditions: dict[str, Any]) -> float | None:
-        """Noisy regression: base + sum(condition bonuses) + N(0, sigma)."""
-        fam = families[family_name]
-        base = float(fam["base_yield_pct"])
-        sigma = float(fam["yield_sigma"])
-        bonus = 0.0
-        for axis, value in conditions.items():
-            axis_bonus = bonuses.get(family_name, {}).get(axis, {})
-            if isinstance(axis_bonus, dict):
-                bonus += float(axis_bonus.get(str(value), axis_bonus.get(value, 0.0)) or 0.0)
-        y = base + bonus + rng.gauss(0, sigma)
-        return max(0.0, min(99.5, round(y, 2)))
-
-    def pick_conditions(family_name: str, sweep_axes: list[str], idx: int) -> dict[str, Any]:
-        """Pick a condition tuple. Sweep axes are varied; non-swept ones are
-        held at a sensible default."""
-        out: dict[str, Any] = {}
-        # All axes get a value (so freetext template has it). Sweep axes are
-        # cycled via idx so each campaign exhibits visible variation.
-        for axis, vals in pools.items():
-            if axis in sweep_axes:
-                out[axis] = vals[idx % len(vals)]
-            else:
-                out[axis] = vals[0]
-        return out
-
     # OFAT entries first — they share a reaction_id within campaign.
-    for camp in world["ofat_campaigns"]:
-        proj_code = camp["project_code"]
-        proj = next(p for p in world["projects"] if p["code"] == proj_code)
-        pid = stable_uuid("project", proj_code)
-        rxn = ofat_campaigns_index[camp["id"]]["_reaction"]
-        chemists = proj["chemists"]
-        nbs = [n for n in project_notebooks[proj_code] if n["kind"] in ("process-dev", "discovery")]
-        if not nbs:
-            nbs = project_notebooks[proj_code]
-        ts_chemist = burst_dates(
-            parse_iso(proj["started_at"]),
-            parse_iso(proj["ended_at"]),
-            camp["entry_count"],
-            chemists,
-            holidays,
-            rng,
-        )
-        for i, (ts, chemist) in enumerate(ts_chemist):
-            shape = shape_assignments[entry_index]
-            quality = quality_assignments[entry_index]
-            ftext_band = freetext_assignments[entry_index]
-            ftext_quality = freetext_quality_assignments[entry_index]
-            entry_index += 1
+    entry_index = emit_ofat_entries(
+        state, world, ofat_campaigns_index, project_notebooks,
+        shape_assignments, quality_assignments,
+        freetext_assignments, freetext_quality_assignments,
+        entry_index_start=0,
+        families=families, bonuses=bonuses, pools=pools, holidays=holidays,
+        adversarial_rate=ADVERSARIAL_RATE,
+        stable_uuid=stable_uuid, iso=iso, parse_iso=parse_iso, jstr=jstr,
+        burst_dates=burst_dates, rng=rng,
+    )
 
-            conditions = pick_conditions(camp["family"], camp["sweep_axes"], i)
-            yield_pct = sample_yield(camp["family"], conditions)
-            if quality == "failed":
-                yield_pct = 0.0
-            elif quality == "noisy":
-                yield_pct = round(max(0.0, yield_pct + rng.gauss(0, 5)), 2)
-
-            scale_mg = rng.choice([50, 100, 200, 500, 1000, 2000])
-            entry_id = stable_uuid("entry-ofat", camp["id"], i)
-            nb = nbs[i % len(nbs)]
-            title = f"{camp['family']} OFAT — {camp['id']} #{i + 1:03d}"
-
-            structured = {
-                "family": camp["family"],
-                "step_number": rxn["step_number"],
-                "scale_mg": scale_mg,
-                "campaign_id": camp["id"],
-                "conditions": conditions,
-                "results": {"yield_pct": yield_pct, "outcome_status": "completed" if quality != "failed" else "failed"},
-            }
-            ftext_fields = {
-                **{k: v for k, v in conditions.items() if k in ("solvent", "base", "ligand", "temperature_c", "time_h", "catalyst", "reductant", "acid", "coupling_reagent")},
-                "yield_pct": yield_pct,
-                "scale_mg": scale_mg,
-                "family": camp["family"],
-                "outcome": "completed" if quality != "failed" else "failed",
-            }
-
-            # ~0.5% of entries with freetext carry an adversarial probe
-            # (prompt-injection bait, fact-id fabrication, etc.) so the
-            # agent's safety hooks have continuous regression coverage.
-            adversarial = shape != "pure-structured" and rng.random() < ADVERSARIAL_RATE
-
-            if shape == "pure-structured":
-                fields_jsonb = structured
-                freetext = ""
-                ftext_len = 0
-            elif shape == "pure-freetext":
-                # Pure-freetext OFAT entries still carry the campaign_id
-                # marker so OFAT-aware aggregation works regardless of shape.
-                fields_jsonb = {"campaign_id": camp["id"]}
-                lo, hi = ft.LENGTH_BANDS[[b[0] for b in ft.LENGTH_BANDS].index(ftext_band)][1:]
-                freetext = ft.render_freetext(
-                    rng, ftext_fields, lo, hi, ftext_quality,
-                    pure_freetext=True, adversarial=adversarial,
-                )
-                ftext_len = len(freetext)
-            else:  # mixed
-                # Apply data_quality_tier perturbation to structured fields
-                fields_jsonb = dict(structured)
-                if quality == "partial":
-                    # Drop ~30% of conditions
-                    cs = dict(conditions)
-                    keys = list(cs.keys())
-                    drop_n = max(1, int(len(keys) * 0.3))
-                    for k in rng.sample(keys, k=drop_n):
-                        del cs[k]
-                    fields_jsonb["conditions"] = cs
-                if quality == "noisy":
-                    # Add a stray jsonb field that's plausibly wrong
-                    fields_jsonb["raw_remarks"] = "see freetext for actuals"
-                lo, hi = ft.LENGTH_BANDS[[b[0] for b in ft.LENGTH_BANDS].index(ftext_band)][1:]
-                # Mixed-shape freetext is biased shorter
-                lo = min(lo, 50)
-                hi = min(hi, 500) if hi <= 1500 else hi
-                freetext = ft.render_freetext(
-                    rng, ftext_fields, lo, hi, ftext_quality,
-                    pure_freetext=False, adversarial=adversarial,
-                )
-                ftext_len = len(freetext)
-
-            status = "signed" if rng.random() < 0.55 else rng.choice(["draft", "in_progress", "witnessed", "archived"])
-            signed_at = iso(ts + timedelta(days=rng.randint(0, 5))) if status in ("signed", "witnessed", "archived") else ""
-            signed_by = chemist if status in ("signed", "witnessed", "archived") else ""
-
-            state.add(
-                "entries",
-                {
-                    "id": entry_id,
-                    "notebook_id": nb["id"],
-                    "project_id": pid,
-                    "reaction_id": rxn["id"],
-                    "schema_kind": "ord-v0.3",
-                    "title": title,
-                    "author_email": chemist,
-                    "signed_by": signed_by,
-                    "status": status,
-                    "entry_shape": shape,
-                    "data_quality_tier": quality,
-                    "fields_jsonb": jstr(fields_jsonb),
-                    "freetext": freetext,
-                    "freetext_length_chars": ftext_len,
-                    "created_at": iso(ts),
-                    "modified_at": iso(ts + timedelta(hours=rng.randint(1, 48))),
-                    "signed_at": signed_at,
-                },
-            )
-
-    # ---- Discovery entries ----
-    for proj in world["projects"]:
-        pcode = proj["code"]
-        pid = stable_uuid("project", pcode)
-        chemists = proj["chemists"]
-        rxns = project_reactions[pcode]
-        nbs = project_notebooks[pcode]
-        n = proj_discovery_count[pcode]
-        ts_chemist = burst_dates(
-            parse_iso(proj["started_at"]),
-            parse_iso(proj["ended_at"]),
-            n,
-            chemists,
-            holidays,
-            rng,
-        )
-        for i, (ts, chemist) in enumerate(ts_chemist):
-            shape = shape_assignments[entry_index]
-            quality = quality_assignments[entry_index]
-            ftext_band = freetext_assignments[entry_index]
-            ftext_quality = freetext_quality_assignments[entry_index]
-            entry_index += 1
-
-            # 70% are linked to a reaction; 30% are pure-discovery (analytical/qc style)
-            if rng.random() < 0.7 and rxns:
-                rxn = rng.choice(rxns)
-                family_name = rxn["family"]
-                conditions = pick_conditions(family_name, list(pools.keys())[:3], i)
-                yield_pct = sample_yield(family_name, conditions)
-                if quality == "failed":
-                    yield_pct = 0.0
-                rxn_id = rxn["id"]
-                title = f"{family_name} discovery — {pcode} #{i + 1:04d}"
-            else:
-                rxn = None
-                family_name = "analytical"
-                conditions = {"solvent": "MeCN", "method": "HPLC-A"}
-                yield_pct = None
-                rxn_id = None
-                title = f"Analytical / QC entry — {pcode} #{i + 1:04d}"
-
-            scale_mg = rng.choice([10, 25, 50, 100, 200, 500])
-            entry_id = stable_uuid("entry-disc", pcode, i)
-            nb = nbs[i % len(nbs)]
-
-            structured = {
-                "family": family_name,
-                "step_number": rxn["step_number"] if rxn else None,
-                "scale_mg": scale_mg,
-                "conditions": conditions,
-                "results": {
-                    "yield_pct": yield_pct,
-                    "outcome_status": "completed" if quality != "failed" else "failed",
-                },
-            }
-            ftext_fields = {
-                **{k: conditions.get(k) for k in ("solvent", "base", "temperature_c") if k in conditions},
-                "yield_pct": yield_pct,
-                "scale_mg": scale_mg,
-                "family": family_name,
-                "outcome": "completed" if quality != "failed" else "failed",
-            }
-
-            adversarial = shape != "pure-structured" and rng.random() < ADVERSARIAL_RATE
-
-            if shape == "pure-structured":
-                fields_jsonb = structured
-                freetext = ""
-                ftext_len = 0
-            elif shape == "pure-freetext":
-                fields_jsonb = {}
-                lo, hi = ft.LENGTH_BANDS[[b[0] for b in ft.LENGTH_BANDS].index(ftext_band)][1:]
-                freetext = ft.render_freetext(
-                    rng, ftext_fields, lo, hi, ftext_quality,
-                    pure_freetext=True, adversarial=adversarial,
-                )
-                ftext_len = len(freetext)
-            else:
-                fields_jsonb = dict(structured)
-                if quality == "partial":
-                    cs = dict(conditions)
-                    keys = list(cs.keys())
-                    if keys:
-                        drop_n = max(1, int(len(keys) * 0.3))
-                        for k in rng.sample(keys, k=drop_n):
-                            del cs[k]
-                        fields_jsonb["conditions"] = cs
-                if quality == "noisy":
-                    fields_jsonb["raw_remarks"] = "see freetext"
-                lo, hi = ft.LENGTH_BANDS[[b[0] for b in ft.LENGTH_BANDS].index(ftext_band)][1:]
-                lo = min(lo, 50)
-                hi = min(hi, 500) if hi <= 1500 else hi
-                freetext = ft.render_freetext(
-                    rng, ftext_fields, lo, hi, ftext_quality,
-                    pure_freetext=False, adversarial=adversarial,
-                )
-                ftext_len = len(freetext)
-
-            status = "signed" if rng.random() < 0.5 else rng.choice(["draft", "in_progress", "witnessed", "archived"])
-            signed_at = iso(ts + timedelta(days=rng.randint(0, 7))) if status in ("signed", "witnessed", "archived") else ""
-            signed_by = chemist if status in ("signed", "witnessed", "archived") else ""
-
-            state.add(
-                "entries",
-                {
-                    "id": entry_id,
-                    "notebook_id": nb["id"],
-                    "project_id": pid,
-                    "reaction_id": rxn_id or "",
-                    "schema_kind": "ord-v0.3",
-                    "title": title,
-                    "author_email": chemist,
-                    "signed_by": signed_by,
-                    "status": status,
-                    "entry_shape": shape,
-                    "data_quality_tier": quality,
-                    "fields_jsonb": jstr(fields_jsonb),
-                    "freetext": freetext,
-                    "freetext_length_chars": ftext_len,
-                    "created_at": iso(ts),
-                    "modified_at": iso(ts + timedelta(hours=rng.randint(1, 72))),
-                    "signed_at": signed_at,
-                },
-            )
+    # Discovery entries.
+    entry_index = emit_discovery_entries(
+        state, world, project_notebooks, project_reactions,
+        proj_discovery_count,
+        shape_assignments, quality_assignments,
+        freetext_assignments, freetext_quality_assignments,
+        entry_index_start=entry_index,
+        families=families, bonuses=bonuses, pools=pools, holidays=holidays,
+        adversarial_rate=ADVERSARIAL_RATE,
+        stable_uuid=stable_uuid, iso=iso, parse_iso=parse_iso, jstr=jstr,
+        burst_dates=burst_dates, rng=rng,
+    )
 
     # ---- Samples + results + attachments + audit_trail ----
-    entries = state.rows["entries"]
-    samples_target = 3000
-    results_target = 5000
-    attachments_target = 3500
-    audit_target = 12000
-
-    # Samples: ~1.5 per entry, but skewed so some entries have 0 and others have many.
-    #
-    # sample_code format: S-{PROJECT_CODE}-{NNNNN} (zero-padded sequential
-    # per project). This is the cross-link key used by fake_logs.datasets
-    # (~70% of which carry a sample_id matching one of these codes), so it
-    # MUST stay deterministic and predictable from the project code +
-    # ordinal alone — DO NOT mix entry-derived bytes into it.
-    sample_rng = random.Random(seed + 1)
-    samples_emitted = 0
-    project_sample_counters: dict[str, int] = {}
-    # Build a fast lookup project_id → project_code (avoids the linear
-    # search inside the hot loop).
-    pid_to_code: dict[str, str] = {
-        stable_uuid("project", p["code"]): p["code"] for p in world["projects"]
-    }
-    for e in entries:
-        if samples_emitted >= samples_target:
-            break
-        # Most entries get 1-2 samples, some get 0, a few get up to 5
-        roll = sample_rng.random()
-        n_samples = 0 if roll < 0.10 else 1 if roll < 0.55 else 2 if roll < 0.85 else sample_rng.randint(3, 5)
-        if e["data_quality_tier"] == "failed":
-            n_samples = max(0, n_samples - 1)
-        proj_code = pid_to_code[e["project_id"]]
-        for s_idx in range(n_samples):
-            if samples_emitted >= samples_target:
-                break
-            sample_id = stable_uuid("sample", e["id"], s_idx)
-            project_compounds_for_proj = project_compounds[proj_code]
-            cmpd = sample_rng.choice(project_compounds_for_proj) if project_compounds_for_proj else None
-            ordinal = project_sample_counters.get(proj_code, 0) + 1
-            project_sample_counters[proj_code] = ordinal
-            sample_code = f"S-{proj_code}-{ordinal:05d}"
-            amt = round(sample_rng.uniform(5, 500), 2)
-            purity = round(sample_rng.uniform(70, 99.9), 2)
-            state.add(
-                "samples",
-                {
-                    "id": sample_id,
-                    "entry_id": e["id"],
-                    "sample_code": sample_code,
-                    "compound_id": cmpd["id"] if cmpd else "",
-                    "amount_mg": amt,
-                    "purity_pct": purity,
-                    "notes": "" if sample_rng.random() < 0.7 else "Stored at -20C under N2.",
-                    "created_at": e["created_at"],
-                },
-            )
-            samples_emitted += 1
-
-    # Results: ~1.7 per sample (nudged so total clears the 4500 floor).
-    result_rng = random.Random(seed + 2)
-    samples = state.rows["samples"]
-    results_emitted = 0
-    for s in samples:
-        if results_emitted >= results_target:
-            break
-        n_res = 1 if result_rng.random() < 0.40 else 2 if result_rng.random() < 0.80 else 3
-        for r_idx in range(n_res):
-            if results_emitted >= results_target:
-                break
-            method_id = result_rng.choice(method_ids)
-            metric = result_rng.choice(["purity_pct", "yield_pct", "rt_min", "mz", "ee_pct"])
-            value_num: float | None = None
-            value_text: str | None = None
-            unit: str | None = None
-            if metric == "purity_pct":
-                value_num = round(result_rng.uniform(80, 100), 2)
-                unit = "%"
-            elif metric == "yield_pct":
-                value_num = round(result_rng.uniform(20, 99), 2)
-                unit = "%"
-            elif metric == "rt_min":
-                value_num = round(result_rng.uniform(1.0, 12.0), 3)
-                unit = "min"
-            elif metric == "mz":
-                value_num = round(result_rng.uniform(150, 800), 4)
-                unit = "Da"
-            else:
-                value_num = round(result_rng.uniform(85, 99.9), 2)
-                unit = "% ee"
-            rid = stable_uuid("result", s["id"], r_idx)
-            measured_at = s["created_at"]
-            state.add(
-                "results",
-                {
-                    "id": rid,
-                    "sample_id": s["id"],
-                    "method_id": method_id,
-                    "metric": metric,
-                    "value_num": value_num,
-                    "value_text": value_text or "",
-                    "unit": unit,
-                    "measured_at": measured_at,
-                    "metadata": jstr({"qc": True}),
-                    "created_at": measured_at,
-                },
-            )
-            results_emitted += 1
-
-    # Attachments: ~1.75 per entry on average
-    att_rng = random.Random(seed + 3)
-    att_emitted = 0
-    for e in entries:
-        if att_emitted >= attachments_target:
-            break
-        n_att = 1 if att_rng.random() < 0.55 else 2 if att_rng.random() < 0.85 else att_rng.randint(3, 5)
-        for a_idx in range(n_att):
-            if att_emitted >= attachments_target:
-                break
-            ext = att_rng.choice([
-                ("pdf", "application/pdf", 200_000),
-                ("png", "image/png", 80_000),
-                ("xlsx", "application/vnd.ms-excel", 40_000),
-                ("zip", "application/zip", 1_500_000),
-                ("txt", "text/plain", 4_000),
-            ])
-            aid = stable_uuid("attachment", e["id"], a_idx)
-            state.add(
-                "entry_attachments",
-                {
-                    "id": aid,
-                    "entry_id": e["id"],
-                    "filename": f"{e['id'][:8]}-{a_idx + 1}.{ext[0]}",
-                    "mime_type": ext[1],
-                    "size_bytes": ext[2] + att_rng.randint(0, 50_000),
-                    "description": att_rng.choice([
-                        "Raw HPLC trace",
-                        "Procedure photo",
-                        "Workup notes",
-                        "TLC scan",
-                        "NMR PDF",
-                        "Excel data dump",
-                    ]),
-                    "uri": f"local-mock-eln://{e['id']}/{a_idx + 1}",
-                    "created_at": e["created_at"],
-                },
-            )
-            att_emitted += 1
-
-    # Audit trail: ~6 events per entry
-    audit_rng = random.Random(seed + 4)
-    audit_emitted = 0
-    for e in entries:
-        if audit_emitted >= audit_target:
-            break
-        n_audit = audit_rng.randint(3, 9)
-        for a_idx in range(n_audit):
-            if audit_emitted >= audit_target:
-                break
-            action = audit_rng.choice(["create", "update", "sign", "witness", "comment", "attach", "amend"])
-            field_path = audit_rng.choice([
-                "fields_jsonb.conditions.solvent",
-                "fields_jsonb.results.yield_pct",
-                "fields_jsonb.scale_mg",
-                "freetext",
-                "status",
-            ])
-            occurred_at = e["created_at"]
-            aid = stable_uuid("audit", e["id"], a_idx)
-            state.add(
-                "audit_trail",
-                {
-                    "id": aid,
-                    "entry_id": e["id"],
-                    "actor_email": e["author_email"],
-                    "action": action,
-                    "field_path": field_path,
-                    "old_value": jstr(None),
-                    "new_value": jstr({"_": "redacted"}),
-                    "reason": audit_rng.choice(["", "transcription error", "instrument re-cal", "operator correction", ""]),
-                    "occurred_at": occurred_at,
-                },
-            )
-            audit_emitted += 1
+    emit_derived_data(
+        state, world, project_compounds, method_ids, seed,
+        stable_uuid=stable_uuid, jstr=jstr,
+    )
 
     # Sort each table by id for byte-identical output across runs.
     for tname in TABLE_ORDER:
@@ -1015,21 +417,25 @@ def generate(world: dict[str, Any], seed: int) -> GenState:
 # --------------------------------------------------------------------------
 # SQL loader emission
 # --------------------------------------------------------------------------
-
-
 def write_seed_sql(out_path: Path, fixtures_relpath: str) -> None:
     """Write db/seed/20_mock_eln_data.sql.
 
     The loader is gated by `current_setting('app.mock_eln_enabled', true) = 'on'`.
-    Use:
-        psql -v "ON_ERROR_STOP=1" -c "SET app.mock_eln_enabled = 'on';" -f db/seed/20_mock_eln_data.sql
-    or:
-        psql -c "ALTER DATABASE chemclaw SET app.mock_eln_enabled = 'on';"
-        psql -f db/seed/20_mock_eln_data.sql
+    Re-running yields the same rows: the gated block TRUNCATEs mock_eln tables
+    (CASCADE) inside the gated block, then \\copies.
 
-    Idempotency: the script TRUNCATES mock_eln tables (CASCADE) inside the
-    gated block, then \\copies. Re-running yields the same rows.
+    Defensive: ``fixtures_relpath`` is restricted to a safe character class
+    before being interpolated into the ``\\copy ... FROM PROGRAM`` line so a
+    future caller passing a path with shell metacharacters can't yield
+    malformed SQL. Current callers (run() and tests) only pass paths
+    derived from ``REPO_ROOT.relative_to`` or ``str(absolute_path)``, so
+    this is purely a belt-and-braces guard.
     """
+    if not _REL_PATH_RE.match(fixtures_relpath):
+        raise ValueError(
+            f"fixtures_relpath {fixtures_relpath!r} contains characters outside "
+            f"the safe pattern {_REL_PATH_RE.pattern!r}"
+        )
     lines: list[str] = [
         "-- Mock ELN — seed data loader.",
         "-- Auto-generated by services/mock_eln/seed/generator.py.",
@@ -1095,8 +501,6 @@ def write_seed_sql(out_path: Path, fixtures_relpath: str) -> None:
 # --------------------------------------------------------------------------
 # Public entry point
 # --------------------------------------------------------------------------
-
-
 def run(seed: int | None = None, fixtures_dir: Path | None = None,
         seed_sql_path: Path | None = None) -> dict[str, int]:
     """Generate fixtures + seed loader; returns row counts per table."""
