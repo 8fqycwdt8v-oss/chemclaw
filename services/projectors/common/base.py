@@ -167,7 +167,7 @@ class BaseProjector(ABC):
                 await self._listen_loop(listen_conn, work_conn)
 
     # ----- catch-up --------------------------------------------------------
-    async def _catch_up(self, work_conn: psycopg.AsyncConnection) -> None:
+    async def _catch_up(self, work_conn: psycopg.AsyncConnection[dict[str, Any]]) -> None:
         """Drain the backlog. Loops until no unprocessed events remain."""
         while not self._shutdown.is_set():
             async with work_conn.cursor() as cur:
@@ -200,8 +200,8 @@ class BaseProjector(ABC):
     # ----- live LISTEN -----------------------------------------------------
     async def _listen_loop(
         self,
-        listen_conn: psycopg.AsyncConnection,
-        work_conn: psycopg.AsyncConnection,
+        listen_conn: psycopg.AsyncConnection[dict[str, Any]],
+        work_conn: psycopg.AsyncConnection[dict[str, Any]],
     ) -> None:
         """Consume NOTIFY payloads until shutdown.
 
@@ -211,7 +211,7 @@ class BaseProjector(ABC):
         """
         notify_gen = listen_conn.notifies()
         # Next-notify task; recreated each iteration.
-        next_notify_task: asyncio.Task | None = None
+        next_notify_task: asyncio.Task[Any] | None = None
         shutdown_task = asyncio.create_task(self._shutdown.wait(), name="shutdown")
 
         try:
@@ -244,7 +244,7 @@ class BaseProjector(ABC):
                 shutdown_task.cancel()
 
     async def _handle_notify(
-        self, work_conn: psycopg.AsyncConnection, raw_payload: str
+        self, work_conn: psycopg.AsyncConnection[dict[str, Any]], raw_payload: str
     ) -> None:
         try:
             msg = json.loads(raw_payload)
@@ -280,7 +280,7 @@ class BaseProjector(ABC):
 
     # ----- dispatch --------------------------------------------------------
     async def _process_row(
-        self, work_conn: psycopg.AsyncConnection, row: dict
+        self, work_conn: psycopg.AsyncConnection[dict[str, Any]], row: dict[str, Any]
     ) -> None:
         event_id = row["id"]
         event_type = row["event_type"]

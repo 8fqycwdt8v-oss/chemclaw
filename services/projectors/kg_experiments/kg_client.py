@@ -69,4 +69,5 @@ class KGClient:
 
         r = await self._client.post("/tools/write_fact", json=payload)
         r.raise_for_status()
-        return r.json()
+        result: dict[str, Any] = r.json()
+        return result
