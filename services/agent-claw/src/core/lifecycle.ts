@@ -88,7 +88,7 @@ export class Lifecycle {
     this._hooks.get(point)!.push({
       name,
       matcher: opts.matcher ? new RegExp(opts.matcher) : undefined,
-      handler: handler as HookCallback<unknown>,
+      handler: handler as HookCallback,
       timeout: opts.timeout ?? DEFAULT_HOOK_TIMEOUT_MS,
     });
     return this;
@@ -179,7 +179,7 @@ export class Lifecycle {
         // sees one span per hook invocation with name, point, matcher
         // target, tool-use id, duration, and OK/ERROR status. A timeout
         // (abort-rejection wins the race) shows up as an ERROR span.
-        const result: HookJSONOutput | undefined | void = await withHookSpan(
+        const result: HookJSONOutput | undefined = await withHookSpan(
           {
             point,
             hookName: hook.name,
@@ -188,7 +188,7 @@ export class Lifecycle {
           },
           () => {
             const handlerPromise = (
-              hook.handler as HookCallback<unknown>
+              hook.handler as HookCallback
             )(payload, opts.toolUseID, { signal: ac.signal });
             const abortPromise = new Promise<never>((_, reject) => {
               if (ac.signal.aborted) {
@@ -210,7 +210,7 @@ export class Lifecycle {
               );
             });
             return Promise.race([handlerPromise, abortPromise]) as Promise<
-              HookJSONOutput | undefined | void
+              HookJSONOutput | undefined
             >;
           },
         );

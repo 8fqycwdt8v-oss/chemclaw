@@ -137,7 +137,7 @@ function extractElnEntryFacts(entry: Record<string, unknown>): SourceFactPayload
   // Legacy shape: fields[key] = { value, displayValue }.
   const fields = entry["fields"];
   if (fields && typeof fields === "object" && !Array.isArray(fields)) {
-    const f = fields as Record<string, { value?: unknown; displayValue?: unknown } | unknown>;
+    const f = fields as Record<string, unknown>;
     for (const [key, predicate] of Object.entries(ELN_FIELD_PREDICATES)) {
       const fieldObj = f[key];
       if (fieldObj && typeof fieldObj === "object" && "value" in (fieldObj as object)) {
