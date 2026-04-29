@@ -122,6 +122,7 @@ jobs:
           mypy services/mcp_tools/mcp_tabicl
           mypy services/mcp_tools/mcp_eln_local
           mypy services/mcp_tools/mcp_logs_sciy
+          mypy services/mcp_tools/mcp_rdkit
       - name: Diff coverage (Python)
         if: github.event_name == 'pull_request'
         run: |
