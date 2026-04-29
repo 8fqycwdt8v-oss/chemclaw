@@ -6,12 +6,16 @@
 // import the module — supported but no script-based hooks ship today.
 //
 // As of v1.2.0 this is the single source of truth for hook registration on
-// the production startup path. The 9 built-in hooks register here; new hooks
-// require both a YAML file in hooks/ AND an entry in BUILTIN_REGISTRARS.
+// the production startup path. The 10 built-in hooks register here; new
+// hooks require both a YAML file in hooks/ AND an entry in
+// BUILTIN_REGISTRARS.
+//
+// Phase 6 added permission_request as a sixth valid lifecycle point and the
+// no-op permission hook on it.
 //
 // YAML shape:
 //   name: <string>
-//   lifecycle: pre_turn | pre_tool | post_tool | pre_compact | post_turn
+//   lifecycle: pre_turn | pre_tool | post_tool | pre_compact | post_turn | permission_request
 //   enabled: true | false
 //   script: <optional JS file path relative to this service>
 //   definition:
@@ -36,6 +40,7 @@ import { registerFoundationCitationGuardHook } from "./hooks/foundation-citation
 import { registerSourceCacheHook } from "./hooks/source-cache.js";
 import { registerCompactWindowHook } from "./hooks/compact-window.js";
 import { registerApplySkillsHook } from "./hooks/apply-skills.js";
+import { registerPermissionHook } from "./hooks/permission.js";
 
 // ---------------------------------------------------------------------------
 // YAML schema (validated at load time).
@@ -47,6 +52,7 @@ const VALID_HOOK_POINTS = new Set<string>([
   "post_tool",
   "pre_compact",
   "post_turn",
+  "permission_request",
 ]);
 
 interface HookYaml {
@@ -97,6 +103,11 @@ const BUILTIN_REGISTRARS: Map<string, BuiltinRegistrar> = new Map([
     "apply-skills",
     (lc, deps) => registerApplySkillsHook(lc, deps.skillLoader, deps.allTools),
   ],
+  // Phase 6: no-op permission hook — operators replace with custom policy.
+  // Registers at permission_request; the route-level resolver dispatches
+  // before pre_tool, so a custom policy here gates tools BEFORE the
+  // budget-guard / foundation-citation-guard pre_tool chain runs.
+  ["permission", (lc) => registerPermissionHook(lc)],
 ]);
 
 // ---------------------------------------------------------------------------

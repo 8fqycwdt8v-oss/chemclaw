@@ -40,6 +40,51 @@ export type StepResult =
   | { kind: "tool_call"; toolId: string; input: unknown };
 
 // ---------------------------------------------------------------------------
+// Phase 6: Permission system primitives.
+//
+// PermissionMode controls how the resolver in core/permissions/resolver.ts
+// gates tool calls. allowedTools / disallowedTools are matched by exact
+// tool id; allowedTools also supports a single trailing "*" wildcard
+// (e.g. "mcp__github__*"). permissionCallback is the explicit escape hatch
+// when no rule matches and no permission_request hook produced a decision.
+// ---------------------------------------------------------------------------
+export type PermissionMode =
+  // Tools not covered by allow/deny rules → fire permission_request hook;
+  // if no resolution, deny.
+  | "default"
+  // Auto-approve filesystem-touching tools; other rules apply.
+  | "acceptEdits"
+  // No tool execution; route should emit a plan instead. Resolver returns
+  // "defer" so step.ts treats it as denied (defense-in-depth) — routes are
+  // expected to detect plan mode BEFORE entering the harness loop.
+  | "plan"
+  // Tools pre-approved via allowedTools run; everything else denied.
+  | "dontAsk"
+  // All tools run unchecked. ONLY for isolated/sandboxed environments.
+  | "bypassPermissions";
+
+export type PermissionResolution = "allow" | "deny" | "ask" | "defer";
+
+export interface PermissionContext {
+  toolId: string;
+  input: unknown;
+  ctx: ToolContext;
+}
+
+export type PermissionCallback = (
+  pctx: PermissionContext,
+) => Promise<PermissionResolution> | PermissionResolution;
+
+export interface PermissionOptions {
+  permissionMode?: PermissionMode;
+  /** Exact match OR `mcp__server__*` trailing-wildcard. */
+  allowedTools?: string[];
+  /** Exact match. */
+  disallowedTools?: string[];
+  permissionCallback?: PermissionCallback;
+}
+
+// ---------------------------------------------------------------------------
 // Options passed to runHarness / buildAgent.
 // ---------------------------------------------------------------------------
 export interface HarnessOptions {
@@ -55,6 +100,13 @@ export interface HarnessOptions {
   lifecycle: Lifecycle;
   /** User + scratchpad context threaded through hooks and tools. */
   ctx: ToolContext;
+  /**
+   * Phase 6: optional permission policy. When undefined, the harness behaves
+   * as before (only the pre_tool hooks gate tool calls). When set, the
+   * resolver in core/permissions/resolver.ts runs BEFORE pre_tool dispatch
+   * and can short-circuit the call with deny / defer.
+   */
+  permissions?: PermissionOptions;
 }
 
 // ---------------------------------------------------------------------------
@@ -116,14 +168,34 @@ export interface PostTurnPayload {
 }
 
 // ---------------------------------------------------------------------------
-// Re-export the five hook point names as a union so the registry is typed.
+// Phase 6: permission_request hook payload.
+//
+// Fired by the route-level resolver in default mode after the static
+// allow/deny rules don't match. Handlers may return a PermissionHookResult
+// (decision + reason) or void (no decision — falls through to permissionCallback).
+// Multiple handlers aggregate via deny>defer>ask>allow precedence.
+// ---------------------------------------------------------------------------
+export interface PermissionRequestPayload {
+  ctx: ToolContext;
+  toolId: string;
+  input: unknown;
+}
+
+export interface PermissionHookResult {
+  decision: PermissionResolution;
+  reason?: string;
+}
+
+// ---------------------------------------------------------------------------
+// Re-export the hook point names as a union so the registry is typed.
 // ---------------------------------------------------------------------------
 export type HookPoint =
   | "pre_turn"
   | "pre_tool"
   | "post_tool"
   | "pre_compact"
-  | "post_turn";
+  | "post_turn"
+  | "permission_request";
 
 // ---------------------------------------------------------------------------
 // Citation — typed provenance record surfaced in tool-result events.

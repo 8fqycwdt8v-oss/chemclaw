@@ -7,8 +7,14 @@
 
 import type { LlmProvider } from "../llm/provider.js";
 import type { Lifecycle } from "./lifecycle.js";
-import type { Message, StepResult, ToolContext } from "./types.js";
+import type {
+  Message,
+  PermissionOptions,
+  StepResult,
+  ToolContext,
+} from "./types.js";
 import type { Tool } from "../tools/tool.js";
+import { resolveDecision } from "./permissions/resolver.js";
 
 export interface StepOnceOptions {
   llm: LlmProvider;
@@ -16,6 +22,12 @@ export interface StepOnceOptions {
   messages: Message[];
   lifecycle: Lifecycle;
   ctx: ToolContext;
+  /**
+   * Phase 6: optional permission policy. When set, the resolver runs
+   * before pre_tool dispatch and can short-circuit a tool call with
+   * deny / defer.
+   */
+  permissions?: PermissionOptions;
 }
 
 export interface StepOnceResult {
@@ -41,7 +53,7 @@ export interface StepOnceResult {
  * the message history.
  */
 export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
-  const { llm, tools, messages, lifecycle, ctx } = opts;
+  const { llm, tools, messages, lifecycle, ctx, permissions } = opts;
 
   // 1. LLM call.
   const { result, usage } = await llm.call(messages, tools);
@@ -60,6 +72,53 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
       `stepOnce: model requested unknown tool "${toolId}". ` +
         `Available: [${tools.map((t) => t.id).join(", ")}]`,
     );
+  }
+
+  // ---------------------------------------------------------------------
+  // Phase 6: route-level permission resolver.
+  //
+  // Runs BEFORE pre_tool dispatch. When permissions options are provided,
+  // the resolver consults permissionMode + allowedTools / disallowedTools,
+  // fires the permission_request hook (default mode), and falls back to
+  // permissionCallback. A deny or defer decision short-circuits tool
+  // execution with a synthetic rejection mirroring the pre_tool deny path.
+  //
+  // When `permissions` is undefined, the resolver is skipped entirely so
+  // legacy callers (sub-agents, deep-research, plan.ts) keep their prior
+  // semantics — only the pre_tool hook chain gates execution.
+  //
+  // ask is currently treated as allow with a console.warn (matching the
+  // pre-Phase-6 pre_tool behaviour); interactive elicit is future work.
+  // ---------------------------------------------------------------------
+  if (permissions) {
+    const permResult = await resolveDecision({
+      tool,
+      input,
+      ctx,
+      options: permissions,
+      lifecycle,
+    });
+
+    if (permResult.decision === "deny" || permResult.decision === "defer") {
+      const denyOutput = {
+        error: `denied_by_permissions:${permResult.decision}`,
+        reason: permResult.reason ?? "",
+      };
+      return {
+        step: result,
+        toolOutput: denyOutput,
+        usage,
+      };
+    }
+
+    if (permResult.decision === "ask") {
+      // eslint-disable-next-line no-console
+      console.warn(
+        `[step] permission_request returned "ask" for ${toolId} — ` +
+          `treating as allow until interactive elicit ships`,
+      );
+    }
+    // "allow" / "ask" both proceed to pre_tool, which can downgrade to deny.
   }
 
   // 3a. pre_tool — hooks may throw to abort, may mutate input.

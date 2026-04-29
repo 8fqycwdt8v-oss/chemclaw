@@ -9,6 +9,9 @@
 
 import type {
   HookPoint,
+  PermissionHookResult,
+  PermissionRequestPayload,
+  PermissionResolution,
   PostToolPayload,
   PostTurnPayload,
   PreCompactPayload,
@@ -25,12 +28,33 @@ type HookPayloadMap = {
   post_tool: PostToolPayload;
   pre_compact: PreCompactPayload;
   post_turn: PostTurnPayload;
+  permission_request: PermissionRequestPayload;
+};
+
+// Phase 6: permission_request hooks may return a PermissionHookResult, an
+// "SDK-shape" object with hookSpecificOutput.permissionDecision, or void.
+// Other hook points return Promise<void>.
+export interface PermissionHookSdkShape {
+  hookSpecificOutput?: {
+    hookEventName?: "permission_request";
+    permissionDecision?: PermissionResolution;
+    permissionDecisionReason?: string;
+  };
+}
+
+type HookReturnMap = {
+  pre_turn: void;
+  pre_tool: void;
+  post_tool: void;
+  pre_compact: void;
+  post_turn: void;
+  permission_request: PermissionHookResult | PermissionHookSdkShape | void;
 };
 
 // A handler for a specific hook point.
 type HookHandler<P extends HookPoint> = (
   payload: HookPayloadMap[P],
-) => Promise<void>;
+) => Promise<HookReturnMap[P]>;
 
 // Internal: store each handler with a name for diagnostics.
 interface RegisteredHook<P extends HookPoint> {
@@ -138,4 +162,94 @@ export class Lifecycle {
       }
     }
   }
+
+  // ---------------------------------------------------------------------------
+  // Phase 6: dispatchPermissionRequest — runs every registered handler at
+  // permission_request and aggregates their decisions using deny>defer>ask>allow
+  // precedence. The route-level resolver in core/permissions/resolver.ts is
+  // the only caller. Hooks that throw are logged and skipped (a throwing
+  // permission policy must not block tool execution silently — the resolver
+  // falls through to permissionCallback or denies).
+  // ---------------------------------------------------------------------------
+  async dispatchPermissionRequest(
+    payload: PermissionRequestPayload,
+  ): Promise<PermissionHookResult | undefined> {
+    const hooks = this._hooks.get("permission_request") ?? [];
+    let aggregated: PermissionHookResult | undefined;
+
+    for (const hook of hooks) {
+      let raw: unknown;
+      try {
+        raw = await (hook.handler as HookHandler<"permission_request">)(payload);
+      } catch (err) {
+        // eslint-disable-next-line no-console
+        console.error(
+          `[lifecycle] permission_request hook "${hook.name}" threw — skipping`,
+          err,
+        );
+        continue;
+      }
+
+      const result = normalisePermissionResult(raw);
+      if (!result) continue;
+
+      aggregated = mostRestrictive(aggregated, result);
+    }
+
+    return aggregated;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Permission decision aggregation helpers.
+// ---------------------------------------------------------------------------
+
+// Permission decisions ordered most-restrictive first. The aggregator picks
+// the first (most-restrictive) decision seen across all hooks.
+const DECISION_PRIORITY: Record<PermissionResolution, number> = {
+  deny: 0,
+  defer: 1,
+  ask: 2,
+  allow: 3,
+};
+
+function mostRestrictive(
+  a: PermissionHookResult | undefined,
+  b: PermissionHookResult,
+): PermissionHookResult {
+  if (!a) return b;
+  return DECISION_PRIORITY[b.decision] < DECISION_PRIORITY[a.decision] ? b : a;
+}
+
+function normalisePermissionResult(raw: unknown): PermissionHookResult | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const obj = raw as Record<string, unknown>;
+
+  // Direct PermissionHookResult shape.
+  if (typeof obj.decision === "string" && isResolution(obj.decision)) {
+    return {
+      decision: obj.decision,
+      reason: typeof obj.reason === "string" ? obj.reason : undefined,
+    };
+  }
+
+  // SDK-shape: { hookSpecificOutput: { permissionDecision, permissionDecisionReason } }.
+  const hookSpecific = obj.hookSpecificOutput;
+  if (hookSpecific && typeof hookSpecific === "object") {
+    const hs = hookSpecific as Record<string, unknown>;
+    const decision = hs.permissionDecision;
+    if (typeof decision === "string" && isResolution(decision)) {
+      const reason = hs.permissionDecisionReason;
+      return {
+        decision,
+        reason: typeof reason === "string" ? reason : undefined,
+      };
+    }
+  }
+
+  return undefined;
+}
+
+function isResolution(s: string): s is PermissionResolution {
+  return s === "allow" || s === "deny" || s === "ask" || s === "defer";
 }
