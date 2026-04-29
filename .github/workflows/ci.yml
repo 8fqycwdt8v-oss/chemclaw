@@ -115,6 +115,9 @@ jobs:
           mypy services/mcp_tools/mcp_aizynth
           mypy services/mcp_tools/mcp_askcos
           mypy services/mcp_tools/mcp_xtb
+          mypy services/mcp_tools/mcp_sirius
+          mypy services/mcp_tools/mcp_chemprop
+          mypy services/optimizer/session_reanimator
       - name: Diff coverage (Python)
         if: github.event_name == 'pull_request'
         run: |
