@@ -1,7 +1,6 @@
 name: foundation-citation-guard
 lifecycle: pre_tool
 enabled: true
-priority: 20
 definition:
   description: |
     When a tool input declares maturity_tier='FOUNDATION', verify the call

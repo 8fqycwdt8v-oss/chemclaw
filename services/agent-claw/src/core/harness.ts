@@ -13,9 +13,17 @@
 //   fire post_turn
 //   return { text, finishReason, stepsUsed, usage }
 
-import { BudgetExceededError } from "./budget.js";
+import { BudgetExceededError, estimateTokenCount } from "./budget.js";
 import { stepOnce } from "./step.js";
-import type { HarnessOptions, HarnessResult, Message, ToolContext } from "./types.js";
+import { syncSeenFactIdsFromScratch } from "./session-state.js";
+import type {
+  HarnessOptions,
+  HarnessResult,
+  Message,
+  PostCompactPayload,
+  PreCompactPayload,
+  ToolContext,
+} from "./types.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 
 export { type HarnessOptions, type HarnessResult };
@@ -27,10 +35,38 @@ export { type HarnessOptions, type HarnessResult };
  * for each step. Callers that need an unmodified copy should clone beforehand.
  */
 export async function runHarness(options: HarnessOptions): Promise<HarnessResult> {
-  const { messages, tools, llm, budget, lifecycle, ctx } = options;
+  const {
+    messages,
+    tools,
+    llm,
+    budget,
+    lifecycle,
+    ctx,
+    streamSink,
+    sessionId,
+    permissions,
+  } = options;
 
   let finalText = "";
   let finishReason = "stop";
+
+  // Phase 4B: thread the lifecycle onto ctx so tools (e.g. manage_todos)
+  // can dispatch fine-grained events (task_created, task_completed). Any
+  // pre-existing ctx.lifecycle is preserved — this only fills in the gap
+  // for callers that constructed ctx without one.
+  if (!ctx.lifecycle) {
+    ctx.lifecycle = lifecycle;
+  }
+
+  // -------------------------------------------------------------------------
+  // onSession — fires once at the very start of a streamed turn, before any
+  // hook runs, so the SSE adapter can write the `session` event before the
+  // first `text_delta` or `tool_call`. No-op when streamSink is undefined or
+  // no sessionId was supplied.
+  // -------------------------------------------------------------------------
+  if (streamSink && sessionId) {
+    streamSink.onSession?.(sessionId);
+  }
 
   // -------------------------------------------------------------------------
   // pre_turn — fires once before any LLM call this turn.
@@ -40,16 +76,10 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
 
   // Wire seenFactIds from scratch into ctx after pre_turn so that tools
   // can access it via the typed accessor. The init-scratch hook must have
-  // run first (registered before anti-fabrication).
-  const _seenFromScratch = ctx.scratchpad.get("seenFactIds");
-  if (_seenFromScratch instanceof Set) {
-    ctx.seenFactIds = _seenFromScratch as Set<string>;
-  } else if (!ctx.seenFactIds) {
-    // Fallback: if init-scratch wasn't registered, initialise here.
-    const _fresh = new Set<string>();
-    ctx.scratchpad.set("seenFactIds", _fresh);
-    ctx.seenFactIds = _fresh;
-  }
+  // run first (registered before anti-fabrication). Shared with the
+  // streaming routes (chat / deep-research) and sub-agent spawner so all
+  // four manual-pre_turn sites stay in lockstep.
+  syncSeenFactIdsFromScratch(ctx);
 
   // -------------------------------------------------------------------------
   // Main loop.
@@ -62,17 +92,57 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
         break loop;
       }
 
-      // One LLM call (+ optional tool execution inside stepOnce).
-      const { step, toolOutput, usage } = await stepOnce({
+      // One LLM call (+ optional tool execution inside stepOnce). Phase 5:
+      // stepOnce returns toolOutputs as an array — single-tool turns get a
+      // 1-element array; multi-tool (parallel) turns get N entries.
+      const { step, toolOutputs, usage } = await stepOnce({
         llm,
         tools,
         messages,
         lifecycle,
         ctx,
+        streamSink,
+        permissions,
       });
 
       // Record usage — BudgetExceededError propagates out of the loop.
       budget.consumeStep(usage);
+
+      // ---------------------------------------------------------------------
+      // Mid-turn compaction: when prompt usage crosses the configured
+      // threshold (default 60% of maxPromptTokens), dispatch pre_compact /
+      // post_compact. The compact-window hook MUTATES payload.messages in
+      // place; the harness reads from the same `messages` reference on the
+      // next iteration so the LLM sees the compacted window.
+      //
+      // Token math: pre_tokens / post_tokens are heuristic
+      // (estimateTokenCount, ~4 chars/token). The trigger itself is gated
+      // on budget.shouldCompact() which uses model-reported usage from
+      // consumeStep, so the heuristic only feeds telemetry — not the
+      // trigger decision. After compaction we resetPromptTokens() to the
+      // post-compact estimate so the next consumeStep doesn't re-trip
+      // shouldCompact() on the now-shrunk window.
+      // ---------------------------------------------------------------------
+      if (budget.shouldCompact()) {
+        const preTokens = budget.promptTokens;
+        const prePayload: PreCompactPayload = {
+          ctx,
+          messages,
+          trigger: "auto",
+          pre_tokens: preTokens,
+          custom_instructions: null,
+        };
+        await lifecycle.dispatch("pre_compact", prePayload);
+        const postTokens = estimateTokenCount(messages);
+        budget.resetPromptTokens(postTokens);
+        const postPayload: PostCompactPayload = {
+          ctx,
+          trigger: "auto",
+          pre_tokens: preTokens,
+          post_tokens: postTokens,
+        };
+        await lifecycle.dispatch("post_compact", postPayload);
+      }
 
       if (step.kind === "text") {
         finalText = step.text;
@@ -82,18 +152,21 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
         break loop;
       }
 
-      // step.kind === "tool_call" — push the tool result to message history.
-      // The LLM will see it on the next iteration.
-      const toolResultContent =
-        toolOutput !== undefined
-          ? JSON.stringify(toolOutput)
-          : `{"error":"no_output"}`;
-
-      messages.push({
-        role: "tool",
-        content: toolResultContent,
-        toolId: step.toolId,
-      });
+      // step.kind === "tool_call" or "tool_calls" — push one tool result
+      // message per executed tool, in batch order. The LLM sees them all
+      // on the next iteration, matching how Claude Code's SDK exposes
+      // parallel tool calls.
+      for (const { toolId, output } of toolOutputs) {
+        const toolResultContent =
+          output !== undefined
+            ? JSON.stringify(output)
+            : `{"error":"no_output"}`;
+        messages.push({
+          role: "tool",
+          content: toolResultContent,
+          toolId,
+        });
+      }
     }
   } catch (err) {
     if (err instanceof BudgetExceededError) {
@@ -109,6 +182,9 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
       // session state. Callers (chat.ts, runChainedHarness) check the
       // finishReason and emit the awaiting_user_input SSE event.
       finishReason = "awaiting_user_input";
+      // Notify the sink (if any) BEFORE re-throwing so the SSE adapter can
+      // emit awaiting_user_input even though this propagates as an error.
+      streamSink?.onAwaitingUserInput?.(err.question);
       // Mirror BudgetExceededError's "throw + finally fires" pattern so the
       // SSE streaming path in chat.ts can short-circuit the streaming loop.
       // runChainedHarness explicitly catches this class.
@@ -120,12 +196,30 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
     // -------------------------------------------------------------------------
     // post_turn — fires even if the loop exited via error.
     // Callers that catch BudgetExceededError will still see this fire.
+    //
+    // Wrapped in its own try/catch so a misbehaving post_turn hook (e.g.
+    // redact-secrets throwing on a malformed scratchpad) doesn't replace
+    // the original loop error with the post_turn error. Without this wrap
+    // the operator sees "post_turn dispatch failed" and loses the actual
+    // BudgetExceededError / tool failure that started the cascade. Any
+    // post_turn rejection is best-effort and is logged via the sink.
     // -------------------------------------------------------------------------
-    await lifecycle.dispatch("post_turn", {
-      ctx,
-      finalText,
-      stepsUsed: budget.stepsUsed,
-    });
+    try {
+      await lifecycle.dispatch("post_turn", {
+        ctx,
+        finalText,
+        stepsUsed: budget.stepsUsed,
+      });
+    } catch (postTurnErr) {
+      // Surface via the sink if available so the route can record it; do
+      // NOT rethrow — the original loop error must be the one that
+      // propagates to the route's catch.
+      streamSink?.onPostTurnError?.(postTurnErr);
+    }
+
+    // onFinish — fires after post_turn (success or failure) so the SSE
+    // adapter always sees a terminal callback and can close the stream.
+    streamSink?.onFinish?.(finishReason, budget.summary());
   }
 
   return {

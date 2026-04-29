@@ -11,6 +11,42 @@ import {
   type SessionFinishReason,
 } from "./session-store.js";
 import type { Budget } from "./budget.js";
+import {
+  redactString,
+  type RedactReplacement,
+} from "./hooks/redact-secrets.js";
+
+/**
+ * Re-bind `ctx.seenFactIds` to whatever Set currently lives at
+ * `ctx.scratchpad["seenFactIds"]`.
+ *
+ * The init-scratch hook (pre_turn) replaces the scratchpad's seenFactIds
+ * with a fresh Set on every turn. Without this resync, the `ctx.seenFactIds`
+ * field still references the OLD Set seeded by `hydrateScratchpad` (or by
+ * the sub-agent spawner) — an orphan that no longer participates in the
+ * authoritative working memory. Tools that mutate via the scratchpad
+ * write to one Set; tools that read `ctx.seenFactIds` see the other.
+ *
+ * Call this after every manual `lifecycle.dispatch("pre_turn", ...)` that
+ * happens outside `runHarness`. `runHarness` itself uses this same helper.
+ *
+ * Fallback: if init-scratch wasn't registered (e.g., tests that use an
+ * empty Lifecycle), seed a fresh Set into the scratchpad and bind it. This
+ * keeps the post-condition "ctx.seenFactIds is the canonical Set" true
+ * regardless of hook configuration.
+ */
+export function syncSeenFactIdsFromScratch(ctx: ToolContext): void {
+  const fromScratch = ctx.scratchpad.get("seenFactIds");
+  if (fromScratch instanceof Set) {
+    ctx.seenFactIds = fromScratch as Set<string>;
+    return;
+  }
+  if (!ctx.seenFactIds) {
+    const fresh = new Set<string>();
+    ctx.scratchpad.set("seenFactIds", fresh);
+    ctx.seenFactIds = fresh;
+  }
+}
 
 /**
  * Hydrate a fresh scratchpad Map from a stored session's scratchpad jsonb.
@@ -73,14 +109,48 @@ export async function persistTurnState(
     typeof dump["awaitingQuestion"] === "string"
       ? (dump["awaitingQuestion"] as string)
       : null;
+
+  // Redact awaitingQuestion BEFORE truncation + persistence. The model may
+  // have phrased its clarification in terms of a SMILES / NCE-ID / compound
+  // code — those would otherwise leak into the agent_sessions row, the
+  // awaiting_user_input SSE event, and the reanimator's downstream consumers.
+  // Replacements are appended to the scratchpad's `redact_log` under
+  // scope="awaiting_question" so the audit trail is recoverable.
+  //
+  // This was previously inlined in routes/chat.ts only, so the chained-
+  // execution path in routes/sessions.ts (which dumps scratchpad directly)
+  // bypassed redaction. Keeping the redaction here means every caller that
+  // saves a session through persistTurnState is safe by default.
+  let safeAwaitingQuestion = rawAwaitingQuestion;
+  if (rawAwaitingQuestion) {
+    const replacements: RedactReplacement[] = [];
+    safeAwaitingQuestion = redactString(rawAwaitingQuestion, replacements);
+    if (replacements.length > 0) {
+      const existing =
+        (ctx.scratchpad.get("redact_log") as Array<{
+          scope: string;
+          replacements: RedactReplacement[];
+          timestamp: string;
+        }>) ?? [];
+      const updated = [
+        ...existing,
+        {
+          scope: "awaiting_question",
+          replacements,
+          timestamp: new Date().toISOString(),
+        },
+      ];
+      ctx.scratchpad.set("redact_log", updated);
+      // Re-dump so the redact_log update lands in the persisted scratchpad.
+      dump["redact_log"] = updated;
+    }
+  }
+
   // Truncate to the 4000-codepoint CHECK constraint added in
   // db/init/16_db_audit_fixes.sql, codepoint-safely (Array.from prevents
   // a UTF-16 surrogate split that would otherwise produce invalid UTF-8
-  // and crash the INSERT mid-finally). Mirrors the redact-then-truncate
-  // pattern in routes/chat.ts:854 — kept here too so any future caller
-  // that reaches saveSession through this helper is safe by default
-  // without a copy-paste of the truncate math.
-  const awaitingQuestion = _truncateAwaitingQuestion(rawAwaitingQuestion);
+  // and crash the INSERT mid-finally).
+  const awaitingQuestion = _truncateAwaitingQuestion(safeAwaitingQuestion);
 
   const sessTotals = budget?.sessionTotals();
   await saveSession(pool, userEntraId, sessionId, {

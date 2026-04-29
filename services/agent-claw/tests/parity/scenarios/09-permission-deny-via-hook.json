@@ -1,0 +1,29 @@
+{
+  "name": "permission-deny-via-hook",
+  "description": "Complement to scenario 05: in default permissionMode the static rule layer is permissive (no allowed/disallowed lists), so the decision falls to the permission_request hook chain. A scenario-registered hook returns deny, the resolver short-circuits BEFORE pre_tool, the harness emits a synthetic tool_result with the deny reason, and the LLM produces text instead. Pins the dynamic-deny path that scenario 05 doesn't cover (because dontAsk short-circuits at the static layer).",
+  "user_messages": ["search"],
+  "permissions": { "permissionMode": "default" },
+  "hooks": [
+    { "point": "permission_request", "name": "test-deny", "behavior": "deny" }
+  ],
+  "steps": [
+    {
+      "llm_response": {
+        "kind": "tool_call",
+        "toolId": "search_knowledge",
+        "input": { "query": "x" }
+      }
+    },
+    { "llm_response": { "kind": "text", "text": "Permission denied by hook." } }
+  ],
+  "expected_events": [
+    { "type": "session" },
+    { "type": "hook", "point": "pre_turn" },
+    { "type": "hook", "point": "permission_request" },
+    { "type": "tool_call", "toolId": "search_knowledge" },
+    { "type": "tool_result", "toolId": "search_knowledge" },
+    { "type": "hook", "point": "post_turn" },
+    { "type": "finish", "finishReason": "stop" }
+  ],
+  "expected_finish_reason": "stop"
+}

@@ -72,6 +72,7 @@ export function buildFindSimilarReactionsTool(pool: Pool, mcpDrfpUrl: string) {
       "Returns up to k reactions with their experiment context and citations.",
     inputSchema: FindSimilarReactionsIn,
     outputSchema: FindSimilarReactionsOut,
+    annotations: { readOnly: true },
 
     execute: async (ctx, input) => {
       // 1. Encode the seed reaction via mcp-drfp.

@@ -45,6 +45,13 @@ export interface CompactorOptions {
   recentKeep?: number;
   /** LLM provider for the synopsis call (Haiku-class). */
   llm: LlmProvider;
+  /**
+   * Optional user-supplied steering for the summarizer. Forwarded from the
+   * /compact slash command's argument string, appended to the system prompt
+   * so the user can request e.g. "focus on the synthesis decisions only".
+   * When absent, the default summarizer prompt is used unchanged.
+   */
+  summaryInstructions?: string;
 }
 
 const DEFAULT_TRIGGER_FRACTION = 0.60;
@@ -102,12 +109,16 @@ export async function compact(
     .map((m) => `${m.role.toUpperCase()}: ${m.content}`)
     .join("\n\n");
 
-  const systemPrompt = [
+  const baseSystemPrompt = [
     "You are a concise scientific assistant. Summarize the following conversation ",
     "transcript in at most 200 words. Preserve all entity identifiers (compound codes, ",
     "fact_ids, reaction IDs, hypothesis IDs, UUIDs), decisions made, and conclusions ",
     "reached. Omit conversational filler. Return JSON: {\"synopsis\": \"<text>\"}.",
   ].join("");
+
+  const systemPrompt = opts.summaryInstructions
+    ? `${baseSystemPrompt}\n\nAdditional steering from the user:\n${opts.summaryInstructions}`
+    : baseSystemPrompt;
 
   let synopsis: string;
   try {

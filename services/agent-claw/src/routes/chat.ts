@@ -28,8 +28,13 @@ import type { Pool } from "pg";
 import type { Config } from "../config.js";
 import type { LlmProvider } from "../llm/provider.js";
 import type { ToolRegistry } from "../tools/registry.js";
-import { Budget, SessionBudgetExceededError } from "../core/budget.js";
-import { buildAgent } from "../core/harness.js";
+import {
+  Budget,
+  BudgetExceededError,
+  SessionBudgetExceededError,
+  estimateTokenCount,
+} from "../core/budget.js";
+import { buildAgent, runHarness } from "../core/harness.js";
 import {
   parseSlash,
   parseFeedbackArgs,
@@ -38,7 +43,7 @@ import {
 } from "../core/slash.js";
 import { redactString } from "../core/hooks/redact-secrets.js";
 import type { RedactReplacement } from "../core/hooks/redact-secrets.js";
-import { hydrateScratchpad } from "../core/session-state.js";
+import { hydrateScratchpad, persistTurnState } from "../core/session-state.js";
 import { lifecycle } from "../core/runtime.js";
 import {
   createSession,
@@ -52,8 +57,12 @@ import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 import { runWithRequestContext } from "../core/request-context.js";
 import { withUserContext } from "../db/with-user-context.js";
 import { PromptRegistry } from "../prompts/registry.js";
-import type { Message, ToolContext } from "../core/types.js";
-import type { PreToolPayload } from "../core/types.js";
+import type {
+  Message,
+  PostCompactPayload,
+  PreCompactPayload,
+  ToolContext,
+} from "../core/types.js";
 import {
   planStore,
   createPlan,
@@ -63,6 +72,7 @@ import {
 import type { SkillLoader } from "../core/skills.js";
 import { VERB_TO_SKILL } from "../core/skills.js";
 import { writeEvent, setupSse } from "../streaming/sse.js";
+import { makeSseSink } from "../streaming/sse-sink.js";
 import { startRootTurnSpan, recordLlmUsage, recordSpanError } from "../observability/spans.js";
 import { context as otelContext, trace } from "@opentelemetry/api";
 import {
@@ -333,6 +343,9 @@ async function handleChat(
   // mint a new session — the SSE path emits a `session` event so the client
   // can resume on the next turn.
   let sessionId: string | null = body.session_id ?? null;
+  // Phase 4B: track whether the session existed at the start of this turn
+  // so the session_start dispatch can pass source ∈ {"create", "resume"}.
+  let sessionExisted = false;
   let priorScratchpad: Record<string, unknown> = {};
   // Phase F + H state captured at turn start.
   let sessionEtag: string | undefined;
@@ -345,6 +358,7 @@ async function handleChat(
     try {
       const loaded = await loadSession(deps.pool, user, sessionId);
       if (loaded) {
+        sessionExisted = true;
         priorScratchpad = loaded.scratchpad ?? {};
         sessionEtag = loaded.etag;
         sessionInputUsed = loaded.sessionInputTokens;
@@ -398,7 +412,69 @@ async function handleChat(
     userEntraId: user,
     seenFactIds,
     scratchpad,
+    lifecycle,
   };
+
+  // ── Phase 4B lifecycle dispatches ──────────────────────────────────────
+  // user_prompt_submit fires after ctx is built but before slash-mode
+  // branches (manual /compact, /plan) and before runHarness. session_start
+  // fires next, with source ∈ {"create", "resume"} based on whether the
+  // session row existed at the start of this turn. Both are best-effort:
+  // failures are logged and don't abort the turn.
+  try {
+    await lifecycle.dispatch("user_prompt_submit", {
+      ctx,
+      prompt: lastUserMessage?.content ?? "",
+      sessionId,
+    });
+  } catch (err) {
+    req.log.warn({ err }, "user_prompt_submit dispatch failed (non-fatal)");
+  }
+
+  if (sessionId) {
+    try {
+      await lifecycle.dispatch("session_start", {
+        ctx,
+        sessionId,
+        source: sessionExisted ? "resume" : "create",
+      });
+    } catch (err) {
+      req.log.warn({ err }, "session_start dispatch failed (non-fatal)");
+    }
+  }
+
+  // ── Manual /compact slash branch ────────────────────────────────────────
+  // Fires pre_compact (with trigger="manual" and any user-supplied
+  // summarization steering) BEFORE the normal harness turn. The
+  // compact-window hook mutates `messages` in place; the harness then runs
+  // against the compacted window. This is the user-driven counterpart to
+  // the auto path inside runHarness's loop.
+  if (slashResult.verb === "compact") {
+    const customInstructions = slashResult.args.trim() || null;
+    const preTokens = estimateTokenCount(messages);
+    const prePayload: PreCompactPayload = {
+      ctx,
+      messages,
+      trigger: "manual",
+      pre_tokens: preTokens,
+      custom_instructions: customInstructions,
+    };
+    try {
+      await lifecycle.dispatch("pre_compact", prePayload);
+      const postTokens = estimateTokenCount(messages);
+      const postPayload: PostCompactPayload = {
+        ctx,
+        trigger: "manual",
+        pre_tokens: preTokens,
+        post_tokens: postTokens,
+      };
+      await lifecycle.dispatch("post_compact", postPayload);
+    } catch (err) {
+      // Compaction itself shouldn't abort the turn — log and proceed with
+      // the original message window.
+      req.log.warn({ err }, "manual /compact dispatch failed; proceeding uncompacted");
+    }
+  }
 
   // Filter tools by active skills (if any skills are active).
   const allTools = deps.registry.all();
@@ -534,25 +610,31 @@ async function handleChat(
   // ------- SSE streaming path -------
   setupSse(reply);
 
-  // Tell the client which session id to thread through subsequent POSTs.
-  // Emitted before any tool/text event so a UI can immediately render
-  // "session: <id>" or store it locally for resume.
-  if (sessionId) {
-    writeEvent(reply, { type: "session", session_id: sessionId });
-  }
+  // NOTE: onSession fires BEFORE pre_turn (when both streamSink and
+  // sessionId are set) — runHarness drives the `session` SSE event via the
+  // sink. We do NOT emit it here directly — that would double-fire when
+  // runHarness runs.
 
   let closed = false;
   const onClose = () => { closed = true; };
   req.raw.on("close", onClose);
   req.raw.on("aborted", onClose);
 
-  // Hoisted out of the try block so the finally can read them when the loop
-  // exits via error. Mirrors runHarness() in core/harness.ts.
+  // finishReason and budget are hoisted out of the try block so the finally
+  // can read them when the loop exits via error. Mirrors runHarness() in
+  // core/harness.ts.
   let finishReason = "stop";
-  let finalText = "";
-  let stepsUsed = 0;
-  // Streaming redaction log: each text_delta is scrubbed in flight via
-  // redactString; replacements are persisted to scratchpad before post_turn.
+  // Streaming redaction log: each text_delta is scrubbed in flight via the
+  // sink's onTextDelta (makeSseSink wraps redactString); replacements
+  // accumulate here so the route's finally can persist them to scratchpad
+  // for observability.
+  //
+  // TODO(disconnect-mid-stream): runHarness doesn't accept an AbortSignal,
+  // so a client close mid-stream cannot abort the harness loop. Writes to
+  // a closed reply silently no-op via Fastify, but the LLM call (and any
+  // outstanding tool calls) run to completion. A future phase should plumb
+  // an AbortController through runHarness if mid-stream cost becomes an
+  // issue.
   const _streamRedactions: RedactReplacement[] = [];
   let budget: Budget | undefined;
 
@@ -630,24 +712,28 @@ async function handleChat(
       return;
     }
 
-    // Token-by-token streaming path.
-    // We run the harness loop manually, using streamCompletion() for the final
-    // text step so tokens flow to the client as they arrive. Tool-call steps
-    // still use call() (blocking) because we need the result before continuing.
+    // Token-by-token streaming path — delegated to runHarness with an SSE sink.
     //
-    // Strategy:
-    //   1. Build a Budget + Lifecycle as normal.
-    //   2. Fire pre_turn.
-    //   3. Loop: call the LLM with call(). If it returns tool_call, emit
-    //      tool_call + tool_result events, push to messages, continue.
-    //   4. When the model produces a text response, switch to streamCompletion()
-    //      to emit token-by-token text_delta events.
-    //   5. Emit finish.
+    // Phase 2B: this used to be a hand-rolled while-loop that duplicated the
+    // pre_turn / pre_tool / post_tool / post_turn dispatches and emitted SSE
+    // events inline. All of that now lives in core/harness.ts; the sink
+    // converts StreamSink callbacks into wire frames via streaming/sse-sink.ts.
     //
-    // This gives real streaming for the text portion while keeping the harness
-    // semantics (hooks, budget, tool execution) intact.
-
-    await lifecycle.dispatch("pre_turn", { ctx, messages });
+    // The sink does NOT expose onAwaitingUserInput — the route's finally
+    // block below lifts the awaiting_question from scratchpad, redacts it,
+    // persists it to the session row, and emits the SSE event. Wiring the
+    // sink's onAwaitingUserInput would emit an unredacted question before
+    // the session save, which is the wrong order for both the wire and the DB.
+    //
+    // Likewise the sink does NOT expose onFinish — the route's finally
+    // emits `finish` AFTER the saveSession + awaiting_user_input emit, which
+    // is part of the public SSE wire contract. (The harness's onFinish is
+    // a no-op when the sink omits the callback.)
+    const sink = makeSseSink(reply, _streamRedactions, sessionId ?? undefined);
+    // Strip the two callbacks the route owns. The sink object is freshly
+    // built here so deleting on it doesn't leak anywhere else.
+    delete (sink as { onAwaitingUserInput?: unknown }).onAwaitingUserInput;
+    delete (sink as { onFinish?: unknown }).onFinish;
 
     budget = new Budget({
       maxSteps: effectiveMaxSteps,
@@ -664,139 +750,24 @@ async function handleChat(
         : undefined,
     });
 
-    streaming: while (true) {
-      if (closed) break;
-      if (budget.isStepCapReached()) {
-        finishReason = "max_steps";
-        break;
-      }
+    const result = await runHarness({
+      messages,
+      tools,
+      llm: deps.llm,
+      budget,
+      lifecycle,
+      ctx,
+      streamSink: sink,
+      sessionId: sessionId ?? undefined,
+    });
 
-      // Peek at what the LLM wants to do next.
-      //
-      // ARCHITECTURAL NOTE (P2 — see e2e-runs verdict): every text turn
-      // currently incurs TWO LLM round-trips — this `call()` to classify
-      // text-vs-tool, then `streamCompletion()` below to actually stream
-      // the tokens. The cost-correct refactor consumes streamCompletion()
-      // here, buffers the first chunk to detect tool_call vs text, and
-      // commits to either branch on the first chunk (the AI SDK guarantees
-      // text and tool_call are mutually exclusive in one response). It
-      // requires careful handling of pre_tool hooks before any tool_call
-      // SSE event is emitted, which is why the simple-but-redundant
-      // call()-then-stream pattern was kept until a separate refactor pass.
-      const { result: stepResult, usage } = await otelContext.with(turnCtx, () =>
-        deps.llm.call(messages, tools),
-      );
-      budget.consumeStep(usage);
-      stepsUsed++;
-
-      if (stepResult.kind === "tool_call") {
-        // Tool-call step — execute the tool, emit events, push to messages.
-        const { toolId, input } = stepResult;
-
-        // pre_tool hook.
-        const prePayload: PreToolPayload = { ctx, toolId, input };
-        await lifecycle.dispatch("pre_tool", prePayload);
-        const effectiveInput = prePayload.input;
-
-        const tool = tools.find((t) => t.id === toolId);
-        if (!tool) {
-          writeEvent(reply, { type: "error", error: `unknown_tool:${toolId}` });
-          break streaming;
-        }
-
-        const parsedInput = tool.inputSchema.parse(effectiveInput);
-        writeEvent(reply, { type: "tool_call", toolId, input: parsedInput });
-
-        // Tool execution: AwaitingUserInputError is the documented control-flow
-        // exception (ask_user) — caught here, NOT in the outer try, so post_turn
-        // and session save still run normally and the awaiting_user_input event
-        // is emitted from the finally block.
-        let rawOutput: unknown;
-        try {
-          rawOutput = await tool.execute(ctx, parsedInput);
-        } catch (toolErr) {
-          if (toolErr instanceof AwaitingUserInputError) {
-            finishReason = "awaiting_user_input";
-            // Don't emit a tool_result for ask_user — the awaiting_user_input
-            // event below replaces it. The model isn't going to read this
-            // result anyway since the loop ends.
-            break streaming;
-          }
-          throw toolErr;
-        }
-        const parsedOutput = tool.outputSchema.parse(rawOutput);
-
-        const postPayload = { ctx, toolId, input: effectiveInput, output: parsedOutput };
-        await lifecycle.dispatch("post_tool", postPayload);
-        const effectiveOutput = postPayload.output;
-
-        writeEvent(reply, { type: "tool_result", toolId, output: effectiveOutput });
-
-        // todo_update event: emit the latest checklist whenever manage_todos
-        // mutates state. The tool's output schema guarantees a `todos` array.
-        if (
-          toolId === "manage_todos" &&
-          effectiveOutput &&
-          typeof effectiveOutput === "object" &&
-          "todos" in effectiveOutput &&
-          Array.isArray((effectiveOutput as { todos: unknown }).todos)
-        ) {
-          writeEvent(reply, {
-            type: "todo_update",
-            todos: (effectiveOutput as {
-              todos: Array<{ id: string; ordering: number; content: string; status: string }>;
-            }).todos,
-          });
-        }
-
-        const toolResultContent = effectiveOutput !== undefined
-          ? JSON.stringify(effectiveOutput)
-          : `{"error":"no_output"}`;
-
-        messages.push({ role: "tool", content: toolResultContent, toolId });
-        continue;
-      }
-
-      // Text step — stream token-by-token using streamCompletion().
-      // We already used call() to determine this is a text step; we now switch
-      // to streamCompletion() so tokens flow to the client as they arrive.
-      // Fall back to a single text_delta if streaming throws.
-      finalText = stepResult.text;
-
-      if (!closed) {
-        try {
-          let streamed = "";
-          // Wrap the streamCompletion iterator construction in turnCtx so
-          // LiteLLM's auto-instrumented HTTP call captures the rootSpan
-          // as parent and inherits the prompt:agent.system Langfuse tag.
-          const streamIter = otelContext.with(turnCtx, () =>
-            deps.llm.streamCompletion(messages, tools),
-          );
-          for await (const chunk of streamIter) {
-            if (closed) break;
-            if (chunk.type === "text_delta") {
-              const redacted = redactString(chunk.delta, _streamRedactions);
-              streamed += redacted;
-              writeEvent(reply, { type: "text_delta", delta: redacted });
-            }
-            // finish/tool_call chunks from the stream are not re-emitted here;
-            // the harness emits its own finish event below.
-          }
-          // If the stream yielded text, use it as the canonical final text.
-          if (streamed) {
-            finalText = streamed;
-          }
-        } catch {
-          // Stream failed — fall back to the complete text we got from call().
-          const redactedFallback = redactString(finalText, _streamRedactions);
-          finalText = redactedFallback;
-          writeEvent(reply, { type: "text_delta", delta: redactedFallback });
-        }
-      }
-
-      messages.push({ role: "assistant", content: finalText });
-      break streaming;
-    }
+    // v1.2 collapse: the hand-rolled call()→streamCompletion()→pre_tool /
+    // post_tool / todo_update wiring that previously lived here was deleted
+    // when runHarness became the single source of truth for the loop. All
+    // those dispatches happen inside runHarness now, and the SSE adapter
+    // (makeSseSink) translates StreamSink callbacks into the same wire
+    // events. Keep the route handler short — see ADR 008.
+    finishReason = result.finishReason;
   } catch (err) {
     // Distinguish typed control-flow / quota errors so clients can render
     // appropriate UI. instanceof checks instead of err.name strings —
@@ -807,6 +778,17 @@ async function handleChat(
       if (!closed) {
         writeEvent(reply, { type: "error", error: "session_budget_exceeded" });
       }
+    } else if (err instanceof BudgetExceededError) {
+      // Per-turn budget overrun. runHarness sets finishReason="budget_exceeded"
+      // and re-throws so the route can render a typed error event. Before
+      // Phase 2B this branch was unreachable because chat.ts checked the
+      // step cap manually and the prompt-token cap path was caught by the
+      // generic else below.
+      req.log.warn({ err }, "chat stream stopped: per-turn budget exceeded");
+      finishReason = "budget_exceeded";
+      if (!closed) {
+        writeEvent(reply, { type: "error", error: "budget_exceeded" });
+      }
     } else if (err instanceof OptimisticLockError) {
       req.log.warn({ err }, "chat stream stopped: concurrent modification");
       finishReason = "concurrent_modification";
@@ -814,10 +796,11 @@ async function handleChat(
         writeEvent(reply, { type: "error", error: "concurrent_modification" });
       }
     } else if (err instanceof AwaitingUserInputError) {
-      // ask_user fired during the streaming loop AFTER our inner break
-      // streaming caught and consumed it. Reaching this branch means
-      // the harness loop re-threw it; treat as a normal awaiting-input
-      // exit, NOT an error.
+      // runHarness re-throws AwaitingUserInputError after dispatching
+      // post_turn (which persists the awaiting_question to scratchpad).
+      // Treat as a normal awaiting-input exit, NOT an error — the route's
+      // finally block lifts the question from scratchpad and emits the
+      // awaiting_user_input SSE event.
       finishReason = "awaiting_user_input";
     } else {
       req.log.error({ err }, "chat stream failed");
@@ -826,14 +809,13 @@ async function handleChat(
       }
     }
   } finally {
-    // post_turn fires even if the streaming loop threw — mirrors runHarness().
-    // The redact-secrets hook scrubs finalText here; for streaming responses
-    // each delta was already scrubbed via redactString above, so this is a
-    // belt-and-suspenders pass that also writes the audit log to scratchpad.
-    try {
-      // Persist any in-flight stream redactions to scratchpad before post_turn
-      // runs so observability captures both layers.
-      if (_streamRedactions.length > 0) {
+    // Persist in-flight stream redactions to scratchpad for observability.
+    // post_turn already ran inside runHarness; we append the stream_delta
+    // log entry AFTER the post_turn redact-secrets entry. The two are
+    // independent — redact-secrets reads/writes its own entry from finalText,
+    // we append ours from the per-delta scrubs the SSE sink performed.
+    if (_streamRedactions.length > 0) {
+      try {
         const existing =
           (ctx.scratchpad.get("redact_log") as Array<{
             scope: string;
@@ -848,100 +830,33 @@ async function handleChat(
             timestamp: new Date().toISOString(),
           },
         ]);
+      } catch (logErr) {
+        req.log.warn({ err: logErr }, "stream redaction-log persist failed");
       }
-      await lifecycle.dispatch("post_turn", { ctx, finalText, stepsUsed });
-    } catch (postTurnErr) {
-      req.log.warn({ err: postTurnErr }, "post_turn dispatch failed");
     }
 
-    // Persist session state. Emits a `session` event already happened at
-    // stream open. We dump the current scratchpad (sans budget — recomputed
-    // each turn) and the finish reason so the next turn (or the resume
-    // endpoint) can pick up cleanly. seenFactIds is serialized as an array.
+    // Persist session state. The `session` event already fired at stream
+    // open. `persistTurnState` dumps the scratchpad (sans budget), redacts
+    // and truncates `awaitingQuestion` (so SMILES / NCE-IDs / compound codes
+    // never leak into the agent_sessions row or the SSE event), and writes
+    // via saveSession with optimistic concurrency. The same helper is used
+    // by the chained-execution loop in routes/sessions.ts so both paths
+    // honour the same redaction contract.
     if (sessionId) {
       try {
-        const dump: Record<string, unknown> = {};
-        for (const [k, v] of ctx.scratchpad.entries()) {
-          if (k === "budget") continue; // recomputed every turn
-          dump[k] = v instanceof Set ? Array.from(v) : v;
-        }
-        // The awaitingQuestion field is set by the ask_user tool; if present
-        // in scratchpad we lift it to the dedicated column for the
-        // awaiting_user_input SSE event below.
-        const awaitingQuestion =
-          typeof dump["awaitingQuestion"] === "string"
-            ? (dump["awaitingQuestion"] as string)
-            : null;
-        // Redact the awaitingQuestion BEFORE persistence + SSE emit. The
-        // model may have phrased its clarification in terms of a SMILES /
-        // NCE-ID / compound code — those leak into both the SSE event
-        // payload and the agent_sessions row otherwise. Replacements are
-        // appended to redact_log under scope="awaiting_question".
-        let safeAwaitingQuestion = awaitingQuestion;
-        if (awaitingQuestion) {
-          const replacements: RedactReplacement[] = [];
-          safeAwaitingQuestion = redactString(awaitingQuestion, replacements);
-          if (replacements.length > 0) {
-            const existing =
-              (ctx.scratchpad.get("redact_log") as Array<{
-                scope: string;
-                replacements: RedactReplacement[];
-                timestamp: string;
-              }>) ?? [];
-            ctx.scratchpad.set("redact_log", [
-              ...existing,
-              {
-                scope: "awaiting_question",
-                replacements,
-                timestamp: new Date().toISOString(),
-              },
-            ]);
-            // Re-dump scratchpad so the redact_log update is persisted.
-            dump["redact_log"] = ctx.scratchpad.get("redact_log");
-          }
-          // Enforce the 4000-char CHECK constraint added in
-          // db/init/16_db_audit_fixes.sql at write time, NOT at the DB
-          // boundary. Hitting the constraint mid-finally otherwise stalls
-          // the SSE close + leaves the session in an inconsistent state.
-          //
-          // Use Array.from to slice on Unicode codepoints, NOT
-          // String.prototype.slice (which slices on UTF-16 code units and
-          // can leave a lone high-surrogate at the end of the string).
-          // PG's UTF-8 encoder rejects unpaired surrogates with
-          // "invalid byte sequence for encoding UTF8", which would surface
-          // as exactly the same mid-finally crash this fix is meant to
-          // prevent — moved from CHECK constraint into the driver. The
-          // " [truncated…]" suffix flags the cap was hit so the UI can
-          // signal it instead of chopping mid-sentence.
-          const AWAITING_QUESTION_MAX = 4000;
-          if (safeAwaitingQuestion) {
-            const codepoints = Array.from(safeAwaitingQuestion);
-            if (codepoints.length > AWAITING_QUESTION_MAX) {
-              const suffix = " [truncated…]";
-              const suffixCps = Array.from(suffix);
-              safeAwaitingQuestion =
-                codepoints.slice(0, AWAITING_QUESTION_MAX - suffixCps.length).join("") +
-                suffix;
-            }
-          }
-        }
-
-        // Persist updated session totals so the next turn picks up where
-        // this one left off.
-        const sessTotals = budget?.sessionTotals();
-        await saveSession(deps.pool, user, sessionId, {
-          scratchpad: dump,
-          lastFinishReason: (finishReason as SessionFinishReason) ?? null,
-          awaitingQuestion: safeAwaitingQuestion,
-          messageCount: messages.length,
-          sessionInputTokens: sessTotals?.inputTokens,
-          sessionOutputTokens: sessTotals?.outputTokens,
-          sessionSteps: sessionStepsUsed + (budget?.stepsUsed ?? 0),
-          // Optimistic concurrency. If a parallel turn raced us,
-          // OptimisticLockError fires here; we log and accept (the parallel
-          // writer's state is what survives). We do NOT clobber.
-          expectedEtag: sessionEtag,
-        });
+        const { awaitingQuestion: safeAwaitingQuestion } = await persistTurnState(
+          deps.pool,
+          user,
+          sessionId,
+          ctx,
+          budget,
+          finishReason,
+          {
+            expectedEtag: sessionEtag,
+            messageCount: messages.length,
+            priorSessionSteps: sessionStepsUsed,
+          },
+        );
 
         // If the model called ask_user, emit the awaiting_user_input event
         // before the final `finish` so clients render the prompt UI.
@@ -958,6 +873,21 @@ async function handleChat(
         }
       } catch (saveErr) {
         req.log.warn({ err: saveErr }, "saveSession failed");
+      }
+    }
+
+    // Phase 4B: session_end fires only on a clean stop. Awaiting-input,
+    // budget-exceeded, and concurrent-modification leave the session open
+    // for the next turn — those are not terminations.
+    if (sessionId && finishReason === "stop") {
+      try {
+        await lifecycle.dispatch("session_end", {
+          ctx,
+          sessionId,
+          finishReason,
+        });
+      } catch (err) {
+        req.log.warn({ err }, "session_end dispatch failed (non-fatal)");
       }
     }
 

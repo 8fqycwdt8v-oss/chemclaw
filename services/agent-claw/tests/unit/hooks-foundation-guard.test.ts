@@ -1,4 +1,13 @@
 // Tests for the foundation-citation-guard pre_tool hook — Phase C.4
+//
+// Phase 4A migrated this hook from `throw` to a deny-decision return. The
+// tests here verify both:
+//   1. The hook returns the no-op HookJSONOutput shape ({}) when there's
+//      nothing to enforce.
+//   2. The hook returns a deny-decision (with reason) when a FOUNDATION
+//      claim cites EXPLORATORY artifacts.
+//   3. The lifecycle dispatcher surfaces that deny-decision via its
+//      DispatchResult — step.ts is what actually short-circuits tool exec.
 
 import { describe, it, expect } from "vitest";
 import {
@@ -36,7 +45,7 @@ function makePayload(input: unknown, maturityEntries: [string, string][] = []): 
 describe("foundationCitationGuardHook", () => {
   it("is a no-op when input has no maturity_tier field", async () => {
     const payload = makePayload({ cited_fact_ids: ["abc-123"] });
-    await expect(foundationCitationGuardHook(payload)).resolves.toBeUndefined();
+    await expect(foundationCitationGuardHook(payload)).resolves.toEqual({});
   });
 
   it("is a no-op when maturity_tier is WORKING", async () => {
@@ -44,7 +53,7 @@ describe("foundationCitationGuardHook", () => {
       { maturity_tier: "WORKING", cited_fact_ids: ["abc-123"] },
       [["abc-123", "EXPLORATORY"]],
     );
-    await expect(foundationCitationGuardHook(payload)).resolves.toBeUndefined();
+    await expect(foundationCitationGuardHook(payload)).resolves.toEqual({});
   });
 
   it("is a no-op when no artifactMaturity map is set", async () => {
@@ -54,7 +63,7 @@ describe("foundationCitationGuardHook", () => {
       toolId: "test_tool",
       input: { maturity_tier: "FOUNDATION", cited_fact_ids: ["abc-123"] },
     };
-    await expect(foundationCitationGuardHook(payload)).resolves.toBeUndefined();
+    await expect(foundationCitationGuardHook(payload)).resolves.toEqual({});
   });
 
   it("is a no-op when all cited artifacts are WORKING or FOUNDATION", async () => {
@@ -68,10 +77,10 @@ describe("foundationCitationGuardHook", () => {
         ["fact-2", "FOUNDATION"],
       ],
     );
-    await expect(foundationCitationGuardHook(payload)).resolves.toBeUndefined();
+    await expect(foundationCitationGuardHook(payload)).resolves.toEqual({});
   });
 
-  it("throws when a FOUNDATION claim cites an EXPLORATORY artifact", async () => {
+  it("returns a deny decision when a FOUNDATION claim cites an EXPLORATORY artifact", async () => {
     const payload = makePayload(
       {
         maturity_tier: "FOUNDATION",
@@ -79,12 +88,17 @@ describe("foundationCitationGuardHook", () => {
       },
       [["fact-exp", "EXPLORATORY"]],
     );
-    await expect(foundationCitationGuardHook(payload)).rejects.toThrow(
-      /foundation-citation-guard/,
-    );
+    const result = await foundationCitationGuardHook(payload);
+    expect(result).toEqual({
+      hookSpecificOutput: {
+        hookEventName: "pre_tool",
+        permissionDecision: "deny",
+        permissionDecisionReason: expect.stringMatching(/foundation-citation-guard/),
+      },
+    });
   });
 
-  it("throws listing all offending IDs in the error message", async () => {
+  it("denies with a reason listing all offending IDs", async () => {
     const payload = makePayload(
       {
         maturity_tier: "FOUNDATION",
@@ -95,19 +109,21 @@ describe("foundationCitationGuardHook", () => {
         ["exp-2", "EXPLORATORY"],
       ],
     );
-    await expect(foundationCitationGuardHook(payload)).rejects.toThrow(
-      /exp-1.*exp-2|exp-2.*exp-1/,
-    );
+    const result = await foundationCitationGuardHook(payload);
+    const reason =
+      (result as { hookSpecificOutput?: { permissionDecisionReason?: string } })
+        .hookSpecificOutput?.permissionDecisionReason ?? "";
+    expect(reason).toMatch(/exp-1.*exp-2|exp-2.*exp-1/);
   });
 
   it("is a no-op for null input", async () => {
     const payload = makePayload(null);
-    await expect(foundationCitationGuardHook(payload)).resolves.toBeUndefined();
+    await expect(foundationCitationGuardHook(payload)).resolves.toEqual({});
   });
 
   it("is a no-op for array input", async () => {
     const payload = makePayload([{ maturity_tier: "FOUNDATION" }]);
-    await expect(foundationCitationGuardHook(payload)).resolves.toBeUndefined();
+    await expect(foundationCitationGuardHook(payload)).resolves.toEqual({});
   });
 });
 
@@ -123,7 +139,7 @@ describe("registerFoundationCitationGuardHook", () => {
     expect(lc.count("pre_tool")).toBe(1);
   });
 
-  it("the registered hook throws via dispatch when guard fires", async () => {
+  it("the registered hook surfaces a deny decision via dispatch when guard fires", async () => {
     const lc = new Lifecycle();
     registerFoundationCitationGuardHook(lc);
 
@@ -135,8 +151,8 @@ describe("registerFoundationCitationGuardHook", () => {
       [["exploratory-id", "EXPLORATORY"]],
     );
 
-    await expect(lc.dispatch("pre_tool", payload)).rejects.toThrow(
-      /foundation-citation-guard/,
-    );
+    const result = await lc.dispatch("pre_tool", payload);
+    expect(result.decision).toBe("deny");
+    expect(result.reason).toMatch(/foundation-citation-guard/);
   });
 });

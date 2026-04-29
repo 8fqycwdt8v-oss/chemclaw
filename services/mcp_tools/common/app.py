@@ -153,14 +153,15 @@ def create_app(
 
     @app.middleware("http")
     async def mcp_auth_middleware(request: Request, call_next: Callable):
-        # Probes always pass. The /internal/ prefix is a defence-in-depth
-        # path-traversal guard: a future ingress that disables
-        # merge-slashes (or a custom rewrite) could otherwise route
-        # /internal/../tools/foo through the bypass.
+        # Probes always pass. ONLY the explicit allowlist below is
+        # exempted; an earlier blanket `/internal/*` prefix bypass was
+        # removed because no MCP service registers `/internal/*` today,
+        # and a future PR adding such a route would silently land
+        # unauthenticated. If a service later needs a cluster-internal
+        # endpoint, add it here explicitly (and gate by source IP /
+        # secret as appropriate).
         path = request.url.path
-        if path in ("/healthz", "/readyz") or (
-            path.startswith("/internal/") and ".." not in path.split("/")
-        ):
+        if path in ("/healthz", "/readyz"):
             return await call_next(request)
 
         enforce = _require_or_skip()
@@ -189,11 +190,15 @@ def create_app(
             return await call_next(request)
 
         try:
-            # In enforced mode, bind the token to this specific service via
-            # the JWT `aud` claim. Dev mode skips the audience check so
-            # tests that mint generic tokens still work.
-            audience_to_check = name if enforce else None
-            claims = verify_mcp_token(parts[1].strip(), expected_audience=audience_to_check)
+            # ALWAYS bind the token to this specific service via the JWT
+            # `aud` claim when a token is presented — even in dev mode.
+            # The dev-mode opt-out (MCP_AUTH_REQUIRED unset / "false") is
+            # ONLY about the missing-token branch above; if the caller IS
+            # presenting a token, the cross-service replay surface that
+            # `aud` closes is the same in dev and prod. Tests that mint
+            # generic tokens should mint with the right `aud`, not rely
+            # on the audience check being silently disabled.
+            claims = verify_mcp_token(parts[1].strip(), expected_audience=name)
             request.state.mcp_claims = claims
         except McpAuthError as exc:
             if enforce:

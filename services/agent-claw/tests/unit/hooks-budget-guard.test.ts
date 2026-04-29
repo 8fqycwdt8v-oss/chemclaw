@@ -34,8 +34,8 @@ function makePayload(budget?: BudgetScratch): PreToolPayload {
 describe("budgetGuardHook", () => {
   it("is a no-op when no budget scratch is set", async () => {
     const payload = makePayload(); // no budget in scratchpad
-    // Should not throw.
-    await expect(budgetGuardHook(payload)).resolves.toBeUndefined();
+    // Should not throw; returns the no-op HookJSONOutput shape.
+    await expect(budgetGuardHook(payload)).resolves.toEqual({});
   });
 
   it("passes when projected usage is within budget", async () => {
@@ -46,7 +46,7 @@ describe("budgetGuardHook", () => {
       toolOverhead: 500,
     });
     // 1200 + 500 = 1700 < 10000 — should pass.
-    await expect(budgetGuardHook(payload)).resolves.toBeUndefined();
+    await expect(budgetGuardHook(payload)).resolves.toEqual({});
   });
 
   it("throws BudgetExceededError when projected usage exceeds budget", async () => {

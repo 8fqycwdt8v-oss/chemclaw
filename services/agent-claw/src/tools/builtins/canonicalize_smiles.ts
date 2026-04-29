@@ -41,6 +41,7 @@ export function buildCanonicalizeSmilesTool(mcpRdkitUrl: string) {
       "Canonicalize a SMILES string via RDKit. Returns canonical_smiles, InChIKey, molecular formula, and molecular weight.",
     inputSchema: CanonicalizeIn,
     outputSchema: CanonicalizeOut,
+    annotations: { readOnly: true },
     execute: async (ctx, input) => {
       return postJson(
         `${mcpRdkitUrl.replace(/\/$/, "")}/tools/canonicalize_smiles`,

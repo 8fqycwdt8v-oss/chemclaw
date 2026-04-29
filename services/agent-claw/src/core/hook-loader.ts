@@ -6,7 +6,7 @@
 // import the module — supported but no script-based hooks ship today.
 //
 // As of v1.2.0 this is the single source of truth for hook registration on
-// the production startup path. The 9 built-in hooks register here; new hooks
+// the production startup path. The 11 built-in hooks register here; new hooks
 // require both a YAML file in hooks/ AND an entry in BUILTIN_REGISTRARS.
 //
 // YAML shape:
@@ -36,6 +36,8 @@ import { registerFoundationCitationGuardHook } from "./hooks/foundation-citation
 import { registerSourceCacheHook } from "./hooks/source-cache.js";
 import { registerCompactWindowHook } from "./hooks/compact-window.js";
 import { registerApplySkillsHook } from "./hooks/apply-skills.js";
+import { registerSessionEventsHook } from "./hooks/session-events.js";
+import { registerPermissionHook } from "./hooks/permission.js";
 
 // ---------------------------------------------------------------------------
 // YAML schema (validated at load time).
@@ -46,7 +48,19 @@ const VALID_HOOK_POINTS = new Set<string>([
   "pre_tool",
   "post_tool",
   "pre_compact",
+  "post_compact",
   "post_turn",
+  // Phase 4B additions:
+  "session_start",
+  "session_end",
+  "user_prompt_submit",
+  "post_tool_failure",
+  "post_tool_batch",
+  "permission_request",
+  "subagent_start",
+  "subagent_stop",
+  "task_created",
+  "task_completed",
 ]);
 
 interface HookYaml {
@@ -79,7 +93,9 @@ type BuiltinRegistrar = (lifecycle: Lifecycle, deps: HookDeps) => void;
 
 const BUILTIN_REGISTRARS: Map<string, BuiltinRegistrar> = new Map([
   ["redact-secrets", (lc) => registerRedactSecretsHook(lc)],
-  ["tag-maturity", (lc) => registerTagMaturityHook(lc)],
+  // Pool is needed for the artifact-row INSERT path (ARTIFACT_TOOL_IDS like
+  // propose_hypothesis). Without it the hook silently skips persistence.
+  ["tag-maturity", (lc, deps) => registerTagMaturityHook(lc, deps.pool)],
   ["budget-guard", (lc) => registerBudgetGuardHook(lc)],
   ["init-scratch", (lc) => registerInitScratchHook(lc)],
   ["anti-fabrication", (lc) => registerAntiFabricationHook(lc)],
@@ -97,6 +113,14 @@ const BUILTIN_REGISTRARS: Map<string, BuiltinRegistrar> = new Map([
     "apply-skills",
     (lc, deps) => registerApplySkillsHook(lc, deps.skillLoader, deps.allTools),
   ],
+  // Phase 4B: no-op session-events hook gives operators a YAML-discoverable
+  // attach point for session_start telemetry without forcing a code change.
+  ["session-events", (lc) => registerSessionEventsHook(lc)],
+  // Phase 6: no-op permission hook — operators replace with custom policy.
+  // Registers at permission_request; the route-level resolver dispatches
+  // before pre_tool, so a custom policy here gates tools BEFORE the
+  // budget-guard / foundation-citation-guard pre_tool chain runs.
+  ["permission", (lc) => registerPermissionHook(lc)],
 ]);
 
 // ---------------------------------------------------------------------------

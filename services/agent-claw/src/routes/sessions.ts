@@ -33,7 +33,7 @@ import {
 } from "../core/budget.js";
 import { runHarness } from "../core/harness.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
-import { hydrateScratchpad } from "../core/session-state.js";
+import { hydrateScratchpad, persistTurnState } from "../core/session-state.js";
 import { lifecycle } from "../core/runtime.js";
 import { runWithRequestContext } from "../core/request-context.js";
 import { verifyBearerHeader, McpAuthError } from "../security/mcp-tokens.js";
@@ -420,9 +420,15 @@ export function registerSessionsRoute(
 // ---------------------------------------------------------------------------
 // Shared helper: run the harness one or more times against a session,
 // auto-chaining until completion / max_steps cap / session-budget trip.
+//
+// Exported for integration tests (tests/integration/chained-execution.test.ts)
+// so the chained-loop logic can be exercised against a real Postgres without
+// having to spin up a full Fastify instance. The signature is part of the
+// internal API; callers outside this module should still prefer the route
+// endpoints.
 // ---------------------------------------------------------------------------
 
-interface ChainedHarnessOptions {
+export interface ChainedHarnessOptions {
   pool: Pool;
   user: string;
   sessionId: string;
@@ -446,7 +452,7 @@ interface ChainedHarnessOptions {
   };
 }
 
-interface ChainedHarnessResult {
+export interface ChainedHarnessResult {
   autoTurns: number;
   totalSteps: number;
   finalFinishReason: string;
@@ -454,7 +460,7 @@ interface ChainedHarnessResult {
   planFinalStepIndex?: number;
 }
 
-async function runChainedHarness(
+export async function runChainedHarness(
   opts: ChainedHarnessOptions,
 ): Promise<ChainedHarnessResult> {
   // Establish the AsyncLocalStorage context so every outbound MCP call
@@ -477,6 +483,11 @@ async function _runChainedHarnessInner(
   let totalSteps = 0;
   let finalFinishReason = "stop";
   let currentMessages = opts.messages;
+  // Phase 4B: track whether we've fired session_start for this chain. The
+  // chained-run + resume routes both target an existing session row, so
+  // source="resume". We only need to fire once per call (not per chained
+  // turn) — runHarness's own pre_turn handles the per-turn entry events.
+  let sessionStartFired = false;
   // Plan progress tracking: walk through the recorded tool messages added
   // by each iteration and advance current_step_index when the toolId
   // matches plan.steps[currentStepIndex].tool. Exact-match for first cut;
@@ -518,26 +529,50 @@ async function _runChainedHarnessInner(
       }
     }
 
-    const { scratchpad, seenFactIds } = hydrateScratchpad(
-      state.scratchpad,
-      sessionId,
-      cfg.AGENT_TOKEN_BUDGET,
-    );
-    const ctx: ToolContext = { userEntraId: user, seenFactIds, scratchpad };
-
-    const budget = new Budget({
-      maxSteps: cfg.AGENT_CHAT_MAX_STEPS,
-      maxPromptTokens: cfg.AGENT_TOKEN_BUDGET,
-      session: {
-        inputUsed: state.sessionInputTokens,
-        outputUsed: state.sessionOutputTokens,
-        inputCap:
-          state.sessionTokenBudget ?? cfg.AGENT_SESSION_INPUT_TOKEN_BUDGET,
-        outputCap: cfg.AGENT_SESSION_OUTPUT_TOKEN_BUDGET,
-      },
-    });
-
+    // The whole iteration body (hydrate → session_start → Budget → runHarness
+     // → persistTurnState) lives inside this try so that the catch + finally
+     // below can release a held Paperclip reservation on every exit path —
+     // including the previously-unprotected window where hydrateScratchpad,
+     // session_start dispatch, or `new Budget(...)` could throw between the
+     // reserve and the harness call. Without this, an exception there
+     // silently leaked the reservation for its TTL window and starved the
+     // daily-USD cap (H-4 in the post-merge review).
     try {
+      const { scratchpad, seenFactIds } = hydrateScratchpad(
+        state.scratchpad,
+        sessionId,
+        cfg.AGENT_TOKEN_BUDGET,
+      );
+      const ctx: ToolContext = { userEntraId: user, seenFactIds, scratchpad, lifecycle };
+
+      // Phase 4B: dispatch session_start once at the top of the chain. Both
+      // chain entry points (POST /plan/run and POST /resume) operate on a
+      // pre-existing session row, so source="resume".
+      if (!sessionStartFired) {
+        sessionStartFired = true;
+        try {
+          await lifecycle.dispatch("session_start", {
+            ctx,
+            sessionId,
+            source: "resume",
+          });
+        } catch (err) {
+          log.warn({ err }, "session_start dispatch failed (non-fatal)");
+        }
+      }
+
+      const budget = new Budget({
+        maxSteps: cfg.AGENT_CHAT_MAX_STEPS,
+        maxPromptTokens: cfg.AGENT_TOKEN_BUDGET,
+        session: {
+          inputUsed: state.sessionInputTokens,
+          outputUsed: state.sessionOutputTokens,
+          inputCap:
+            state.sessionTokenBudget ?? cfg.AGENT_SESSION_INPUT_TOKEN_BUDGET,
+          outputCap: cfg.AGENT_SESSION_OUTPUT_TOKEN_BUDGET,
+        },
+      });
+
       const r = await runHarness({
         messages: currentMessages,
         tools,
@@ -568,22 +603,26 @@ async function _runChainedHarnessInner(
         inspectedUpTo = currentMessages.length;
       }
 
-      // Persist updated session state.
-      const sessTotals = budget.sessionTotals();
-      const dump: Record<string, unknown> = {};
-      for (const [k, v] of ctx.scratchpad.entries()) {
-        if (k === "budget") continue;
-        dump[k] = v instanceof Set ? Array.from(v) : v;
-      }
-      await saveSession(pool, user, sessionId, {
-        scratchpad: dump,
-        lastFinishReason: r.finishReason as SessionFinishReason,
-        messageCount: currentMessages.length,
-        sessionInputTokens: sessTotals?.inputTokens,
-        sessionOutputTokens: sessTotals?.outputTokens,
-        sessionSteps: state.sessionSteps + r.stepsUsed,
-        expectedEtag: state.etag,
-      });
+      // Persist updated session state via the shared persistTurnState
+      // helper. Routes through the same redact-then-truncate path as
+      // routes/chat.ts so a mid-chain ask_user with a SMILES / NCE-ID /
+      // compound code in the question doesn't leak into the agent_sessions
+      // row, the awaiting_user_input SSE event, or the reanimator's
+      // downstream consumers. The previous inline dump bypassed redaction
+      // — see C-3 in the post-merge review.
+      await persistTurnState(
+        pool,
+        user,
+        sessionId,
+        ctx,
+        budget,
+        r.finishReason,
+        {
+          expectedEtag: state.etag,
+          messageCount: currentMessages.length,
+          priorSessionSteps: state.sessionSteps,
+        },
+      );
 
       // Release this iteration's Paperclip reservation with TURN-DELTA
       // actuals (not session-cumulative). `r.usage` is `budget.summary()`
@@ -653,6 +692,55 @@ async function _runChainedHarnessInner(
         log.error({ err }, "runChainedHarness: harness threw");
       }
       break;
+    }
+  }
+
+  // Phase 4B: session_end fires once at the end of the chain when the
+  // final finish reason is a clean stop. Awaiting-input / budget-exceeded
+  // leave the session open for the next reanimator tick or user message.
+  //
+  // We reload the session row before dispatching so `endCtx.scratchpad`
+  // reflects the persisted state at chain end (post the last
+  // `persistTurnState`). Previously this synthesized an empty Map and
+  // empty Set — third-party `session_end` hooks would silently see a
+  // blank ctx and either no-op or write degenerate telemetry. The
+  // reload is one extra DB roundtrip per chain (chains are rare; cost
+  // is negligible). If the load fails we fall back to the empty-ctx
+  // shape so a hook author who tolerates an empty Map keeps working.
+  if (sessionStartFired && finalFinishReason === "stop") {
+    try {
+      let endScratchpad = new Map<string, unknown>();
+      let endSeenFactIds = new Set<string>();
+      try {
+        const finalState = await loadSession(pool, user, sessionId);
+        if (finalState) {
+          const hydrated = hydrateScratchpad(
+            finalState.scratchpad,
+            sessionId,
+            cfg.AGENT_TOKEN_BUDGET,
+          );
+          endScratchpad = hydrated.scratchpad;
+          endSeenFactIds = hydrated.seenFactIds;
+        }
+      } catch (loadErr) {
+        log.warn(
+          { err: loadErr },
+          "session_end: final loadSession failed; falling back to empty ctx",
+        );
+      }
+      const endCtx: ToolContext = {
+        userEntraId: user,
+        seenFactIds: endSeenFactIds,
+        scratchpad: endScratchpad,
+        lifecycle,
+      };
+      await lifecycle.dispatch("session_end", {
+        ctx: endCtx,
+        sessionId,
+        finishReason: finalFinishReason,
+      });
+    } catch (err) {
+      log.warn({ err }, "session_end dispatch failed (non-fatal)");
     }
   }
 

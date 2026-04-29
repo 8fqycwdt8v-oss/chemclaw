@@ -13,9 +13,16 @@
 // accounting and per-user daily caps.
 //
 // The hook reads current usage from ctx.scratchpad.budget (set by the harness).
+//
+// NOTE on Phase 4A migration: budget-guard continues to *throw*
+// BudgetExceededError rather than returning permissionDecision:"deny" because
+// callers (runHarness, /api/chat) already special-case BudgetExceededError to
+// emit a "budget_exceeded" finishReason + 402 response. The lifecycle's
+// strict-throw rule for pre_tool preserves that flow.
 
 import type { PreToolPayload } from "../types.js";
 import type { Lifecycle } from "../lifecycle.js";
+import type { HookJSONOutput } from "../hook-output.js";
 import { BudgetExceededError } from "../budget.js";
 
 // Expected shape of ctx.scratchpad.budget (set by the chat route or harness).
@@ -33,11 +40,15 @@ const DEFAULT_TOOL_OVERHEAD = 500;
  * Check if executing the next tool would exceed the token budget.
  * Throws BudgetExceededError if so.
  */
-export async function budgetGuardHook(payload: PreToolPayload): Promise<void> {
+export async function budgetGuardHook(
+  payload: PreToolPayload,
+  _toolUseID?: string,
+  _options?: { signal: AbortSignal },
+): Promise<HookJSONOutput> {
   const budgetScratch = payload.ctx.scratchpad.get("budget") as BudgetScratch | undefined;
 
   // If no budget scratch is set, the guard is a no-op (graceful degradation).
-  if (!budgetScratch) return;
+  if (!budgetScratch) return {};
 
   const used = budgetScratch.promptTokensUsed + budgetScratch.completionTokensUsed;
   const overhead = budgetScratch.toolOverhead ?? DEFAULT_TOOL_OVERHEAD;
@@ -49,6 +60,7 @@ export async function budgetGuardHook(payload: PreToolPayload): Promise<void> {
       "prompt_tokens",
     );
   }
+  return {};
 }
 
 /**

@@ -20,6 +20,7 @@
 
 import type { PostTurnPayload } from "../types.js";
 import type { Lifecycle } from "../lifecycle.js";
+import type { HookJSONOutput } from "../hook-output.js";
 
 // ---------------------------------------------------------------------------
 // Compiled patterns (length-bounded — no unbounded quantifiers).
@@ -98,10 +99,16 @@ export function redactString(
  * post_turn handler: scrubs `payload.finalText` in place. Any replacements
  * are appended to a per-turn scratchpad log keyed `redact_log` for observability.
  *
- * This runs even on error paths because the chat route dispatches `post_turn`
- * from a `finally` block (see routes/chat.ts).
+ * This runs even on error paths because `runHarness` dispatches `post_turn`
+ * from its own `finally` block (see `core/harness.ts:195-204`). Routes do
+ * not redispatch — the v1.2 rebuild made `runHarness` the single source of
+ * truth for the dispatch.
  */
-export async function redactSecretsHook(payload: PostTurnPayload): Promise<void> {
+export async function redactSecretsHook(
+  payload: PostTurnPayload,
+  _toolUseID?: string,
+  _options?: { signal: AbortSignal },
+): Promise<HookJSONOutput> {
   const replacements: RedactReplacement[] = [];
 
   const original = payload.finalText ?? "";
@@ -127,6 +134,7 @@ export async function redactSecretsHook(payload: PostTurnPayload): Promise<void>
       },
     ]);
   }
+  return {};
 }
 
 /**
