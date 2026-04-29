@@ -153,3 +153,60 @@ class TestGepaMetric:
         ex = dspy.Example(question="Q?", answer="ans", feedback="up", tool_outputs=[]).with_inputs("question")
         score = metric(ex, Pred())
         assert 0.0 <= score <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# Phase G — Identity-template guard (deep-review #7)
+# ---------------------------------------------------------------------------
+
+
+class TestIdentityTemplateGuard:
+    """run_gepa must mark a run as skipped when the optimised module's
+    extracted template is byte-identical to the seed — otherwise we
+    insert a 'candidate' that's exactly the active prompt, which can
+    never beat itself."""
+
+    def test_skipped_when_extracted_matches_seed(self, monkeypatch):
+        import dspy
+        from unittest.mock import MagicMock
+        from services.optimizer.gepa_runner.gepa import run_gepa
+
+        seed = "You are ChemClaw, the knowledge agent."
+        examples = [
+            dspy.Example(
+                question=f"q{i}",
+                answer="a",
+                feedback="thumbs_up",
+                tool_outputs=[],
+                query_class="retrosynthesis",
+            ).with_inputs("question")
+            for i in range(30)
+        ]
+
+        class FakeSig:
+            instructions = seed
+
+        class FakeModule:
+            signature = FakeSig()
+
+            def predictors(self):
+                return []
+
+        class FakeOptimizer:
+            def __init__(self, *args, **kwargs):
+                pass
+
+            def compile(self, student, trainset):
+                return FakeModule()
+
+        monkeypatch.setattr(dspy, "GEPA", FakeOptimizer, raising=False)
+
+        result = run_gepa(
+            prompt_name="agent.system",
+            current_template=seed,
+            examples=examples,
+            golden_examples=[],
+        )
+
+        assert result.skipped is True
+        assert "identity" in result.skip_reason.lower()
