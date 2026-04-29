@@ -24,7 +24,9 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
 
 # SMILES heuristic: any token containing at least 5 bond/atom characters and
 # at least one ring-closure or bond symbol. Tightened with word boundaries to
@@ -89,7 +91,11 @@ def redact(text: str) -> RedactionResult:
 
     result = RedactionResult(text=text)
 
-    def _sub(pattern: re.Pattern[str], kind: str, extra_check=None):
+    def _sub(
+        pattern: re.Pattern[str],
+        kind: str,
+        extra_check: Callable[[str], bool] | None = None,
+    ) -> None:
         def replace(match: re.Match[str]) -> str:
             value = match.group(0)
             if extra_check is not None and not extra_check(value):
@@ -111,7 +117,7 @@ def redact(text: str) -> RedactionResult:
     return result
 
 
-def redact_messages(messages: list[dict]) -> list[dict]:
+def redact_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Apply redact() to every 'content' field in a list of chat messages.
 
     Also scrubs OpenAI-style assistant tool_calls (each tool_call's

@@ -102,10 +102,12 @@ jobs:
       - name: Mypy (clean subset — see PR-1 description)
         # PR-1 introduces mypy in CI. Strict mypy is too strict for the
         # full tree today (see audit 02-python-hotspots.md), so we run
-        # only on `services/optimizer/session_purger`, which is the one
-        # service that already passes `mypy --strict`. PR-N broadens this
-        # subset rule-by-rule as the underlying type debt is paid down.
-        run: mypy services/optimizer/session_purger
+        # only on services that already pass `mypy --strict`. PR-1
+        # follow-ups broaden this subset rule-by-rule as the underlying
+        # type debt is paid down.
+        run: |
+          mypy services/optimizer/session_purger
+          mypy services/litellm_redactor
       - name: Diff coverage (Python)
         if: github.event_name == 'pull_request'
         run: |
