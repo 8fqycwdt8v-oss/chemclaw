@@ -26,6 +26,13 @@ import type { HookJSONOutput } from "../hook-output.js";
 // Compiled patterns (length-bounded — no unbounded quantifiers).
 // ---------------------------------------------------------------------------
 
+// Defense against pathological input: real prompts are <100KB. Anything past
+// this cap is returned unmodified, bounding worst-case CPU. Even bounded
+// quantifiers do O(n*k) work — n in megabytes is enough to be a soft DoS.
+export const MAX_REDACTION_INPUT_LEN = 5 * 1024 * 1024;
+
+// Always pre-gated on a cheap >=2 '>' count: prose without reaction arrows
+// skips the bounded-quantifier scan entirely.
 const RXN_SMILES = /\S{1,400}>\S{0,400}>\S{1,400}/g;
 
 const SMILES_TOKEN = /(?<![A-Za-z0-9])[A-Za-z0-9@+\-\[\]\(\)=#/\\\.]{6,200}(?![A-Za-z0-9])/g;
@@ -59,15 +66,27 @@ export function redactString(
   value: string,
   replacements: RedactReplacement[],
 ): string {
+  // Bound worst-case CPU: refuse pathologically large input rather than
+  // burn seconds in the regex engine.
+  if (!value || value.length > MAX_REDACTION_INPUT_LEN) {
+    return value;
+  }
+
   let result = value;
 
-  result = result.replace(RXN_SMILES, (match) => {
-    if (match.split(">").length - 1 >= 2) {
-      replacements.push({ pattern: "RXN_SMILES", original: match });
-      return "[REDACTED]";
-    }
-    return match;
-  });
+  // Pre-gate: RXN_SMILES requires two '>' chars; short-circuit with two
+  // O(1)-per-char indexOf calls before invoking the bounded-quantifier scan.
+  const firstArrow = value.indexOf(">");
+  const hasTwoArrows = firstArrow !== -1 && value.indexOf(">", firstArrow + 1) !== -1;
+  if (hasTwoArrows) {
+    result = result.replace(RXN_SMILES, (match) => {
+      if (match.split(">").length - 1 >= 2) {
+        replacements.push({ pattern: "RXN_SMILES", original: match });
+        return "[REDACTED]";
+      }
+      return match;
+    });
+  }
 
   result = result.replace(SMILES_TOKEN, (match) => {
     if (looksLikeSmiles(match)) {
