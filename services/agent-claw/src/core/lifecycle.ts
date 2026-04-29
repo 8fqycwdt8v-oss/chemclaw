@@ -86,6 +86,18 @@ export class Lifecycle {
   }
 
   /**
+   * Returns the names of registered handlers at a given point, in
+   * registration order. Used by the hook-loader-coverage parity test
+   * to assert that each YAML file's `lifecycle:` matches the point
+   * its registrar actually wires the handler to. Returns a copy so
+   * callers can't mutate the internal array.
+   */
+  hookNames(point: HookPoint): string[] {
+    const arr = this._hooks.get(point) ?? [];
+    return arr.map((h) => h.name);
+  }
+
+  /**
    * Dispatch a lifecycle event. All registered handlers for the given point
    * are called sequentially (in registration order).
    *
