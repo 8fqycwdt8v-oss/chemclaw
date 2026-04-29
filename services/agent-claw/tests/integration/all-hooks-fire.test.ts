@@ -4,8 +4,9 @@
 // lifecycle.
 //
 // Phases 1A/1B verified pieces in isolation: 1A locked the YAML loader as
-// the single source of truth for hook registration (9 hooks at the right
-// points), 1B made routes + sub-agents consume the same global lifecycle.
+// the single source of truth for hook registration (now 11 hooks at the right
+// points after Phase 4B's session-events + Phase 6's permission), 1B made
+// routes + sub-agents consume the same global lifecycle.
 // Neither exercised the integrated path — does runHarness actually dispatch
 // pre_turn → pre_tool → post_tool → post_turn end-to-end? This test does.
 //

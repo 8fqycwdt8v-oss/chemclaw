@@ -1,5 +1,13 @@
 // Phase 6: workspace boundary validation.
 //
+// STATUS: helper landed; no caller in production today. The catalog has no
+// filesystem-shaped tool that takes a user-supplied path right now (run_program
+// runs inside the E2B PTC sandbox which manages its own filesystem). When a
+// filesystem-touching tool is added (e.g. a markdown reader, CSV file loader),
+// the author MUST call assertWithinWorkspace explicitly — there is no
+// automatic gating wrapping tool registration. See PARITY.md row "Workspace
+// boundary validation" and ADR 010.
+//
 // Filesystem-touching tools (today: run_program's sandbox path inputs; in
 // future: any tool that reads a user-supplied path) call assertWithinWorkspace
 // before opening the path. The helper rejects:

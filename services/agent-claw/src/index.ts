@@ -477,7 +477,11 @@ const start = async () => {
     // that starts without redact-secrets / budget-guard / etc., quietly
     // letting compound codes through LiteLLM and unbudgeted tool calls
     // through every endpoint.
-    const MIN_EXPECTED_HOOKS = 9;
+    // 11 = 9 pre-rebuild hooks + session-events (Phase 4B) + permission (Phase 6).
+    // Bump every time BUILTIN_REGISTRARS gains an entry so a silent failure to
+    // load a new hook trips the startup gate instead of quietly downgrading
+    // the safety net.
+    const MIN_EXPECTED_HOOKS = 11;
     try {
       const hookResult = await loadHooks(lifecycle, {
         pool,

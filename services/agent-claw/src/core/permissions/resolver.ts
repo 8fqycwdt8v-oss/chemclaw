@@ -1,5 +1,12 @@
 // Phase 6: Permission resolver.
 //
+// STATUS: library-landed; route activation deferred to v1.4. No production
+// route (chat.ts, sessions.ts:runChainedHarness, deep-research.ts,
+// sub-agent.ts) passes a `permissions` option to runHarness today, so this
+// resolver only fires in unit tests and parity scenario 05. When wiring
+// per-route permissionMode, plumb a `permissions` field through the
+// route deps and into the runHarness call. See PARITY.md and ADR 010.
+//
 // Translates the static rule layer (permissionMode + allowedTools /
 // disallowedTools) plus the dynamic hook + callback chain into a single
 // PermissionResolution that step.ts honours BEFORE pre_tool dispatch.

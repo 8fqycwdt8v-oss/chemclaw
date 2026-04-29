@@ -220,7 +220,7 @@ The plan document is at `~/.claude/plans/go-through-the-three-vivid-sunset.md`.
 ## Test counts (current branch)
 
 ```
-cd services/agent-claw && npm test          →  757 passed | 2 skipped (102 files)
+cd services/agent-claw && npm test          →  759 passed (102 files)
 cd services/agent-claw && npx tsc --noEmit  →  ok
 cd services/paperclip && npm test           →  17 passed
 .venv/bin/pytest services/mcp_tools/common/tests/ -q   →  33 passed
@@ -243,11 +243,11 @@ The agent harness (`services/agent-claw/`) has 16 lifecycle hook points. **`load
 | `session_end` | On session finalisation | (declared; no built-ins yet) |
 | `user_prompt_submit` | Before a user turn enters the loop | (declared; no built-ins yet) |
 | `pre_turn` | Before LLM call; after slash parsing | `init-scratch`, `apply-skills` |
-| `pre_tool` | Before a tool executes | `anti-fabrication`, `budget-guard`, `foundation-citation-guard` |
-| `post_tool` | After a tool returns | `tag-maturity`, `source-cache` |
+| `pre_tool` | Before a tool executes | `budget-guard`, `foundation-citation-guard` |
+| `post_tool` | After a tool returns | `anti-fabrication`, `tag-maturity`, `source-cache` |
 | `post_tool_failure` | After a tool throws | (declared; no built-ins yet) |
 | `post_tool_batch` | After a parallel readonly batch resolves | (declared; no built-ins yet) |
-| `permission_request` | When `ask`/`defer` decision returns (Phase 6) | (declared; resolver pending) |
+| `permission_request` | When the resolver in `core/permissions/resolver.ts` needs a decision (Phase 6) | `permission` (no-op default — operators replace with custom policy). NOTE: the resolver is wired in `core/step.ts` but only fires when a route passes a `permissions` option to `runHarness`; no production route does today, so the chain runs only in unit / parity tests. |
 | `subagent_start` | Before a sub-agent runHarness call | (declared; no built-ins yet) |
 | `subagent_stop` | After a sub-agent returns | (declared; no built-ins yet) |
 | `task_created` | When `manage_todos` adds an item | (declared; no built-ins yet) |

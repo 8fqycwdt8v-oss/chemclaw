@@ -49,7 +49,9 @@ Concretely:
 
 1. Every hook `.ts` file in `services/agent-claw/src/core/hooks/` has a
    matching YAML file in `hooks/` AND an entry in `BUILTIN_REGISTRARS`.
-   `BUILTIN_REGISTRARS` now maps 10 hook names to registrars (was 5).
+   `BUILTIN_REGISTRARS` now maps 11 hook names to registrars (was 5;
+   v1.2 brought it to 10 with `session-events`, then Phase 6 added the
+   no-op `permission` registrar to bring it to 11).
 2. `HookDeps` (`{ pool, llm, skillLoader, allTools, tokenBudget }`) is
    the typed dependency bundle threaded into every registrar. Composition
    of dependencies happens in `index.ts` and is the one place where the

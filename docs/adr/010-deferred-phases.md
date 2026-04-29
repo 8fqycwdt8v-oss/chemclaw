@@ -27,22 +27,35 @@ The following items were marked "deferred (Phase 6/8/9/11, v1.3)" in
 the first draft of `docs/PARITY.md` and ADR 010, then implemented on
 the same branch before merge:
 
-### Phase 6 — Permission system foundation
+### Phase 6 — Permission system foundation (library landed; route activation deferred to v1.4)
 
 - Route-level resolver
   (`services/agent-claw/src/core/permissions/resolver.ts`) combines
   `permissionMode` (`default | acceptEdits | plan | dontAsk |
   bypassPermissions`), `allowedTools` / `disallowedTools` filters, and
-  per-route hook decisions.
-- `permission_request` lifecycle point fires when `ask` / `defer`
-  decisions surface; the `permission` hook
-  (`services/agent-claw/src/core/hooks/permission.ts`) gates flow.
+  per-route hook decisions. Wired into `core/step.ts:120` so it runs
+  before `pre_tool` whenever a `permissions` option is passed to
+  `runHarness`.
+- `permission_request` lifecycle point fires when the resolver needs
+  a decision; the `permission` hook
+  (`services/agent-claw/src/core/hooks/permission.ts`) is registered
+  as a no-op default that operators replace with custom policy.
 - Workspace-boundary validation
   (`services/agent-claw/src/security/workspace-boundary.ts`) rejects
   filesystem-shaped tool inputs that resolve outside the configured
   workspace root.
-- Tested by `tests/unit/permission-mode.test.ts` and
-  `tests/unit/workspace-boundary.test.ts`.
+- Tested by `tests/unit/permission-mode.test.ts`,
+  `tests/unit/workspace-boundary.test.ts`, and parity scenario 05.
+
+**Important caveat (route activation deferred to v1.4):** No production
+route (`chat.ts`, `sessions.ts:runChainedHarness`, `deep-research.ts`,
+`sub-agent.ts`) passes a `permissions` option to `runHarness` today, so
+the resolver only fires in unit and parity tests. The library is in
+place for v1.4 to activate per-route. Likewise, `assertWithinWorkspace`
+has no caller — the catalog has no filesystem-shaped tool today, so
+the helper is dormant until one is added. Operators reading the PARITY
+table should treat the three Phase 6 rows as `partial` until route
+wiring lands.
 
 ### Phase 8 — etag / chained / reanimator integration tests
 
