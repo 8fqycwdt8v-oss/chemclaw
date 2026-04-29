@@ -66,3 +66,62 @@ describe("hook loader coverage", () => {
     }
   });
 });
+
+describe("hook YAML/registrar parity", () => {
+  it("every YAML's lifecycle field matches where its registrar actually wires the handler", async () => {
+    const yamlEntries = (await readdir(hooksDir)).filter((f) => f.endsWith(".yaml"));
+
+    // Build a map of name → declared lifecycle from each YAML file.
+    const declared = new Map<string, string>();
+    for (const file of yamlEntries) {
+      const raw = await readFile(resolve(hooksDir, file), "utf8");
+      const parsed = parseYaml(raw) as { name?: string; lifecycle?: string; enabled?: boolean };
+      if (parsed.enabled === false) continue;
+      if (parsed.name && parsed.lifecycle) {
+        declared.set(parsed.name, parsed.lifecycle);
+      }
+    }
+
+    // Run the loader, then introspect the lifecycle to discover where
+    // each registered hook actually landed.
+    const lc = new Lifecycle();
+    await loadHooks(lc, mockHookDeps(), hooksDir);
+
+    // Cover the 5 core points + every extended point that has a built-in
+    // registrar (session_start for session-events, permission_request for
+    // the permission hook). Adding a hook that fires at a new extended
+    // point requires bumping this list — that's the audit-friendly trade.
+    const points = [
+      "pre_turn",
+      "pre_tool",
+      "post_tool",
+      "pre_compact",
+      "post_compact",
+      "post_turn",
+      "session_start",
+      "session_end",
+      "user_prompt_submit",
+      "post_tool_failure",
+      "post_tool_batch",
+      "permission_request",
+      "subagent_start",
+      "subagent_stop",
+      "task_created",
+      "task_completed",
+    ] as const;
+    const actual = new Map<string, string>();
+    for (const point of points) {
+      for (const name of lc.hookNames(point)) {
+        actual.set(name, point);
+      }
+    }
+
+    // Each declared YAML must match its registrar's actual point. A
+    // mismatch means the YAML is lying about where the hook fires —
+    // future drift fails CI.
+    for (const [name, declaredPoint] of declared) {
+      const actualPoint = actual.get(name);
+      expect(actualPoint, `hook ${name}: YAML declares ${declaredPoint}`).toBe(declaredPoint);
+    }
+  });
+});

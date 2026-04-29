@@ -74,6 +74,7 @@ import { VERB_TO_SKILL } from "../core/skills.js";
 import { writeEvent, setupSse } from "../streaming/sse.js";
 import { makeSseSink } from "../streaming/sse-sink.js";
 import { startRootTurnSpan, recordLlmUsage, recordSpanError } from "../observability/spans.js";
+import { context as otelContext, trace } from "@opentelemetry/api";
 import {
   PaperclipClient,
   PaperclipBudgetError,
@@ -491,37 +492,9 @@ async function handleChat(
     maxPromptTokens: deps.config.AGENT_TOKEN_BUDGET,
   });
 
-  if (!doStream) {
-    // Non-streaming path.
-    try {
-      if (isPlanMode) {
-        // Plan mode: ask LLM to produce a JSON plan; no tool execution.
-        const planJson = await deps.llm.completeJson({
-          system: systemPrompt,
-          user: lastUserMessage?.content ?? "",
-        });
-        const steps = parsePlanSteps(planJson);
-        const plan = createPlan(steps, messages, user);
-        planStore.save(plan);
-        cleanupSkillForTurn?.();
-        return void reply.send({
-          plan_id: plan.plan_id,
-          steps: plan.steps,
-          created_at: plan.created_at,
-        });
-      }
-      const result = await agent.run({ messages, ctx });
-      cleanupSkillForTurn?.();
-      return void reply.send({ text: result.text, finishReason: result.finishReason, usage: result.usage });
-    } catch (err) {
-      req.log.error({ err }, "chat generate failed");
-      cleanupSkillForTurn?.();
-      return void reply.code(500).send({ error: "internal" });
-    }
-  }
-
-  // ------- Paperclip reservation (Phase D) -------
-  // Reserve budget BEFORE opening SSE so a 429 surfaces with Retry-After.
+  // ------- Paperclip reservation (Phase D) — applies to BOTH streaming and
+  // non-streaming paths so daily-USD enforcement is uniform. A budget refusal
+  // surfaces as HTTP 429 with Retry-After before any response body opens.
   let paperclipHandle: ReservationHandle | null = null;
   if (deps.paperclip) {
     try {
@@ -547,16 +520,11 @@ async function handleChat(
     }
   }
 
-  // ------- SSE streaming path -------
-  setupSse(reply);
-
-  // NOTE: onSession fires BEFORE pre_turn (when both streamSink and
-  // sessionId are set) — runHarness drives the `session` SSE event via the
-  // sink. We do NOT emit it here directly — that would double-fire when
-  // runHarness runs.
-
   // Open the OTel root span for the turn — emits the Langfuse `prompt:<name>`
-  // tag so the GEPA runner's tag-filtered fetch returns this trace.
+  // tag so the GEPA runner's tag-filtered fetch returns this trace. Opened
+  // BEFORE the doStream branch so both paths inherit the same span context
+  // (plan-mode / non-streaming completeJson calls inherit via context.with()
+  // below).
   const rootSpan = startRootTurnSpan({
     traceId: body.agent_trace_id ?? sessionId ?? "unknown",
     userEntraId: user,
@@ -565,6 +533,87 @@ async function handleChat(
     promptVersion: activePromptVersion,
     sessionId: sessionId ?? undefined,
   });
+
+  // Helper: release Paperclip + close root span. Called from the non-streaming
+  // path's success / error returns; the streaming path has its own finally
+  // block that does the same work plus session persistence + post_turn.
+  const closeNonStreamingTurn = async (
+    promptTokens: number,
+    completionTokens: number,
+  ) => {
+    try {
+      recordLlmUsage(rootSpan, {
+        promptTokens,
+        completionTokens,
+        model: deps.config.AGENT_MODEL,
+      });
+    } catch (spanErr) {
+      try { recordSpanError(rootSpan, spanErr); } catch { /* ignore */ }
+    }
+    try { rootSpan.end(); } catch { /* ignore */ }
+
+    if (paperclipHandle) {
+      try {
+        const totalTokens = promptTokens + completionTokens;
+        const actualUsd = totalTokens * USD_PER_TOKEN_ESTIMATE;
+        await paperclipHandle.release(totalTokens, actualUsd);
+      } catch (relErr) {
+        req.log.warn({ err: relErr }, "paperclip /release failed (non-fatal)");
+      }
+    }
+  };
+
+  if (!doStream) {
+    // Non-streaming path. Mirrors the streaming path's Paperclip + rootSpan
+    // wiring so daily-USD caps and Langfuse trace tagging apply uniformly.
+    try {
+      if (isPlanMode) {
+        // Plan mode: ask LLM to produce a JSON plan; no tool execution.
+        // Run the completeJson call inside the rootSpan's OTel context so
+        // LiteLLM's auto-instrumentation parents its trace under the
+        // root and inherits the prompt:agent.system tag (deep-review #6).
+        const planJson = await otelContext.with(
+          trace.setSpan(otelContext.active(), rootSpan),
+          () =>
+            deps.llm.completeJson({
+              system: systemPrompt,
+              user: lastUserMessage?.content ?? "",
+            }),
+        );
+        const steps = parsePlanSteps(planJson);
+        const plan = createPlan(steps, messages, user);
+        planStore.save(plan);
+        cleanupSkillForTurn?.();
+        await closeNonStreamingTurn(0, 0);
+        return void reply.send({
+          plan_id: plan.plan_id,
+          steps: plan.steps,
+          created_at: plan.created_at,
+        });
+      }
+      const result = await otelContext.with(
+        trace.setSpan(otelContext.active(), rootSpan),
+        () => agent.run({ messages, ctx }),
+      );
+      cleanupSkillForTurn?.();
+      await closeNonStreamingTurn(result.usage.promptTokens, result.usage.completionTokens);
+      return void reply.send({ text: result.text, finishReason: result.finishReason, usage: result.usage });
+    } catch (err) {
+      req.log.error({ err }, "chat generate failed");
+      cleanupSkillForTurn?.();
+      try { recordSpanError(rootSpan, err); } catch { /* ignore */ }
+      await closeNonStreamingTurn(0, 0);
+      return void reply.code(500).send({ error: "internal" });
+    }
+  }
+
+  // ------- SSE streaming path -------
+  setupSse(reply);
+
+  // NOTE: onSession fires BEFORE pre_turn (when both streamSink and
+  // sessionId are set) — runHarness drives the `session` SSE event via the
+  // sink. We do NOT emit it here directly — that would double-fire when
+  // runHarness runs.
 
   let closed = false;
   const onClose = () => { closed = true; };
@@ -589,14 +638,21 @@ async function handleChat(
   const _streamRedactions: RedactReplacement[] = [];
   let budget: Budget | undefined;
 
+  // Make rootSpan the active OTel context for the rest of the turn so
+  // every LiteLLM auto-instrumented call inherits the parent and the
+  // `prompt:agent.system` tag. The AsyncLocalStorageContextManager
+  // registered in observability/otel.ts propagates this across awaits.
+  const turnCtx = trace.setSpan(otelContext.active(), rootSpan);
   try {
     // Plan mode: ask LLM for a JSON plan; emit plan_step + plan_ready; no tool execution.
     if (isPlanMode) {
       try {
-        const planJson = await deps.llm.completeJson({
-          system: systemPrompt,
-          user: lastUserMessage?.content ?? "",
-        });
+        const planJson = await otelContext.with(turnCtx, () =>
+          deps.llm.completeJson({
+            system: systemPrompt,
+            user: lastUserMessage?.content ?? "",
+          }),
+        );
         const steps = parsePlanSteps(planJson);
 
         // Emit plan_step events.
@@ -705,6 +761,12 @@ async function handleChat(
       sessionId: sessionId ?? undefined,
     });
 
+    // v1.2 collapse: the hand-rolled call()→streamCompletion()→pre_tool /
+    // post_tool / todo_update wiring that previously lived here was deleted
+    // when runHarness became the single source of truth for the loop. All
+    // those dispatches happen inside runHarness now, and the SSE adapter
+    // (makeSseSink) translates StreamSink callbacks into the same wire
+    // events. Keep the route handler short — see ADR 008.
     finishReason = result.finishReason;
   } catch (err) {
     // Distinguish typed control-flow / quota errors so clients can render

@@ -95,3 +95,69 @@ class TestCheckClassMinimums:
         groups = {"analytical": [object()] * (MIN_EXAMPLES_PER_CLASS - 1)}
         result = check_class_minimums(groups)
         assert result["analytical"] is False
+
+
+# ---------------------------------------------------------------------------
+# Phase G — scoring-based classify_question + broader obs.type filter
+# ---------------------------------------------------------------------------
+
+
+class TestClassifyQuestionScoring:
+    """First-keyword-match-wins biases the training distribution toward
+    whichever class has the highest-frequency keyword. Scoring counts
+    keyword hits per class and picks argmax."""
+
+    def test_cross_project_dominates_when_more_keywords_match(self):
+        from services.optimizer.gepa_runner.examples import classify_question
+
+        # 1 retrosynthesis keyword (retro), 3 cross_project (compare,
+        # multiple, project).
+        q = "Compare retro routes across multiple projects in our portfolio"
+        assert classify_question(q) == "cross_project"
+
+    def test_falls_back_to_cross_project_when_no_keywords(self):
+        from services.optimizer.gepa_runner.examples import classify_question
+        assert classify_question("hello world") == "cross_project"
+
+    def test_single_strong_signal_picks_that_class(self):
+        from services.optimizer.gepa_runner.examples import classify_question
+        assert classify_question("Optimise HPLC method for impurity X") == "analytical"
+
+
+class TestTraceObservationTypes:
+    """Langfuse OTel records observations with type='SPAN' (uppercase) or
+    'GENERATION' (LLM calls). The original lowercase 'span' filter never
+    matched real traces; tool_outputs ended up empty."""
+
+    def test_accepts_uppercase_span(self):
+        from services.optimizer.gepa_runner.examples import traces_to_examples
+
+        traces = [
+            {
+                "id": "t1",
+                "input": {"messages": [{"role": "user", "content": "What HPLC method?"}]},
+                "output": {"answer": "Use C18 column"},
+                "observations": [
+                    {"type": "SPAN", "output": {"fact_id": "abc123"}},
+                ],
+            }
+        ]
+        examples = traces_to_examples(traces, [])
+        assert len(examples) == 1
+        assert examples[0].tool_outputs == [{"fact_id": "abc123"}]
+
+    def test_accepts_generation_type(self):
+        from services.optimizer.gepa_runner.examples import traces_to_examples
+
+        traces = [
+            {
+                "id": "t1",
+                "input": {"messages": [{"role": "user", "content": "What HPLC method?"}]},
+                "output": {"answer": "Use C18 column"},
+                "observations": [
+                    {"type": "GENERATION", "output": {"fact_id": "xyz789"}},
+                ],
+            }
+        ]
+        examples = traces_to_examples(traces, [])
+        assert examples[0].tool_outputs == [{"fact_id": "xyz789"}]

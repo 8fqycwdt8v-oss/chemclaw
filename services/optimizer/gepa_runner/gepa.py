@@ -159,6 +159,25 @@ def run_gepa(
     # Extract the optimised prompt text from the module's predictors.
     new_template = _extract_template(optimized, current_template)
 
+    # Guard against the "extraction returned the seed" path. DSPy's Predict
+    # exposes the *signature docstring* via pred.signature.instructions; if
+    # the optimiser failed to evolve a meaningfully different prompt (or if
+    # _extract_template walked off into a dead branch), inserting that
+    # value as a "candidate" produces a row that is byte-identical to the
+    # active version. Such a row can never beat the active prompt in
+    # shadow scoring (it's the same prompt) and just clutters the registry.
+    if _is_identity_template(new_template, current_template):
+        return GepaResult(
+            prompt_name=prompt_name,
+            new_template=current_template,
+            golden_score=0.0,
+            feedback_rate=feedback_rate,
+            per_class_breakdown=per_class_breakdown,
+            gepa_metadata={"reason": "identity_template"},
+            skipped=True,
+            skip_reason="identity template — optimiser returned the seed",
+        )
+
     gepa_metadata: dict[str, Any] = {
         "generations": generations,
         "population_size": population_size,
@@ -214,3 +233,13 @@ def _extract_template(module: dspy.Module, fallback: str) -> str:
     except Exception:
         logger.exception("_extract_template traversal failed")
     return fallback
+
+
+def _is_identity_template(candidate: str, seed: str) -> bool:
+    """Return True if the candidate is the same prompt as the seed.
+
+    Compares on stripped content so trailing whitespace differences
+    don't accidentally pass. Doesn't normalise case — instruction
+    case can be semantically meaningful.
+    """
+    return candidate.strip() == seed.strip()

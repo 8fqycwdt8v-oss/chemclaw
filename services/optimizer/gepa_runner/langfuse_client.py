@@ -56,14 +56,39 @@ class LangfuseTraceClient:
         prompt_name: str,
         hours: int = 24,
     ) -> list[dict[str, Any]]:
-        """Return a list of trace dicts for `prompt_name` in the last `hours` hours."""
-        since = datetime.now(tz=timezone.utc) - timedelta(hours=hours)
+        """Return a list of trace dicts for `prompt_name` in the last `hours` hours.
 
-        # Langfuse SDK: fetch_traces returns a FetchTracesResponse with .data
-        resp = self._client.fetch_traces(
-            tags=[f"prompt:{prompt_name}"],
-            from_timestamp=since,
-        )
+        Probes the v3 SDK path first (``client.api.trace.list``), falls back
+        to v2 (``client.fetch_traces``). Both APIs return a list-like object
+        with a ``.data`` attribute or are list-like themselves; ``_to_dict``
+        normalises individual entries.
+
+        Raises:
+            AttributeError: if neither API surface exists. Surfacing this
+            instead of silently returning [] keeps GEPA's degraded path
+            actionable — an empty list looks identical to "no traces this
+            window" otherwise.
+        """
+        since = datetime.now(tz=timezone.utc) - timedelta(hours=hours)
+        tag = f"prompt:{prompt_name}"
+
+        # v3 path: client.api.trace.list(tags=[...], from_timestamp=...)
+        api = getattr(self._client, "api", None)
+        trace_api = getattr(api, "trace", None) if api is not None else None
+        list_fn = getattr(trace_api, "list", None) if trace_api is not None else None
+        if callable(list_fn):
+            resp = list_fn(tags=[tag], from_timestamp=since)
+        else:
+            # v2 fallback: client.fetch_traces(tags=[...], from_timestamp=...)
+            fetch_traces = getattr(self._client, "fetch_traces", None)
+            if not callable(fetch_traces):
+                raise AttributeError(
+                    "Langfuse client exposes neither api.trace.list (v3) nor "
+                    "fetch_traces (v2); GEPA cannot fetch training traces. "
+                    "Pin langfuse to a known version or update this client."
+                )
+            resp = fetch_traces(tags=[tag], from_timestamp=since)
+
         traces = getattr(resp, "data", resp) or []
         return [self._to_dict(t) for t in traces]
 

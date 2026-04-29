@@ -36,6 +36,47 @@ _last_run_status: str = "never"
 _last_run_details: dict[str, Any] = {}
 
 # ---------------------------------------------------------------------------
+# DSPy LM configuration
+# ---------------------------------------------------------------------------
+
+def _configure_dspy_lm() -> None:
+    """Configure DSPy's global LM to point at the LiteLLM gateway.
+
+    DSPy needs a configured LM before any optimiser can compile a module.
+    The agent-claw service routes every LLM call through LiteLLM (the
+    project's single egress chokepoint — see CLAUDE.md / ADR 006); the
+    optimiser uses the same gateway so the redactor callback applies
+    uniformly to training-time calls.
+
+    Raises:
+        RuntimeError: if LITELLM_BASE_URL / LITELLM_API_KEY are unset.
+        Failing fast here lets ``run_gepa_nightly`` mark the run as 'error'
+        so /healthz is honest about what didn't run.
+    """
+    import dspy
+
+    base = os.environ.get("LITELLM_BASE_URL")
+    api_key = os.environ.get("LITELLM_API_KEY")
+    if not base or not api_key:
+        raise RuntimeError(
+            "LITELLM_BASE_URL and LITELLM_API_KEY must be set; the GEPA "
+            "runner uses the LiteLLM gateway as its single egress point. "
+            "Without an LM configured, every prompt errors silently."
+        )
+    model_alias = os.environ.get("GEPA_MODEL", "executor")
+    # DSPy's LiteLLM provider expects "openai/<model_or_alias>" so it routes
+    # through the OpenAI-compatible adapter; LiteLLM itself maps the alias
+    # to the upstream provider per services/litellm/config.yaml.
+    lm = dspy.LM(
+        model=f"openai/{model_alias}",
+        api_base=base,
+        api_key=api_key,
+    )
+    dspy.configure(lm=lm)
+    logger.info("DSPy LM configured via LiteLLM (model=%s)", model_alias)
+
+
+# ---------------------------------------------------------------------------
 # DB helpers
 # ---------------------------------------------------------------------------
 
@@ -182,6 +223,13 @@ async def run_gepa_nightly(
     details: dict[str, Any] = {}
 
     try:
+        # Wire DSPy to LiteLLM before doing anything else. A misconfigured
+        # gateway turns every per-prompt run into an exception with no
+        # actionable signal in /healthz; failing fast here marks the
+        # run as 'error' so the operator notices the missing env var
+        # immediately instead of after a week of green-but-empty runs.
+        _configure_dspy_lm()
+
         dsn = _get_dsn()
         lf_client = langfuse_client or LangfuseTraceClient()
         golden_examples = _load_golden_examples(fixture_path)
@@ -249,7 +297,15 @@ async def run_gepa_nightly(
                     logger.exception("GEPA failed for prompt %s: %s", name, exc)
                     details[name] = {"status": "error", "error": str(exc)}
 
-        _last_run_status = "ok"
+        # Surface aggregate status honestly: 'ok' only if no per-prompt
+        # error fired. `degraded` covers partial failure without masking
+        # it as success so /healthz doesn't lie when GEPA can't reach
+        # an LM, the registry, or Langfuse.
+        any_error = any(
+            isinstance(d, dict) and d.get("status") == "error"
+            for d in details.values()
+        )
+        _last_run_status = "degraded" if any_error else "ok"
     except Exception as exc:
         logger.exception("GEPA nightly run failed: %s", exc)
         _last_run_status = "error"

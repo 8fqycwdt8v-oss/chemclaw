@@ -152,3 +152,56 @@ describe("ShadowEvaluator", () => {
     expect(score).toBeLessThanOrEqual(1);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase G next-pass #10 — shadow score uses citation-faithfulness signal
+// ---------------------------------------------------------------------------
+
+describe("ShadowEvaluator — citation-faithfulness scoring", () => {
+  it("scores 1.0 (no claims) for a response without UUID citations", async () => {
+    const ShadowEvaluator = await importEvaluator();
+    const futureDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const registry = makeRegistry([
+      { template: "shadow prompt", version: 2, shadowUntil: futureDate },
+    ]);
+    // Plain response, no UUIDs — should score high (faith=1.0 trivially).
+    const llm = makeLlm("Use a C18 column with 30:70 ACN/water mobile phase.");
+    const evaluator = new ShadowEvaluator(registry as never, llm as never, makePool() as never, 1.0);
+    await evaluator.evaluateAsync({
+      promptName: "agent.system",
+      messages: [{ role: "user", content: "What HPLC method?" }],
+      traceId: "t1",
+      userEntraId: "user@test.com",
+    });
+    const call = registry.recordShadowScore.mock.calls[0]!;
+    const score = call[3] as number;
+    // 0.8 * 1.0 (faithful) + 0.2 * lenScore.
+    // Length of the response above is ~62 chars, lenScore ≈ 1 - |62-600|/3000 ≈ 0.821.
+    expect(score).toBeGreaterThan(0.85);
+  });
+
+  it("scores 0.0-faith when response cites an unsupported UUID", async () => {
+    const ShadowEvaluator = await importEvaluator();
+    const futureDate = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000);
+    const registry = makeRegistry([
+      { template: "shadow prompt", version: 2, shadowUntil: futureDate },
+    ]);
+    // Fabricated UUID — shadow has no tool_outputs to ground against, so
+    // any cited UUID counts as unfaithful → faith=0.0.
+    const fakeUuid = "12345678-1234-1234-1234-123456789012";
+    const responseText = `According to fact ${fakeUuid}, use C18.`;
+    const llm = makeLlm(responseText);
+    const evaluator = new ShadowEvaluator(registry as never, llm as never, makePool() as never, 1.0);
+    await evaluator.evaluateAsync({
+      promptName: "agent.system",
+      messages: [{ role: "user", content: "What HPLC method?" }],
+      traceId: "t1",
+      userEntraId: "user@test.com",
+    });
+    const call = registry.recordShadowScore.mock.calls[0]!;
+    const score = call[3] as number;
+    // 0.8 * 0 (unfaithful) + 0.2 * lenScore (~0.83) ≈ 0.166.
+    // Below the 0.80 promotion floor — fabricator prompts get rejected.
+    expect(score).toBeLessThan(0.30);
+  });
+});
