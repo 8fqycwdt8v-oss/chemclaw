@@ -575,6 +575,9 @@ services:
       LANGFUSE_HOST: ${LANGFUSE_HOST:-http://langfuse:3000}
       LANGFUSE_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-}
       LANGFUSE_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-}
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-chemclaw-dev-master-change-me}
+      GEPA_MODEL: ${GEPA_MODEL:-executor}
       GEPA_PORT: "8010"
       GEPA_GOLDEN_FIXTURE: /app/tests/golden/chem_qa_v1.fixture.jsonl
     ports:
