@@ -27,6 +27,9 @@ import type { StreamSink, TodoSnapshot } from "./streaming-sink.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 import { resolveDecision } from "./permissions/resolver.js";
 import { withToolSpan } from "../observability/tool-spans.js";
+import { getLogger } from "../observability/logger.js";
+
+const log = getLogger("step");
 
 export interface StepOnceOptions {
   llm: LlmProvider;
@@ -159,14 +162,13 @@ async function _runOneTool(opts: {
   // "ask" / "defer" require route-level handling; for now treat as allow.
   // TODO(phase-6-permissions): wire ask/defer to a route-level prompt.
   if (preResult.decision === "ask" || preResult.decision === "defer") {
-    // No logger is in scope at this layer (stepOnce is called from the
-    // harness loop, which is reached from many routes / sub-agent flows).
-    // Use console.warn so the gap is observable in dev + production.
-    // eslint-disable-next-line no-console
-    console.warn(
-      `[step] decision=${preResult.decision} treated as allow ` +
-        `(Phase 6 will implement the route-level resolver) ` +
-        `toolId=${toolId} reason=${preResult.reason ?? "(none)"}`,
+    log.warn(
+      {
+        decision: preResult.decision,
+        toolId,
+        reason: preResult.reason ?? null,
+      },
+      "decision treated as allow (Phase 6 will implement the route-level resolver)",
     );
   }
 

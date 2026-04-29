@@ -26,6 +26,9 @@ import type {
 import { mostRestrictive } from "./hook-output.js";
 import type { HookPayloadMap, HookPoint } from "./types.js";
 import { withHookSpan } from "../observability/hook-spans.js";
+import { getLogger } from "../observability/logger.js";
+
+const log = getLogger("lifecycle");
 
 // Internal: store each handler with a name + matcher + per-hook timeout.
 interface RegisteredHook<P> {
@@ -252,15 +255,12 @@ export class Lifecycle {
           // the tool call by throwing.
           throw err;
         }
-        // TODO(observability): replace with a centralised pino logger when
-        // one is introduced (Phase 9 self-review: no shared logger module
-        // exists yet; the per-hook OTel span emits ERROR status with
-        // recordException so the failure is observable in Langfuse — this
-        // console.error remains as a developer-facing fallback).
-        // eslint-disable-next-line no-console
-        console.error(
-          `[lifecycle] non-pre_tool hook "${hook.name}" at "${point}" threw — continuing with remaining hooks`,
-          err,
+        // The per-hook OTel span emits ERROR status with recordException so
+        // the failure is also visible in Langfuse; this structured log line
+        // is the developer-facing fallback in plain log shippers.
+        log.error(
+          { hook: hook.name, point, err: err instanceof Error ? err : String(err) },
+          "non-pre_tool hook threw — continuing with remaining hooks",
         );
       } finally {
         clearTimeout(timer);

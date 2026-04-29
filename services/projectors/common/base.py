@@ -284,6 +284,21 @@ class BaseProjector(ABC):
     ) -> None:
         event_id = row["id"]
         event_type = row["event_type"]
+        payload = row["payload"] or {}
+        # Correlation ID: ingestion writers MAY include `request_id` in the
+        # JSONB payload (sourced from the originating HTTP request's
+        # `x-request-id` header / `request.state.request_id`). When present
+        # we surface it on every log line for this event so a single trace
+        # spans the HTTP boundary -> canonical INSERT -> projector. When
+        # absent we silently fall back to the event id, keeping logs useful
+        # for legacy ingesters that haven't been retrofitted yet.
+        request_id = payload.get("request_id") if isinstance(payload, dict) else None
+        # `extra` is merged into every log record by the LoggerAdapter so
+        # downstream shippers (or a structured handler) can key on the field.
+        log_ctx = logging.LoggerAdapter(
+            log,
+            {"request_id": request_id, "event_id": event_id, "projector": self.name},
+        )
         should_ack = True
 
         try:
@@ -299,15 +314,15 @@ class BaseProjector(ABC):
                     event_type=event_type,
                     source_table=row["source_table"],
                     source_row_id=row["source_row_id"],
-                    payload=row["payload"] or {},
+                    payload=payload,
                 )
         except PermanentHandlerError as exc:
-            log.warning(
+            log_ctx.warning(
                 "[%s] permanent handler error on event %s: %s (acking to stop retries)",
                 self.name, event_id, exc,
             )
         except Exception:
-            log.exception(
+            log_ctx.exception(
                 "[%s] transient handler error on event %s; NOT acking", self.name, event_id
             )
             should_ack = False
@@ -325,4 +340,4 @@ class BaseProjector(ABC):
                 (event_id, self.name),
             )
         await work_conn.commit()
-        log.debug("[%s] acked %s (%s)", self.name, event_id, event_type)
+        log_ctx.debug("[%s] acked %s (%s)", self.name, event_id, event_type)

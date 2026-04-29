@@ -17,6 +17,9 @@ import type { ModelRole } from "../llm/provider.js";
 import { postJson } from "../mcp/postJson.js";
 import type { SandboxClient } from "../core/sandbox.js";
 import { wrapCode, parseOutputs, buildStubLibrary } from "./builtins/run_program.js";
+import { getLogger } from "../observability/logger.js";
+
+const log = getLogger("ToolRegistry");
 
 // ---------------------------------------------------------------------------
 // Role tier ordering (planner > executor > compactor > judge).
@@ -318,10 +321,9 @@ export class ToolRegistry {
       const isProgrammaticBuiltin =
         existing !== undefined && row.source !== "builtin";
       if (isProgrammaticBuiltin) {
-        // eslint-disable-next-line no-console
-        console.warn(
-          `[ToolRegistry] DB row source="${row.source}" for "${row.name}" ` +
-            `would overwrite a programmatically-registered tool — skipping.`,
+        log.warn(
+          { toolName: row.name, dbSource: row.source },
+          "DB row would overwrite a programmatically-registered tool — skipping",
         );
         continue;
       }
@@ -388,9 +390,9 @@ export class ToolRegistry {
       }
       if (!this._sandboxClient) {
         // SandboxClient not injected — log and skip.
-        // eslint-disable-next-line no-console
-        console.warn(
-          `ToolRegistry: skipping forged tool '${row.name}' — setSandboxClient() was not called.`,
+        log.warn(
+          { toolName: row.name },
+          "skipping forged tool — setSandboxClient() was not called",
         );
         return null;
       }
@@ -436,9 +438,9 @@ export class ToolRegistry {
             }
           } else if (!codeCache.has(name)) {
             // First call for a legacy tool with no stored hash. Log once.
-            // eslint-disable-next-line no-console
-            console.warn(
-              `ToolRegistry: forged tool '${name}' has no code_sha256 (legacy row). Re-forge to enable integrity checking.`,
+            log.warn(
+              { toolName: name },
+              "forged tool has no code_sha256 (legacy row) — re-forge to enable integrity checking",
             );
           }
           codeCache.set(name, code);

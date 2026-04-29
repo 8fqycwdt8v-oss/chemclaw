@@ -8,6 +8,9 @@
 //   - All methods throw SandboxError on failure.
 
 import type { Config } from "../config.js";
+import { getLogger } from "../observability/logger.js";
+
+const log = getLogger("SandboxClient");
 
 // ---------------------------------------------------------------------------
 // Types
@@ -239,8 +242,10 @@ export function buildSandboxClient(cfg: Pick<Config, "E2B_API_KEY" | "E2B_TEMPLA
         await instance.kill();
       } catch (err) {
         // Non-fatal — log but don't throw.
-        // eslint-disable-next-line no-console
-        console.warn(`SandboxClient: kill() failed for sandbox ${handle.id}: ${(err as Error).message}`);
+        log.warn(
+          { sandboxId: handle.id, err: (err as Error).message },
+          "kill() failed for sandbox",
+        );
       }
     },
   };
