@@ -207,7 +207,10 @@ export async function loadHooks(
       continue;
     }
 
-    if (hook.enabled === false) {
+    // explicit-false check: undefined or true means "enabled"; only an
+    // explicit `enabled: false` in YAML disables the hook. Don't simplify
+    // to `!hook.enabled` — that would treat undefined as disabled too.
+    if (hook.enabled !== undefined && !hook.enabled) {
       result.skipped.push(`${file}: disabled`);
       continue;
     }

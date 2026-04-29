@@ -214,11 +214,11 @@ export function buildSearchKnowledgeTool(pool: Pool, mcpEmbedderUrl: string) {
         switch (mode) {
           case "dense": {
             const dense = await denseSearch(client, embedding!, k, sourceTypes);
-            return dense.map((r) => ({ ...r, score: 1 - Number(r.distance ?? 0) }));
+            return dense.map((r) => ({ ...r, score: 1 - (r.distance ?? 0) }));
           }
           case "sparse": {
             const sparse = await sparseSearch(client, query, k, sourceTypes);
-            return sparse.map((r) => ({ ...r, score: Number(r.trgm_sim ?? 0) }));
+            return sparse.map((r) => ({ ...r, score: r.trgm_sim ?? 0 }));
           }
           default: {
             const [dense, sparse] = await Promise.all([

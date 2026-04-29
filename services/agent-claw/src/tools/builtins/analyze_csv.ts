@@ -297,13 +297,13 @@ export function buildAnalyzeCsvTool(pool: Pool, docFetcherUrl: string) {
         throw new Error("analyze_csv: CSV is empty.");
       }
 
-      const headers = (allRows[0] ?? []).map((h) => String(h).trim());
+      const headers = (allRows[0] ?? []).map((h) => h.trim());
       const dataRows = allRows.slice(1);
       const rowCount = dataRows.length;
 
       // ── Build column summaries. ─────────────────────────────────────────────
       const columnSummaries: ColumnSummaryItem[] = headers.map((header, idx) => {
-        const values = dataRows.map((row) => String(row[idx] ?? ""));
+        const values = dataRows.map((row) => row[idx] ?? "");
         return buildColumnSummary(header, values);
       });
 

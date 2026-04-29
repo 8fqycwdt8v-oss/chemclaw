@@ -55,7 +55,7 @@ export default tseslint.config(
       '@typescript-eslint/no-redundant-type-constituents': 'error',
       '@typescript-eslint/unbound-method': 'warn',
       '@typescript-eslint/restrict-plus-operands': 'warn',
-      '@typescript-eslint/prefer-promise-reject-errors': 'warn',
+      '@typescript-eslint/prefer-promise-reject-errors': 'error',
       '@typescript-eslint/only-throw-error': 'warn',
       '@typescript-eslint/no-base-to-string': 'warn',
       '@typescript-eslint/no-deprecated': 'warn',
@@ -80,10 +80,13 @@ export default tseslint.config(
       '@typescript-eslint/no-mixed-enums': 'warn',
       '@typescript-eslint/prefer-includes': 'warn',
       '@typescript-eslint/no-unused-expressions': 'warn',
-      '@typescript-eslint/no-unnecessary-boolean-literal-compare': 'warn',
+      '@typescript-eslint/no-unnecessary-boolean-literal-compare': 'error',
       '@typescript-eslint/no-invalid-void-type': 'error',
       '@typescript-eslint/no-unnecessary-type-parameters': 'warn',
-      '@typescript-eslint/no-unnecessary-type-conversion': 'warn',
+      '@typescript-eslint/no-unnecessary-type-conversion': 'error',
+      // PR-1 paydown: prefer-promise-reject-errors flipped to error after
+      // wrapping signal.reason narrowing in lifecycle.ts.
+
       // Plain ESLint rules that strict-type-checked also enables.
       'no-empty': 'warn',
       'no-control-regex': 'warn',

@@ -191,21 +191,18 @@ export class Lifecycle {
               hook.handler as HookCallback
             )(payload, opts.toolUseID, { signal: ac.signal });
             const abortPromise = new Promise<never>((_, reject) => {
+              const reasonAsError = (): Error => {
+                const reason: unknown = ac.signal.reason;
+                if (reason instanceof Error) return reason;
+                return new Error(`hook timeout: ${hook.name}`);
+              };
               if (ac.signal.aborted) {
-                reject(
-                  ac.signal.reason ??
-                    new Error(`hook timeout: ${hook.name}`),
-                );
+                reject(reasonAsError());
                 return;
               }
               ac.signal.addEventListener(
                 "abort",
-                () => {
-                  reject(
-                    ac.signal.reason ??
-                      new Error(`hook timeout: ${hook.name}`),
-                  );
-                },
+                () => { reject(reasonAsError()); },
                 { once: true },
               );
             });
