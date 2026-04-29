@@ -14,9 +14,11 @@
 import Fastify from "fastify";
 import { z } from "zod";
 import { randomUUID } from "crypto";
+import { Pool } from "pg";
 import { BudgetManager, DEFAULT_BUDGET_CONFIG } from "./budget.js";
 import { HeartbeatTracker } from "./heartbeat.js";
 import { MetricsCollector } from "./metrics.js";
+import { PaperclipState } from "./persistence.js";
 
 // ---------------------------------------------------------------------------
 // Config from env
@@ -42,6 +44,20 @@ const budgetMgr = new BudgetManager({
 
 const heartbeat = new HeartbeatTracker(HEARTBEAT_TTL_MS);
 const metrics = new MetricsCollector();
+
+// ---------------------------------------------------------------------------
+// Persistence (Phase G — closes deep-review #11).
+// ---------------------------------------------------------------------------
+//
+// Hot path stays in-process; Postgres is the durable shadow so a sidecar
+// restart doesn't reset the daily-USD ledger. When PAPERCLIP_PG_DSN is
+// unset (single-instance dev / tests), the persistence object is null and
+// the sidecar matches its pre-Phase-G behaviour exactly.
+
+const PG_DSN = process.env["PAPERCLIP_PG_DSN"];
+const persistence: PaperclipState | null = PG_DSN
+  ? new PaperclipState(new Pool({ connectionString: PG_DSN }))
+  : null;
 
 // ---------------------------------------------------------------------------
 // Request schemas
@@ -114,6 +130,18 @@ export function buildApp() {
 
     metrics.recordReservation();
 
+    // Phase G: mirror the reservation into Postgres so a sidecar restart
+    // doesn't lose the daily-USD ledger.
+    if (persistence) {
+      await persistence.recordReserved({
+        reservationId,
+        userEntraId: user_entra_id,
+        sessionId: session_id,
+        estTokens: est_tokens,
+        estUsd: est_usd,
+      });
+    }
+
     return reply.code(200).send({ reservation_id: reservationId });
   });
 
@@ -132,6 +160,16 @@ export function buildApp() {
 
     // Record turn duration (not tracked individually — just accumulate ms).
     metrics.recordRelease(0);
+
+    // Phase G: mirror the release into Postgres so the durable ledger
+    // reflects actual usage. Best-effort — a DB outage doesn't block.
+    if (persistence) {
+      await persistence.recordReleased(
+        reservation_id,
+        parsed.data.actual_tokens ?? 0,
+        actual_usd ?? 0,
+      );
+    }
 
     return reply.code(200).send({ status: "released" });
   });
@@ -189,12 +227,34 @@ function startCleanupLoop(intervalMs = 60_000): void {
 if (process.env["PAPERCLIP_SKIP_START"] !== "true") {
   const app = buildApp();
 
-  app.listen({ host: HOST, port: PORT }, (err) => {
-    if (err) {
-      app.log.error(err);
-      process.exit(1);
+  // Rehydrate the daily-USD ledger from paperclip_state BEFORE opening
+  // for traffic. A 23:59 UTC restart otherwise zeroes everyone's spend
+  // and lets a user double-spend their daily cap. Awaited so the first
+  // /reserve sees the historical totals rather than racing the rehydrate.
+  const startup = (async () => {
+    if (persistence) {
+      try {
+        const snapshot = await persistence.rehydrateDailyUsd();
+        budgetMgr.rehydrateDailyUsd(snapshot);
+        app.log.info({ entries: snapshot.size }, "paperclip rehydrated daily-USD ledger");
+      } catch (err) {
+        app.log.warn({ err }, "paperclip rehydrate failed; starting with empty ledger");
+      }
     }
-    app.log.info({ port: PORT }, "Paperclip-lite started");
+
+    app.listen({ host: HOST, port: PORT }, (err) => {
+      if (err) {
+        app.log.error(err);
+        process.exit(1);
+      }
+      app.log.info({ port: PORT }, "Paperclip-lite started");
+    });
+  })();
+
+  // Surface unhandled rejections from the IIFE so Node doesn't silently swallow.
+  startup.catch((err) => {
+    app.log.error(err);
+    process.exit(1);
   });
 
   startCleanupLoop();

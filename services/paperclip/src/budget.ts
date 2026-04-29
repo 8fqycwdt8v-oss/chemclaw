@@ -171,6 +171,22 @@ export class BudgetManager {
     return total;
   }
 
+  /**
+   * Replace the in-memory daily-USD ledger with the supplied snapshot.
+   * Called once at startup from index.ts after PaperclipState reads
+   * paperclip_state for today's totals. Idempotent: calling again
+   * overwrites whatever was in the map.
+   *
+   * Phase G — closes the "sidecar restart resets daily cap" hole. See
+   * services/paperclip/src/persistence.ts and deep-review #11.
+   */
+  rehydrateDailyUsd(snapshot: Map<string, number>): void {
+    this._dailyUsd.clear();
+    for (const [key, amount] of snapshot) {
+      this._dailyUsd.set(key, amount);
+    }
+  }
+
   private _dailyKey(userId: string): string {
     const d = new Date();
     const ymd = `${d.getUTCFullYear()}-${String(d.getUTCMonth() + 1).padStart(2, "0")}-${String(d.getUTCDate()).padStart(2, "0")}`;

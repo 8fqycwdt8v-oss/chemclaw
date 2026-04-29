@@ -426,6 +426,10 @@ services:
       PAPERCLIP_MAX_TOKENS: "${PAPERCLIP_MAX_TOKENS:-80000}"
       PAPERCLIP_MAX_USD_PER_DAY: "${PAPERCLIP_MAX_USD_PER_DAY:-25.0}"
       PAPERCLIP_HEARTBEAT_TTL_MS: "90000"
+      # Phase G: persist daily-USD ledger to paperclip_state so a sidecar
+      # restart doesn't reset everyone's spend mid-day. chemclaw_service
+      # has BYPASSRLS so the sidecar can write/read across all users.
+      PAPERCLIP_PG_DSN: ${PAPERCLIP_PG_DSN:-postgresql://${CHEMCLAW_SERVICE_USER:-chemclaw_service}:${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}@postgres:5432/${POSTGRES_DB:-chemclaw}}
     ports:
       - "3200:3200"
     healthcheck:
