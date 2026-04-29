@@ -59,6 +59,7 @@ export function buildQueryElnExperimentsTool(mcpUrl: string) {
       "pass next_cursor back as cursor to continue.",
     inputSchema: QueryElnExperimentsIn,
     outputSchema: QueryElnExperimentsOut,
+    annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
       const parsed = QueryElnExperimentsIn.parse(input);

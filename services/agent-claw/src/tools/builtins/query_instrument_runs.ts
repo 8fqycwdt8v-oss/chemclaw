@@ -66,6 +66,7 @@ export function buildQueryInstrumentRunsTool(mcpLogsSciyUrl: string) {
       "Returns up to limit datasets with a cursor for keyset pagination on (measured_at DESC, uid).",
     inputSchema: QueryInstrumentRunsIn,
     outputSchema: QueryInstrumentRunsOut,
+    annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
       return postJson(

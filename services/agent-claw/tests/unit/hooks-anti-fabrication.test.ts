@@ -104,10 +104,10 @@ describe("antiFabricationHook (post_tool)", () => {
 
   it("does not throw when output is malformed", async () => {
     const ctx = makeCtx();
-    // Should silently swallow the error.
+    // Should silently swallow the error and return the no-op HookJSONOutput shape.
     await expect(
       antiFabricationHook({ ctx, toolId: "unknown", input: {}, output: "bad-output" }),
-    ).resolves.toBeUndefined();
+    ).resolves.toEqual({});
   });
 });
 

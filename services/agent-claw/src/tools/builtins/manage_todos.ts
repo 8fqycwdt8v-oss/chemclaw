@@ -101,8 +101,26 @@ export function buildManageTodosTool(pool: Pool) {
 
       switch (input.action) {
         case "create": {
+          // listTodos before-and-after lets us identify the rows that were
+          // freshly inserted (by id) without changing createTodos's
+          // bulk-insert signature. The fresh rows are then surfaced via
+          // task_created so observability hooks can record per-todo events.
+          const before = await listTodos(pool, ctx.userEntraId, sessionId);
+          const beforeIds = new Set(before.map((t) => t.id));
           await createTodos(pool, ctx.userEntraId, sessionId, input.contents);
           const all = await listTodos(pool, ctx.userEntraId, sessionId);
+          if (ctx.lifecycle) {
+            for (const t of all) {
+              if (!beforeIds.has(t.id)) {
+                await ctx.lifecycle.dispatch("task_created", {
+                  ctx,
+                  todoId: t.id,
+                  content: t.content,
+                  ordering: t.ordering,
+                });
+              }
+            }
+          }
           return { todos: all.map(stripDates) };
         }
 
@@ -120,6 +138,17 @@ export function buildManageTodosTool(pool: Pool) {
               notice: `todo_id ${input.todo_id} not found`,
             };
           }
+          // Dispatch task_completed when the update transitions a todo to
+          // status='completed'. The "complete" action below has its own
+          // dispatch; this branch covers the model setting status via the
+          // generic update verb.
+          if (ctx.lifecycle && patch.status === "completed") {
+            await ctx.lifecycle.dispatch("task_completed", {
+              ctx,
+              todoId: updated.id,
+              content: updated.content,
+            });
+          }
           const all = await listTodos(pool, ctx.userEntraId, sessionId);
           return { todos: all.map(stripDates) };
         }
@@ -133,6 +162,13 @@ export function buildManageTodosTool(pool: Pool) {
               todos: (await listTodos(pool, ctx.userEntraId, sessionId)).map(stripDates),
               notice: `todo_id ${input.todo_id} not found`,
             };
+          }
+          if (ctx.lifecycle) {
+            await ctx.lifecycle.dispatch("task_completed", {
+              ctx,
+              todoId: updated.id,
+              content: updated.content,
+            });
           }
           const all = await listTodos(pool, ctx.userEntraId, sessionId);
           return { todos: all.map(stripDates) };

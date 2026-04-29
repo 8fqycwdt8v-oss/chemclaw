@@ -52,6 +52,7 @@ export function buildComputeConformerEnsembleTool(mcpXtbUrl: string) {
       "Use for stereo, atropisomerism, or ring-flip questions. Latency ~30-60 s.",
     inputSchema: ComputeConformerEnsembleIn,
     outputSchema: ComputeConformerEnsembleOut,
+    annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
       return postJson(

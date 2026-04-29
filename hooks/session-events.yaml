@@ -1,0 +1,13 @@
+name: session-events
+lifecycle: session_start
+enabled: true
+priority: 0
+# No script — uses the built-in TypeScript implementation in
+# services/agent-claw/src/core/hooks/session-events.ts
+definition:
+  description: >
+    Logging hook for session lifecycle events. The default implementation is
+    a no-op (returns {}); replace with a custom telemetry sink (Langfuse,
+    OTel, app log) as needed. Fires on session_start with source ∈
+    {"create", "resume", "compact"} so a single handler covers fresh
+    sessions and rehydration paths.

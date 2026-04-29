@@ -38,6 +38,7 @@ export function buildFetchElnSampleTool(mcpUrl: string) {
       "from an experiment into downstream analytical data.",
     inputSchema: FetchElnSampleIn,
     outputSchema: FetchElnSampleOut,
+    annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
       const parsed = FetchElnSampleIn.parse(input);

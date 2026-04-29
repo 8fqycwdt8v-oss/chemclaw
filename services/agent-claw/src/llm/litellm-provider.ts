@@ -144,6 +144,23 @@ export class LiteLLMProvider implements LlmProvider {
     // Check for tool calls first (finishReason may be 'tool-calls' or the
     // model may stop with both tool calls and text in some provider variants).
     if (result.toolCalls && result.toolCalls.length > 0) {
+      // Phase 5: when the model emits 2+ tool calls in one assistant
+      // message, return the multi-call shape so step.ts can run them as a
+      // batch (read-only batches go through Promise.all). Single calls keep
+      // the legacy shape so existing tests / callers that pattern-match on
+      // kind === "tool_call" continue to work.
+      if (result.toolCalls.length > 1) {
+        return {
+          result: {
+            kind: "tool_calls",
+            calls: result.toolCalls.map((tc) => ({
+              toolId: tc.toolName,
+              input: tc.input,
+            })),
+          },
+          usage,
+        };
+      }
       const first = result.toolCalls[0]!;
       // v5 renamed args → input on tool-call parts.
       return {

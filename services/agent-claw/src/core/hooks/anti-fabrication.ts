@@ -18,6 +18,7 @@
 
 import type { PostToolPayload } from "../types.js";
 import type { Lifecycle } from "../lifecycle.js";
+import type { HookJSONOutput } from "../hook-output.js";
 
 // UUID v4 pattern — used to extract bare UUIDs from generic string fields if needed.
 const _UUID_RE =
@@ -74,10 +75,14 @@ export function extractFactIds(output: unknown): string[] {
 /**
  * post_tool handler: harvest fact_ids from tool output → seenFactIds.
  */
-export async function antiFabricationHook(payload: PostToolPayload): Promise<void> {
+export async function antiFabricationHook(
+  payload: PostToolPayload,
+  _toolUseID?: string,
+  _options?: { signal: AbortSignal },
+): Promise<HookJSONOutput> {
   try {
     const factIds = extractFactIds(payload.output);
-    if (factIds.length === 0) return;
+    if (factIds.length === 0) return {};
 
     let seen = payload.ctx.scratchpad.get("seenFactIds") as Set<string> | undefined;
     if (!seen) {
@@ -90,6 +95,7 @@ export async function antiFabricationHook(payload: PostToolPayload): Promise<voi
   } catch {
     // Never crash on harvesting failure.
   }
+  return {};
 }
 
 /**

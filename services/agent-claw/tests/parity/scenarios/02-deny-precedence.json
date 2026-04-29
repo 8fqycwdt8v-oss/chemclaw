@@ -1,0 +1,28 @@
+{
+  "name": "deny-precedence",
+  "description": "A pre_tool hook denies the call. The harness skips execution, emits a synthetic tool_result with the deny payload, and the LLM produces text instead. Verifies that pre_tool denial short-circuits without hitting the tool body or post_tool dispatch.",
+  "user_messages": ["read the file"],
+  "steps": [
+    {
+      "llm_response": {
+        "kind": "tool_call",
+        "toolId": "read_file",
+        "input": { "path": "/etc/passwd" }
+      }
+    },
+    { "llm_response": { "kind": "text", "text": "I can't read that file." } }
+  ],
+  "hooks": [
+    { "point": "pre_tool", "name": "scenario-deny", "behavior": "deny" }
+  ],
+  "expected_events": [
+    { "type": "session" },
+    { "type": "hook", "point": "pre_tool", "toolId": "read_file" },
+    { "type": "tool_call", "toolId": "read_file" },
+    { "type": "tool_result", "toolId": "read_file" },
+    { "type": "hook", "point": "post_tool_batch" },
+    { "type": "hook", "point": "post_turn" },
+    { "type": "finish", "finishReason": "stop" }
+  ],
+  "expected_finish_reason": "stop"
+}

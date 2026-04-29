@@ -13,9 +13,14 @@ Layered defense:
 
 Key management:
   MCP_AUTH_SIGNING_KEY environment variable. Production deploys load this
-  from a Kubernetes secret shared between agent and MCP services. Dev mode
-  (MCP_AUTH_REQUIRED=false) skips verification with a one-line warning so
-  local-dev, smoke tests, and existing pytest suites continue to work.
+  from a Kubernetes secret shared between agent and MCP services.
+
+  Phase 7 fail-closed default: with neither MCP_AUTH_SIGNING_KEY nor
+  MCP_AUTH_DEV_MODE=true set, requests without a valid Bearer token are
+  rejected with 401. Local-dev / smoke / pytest opts out by setting
+  MCP_AUTH_DEV_MODE=true (preferred — declares intent) or the legacy
+  MCP_AUTH_REQUIRED=false. Routes do NOT need to defensively check
+  `if claims is None: deny` — the middleware raises before the route runs.
 
 This module is dependency-free besides the Python stdlib so MCP services
 don't need to add a JWT library.

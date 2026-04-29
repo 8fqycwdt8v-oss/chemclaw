@@ -55,6 +55,7 @@ export function buildQueryInstrumentPersonsTool(mcpLogsSciyUrl: string) {
       "case-insensitive `name_contains` filter; results capped by `limit`.",
     inputSchema: QueryInstrumentPersonsIn,
     outputSchema: QueryInstrumentPersonsOut,
+    annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
       const parsed = QueryInstrumentPersonsIn.parse(input);

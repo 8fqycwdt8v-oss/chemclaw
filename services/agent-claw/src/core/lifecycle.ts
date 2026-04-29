@@ -1,81 +1,97 @@
-// Hook registry + dispatch for the five lifecycle points.
-// Phase A.1: programmatic registration only (YAML loading lands in A.3).
+// Hook registry + dispatch for the lifecycle points.
+// Phase 4A: hooks now follow the Claude Agent SDK contract. Each handler
+// receives (input, toolUseID, { signal }) and returns Promise<HookJSONOutput>.
 //
-// Design: hooks are async functions registered by name. Multiple hooks can
-// share a point; they run sequentially in registration order. A pre_tool hook
-// may throw to abort the tool call — the error propagates to runHarness which
-// catches it and surfaces it as a step error. Hooks that mutate payload fields
-// do so in-place (the payload is passed by reference).
+// Per-hook AbortController + timeout (default 60s): if a hook doesn't return
+// in time, its signal aborts so cooperative handlers can bail. Hooks that
+// don't honour the signal will still hold the dispatcher hostage — this is
+// "best-effort" abort, matching the SDK behaviour.
+//
+// Per-point semantics:
+//   - pre_tool: a thrown error propagates (preserves budget-guard semantics).
+//     A hook that wants to deny softly should return permissionDecision:"deny".
+//   - All other points: a thrown error is logged and the next hook runs.
+//     Subsequent hooks (e.g. redact-secrets at post_turn) MUST run even if
+//     an earlier one fails.
+//
+// dispatch() aggregates decisions across multiple hooks at the same point
+// using deny > defer > ask > allow precedence. updatedInput from any hook
+// flows back to the caller; the caller (step.ts) decides what to do with it.
 
 import type {
-  HookPoint,
-  PostToolPayload,
-  PostTurnPayload,
-  PreCompactPayload,
-  PreToolPayload,
-  PreTurnPayload,
-} from "./types.js";
+  HookCallback,
+  HookJSONOutput,
+  PermissionDecision,
+} from "./hook-output.js";
+import { mostRestrictive } from "./hook-output.js";
+import type { HookPayloadMap, HookPoint } from "./types.js";
+import { withHookSpan } from "../observability/hook-spans.js";
 
-// ---------------------------------------------------------------------------
-// Union of all payload types keyed by hook point.
-// ---------------------------------------------------------------------------
-type HookPayloadMap = {
-  pre_turn: PreTurnPayload;
-  pre_tool: PreToolPayload;
-  post_tool: PostToolPayload;
-  pre_compact: PreCompactPayload;
-  post_turn: PostTurnPayload;
-};
-
-// A handler for a specific hook point.
-type HookHandler<P extends HookPoint> = (
-  payload: HookPayloadMap[P],
-) => Promise<void>;
-
-// Internal: store each handler with a name for diagnostics.
-interface RegisteredHook<P extends HookPoint> {
+// Internal: store each handler with a name + matcher + per-hook timeout.
+interface RegisteredHook<P> {
   name: string;
-  handler: HookHandler<P>;
+  matcher?: RegExp;
+  handler: HookCallback<P>;
+  timeout: number;
 }
 
-// ---------------------------------------------------------------------------
-// Lifecycle — the dispatcher.
-// ---------------------------------------------------------------------------
+export interface DispatchOptions {
+  /** Tool-use identifier passed to handlers (typically the toolId for pre/post_tool). */
+  toolUseID?: string;
+  /**
+   * String tested against each hook's matcher regex. If a hook has a matcher
+   * and this target is provided, the hook only runs when the regex matches.
+   * If a hook has a matcher and matcherTarget is undefined, the hook is
+   * skipped (no implicit match).
+   */
+  matcherTarget?: string;
+}
+
+export interface DispatchResult {
+  /** Aggregate decision across all hooks at this point (deny>defer>ask>allow). */
+  decision?: PermissionDecision;
+  /** Reason from whichever hook produced the most-restrictive decision. */
+  reason?: string;
+  /**
+   * Last-write-wins updated input from a pre_tool hook. step.ts re-parses
+   * this through the tool's input schema before execution.
+   */
+  updatedInput?: Record<string, unknown>;
+}
+
+// Default per-hook timeout: 60s, matching the Claude Agent SDK default.
+const DEFAULT_HOOK_TIMEOUT_MS = 60_000;
+
 export class Lifecycle {
-  // Use a map of arrays; the union is too wide for the generic so we use
-  // Map<string, RegisteredHook<any>[]> and cast at dispatch time.
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  private readonly _hooks: Map<HookPoint, RegisteredHook<any>[]> = new Map();
+  // Map<point, RegisteredHook<unknown>[]> — payloads are erased at storage
+  // time and re-narrowed at dispatch time via the generic.
+  private readonly _hooks: Map<HookPoint, RegisteredHook<unknown>[]> = new Map();
 
   /**
    * Register a hook handler for the given lifecycle point.
    *
-   * @param point  One of the five lifecycle hook points.
-   * @param name   Diagnostic name; shown in logs.
-   * @param handler Async function invoked at that point. For pre_tool, may throw to abort.
+   * @param point   One of the lifecycle hook points.
+   * @param name    Diagnostic name; shown in logs.
+   * @param handler Async callback returning HookJSONOutput.
+   * @param opts    Optional matcher (regex string tested against
+   *                dispatchOptions.matcherTarget) + per-hook timeout (ms).
    */
   on<P extends HookPoint>(
     point: P,
     name: string,
-    handler: HookHandler<P>,
+    handler: HookCallback<HookPayloadMap[P]>,
+    opts: { matcher?: string; timeout?: number } = {},
   ): this {
     if (!this._hooks.has(point)) {
       this._hooks.set(point, []);
     }
-    // eslint-disable-next-line @typescript-eslint/no-non-null-assertion
-    this._hooks.get(point)!.push({ name, handler });
+    this._hooks.get(point)!.push({
+      name,
+      matcher: opts.matcher ? new RegExp(opts.matcher) : undefined,
+      handler: handler as HookCallback<unknown>,
+      timeout: opts.timeout ?? DEFAULT_HOOK_TIMEOUT_MS,
+    });
     return this;
-  }
-
-  /**
-   * Remove all hooks for a given point (useful in tests).
-   */
-  clear(point?: HookPoint): void {
-    if (point) {
-      this._hooks.delete(point);
-    } else {
-      this._hooks.clear();
-    }
   }
 
   /**
@@ -86,44 +102,158 @@ export class Lifecycle {
   }
 
   /**
-   * Dispatch a lifecycle event. All registered handlers for the given point
-   * are called sequentially (in registration order).
+   * Remove all hooks (or only those at a specific point).
+   * Useful in tests.
+   */
+  clear(point?: HookPoint): void {
+    if (point) {
+      this._hooks.delete(point);
+    } else {
+      this._hooks.clear();
+    }
+  }
+
+  /**
+   * Dispatch a lifecycle event.
    *
-   * For pre_tool: if any handler throws, the error propagates immediately
-   * (remaining handlers for that point are skipped). This is intentional —
-   * a budget-guard hook that throws aborts the tool call.
-   *
-   * For all other points (pre_turn, post_tool, pre_compact, post_turn):
-   * a thrown error is logged and the next hook is invoked. We do NOT abort
-   * the whole turn just because (e.g.) tag-maturity has a transient DB
-   * hiccup, and we MUST not skip subsequent hooks (such as the redact-secrets
-   * post_turn pass) on a transient failure of an earlier hook.
+   * Iterates registered handlers for the point in registration order:
+   *   - Skips a hook whose matcher doesn't match `opts.matcherTarget`.
+   *   - Runs the handler with a per-call AbortSignal that fires when the
+   *     hook's timeout elapses.
+   *   - For pre_tool, a thrown error propagates immediately (legacy
+   *     budget-guard semantics). For all other points, errors are logged
+   *     and the next hook runs.
+   *   - { async: true } returns are ignored — the hook is fire-and-forget.
+   *   - permissionDecision values are aggregated via deny>defer>ask>allow;
+   *     reason follows whichever hook upgraded the decision.
+   *   - updatedInput from any hook is captured (last-write-wins).
    */
   async dispatch<P extends HookPoint>(
     point: P,
     payload: HookPayloadMap[P],
-  ): Promise<void> {
+    opts: DispatchOptions = {},
+  ): Promise<DispatchResult> {
     const hooks = this._hooks.get(point) ?? [];
+    let decision: PermissionDecision | undefined;
+    let reason: string | undefined;
+    let updatedInput: Record<string, unknown> | undefined;
+
     for (const hook of hooks) {
-      if (point === "pre_tool") {
-        // Strict-throw semantics for pre_tool: a throwing hook aborts the
-        // tool call (used by budget-guard, anti-fabrication, citation guard).
-        await (hook.handler as HookHandler<P>)(payload);
-      } else {
-        try {
-          await (hook.handler as HookHandler<P>)(payload);
-        } catch (err) {
-          // Best-effort logging — we use console here because the lifecycle
-          // is platform-agnostic. Routes that have a Fastify logger should
-          // observe these errors via Langfuse spans (instrumented at the
-          // hook implementation site).
-          // eslint-disable-next-line no-console
-          console.error(
-            `[lifecycle] non-pre_tool hook "${hook.name}" at "${point}" threw — continuing with remaining hooks`,
-            err,
-          );
+      // Matcher gate: if the hook has a regex matcher, only run when a
+      // target string is supplied AND it matches. No target = skip (the
+      // hook explicitly opted into matcher-gated dispatch).
+      if (hook.matcher) {
+        if (!opts.matcherTarget || !hook.matcher.test(opts.matcherTarget)) {
+          continue;
         }
       }
+
+      const ac = new AbortController();
+      const timer = setTimeout(
+        () => ac.abort(new Error(`hook timeout: ${hook.name}`)),
+        hook.timeout,
+      );
+
+      try {
+        // Race the handler against an abort-rejection promise so that a
+        // misbehaving hook (one that ignores its AbortSignal) cannot stall
+        // the dispatcher beyond `hook.timeout`. The hook keeps running in
+        // the background — we cannot kill its event-loop work — but the
+        // dispatcher unblocks, the timeout error path runs, and the next
+        // hook fires on schedule.
+        //
+        // The Promise.race is wrapped in withHookSpan so the OTel exporter
+        // sees one span per hook invocation with name, point, matcher
+        // target, tool-use id, duration, and OK/ERROR status. A timeout
+        // (abort-rejection wins the race) shows up as an ERROR span.
+        const result: HookJSONOutput | undefined | void = await withHookSpan(
+          {
+            point,
+            hookName: hook.name,
+            matcherTarget: opts.matcherTarget,
+            toolUseId: opts.toolUseID,
+          },
+          () => {
+            const handlerPromise = (
+              hook.handler as HookCallback<unknown>
+            )(payload, opts.toolUseID, { signal: ac.signal });
+            const abortPromise = new Promise<never>((_, reject) => {
+              if (ac.signal.aborted) {
+                reject(
+                  ac.signal.reason ??
+                    new Error(`hook timeout: ${hook.name}`),
+                );
+                return;
+              }
+              ac.signal.addEventListener(
+                "abort",
+                () => {
+                  reject(
+                    ac.signal.reason ??
+                      new Error(`hook timeout: ${hook.name}`),
+                  );
+                },
+                { once: true },
+              );
+            });
+            return Promise.race([handlerPromise, abortPromise]) as Promise<
+              HookJSONOutput | undefined | void
+            >;
+          },
+        );
+
+        // Tolerate hooks that return nothing (legacy void-returning shape
+        // surfaced by older tests and any third-party hook that hasn't
+        // migrated yet). Treat as a no-op success.
+        if (!result) continue;
+
+        // Fire-and-forget: ignore the result, move to the next hook.
+        if ("async" in result && result.async) continue;
+
+        // After the async-branch guard, `result` is the synchronous-shape
+        // variant. Pick out hookSpecificOutput as the loosely-typed object
+        // it is on the wire — its inner fields are then narrowed below.
+        const hso = (result as { hookSpecificOutput?: unknown }).hookSpecificOutput as
+          | {
+              permissionDecision?: PermissionDecision;
+              permissionDecisionReason?: string;
+              updatedInput?: Record<string, unknown>;
+            }
+          | undefined;
+
+        // Aggregate permission decision.
+        const dec = hso?.permissionDecision;
+        if (dec) {
+          const next = mostRestrictive(decision, dec);
+          if (next !== decision) {
+            decision = next;
+            reason = hso?.permissionDecisionReason;
+          }
+        }
+
+        // Capture updatedInput (last-write-wins).
+        if (hso?.updatedInput) updatedInput = hso.updatedInput;
+      } catch (err) {
+        if (point === "pre_tool") {
+          // Strict-throw semantics for pre_tool: budget-guard etc. abort
+          // the tool call by throwing.
+          throw err;
+        }
+        // TODO(observability): replace with a centralised pino logger when
+        // one is introduced (Phase 9 self-review: no shared logger module
+        // exists yet; the per-hook OTel span emits ERROR status with
+        // recordException so the failure is observable in Langfuse — this
+        // console.error remains as a developer-facing fallback).
+        // eslint-disable-next-line no-console
+        console.error(
+          `[lifecycle] non-pre_tool hook "${hook.name}" at "${point}" threw — continuing with remaining hooks`,
+          err,
+        );
+      } finally {
+        clearTimeout(timer);
+      }
     }
+
+    return { decision, reason, updatedInput };
   }
 }

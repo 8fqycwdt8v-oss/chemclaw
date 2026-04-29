@@ -11,9 +11,15 @@
 
 import type { PreTurnPayload } from "../types.js";
 import type { Lifecycle } from "../lifecycle.js";
+import type { HookJSONOutput } from "../hook-output.js";
 
-export async function initScratchHook(payload: PreTurnPayload): Promise<void> {
+export async function initScratchHook(
+  payload: PreTurnPayload,
+  _toolUseID?: string,
+  _options?: { signal: AbortSignal },
+): Promise<HookJSONOutput> {
   payload.ctx.scratchpad.set("seenFactIds", new Set<string>());
+  return {};
 }
 
 /**

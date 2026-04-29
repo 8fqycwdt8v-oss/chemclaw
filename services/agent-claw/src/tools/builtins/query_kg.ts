@@ -86,6 +86,7 @@ export function buildQueryKgTool(mcpKgUrl: string) {
       "Returned fact_ids are tracked for anti-fabrication checks.",
     inputSchema: QueryKgIn,
     outputSchema: QueryKgOut,
+    annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
       return postJson(

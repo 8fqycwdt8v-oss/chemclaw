@@ -420,9 +420,15 @@ export function registerSessionsRoute(
 // ---------------------------------------------------------------------------
 // Shared helper: run the harness one or more times against a session,
 // auto-chaining until completion / max_steps cap / session-budget trip.
+//
+// Exported for integration tests (tests/integration/chained-execution.test.ts)
+// so the chained-loop logic can be exercised against a real Postgres without
+// having to spin up a full Fastify instance. The signature is part of the
+// internal API; callers outside this module should still prefer the route
+// endpoints.
 // ---------------------------------------------------------------------------
 
-interface ChainedHarnessOptions {
+export interface ChainedHarnessOptions {
   pool: Pool;
   user: string;
   sessionId: string;
@@ -446,7 +452,7 @@ interface ChainedHarnessOptions {
   };
 }
 
-interface ChainedHarnessResult {
+export interface ChainedHarnessResult {
   autoTurns: number;
   totalSteps: number;
   finalFinishReason: string;
@@ -454,7 +460,7 @@ interface ChainedHarnessResult {
   planFinalStepIndex?: number;
 }
 
-async function runChainedHarness(
+export async function runChainedHarness(
   opts: ChainedHarnessOptions,
 ): Promise<ChainedHarnessResult> {
   // Establish the AsyncLocalStorage context so every outbound MCP call
@@ -477,6 +483,11 @@ async function _runChainedHarnessInner(
   let totalSteps = 0;
   let finalFinishReason = "stop";
   let currentMessages = opts.messages;
+  // Phase 4B: track whether we've fired session_start for this chain. The
+  // chained-run + resume routes both target an existing session row, so
+  // source="resume". We only need to fire once per call (not per chained
+  // turn) — runHarness's own pre_turn handles the per-turn entry events.
+  let sessionStartFired = false;
   // Plan progress tracking: walk through the recorded tool messages added
   // by each iteration and advance current_step_index when the toolId
   // matches plan.steps[currentStepIndex].tool. Exact-match for first cut;
@@ -523,7 +534,23 @@ async function _runChainedHarnessInner(
       sessionId,
       cfg.AGENT_TOKEN_BUDGET,
     );
-    const ctx: ToolContext = { userEntraId: user, seenFactIds, scratchpad };
+    const ctx: ToolContext = { userEntraId: user, seenFactIds, scratchpad, lifecycle };
+
+    // Phase 4B: dispatch session_start once at the top of the chain. Both
+    // chain entry points (POST /plan/run and POST /resume) operate on a
+    // pre-existing session row, so source="resume".
+    if (!sessionStartFired) {
+      sessionStartFired = true;
+      try {
+        await lifecycle.dispatch("session_start", {
+          ctx,
+          sessionId,
+          source: "resume",
+        });
+      } catch (err) {
+        log.warn({ err }, "session_start dispatch failed (non-fatal)");
+      }
+    }
 
     const budget = new Budget({
       maxSteps: cfg.AGENT_CHAT_MAX_STEPS,
@@ -653,6 +680,37 @@ async function _runChainedHarnessInner(
         log.error({ err }, "runChainedHarness: harness threw");
       }
       break;
+    }
+  }
+
+  // Phase 4B: session_end fires once at the end of the chain when the
+  // final finish reason is a clean stop. Awaiting-input / budget-exceeded
+  // leave the session open for the next reanimator tick or user message.
+  //
+  // GOTCHA for future hook authors: the `endCtx` synthesized here is
+  // intentionally minimal — `seenFactIds` is empty and `scratchpad` is
+  // empty. The chain persisted real state through `saveSession` after
+  // each turn, but rebuilding ctx from disk for one terminal dispatch
+  // would be expensive and is not currently worth the complexity. If
+  // your `session_end` hook needs to read scratchpad, load it from the
+  // `agent_sessions.scratchpad` row directly (see `loadSession` in
+  // services/agent-claw/src/core/session-store.ts) — do NOT rely on
+  // `endCtx.scratchpad` being populated.
+  if (sessionStartFired && finalFinishReason === "stop") {
+    try {
+      const endCtx: ToolContext = {
+        userEntraId: user,
+        seenFactIds: new Set<string>(),
+        scratchpad: new Map<string, unknown>(),
+        lifecycle,
+      };
+      await lifecycle.dispatch("session_end", {
+        ctx: endCtx,
+        sessionId,
+        finishReason: finalFinishReason,
+      });
+    } catch (err) {
+      log.warn({ err }, "session_end dispatch failed (non-fatal)");
     }
   }
 

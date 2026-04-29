@@ -5,6 +5,7 @@ import type { Tool } from "../tools/tool.js";
 import type { Lifecycle } from "./lifecycle.js";
 import type { Budget } from "./budget.js";
 import type { LlmProvider } from "../llm/provider.js";
+import type { StreamSink } from "./streaming-sink.js";
 
 // ---------------------------------------------------------------------------
 // Tool execution context threaded through every hook and tool.execute call.
@@ -30,14 +31,74 @@ export interface ToolContext {
    * for backward compatibility, but the typed accessor is preferred.
    */
   seenFactIds: Set<string>;
+  /**
+   * Optional lifecycle dispatcher threaded through to tool.execute so a tool
+   * can fire fine-grained events (manage_todos → task_created/completed).
+   * The harness wires this on the way in; tests / sub-agents that don't have
+   * a Lifecycle in scope leave it undefined and tools tolerate the absence.
+   */
+  lifecycle?: Lifecycle;
 }
 
 // ---------------------------------------------------------------------------
 // The typed result of one step (one LLM call).
+//
+// `tool_call` (singular) is the legacy / single-tool shape kept for wire
+// compatibility with existing tests and the StubLlmProvider's enqueueToolCall.
+// `tool_calls` (plural) is emitted by providers that support multi-tool
+// responses (Phase 5 — the LiteLLM provider switches to this shape when the
+// underlying model returns 2+ tool calls in one assistant message). step.ts
+// normalises both to a single internal batch shape before execution.
 // ---------------------------------------------------------------------------
 export type StepResult =
   | { kind: "text"; text: string }
-  | { kind: "tool_call"; toolId: string; input: unknown };
+  | { kind: "tool_call"; toolId: string; input: unknown }
+  | { kind: "tool_calls"; calls: Array<{ toolId: string; input: unknown }> };
+
+// ---------------------------------------------------------------------------
+// Phase 6: Permission system primitives.
+//
+// PermissionMode controls how the resolver in core/permissions/resolver.ts
+// gates tool calls. allowedTools / disallowedTools are matched by exact
+// tool id; allowedTools also supports a single trailing "*" wildcard
+// (e.g. "mcp__github__*"). permissionCallback is the explicit escape hatch
+// when no rule matches and no permission_request hook produced a decision.
+// ---------------------------------------------------------------------------
+export type PermissionMode =
+  // Tools not covered by allow/deny rules → fire permission_request hook;
+  // if no resolution, deny.
+  | "default"
+  // Auto-approve filesystem-touching tools; other rules apply.
+  | "acceptEdits"
+  // No tool execution; route should emit a plan instead. Resolver returns
+  // "defer" so step.ts treats it as denied (defense-in-depth) — routes are
+  // expected to detect plan mode BEFORE entering the harness loop.
+  | "plan"
+  // Tools pre-approved via allowedTools run; everything else denied.
+  | "dontAsk"
+  // All tools run unchecked. ONLY for isolated/sandboxed environments.
+  | "bypassPermissions";
+
+export type PermissionResolution = "allow" | "deny" | "ask" | "defer";
+
+export interface PermissionContext {
+  toolId: string;
+  input: unknown;
+  ctx: ToolContext;
+}
+
+export type PermissionCallback = (
+  pctx: PermissionContext,
+) => Promise<PermissionResolution> | PermissionResolution;
+
+export interface PermissionOptions {
+  permissionMode?: PermissionMode;
+  /** Exact match OR `mcp__server__*` trailing-wildcard. */
+  allowedTools?: string[];
+  /** Exact match. */
+  disallowedTools?: string[];
+  permissionCallback?: PermissionCallback;
+}
 
 // ---------------------------------------------------------------------------
 // Options passed to runHarness / buildAgent.
@@ -55,6 +116,22 @@ export interface HarnessOptions {
   lifecycle: Lifecycle;
   /** User + scratchpad context threaded through hooks and tools. */
   ctx: ToolContext;
+  /**
+   * Optional streaming sink. When set, the harness drives text steps via
+   * llm.streamCompletion and emits onTextDelta per chunk plus tool / session /
+   * finish notifications. When undefined, runHarness behaves identically to
+   * today (single llm.call per step, no streaming).
+   */
+  streamSink?: StreamSink;
+  /** Optional session id; passed through to the sink's onSession callback. */
+  sessionId?: string;
+  /**
+   * Phase 6: optional permission policy. When undefined, the harness behaves
+   * as before (only the pre_tool hooks gate tool calls). When set, the
+   * resolver in core/permissions/resolver.ts runs BEFORE pre_tool dispatch
+   * and can short-circuit the call with deny / defer.
+   */
+  permissions?: PermissionOptions;
 }
 
 // ---------------------------------------------------------------------------
@@ -107,6 +184,27 @@ export interface PostToolPayload {
 export interface PreCompactPayload {
   ctx: ToolContext;
   messages: Message[];
+  /**
+   * Compaction trigger:
+   *   - "auto"   — runHarness saw budget.shouldCompact() return true after a step.
+   *   - "manual" — the user invoked /compact (chat.ts slash branch).
+   *
+   * Mirrors the Claude Agent SDK `SDKCompactBoundaryMessage.trigger` field.
+   */
+  trigger: "manual" | "auto";
+  /** Estimated prompt-token count BEFORE compaction. */
+  pre_tokens: number;
+  /** Optional user-supplied summarization steering (manual /compact path only). */
+  custom_instructions?: string | null;
+}
+
+export interface PostCompactPayload {
+  ctx: ToolContext;
+  trigger: "manual" | "auto";
+  /** Estimated prompt-token count BEFORE compaction. */
+  pre_tokens: number;
+  /** Estimated prompt-token count AFTER compaction. */
+  post_tokens: number;
 }
 
 export interface PostTurnPayload {
@@ -116,14 +214,154 @@ export interface PostTurnPayload {
 }
 
 // ---------------------------------------------------------------------------
-// Re-export the five hook point names as a union so the registry is typed.
+// Phase 4B hook payloads — Claude-Code-shape additions.
+// ---------------------------------------------------------------------------
+
+export interface SessionStartPayload {
+  ctx: ToolContext;
+  sessionId: string;
+  source: "create" | "resume" | "compact";
+}
+
+export interface SessionEndPayload {
+  ctx: ToolContext;
+  sessionId: string;
+  finishReason: string;
+}
+
+export interface UserPromptSubmitPayload {
+  ctx: ToolContext;
+  prompt: string;
+  sessionId: string | null;
+}
+
+export interface PostToolFailurePayload {
+  ctx: ToolContext;
+  toolId: string;
+  input: unknown;
+  error: Error;
+  durationMs: number;
+}
+
+export interface PostToolBatchEntry {
+  toolId: string;
+  input: unknown;
+  output: unknown;
+}
+
+export interface PostToolBatchPayload {
+  ctx: ToolContext;
+  batch: PostToolBatchEntry[];
+}
+
+// TODO(phase-6-permissions): no dispatch site yet. Phase 6's permission
+// resolver will fire this when a tool needs an interactive permission
+// decision; for now the type exists so downstream hook authors can
+// register against it without a follow-up patch.
+export interface PermissionRequestPayload {
+  ctx: ToolContext;
+  toolId: string;
+  input: unknown;
+}
+
+// SubAgent shapes are re-exported from core/sub-agent.ts (which imports
+// these definitions). They live here to break the circular import that
+// would otherwise form between core/types.ts and core/sub-agent.ts.
+export type SubAgentType = "chemist" | "analyst" | "reader";
+
+export interface SubAgentTaskSpec {
+  /** What the sub-agent should accomplish. */
+  goal: string;
+  /** Named input values the sub-agent can reference in the goal. */
+  inputs: Record<string, unknown>;
+  /** Override step cap. */
+  max_steps?: number;
+  /** Override prompt token budget. */
+  max_tokens?: number;
+}
+
+export interface SubAgentResult {
+  text: string;
+  finishReason: string;
+  /** Fact/doc/rxn IDs collected by the seenFactIds set during the sub-turn. */
+  citations: string[];
+  stepsUsed: number;
+  usage: { promptTokens: number; completionTokens: number };
+}
+
+export interface SubAgentStartPayload {
+  ctx: ToolContext;
+  type: SubAgentType;
+  taskSpec: SubAgentTaskSpec;
+  parentUserEntraId: string;
+}
+
+export interface SubAgentStopPayload {
+  ctx: ToolContext;
+  type: SubAgentType;
+  result: SubAgentResult;
+  durationMs: number;
+}
+
+export interface TaskCreatedPayload {
+  ctx: ToolContext;
+  todoId: string;
+  content: string;
+  ordering: number;
+}
+
+export interface TaskCompletedPayload {
+  ctx: ToolContext;
+  todoId: string;
+  content: string;
+}
+
+// ---------------------------------------------------------------------------
+// Hook point names — Claude-Agent-SDK-shape union.
 // ---------------------------------------------------------------------------
 export type HookPoint =
   | "pre_turn"
   | "pre_tool"
   | "post_tool"
   | "pre_compact"
-  | "post_turn";
+  | "post_compact"
+  | "post_turn"
+  // Phase 4B additions:
+  | "session_start"
+  | "session_end"
+  | "user_prompt_submit"
+  | "post_tool_failure"
+  | "post_tool_batch"
+  | "permission_request"
+  | "subagent_start"
+  | "subagent_stop"
+  | "task_created"
+  | "task_completed";
+
+// ---------------------------------------------------------------------------
+// Map of hook point → payload type. Lifecycle uses this to type its on() /
+// dispatch() generics. Lives here (not lifecycle.ts) so callers that build
+// typed HookCallbacks can import it without pulling in the dispatcher.
+// ---------------------------------------------------------------------------
+export type HookPayloadMap = {
+  pre_turn: PreTurnPayload;
+  pre_tool: PreToolPayload;
+  post_tool: PostToolPayload;
+  pre_compact: PreCompactPayload;
+  post_compact: PostCompactPayload;
+  post_turn: PostTurnPayload;
+  // Phase 4B:
+  session_start: SessionStartPayload;
+  session_end: SessionEndPayload;
+  user_prompt_submit: UserPromptSubmitPayload;
+  post_tool_failure: PostToolFailurePayload;
+  post_tool_batch: PostToolBatchPayload;
+  permission_request: PermissionRequestPayload;
+  subagent_start: SubAgentStartPayload;
+  subagent_stop: SubAgentStopPayload;
+  task_created: TaskCreatedPayload;
+  task_completed: TaskCompletedPayload;
+};
 
 // ---------------------------------------------------------------------------
 // Citation — typed provenance record surfaced in tool-result events.

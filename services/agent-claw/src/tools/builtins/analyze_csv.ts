@@ -223,6 +223,7 @@ export function buildAnalyzeCsvTool(pool: Pool, docFetcherUrl: string) {
       "If answer_to_query is '__llm_judgement_required__', call synthesize_insights next.",
     inputSchema: AnalyzeCsvIn,
     outputSchema: AnalyzeCsvOut,
+    annotations: { readOnly: true },
 
     execute: async (ctx, input) => {
       // ── Validate: exactly one data source. ─────────────────────────────────
