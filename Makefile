@@ -83,8 +83,16 @@ db.psql: ## Open psql shell into the app DB
 	docker compose exec postgres psql -U chemclaw -d chemclaw
 
 .PHONY: db.init
-db.init: ## Re-apply schema (idempotent)
-	docker compose exec -T postgres psql -U chemclaw -d chemclaw < db/init/01_schema.sql
+db.init: ## Re-apply schema (idempotent — applies all db/init/*.sql in lex order)
+	@for f in db/init/*.sql; do \
+	  echo "  applying $$f"; \
+	  docker compose exec -T postgres psql -U chemclaw -d chemclaw \
+	    -v ON_ERROR_STOP=1 < "$$f" || exit 1; \
+	  docker compose exec -T postgres psql -U chemclaw -d chemclaw \
+	    -c "INSERT INTO schema_version (filename) VALUES ('$$f') ON CONFLICT DO NOTHING" \
+	    >/dev/null 2>&1 || true; \
+	done
+	@echo "  db.init complete"
 
 .PHONY: db.seed
 db.seed: ## Load sample seed data
