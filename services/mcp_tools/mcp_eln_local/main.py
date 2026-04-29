@@ -98,7 +98,12 @@ settings = ElnLocalSettings()
 # --------------------------------------------------------------------------
 # Pool + lifespan
 # --------------------------------------------------------------------------
-_pool_holder: dict[str, AsyncConnectionPool] = {}
+# The pool is configured with row_factory=dict_row at construction below, so
+# every cursor by default returns dict-shaped rows. Carrying that through the
+# generic params lets the _row_to_* helpers receive `dict[str, Any]` rather
+# than the default tuple row type.
+_PoolType = AsyncConnectionPool[psycopg.AsyncConnection[dict[str, Any]]]
+_pool_holder: dict[str, _PoolType] = {}
 
 
 def _check_dsn_safety() -> None:
@@ -120,7 +125,7 @@ def _check_dsn_safety() -> None:
 async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _check_dsn_safety()
     log.info("mcp-eln-local starting; mock_eln_enabled=%s", settings.mock_eln_enabled)
-    pool = AsyncConnectionPool(
+    pool: _PoolType = AsyncConnectionPool(
         conninfo=settings.mock_eln_dsn,
         min_size=settings.pool_min_size,
         max_size=settings.pool_max_size,
@@ -136,9 +141,12 @@ async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 log.warning("mcp-eln-local: pool.open failed: %s", exc)
         yield
     finally:
-        pool = _pool_holder.pop("pool", None)
-        if pool is not None:
-            await pool.close()
+        # Inline get-and-delete instead of `pop("pool", None)` so mypy doesn't
+        # need to widen the dict's value type to Optional.
+        held_pool = _pool_holder.get("pool")
+        if held_pool is not None:
+            del _pool_holder["pool"]
+            await held_pool.close()
 
 
 def _ready_check() -> bool:
@@ -147,7 +155,7 @@ def _ready_check() -> bool:
 
 
 @asynccontextmanager
-async def _acquire() -> AsyncIterator[psycopg.AsyncConnection]:
+async def _acquire() -> AsyncIterator[psycopg.AsyncConnection[dict[str, Any]]]:
     """Acquire a connection from the pool for the lifetime of one request.
 
     Replaces the previous module-level shared connection: psycopg's async
@@ -671,7 +679,7 @@ async def experiments_query(
 
 
 async def _fetch_attachments(
-    conn: psycopg.AsyncConnection, entry_id: str
+    conn: psycopg.AsyncConnection[dict[str, Any]], entry_id: str
 ) -> list[Attachment]:
     async with conn.cursor() as cur:
         await cur.execute(
@@ -688,7 +696,7 @@ async def _fetch_attachments(
 
 
 async def _fetch_audit_summary(
-    conn: psycopg.AsyncConnection, entry_id: str, limit: int = 20
+    conn: psycopg.AsyncConnection[dict[str, Any]], entry_id: str, limit: int = 20
 ) -> list[AuditEntry]:
     async with conn.cursor() as cur:
         await cur.execute(

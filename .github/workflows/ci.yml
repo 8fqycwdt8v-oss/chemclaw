@@ -120,6 +120,7 @@ jobs:
           mypy services/optimizer/session_reanimator
           mypy services/mcp_tools/mcp_doc_fetcher
           mypy services/mcp_tools/mcp_tabicl
+          mypy services/mcp_tools/mcp_eln_local
       - name: Diff coverage (Python)
         if: github.event_name == 'pull_request'
         run: |
