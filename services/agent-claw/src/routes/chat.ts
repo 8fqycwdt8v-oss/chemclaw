@@ -64,6 +64,7 @@ import type { SkillLoader } from "../core/skills.js";
 import { VERB_TO_SKILL } from "../core/skills.js";
 import { writeEvent, setupSse } from "../streaming/sse.js";
 import { startRootTurnSpan, recordLlmUsage, recordSpanError } from "../observability/spans.js";
+import { context as otelContext, trace } from "@opentelemetry/api";
 import {
   PaperclipClient,
   PaperclipBudgetError,
@@ -415,37 +416,9 @@ async function handleChat(
     maxPromptTokens: deps.config.AGENT_TOKEN_BUDGET,
   });
 
-  if (!doStream) {
-    // Non-streaming path.
-    try {
-      if (isPlanMode) {
-        // Plan mode: ask LLM to produce a JSON plan; no tool execution.
-        const planJson = await deps.llm.completeJson({
-          system: systemPrompt,
-          user: lastUserMessage?.content ?? "",
-        });
-        const steps = parsePlanSteps(planJson);
-        const plan = createPlan(steps, messages, user);
-        planStore.save(plan);
-        cleanupSkillForTurn?.();
-        return void reply.send({
-          plan_id: plan.plan_id,
-          steps: plan.steps,
-          created_at: plan.created_at,
-        });
-      }
-      const result = await agent.run({ messages, ctx });
-      cleanupSkillForTurn?.();
-      return void reply.send({ text: result.text, finishReason: result.finishReason, usage: result.usage });
-    } catch (err) {
-      req.log.error({ err }, "chat generate failed");
-      cleanupSkillForTurn?.();
-      return void reply.code(500).send({ error: "internal" });
-    }
-  }
-
-  // ------- Paperclip reservation (Phase D) -------
-  // Reserve budget BEFORE opening SSE so a 429 surfaces with Retry-After.
+  // ------- Paperclip reservation (Phase D) — applies to BOTH streaming and
+  // non-streaming paths so daily-USD enforcement is uniform. A budget refusal
+  // surfaces as HTTP 429 with Retry-After before any response body opens.
   let paperclipHandle: ReservationHandle | null = null;
   if (deps.paperclip) {
     try {
@@ -471,6 +444,93 @@ async function handleChat(
     }
   }
 
+  // Open the OTel root span for the turn — emits the Langfuse `prompt:<name>`
+  // tag so the GEPA runner's tag-filtered fetch returns this trace. Opened
+  // BEFORE the doStream branch so both paths inherit the same span context
+  // (plan-mode / non-streaming completeJson calls inherit via context.with()
+  // below).
+  const rootSpan = startRootTurnSpan({
+    traceId: body.agent_trace_id ?? sessionId ?? "unknown",
+    userEntraId: user,
+    model: deps.config.AGENT_MODEL,
+    promptName: "agent.system",
+    promptVersion: activePromptVersion,
+    sessionId: sessionId ?? undefined,
+  });
+
+  // Helper: release Paperclip + close root span. Called from the non-streaming
+  // path's success / error returns; the streaming path has its own finally
+  // block that does the same work plus session persistence + post_turn.
+  const closeNonStreamingTurn = async (
+    promptTokens: number,
+    completionTokens: number,
+  ) => {
+    try {
+      recordLlmUsage(rootSpan, {
+        promptTokens,
+        completionTokens,
+        model: deps.config.AGENT_MODEL,
+      });
+    } catch (spanErr) {
+      try { recordSpanError(rootSpan, spanErr); } catch { /* ignore */ }
+    }
+    try { rootSpan.end(); } catch { /* ignore */ }
+
+    if (paperclipHandle) {
+      try {
+        const totalTokens = promptTokens + completionTokens;
+        const actualUsd = totalTokens * USD_PER_TOKEN_ESTIMATE;
+        await paperclipHandle.release(totalTokens, actualUsd);
+      } catch (relErr) {
+        req.log.warn({ err: relErr }, "paperclip /release failed (non-fatal)");
+      }
+    }
+  };
+
+  if (!doStream) {
+    // Non-streaming path. Mirrors the streaming path's Paperclip + rootSpan
+    // wiring so daily-USD caps and Langfuse trace tagging apply uniformly.
+    try {
+      if (isPlanMode) {
+        // Plan mode: ask LLM to produce a JSON plan; no tool execution.
+        // Run the completeJson call inside the rootSpan's OTel context so
+        // LiteLLM's auto-instrumentation parents its trace under the
+        // root and inherits the prompt:agent.system tag (deep-review #6).
+        const planJson = await otelContext.with(
+          trace.setSpan(otelContext.active(), rootSpan),
+          () =>
+            deps.llm.completeJson({
+              system: systemPrompt,
+              user: lastUserMessage?.content ?? "",
+            }),
+        );
+        const steps = parsePlanSteps(planJson);
+        const plan = createPlan(steps, messages, user);
+        planStore.save(plan);
+        cleanupSkillForTurn?.();
+        await closeNonStreamingTurn(0, 0);
+        return void reply.send({
+          plan_id: plan.plan_id,
+          steps: plan.steps,
+          created_at: plan.created_at,
+        });
+      }
+      const result = await otelContext.with(
+        trace.setSpan(otelContext.active(), rootSpan),
+        () => agent.run({ messages, ctx }),
+      );
+      cleanupSkillForTurn?.();
+      await closeNonStreamingTurn(result.usage.promptTokens, result.usage.completionTokens);
+      return void reply.send({ text: result.text, finishReason: result.finishReason, usage: result.usage });
+    } catch (err) {
+      req.log.error({ err }, "chat generate failed");
+      cleanupSkillForTurn?.();
+      try { recordSpanError(rootSpan, err); } catch { /* ignore */ }
+      await closeNonStreamingTurn(0, 0);
+      return void reply.code(500).send({ error: "internal" });
+    }
+  }
+
   // ------- SSE streaming path -------
   setupSse(reply);
 
@@ -480,17 +540,6 @@ async function handleChat(
   if (sessionId) {
     writeEvent(reply, { type: "session", session_id: sessionId });
   }
-
-  // Open the OTel root span for the turn — emits the Langfuse `prompt:<name>`
-  // tag so the GEPA runner's tag-filtered fetch returns this trace.
-  const rootSpan = startRootTurnSpan({
-    traceId: body.agent_trace_id ?? sessionId ?? "unknown",
-    userEntraId: user,
-    model: deps.config.AGENT_MODEL,
-    promptName: "agent.system",
-    promptVersion: activePromptVersion,
-    sessionId: sessionId ?? undefined,
-  });
 
   let closed = false;
   const onClose = () => { closed = true; };
@@ -507,14 +556,21 @@ async function handleChat(
   const _streamRedactions: RedactReplacement[] = [];
   let budget: Budget | undefined;
 
+  // Make rootSpan the active OTel context for the rest of the turn so
+  // every LiteLLM auto-instrumented call inherits the parent and the
+  // `prompt:agent.system` tag. The AsyncLocalStorageContextManager
+  // registered in observability/otel.ts propagates this across awaits.
+  const turnCtx = trace.setSpan(otelContext.active(), rootSpan);
   try {
     // Plan mode: ask LLM for a JSON plan; emit plan_step + plan_ready; no tool execution.
     if (isPlanMode) {
       try {
-        const planJson = await deps.llm.completeJson({
-          system: systemPrompt,
-          user: lastUserMessage?.content ?? "",
-        });
+        const planJson = await otelContext.with(turnCtx, () =>
+          deps.llm.completeJson({
+            system: systemPrompt,
+            user: lastUserMessage?.content ?? "",
+          }),
+        );
         const steps = parsePlanSteps(planJson);
 
         // Emit plan_step events.
@@ -627,7 +683,9 @@ async function handleChat(
       // requires careful handling of pre_tool hooks before any tool_call
       // SSE event is emitted, which is why the simple-but-redundant
       // call()-then-stream pattern was kept until a separate refactor pass.
-      const { result: stepResult, usage } = await deps.llm.call(messages, tools);
+      const { result: stepResult, usage } = await otelContext.with(turnCtx, () =>
+        deps.llm.call(messages, tools),
+      );
       budget.consumeStep(usage);
       stepsUsed++;
 
@@ -708,7 +766,13 @@ async function handleChat(
       if (!closed) {
         try {
           let streamed = "";
-          for await (const chunk of deps.llm.streamCompletion(messages, tools)) {
+          // Wrap the streamCompletion iterator construction in turnCtx so
+          // LiteLLM's auto-instrumented HTTP call captures the rootSpan
+          // as parent and inherits the prompt:agent.system Langfuse tag.
+          const streamIter = otelContext.with(turnCtx, () =>
+            deps.llm.streamCompletion(messages, tools),
+          );
+          for await (const chunk of streamIter) {
             if (closed) break;
             if (chunk.type === "text_delta") {
               const redacted = redactString(chunk.delta, _streamRedactions);
