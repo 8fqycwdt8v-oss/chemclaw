@@ -22,6 +22,15 @@ export interface Tool<I = unknown, O = unknown> {
    * Throw any Error to signal failure; the harness surfaces it as a tool error.
    */
   execute: (ctx: ToolContext, input: I) => Promise<O>;
+  /**
+   * Optional metadata read by the harness (and surfaced to OTel spans).
+   * - `readOnly: true` marks tools that don't mutate state — eligible for
+   *   parallel-batch execution (Phase 5) and reflected on the tool span as
+   *   `tool.read_only`.
+   */
+  annotations?: {
+    readOnly?: boolean;
+  };
 }
 
 // ---------------------------------------------------------------------------

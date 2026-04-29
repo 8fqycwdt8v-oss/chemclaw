@@ -18,6 +18,22 @@ import type {
   PreToolPayload,
   PreTurnPayload,
 } from "./types.js";
+import { withHookSpan } from "../observability/hook-spans.js";
+
+// ---------------------------------------------------------------------------
+// Phase 9: per-dispatch options for OTel span attribution.
+//
+// Currently the dispatcher only uses these to propagate `matcherTarget` and
+// `toolUseID` onto the per-hook span; future phases (4A timeouts, hook
+// matchers) may extend this struct without breaking existing call sites
+// because every field is optional.
+// ---------------------------------------------------------------------------
+export interface DispatchOptions {
+  /** String tested against a hook matcher regex (typically the toolId). */
+  matcherTarget?: string;
+  /** Tool-use identifier surfaced on hook spans + structured logs. */
+  toolUseID?: string;
+}
 
 // ---------------------------------------------------------------------------
 // Union of all payload types keyed by hook point.
@@ -138,16 +154,33 @@ export class Lifecycle {
   async dispatch<P extends HookPoint>(
     point: P,
     payload: HookPayloadMap[P],
+    opts?: DispatchOptions,
   ): Promise<void> {
     const hooks = this._hooks.get(point) ?? [];
     for (const hook of hooks) {
+      // Phase 9: wrap every hook handler in an OTel span so Langfuse /
+      // OTLP gets one span per invocation with point, name, matcher target,
+      // tool-use id, duration, and OK/ERROR status. The wrapper re-throws
+      // on handler failure so the dispatch-strict-vs-tolerant behaviour
+      // below is unchanged.
+      const invokeWithSpan = () =>
+        withHookSpan(
+          {
+            point,
+            hookName: hook.name,
+            matcherTarget: opts?.matcherTarget,
+            toolUseId: opts?.toolUseID,
+          },
+          () => (hook.handler as HookHandler<P>)(payload) as Promise<void>,
+        );
+
       if (point === "pre_tool") {
         // Strict-throw semantics for pre_tool: a throwing hook aborts the
         // tool call (used by budget-guard, anti-fabrication, citation guard).
-        await (hook.handler as HookHandler<P>)(payload);
+        await invokeWithSpan();
       } else {
         try {
-          await (hook.handler as HookHandler<P>)(payload);
+          await invokeWithSpan();
         } catch (err) {
           // Best-effort logging — we use console here because the lifecycle
           // is platform-agnostic. Routes that have a Fastify logger should
@@ -173,6 +206,7 @@ export class Lifecycle {
   // ---------------------------------------------------------------------------
   async dispatchPermissionRequest(
     payload: PermissionRequestPayload,
+    opts?: DispatchOptions,
   ): Promise<PermissionHookResult | undefined> {
     const hooks = this._hooks.get("permission_request") ?? [];
     let aggregated: PermissionHookResult | undefined;
@@ -180,7 +214,19 @@ export class Lifecycle {
     for (const hook of hooks) {
       let raw: unknown;
       try {
-        raw = await (hook.handler as HookHandler<"permission_request">)(payload);
+        // Phase 9: span every permission_request handler invocation too.
+        raw = await withHookSpan(
+          {
+            point: "permission_request",
+            hookName: hook.name,
+            matcherTarget: opts?.matcherTarget ?? payload.toolId,
+            toolUseId: opts?.toolUseID,
+          },
+          () =>
+            (hook.handler as HookHandler<"permission_request">)(
+              payload,
+            ) as Promise<unknown>,
+        );
       } catch (err) {
         // eslint-disable-next-line no-console
         console.error(

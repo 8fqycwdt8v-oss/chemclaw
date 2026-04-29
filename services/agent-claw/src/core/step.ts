@@ -15,6 +15,7 @@ import type {
 } from "./types.js";
 import type { Tool } from "../tools/tool.js";
 import { resolveDecision } from "./permissions/resolver.js";
+import { withToolSpan } from "../observability/tool-spans.js";
 
 export interface StepOnceOptions {
   llm: LlmProvider;
@@ -123,22 +124,33 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
 
   // 3a. pre_tool — hooks may throw to abort, may mutate input.
   const prePayload = { ctx, toolId, input };
-  await lifecycle.dispatch("pre_tool", prePayload);
+  await lifecycle.dispatch("pre_tool", prePayload, { matcherTarget: toolId });
   // Input may have been mutated by a hook.
   const effectiveInput = prePayload.input;
 
   // 3b. Validate input.
   const parsedInput = tool.inputSchema.parse(effectiveInput);
 
-  // 3c. Execute.
-  const rawOutput = await tool.execute(ctx, parsedInput);
+  // 3c. Execute — wrapped in an OTel span so Langfuse / OTLP receives
+  //      `tool.{toolId}` with id, read_only, in_batch, duration, status.
+  //      Phase 5's parallel-batch path is not present on this branch yet,
+  //      so `inBatch` is always false; when batching lands the parallel
+  //      call site will set it to true.
+  const rawOutput = await withToolSpan(
+    {
+      toolId: tool.id,
+      readOnly: tool.annotations?.readOnly,
+      inBatch: false,
+    },
+    () => tool.execute(ctx, parsedInput),
+  );
 
   // 3d. Validate output.
   const parsedOutput = tool.outputSchema.parse(rawOutput);
 
   // 3e. post_tool.
   const postPayload = { ctx, toolId, input: effectiveInput, output: parsedOutput };
-  await lifecycle.dispatch("post_tool", postPayload);
+  await lifecycle.dispatch("post_tool", postPayload, { matcherTarget: toolId });
   // Output may have been mutated by a hook.
   const effectiveOutput = postPayload.output;
 
