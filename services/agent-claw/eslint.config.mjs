@@ -42,7 +42,7 @@ export default tseslint.config(
       // TODO(PR-4): cap any-casts; flip these back to 'error'.
       '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/no-unsafe-assignment': 'warn',
-      '@typescript-eslint/no-unsafe-call': 'warn',
+      '@typescript-eslint/no-unsafe-call': 'error',
       '@typescript-eslint/no-unsafe-member-access': 'warn',
       '@typescript-eslint/no-unsafe-argument': 'warn',
       '@typescript-eslint/no-unsafe-return': 'warn',
@@ -82,7 +82,7 @@ export default tseslint.config(
       '@typescript-eslint/no-unused-expressions': 'warn',
       '@typescript-eslint/no-unnecessary-boolean-literal-compare': 'error',
       '@typescript-eslint/no-invalid-void-type': 'error',
-      '@typescript-eslint/no-unnecessary-type-parameters': 'warn',
+      '@typescript-eslint/no-unnecessary-type-parameters': 'error',
       '@typescript-eslint/no-unnecessary-type-conversion': 'error',
       // PR-1 paydown: prefer-promise-reject-errors flipped to error after
       // wrapping signal.reason narrowing in lifecycle.ts.

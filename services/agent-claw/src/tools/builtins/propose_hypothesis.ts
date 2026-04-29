@@ -75,10 +75,13 @@ export function buildProposeHypothesisTool(pool: Pool, agentTraceId?: string) {
 
         const hid: string = ins.rows[0].id;
         const tier: "low" | "medium" | "high" = ins.rows[0].confidence_tier;
+        // Narrow the `any`-typed row column through a typed local so the
+        // .toISOString() call below is safe per @typescript-eslint/no-unsafe-call.
+        const rawCreatedAt: unknown = ins.rows[0].created_at;
         const createdAt: string =
-          ins.rows[0].created_at instanceof Date
-            ? ins.rows[0].created_at.toISOString()
-            : String(ins.rows[0].created_at);
+          rawCreatedAt instanceof Date
+            ? rawCreatedAt.toISOString()
+            : String(rawCreatedAt);
 
         for (const fid of input.cited_fact_ids) {
           const note = input.citation_notes?.[fid] ?? null;
