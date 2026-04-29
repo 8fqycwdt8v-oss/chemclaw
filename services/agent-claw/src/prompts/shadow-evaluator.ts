@@ -41,26 +41,61 @@ export interface ShadowScoreResult {
 // Scoring heuristic
 // ---------------------------------------------------------------------------
 
+// UUID-shaped fact_id regex — must mirror services/optimizer/gepa_runner/
+// metric.py:_FACT_ID_RE so shadow scoring and GEPA's citation-faithfulness
+// component agree on what counts as a citation.
+const FACT_ID_RE = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
+
 /**
- * Simple inline scorer — mirrors the citation-faithfulness + length components
- * of the GEPA metric but without the feedback signal (unavailable at eval time).
+ * Composite shadow score — aligned with GEPA's citation-faithfulness signal
+ * (deep-review #10).
  *
- * Score breakdown:
- *   60% — response length normality (penalise very short / very long)
- *   40% — citation density (UUIDs per 500 chars)
+ * GEPA's full metric is `0.5*feedback + 0.3*golden + 0.2*citation_faithfulness`.
+ * Shadow eval can't see user feedback (the response was never delivered) and
+ * doesn't have golden examples in scope, so we use:
  *
- * This is intentionally cheap; the real metric runs in the GEPA optimizer.
+ *   80% — citation faithfulness (every UUID in the response also appears in
+ *         tool_outputs from the same turn). Mirrors the GEPA component
+ *         exactly so a candidate that scores well in shadow scores well in
+ *         GEPA's citation slice. When tool_outputs is empty AND the response
+ *         has no UUIDs, this is trivially 1.0 (no claims = no faithfulness
+ *         violations) — same convention as the GEPA metric.
+ *   20% — response length normality (penalise truncated / runaway responses).
+ *         A weak signal kept at low weight so a faithful but oddly-shaped
+ *         response still scores reasonably.
+ *
+ * The shadow_promote/shadow_reject gate's 0.80 absolute floor is calibrated
+ * to this metric's distribution, NOT to GEPA's full composite — the two are
+ * intentionally different signals. Documented divergence: shadow eval is a
+ * runtime-cheap gate that flags candidates worth further GEPA scrutiny;
+ * GEPA's training-time score is the authoritative quality signal.
  */
-function _scoreResponse(response: string): number {
+function _scoreResponse(response: string, toolOutputs: unknown[]): number {
+  // --- citation faithfulness (mirrors GEPA's _citation_faithfulness_score) ---
+  const claimedRaw = response.match(FACT_ID_RE) ?? [];
+  const claimed = new Set(claimedRaw.map((s) => s.toLowerCase()));
+  let faithScore = 1.0;
+  if (claimed.size > 0) {
+    const available = new Set<string>();
+    for (const out of toolOutputs) {
+      try {
+        const text = JSON.stringify(out).toLowerCase();
+        for (const m of text.match(FACT_ID_RE) ?? []) {
+          available.add(m);
+        }
+      } catch {
+        // Non-serialisable output: skip.
+      }
+    }
+    const faithful = [...claimed].filter((c) => available.has(c)).length;
+    faithScore = faithful / claimed.size;
+  }
+
+  // --- length normality (peak at 600 chars, decays toward 0 beyond 4000 / below 50) ---
   const len = response.length;
-  // Length score: peak at 600 chars, decays toward 0 beyond 4000 and below 50.
   const lenScore = Math.max(0, 1 - Math.abs(len - 600) / 3000);
 
-  const uuidRe = /[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi;
-  const citationCount = (response.match(uuidRe) ?? []).length;
-  const citationDensity = Math.min(1, citationCount / Math.max(1, len / 500));
-
-  return Math.round((0.6 * lenScore + 0.4 * citationDensity) * 10000) / 10000;
+  return Math.round((0.8 * faithScore + 0.2 * lenScore) * 10000) / 10000;
 }
 
 // ---------------------------------------------------------------------------
@@ -127,7 +162,16 @@ export class ShadowEvaluator {
           (responseObj as { text?: string; answer?: string } | null)?.answer ??
           "";
 
-    const score = _scoreResponse(responseText);
+    // Shadow runs without tool execution (see completeJson contract above —
+    // it's a structured single-turn call, no tools registered for the
+    // shadow LLM). That means no harvested fact IDs are available at
+    // scoring time. Passing an empty array is the GEPA-compatible default:
+    // when the response has no UUIDs, citation faithfulness scores 1.0
+    // (no claims to violate); when the response cites a UUID, faithfulness
+    // scores 0.0 (no source to ground against). This biases shadow toward
+    // prompts that don't fabricate IDs without evidence — exactly what
+    // we want for a runtime-cheap quality gate.
+    const score = _scoreResponse(responseText, []);
 
     await this.promptRegistry.recordShadowScore(
       ctx.promptName,
