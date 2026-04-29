@@ -65,7 +65,7 @@ export default tseslint.config(
       '@typescript-eslint/return-await': 'warn',
       '@typescript-eslint/no-unnecessary-condition': 'warn',
       '@typescript-eslint/no-unnecessary-type-arguments': 'error',
-      '@typescript-eslint/prefer-nullish-coalescing': 'warn',
+      '@typescript-eslint/prefer-nullish-coalescing': 'error',
       '@typescript-eslint/prefer-reduce-type-parameter': 'warn',
       '@typescript-eslint/consistent-type-definitions': 'warn',
       '@typescript-eslint/dot-notation': 'warn',

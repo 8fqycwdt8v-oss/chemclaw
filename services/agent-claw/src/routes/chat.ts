@@ -167,7 +167,7 @@ async function writeFeedback(
     await client.query(
       `INSERT INTO feedback_events (user_entra_id, signal, query_text, trace_id)
        VALUES ($1, $2, $3, $4)`,
-      [userEntraId, signal, reason || null, traceId || null],
+      [userEntraId, signal, reason ?? null, traceId ?? null],
     );
   });
 }

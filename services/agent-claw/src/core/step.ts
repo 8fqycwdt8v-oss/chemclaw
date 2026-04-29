@@ -171,8 +171,7 @@ async function _runOneTool(opts: {
   }
 
   // updatedInput from a hook supersedes any in-place mutation.
-  const effectiveInput =
-    preResult.updatedInput !== undefined ? preResult.updatedInput : prePayload.input;
+  const effectiveInput = preResult.updatedInput ?? prePayload.input;
 
   // Validate input.
   const parsedInput = tool.inputSchema.parse(effectiveInput);

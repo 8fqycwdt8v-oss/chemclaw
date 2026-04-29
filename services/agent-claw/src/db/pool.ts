@@ -14,8 +14,8 @@ import type { Config } from "../config.js";
 
 export function createPool(cfg: Config): Pool {
   // Prefer the dedicated app role; fall back to the legacy single-role config.
-  const user = cfg.CHEMCLAW_APP_USER || cfg.POSTGRES_USER;
-  const password = cfg.CHEMCLAW_APP_PASSWORD || cfg.POSTGRES_PASSWORD;
+  const user = cfg.CHEMCLAW_APP_USER ?? cfg.POSTGRES_USER;
+  const password = cfg.CHEMCLAW_APP_PASSWORD ?? cfg.POSTGRES_PASSWORD;
   return new Pool({
     host: cfg.POSTGRES_HOST,
     port: cfg.POSTGRES_PORT,
