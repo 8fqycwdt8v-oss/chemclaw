@@ -1,0 +1,21 @@
+{
+  "name": "permission-deny-via-mode",
+  "description": "Permission resolver denies the tool because permissionMode='dontAsk' with no allowedTools. The harness short-circuits BEFORE pre_tool dispatch (and BEFORE permission_request hook fires — dontAsk does not consult hooks), emits a synthetic denied_by_permissions output, and the LLM produces text instead. Verifies pre_tool / post_tool / permission_request all stay silent.",
+  "user_messages": ["search"],
+  "permissions": { "permissionMode": "dontAsk" },
+  "steps": [
+    {
+      "llm_response": {
+        "kind": "tool_call",
+        "toolId": "search_knowledge",
+        "input": { "query": "x" }
+      }
+    },
+    { "llm_response": { "kind": "text", "text": "Permission denied." } }
+  ],
+  "expected_events": [
+    { "type": "hook", "point": "pre_turn" },
+    { "type": "hook", "point": "post_turn" }
+  ],
+  "expected_finish_reason": "stop"
+}

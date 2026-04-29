@@ -1,0 +1,20 @@
+{
+  "name": "ask-user-pause",
+  "description": "ask_user pauses the harness via AwaitingUserInputError thrown from the tool body. Verifies pre_tool fires, the throw happens before post_tool dispatch, post_turn STILL fires (finally block), and the loop exits with finishReason='awaiting_user_input'.",
+  "user_messages": ["should I proceed?"],
+  "steps": [
+    {
+      "llm_response": {
+        "kind": "tool_call",
+        "toolId": "ask_user",
+        "input": { "question": "Use option A or B?" }
+      }
+    }
+  ],
+  "expected_events": [
+    { "type": "hook", "point": "pre_turn" },
+    { "type": "hook", "point": "pre_tool", "toolId": "ask_user" },
+    { "type": "hook", "point": "post_turn" }
+  ],
+  "expected_finish_reason": "awaiting_user_input"
+}

@@ -1,0 +1,41 @@
+{
+  "name": "multi-tool-round",
+  "description": "LLM calls the same tool twice (e.g. manage_todos create then complete) before producing final text. Verifies pre_tool / post_tool fire ONCE PER CALL — not collapsed across repeated tool ids.",
+  "user_messages": ["start the task list"],
+  "steps": [
+    {
+      "llm_response": {
+        "kind": "tool_call",
+        "toolId": "manage_todos",
+        "input": { "action": "create", "contents": ["step 1"] }
+      },
+      "tool_output": {
+        "todos": [
+          { "id": "t1", "ordering": 1, "content": "step 1", "status": "in_progress" }
+        ]
+      }
+    },
+    {
+      "llm_response": {
+        "kind": "tool_call",
+        "toolId": "manage_todos",
+        "input": { "action": "complete", "todo_id": "t1" }
+      },
+      "tool_output": {
+        "todos": [
+          { "id": "t1", "ordering": 1, "content": "step 1", "status": "completed" }
+        ]
+      }
+    },
+    { "llm_response": { "kind": "text", "text": "Done." } }
+  ],
+  "expected_events": [
+    { "type": "hook", "point": "pre_turn" },
+    { "type": "hook", "point": "pre_tool", "toolId": "manage_todos" },
+    { "type": "hook", "point": "post_tool", "toolId": "manage_todos" },
+    { "type": "hook", "point": "pre_tool", "toolId": "manage_todos" },
+    { "type": "hook", "point": "post_tool", "toolId": "manage_todos" },
+    { "type": "hook", "point": "post_turn" }
+  ],
+  "expected_finish_reason": "stop"
+}

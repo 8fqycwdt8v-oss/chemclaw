@@ -1,0 +1,29 @@
+{
+  "name": "permission-deny-via-hook",
+  "description": "A permission_request hook returns deny in default permission mode. The resolver short-circuits BEFORE pre_tool dispatch and returns a synthetic denied_by_permissions output. Verifies that permission_request fires AND that pre_tool / post_tool do NOT fire when the resolver denies.",
+  "user_messages": ["read the file"],
+  "permissions": { "permissionMode": "default" },
+  "steps": [
+    {
+      "llm_response": {
+        "kind": "tool_call",
+        "toolId": "read_file",
+        "input": { "path": "/etc/passwd" }
+      }
+    },
+    { "llm_response": { "kind": "text", "text": "I can't read that file." } }
+  ],
+  "hooks": [
+    {
+      "point": "permission_request",
+      "name": "scenario-deny",
+      "behavior": "deny"
+    }
+  ],
+  "expected_events": [
+    { "type": "hook", "point": "pre_turn" },
+    { "type": "hook", "point": "permission_request", "toolId": "read_file" },
+    { "type": "hook", "point": "post_turn" }
+  ],
+  "expected_finish_reason": "stop"
+}
