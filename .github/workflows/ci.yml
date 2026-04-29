@@ -109,6 +109,7 @@ jobs:
           mypy services/optimizer/session_purger
           mypy services/litellm_redactor
           mypy services/optimizer/forged_tool_validator
+          mypy services/mcp_tools/common
       - name: Diff coverage (Python)
         if: github.event_name == 'pull_request'
         run: |
