@@ -82,18 +82,19 @@ class TestGepaNightly:
             '{"question":"q","answer":"a","expected_classes":["analytical"]}\n'
         )
 
-        with patch("services.optimizer.gepa_runner.runner._get_dsn", return_value="dummy"):
-            with patch("psycopg.connect") as mock_connect:
-                mock_conn = _make_mock_conn(
-                    prompts=[{"id": "abc", "name": "agent.system", "version": 1, "template": "T"}]
-                )
-                mock_connect.return_value.__enter__ = MagicMock(return_value=mock_conn)
-                mock_connect.return_value.__exit__ = MagicMock(return_value=False)
+        with patch("services.optimizer.gepa_runner.runner._configure_dspy_lm", return_value=None):
+            with patch("services.optimizer.gepa_runner.runner._get_dsn", return_value="dummy"):
+                with patch("psycopg.connect") as mock_connect:
+                    mock_conn = _make_mock_conn(
+                        prompts=[{"id": "abc", "name": "agent.system", "version": 1, "template": "T"}]
+                    )
+                    mock_connect.return_value.__enter__ = MagicMock(return_value=mock_conn)
+                    mock_connect.return_value.__exit__ = MagicMock(return_value=False)
 
-                await run_gepa_nightly(
-                    langfuse_client=lf_client,
-                    fixture_path=str(fixture),
-                )
+                    await run_gepa_nightly(
+                        langfuse_client=lf_client,
+                        fixture_path=str(fixture),
+                    )
 
         from services.optimizer.gepa_runner.runner import _last_run_status
         assert _last_run_status == "ok"
@@ -136,19 +137,20 @@ class TestGepaNightly:
         fake_result.feedback_rate = 0.6
         fake_result.gepa_metadata = {"generations": 30}
 
-        with patch("services.optimizer.gepa_runner.runner.run_gepa", return_value=fake_result):
-            with patch("services.optimizer.gepa_runner.runner._get_dsn", return_value="dummy"):
-                with patch("psycopg.connect") as mock_connect:
-                    mock_conn = _make_mock_conn(
-                        prompts=[{"id": "abc", "name": "agent.system", "version": 1, "template": "T"}]
-                    )
-                    mock_connect.return_value.__enter__ = MagicMock(return_value=mock_conn)
-                    mock_connect.return_value.__exit__ = MagicMock(return_value=False)
+        with patch("services.optimizer.gepa_runner.runner._configure_dspy_lm", return_value=None):
+            with patch("services.optimizer.gepa_runner.runner.run_gepa", return_value=fake_result):
+                with patch("services.optimizer.gepa_runner.runner._get_dsn", return_value="dummy"):
+                    with patch("psycopg.connect") as mock_connect:
+                        mock_conn = _make_mock_conn(
+                            prompts=[{"id": "abc", "name": "agent.system", "version": 1, "template": "T"}]
+                        )
+                        mock_connect.return_value.__enter__ = MagicMock(return_value=mock_conn)
+                        mock_connect.return_value.__exit__ = MagicMock(return_value=False)
 
-                    await runner_mod.run_gepa_nightly(
-                        langfuse_client=lf_client,
-                        fixture_path=str(fixture),
-                    )
+                        await runner_mod.run_gepa_nightly(
+                            langfuse_client=lf_client,
+                            fixture_path=str(fixture),
+                        )
 
         assert ("agent.system", 1) in inserted
 
@@ -183,3 +185,119 @@ class TestGepaNightly:
         assert "last_run_at" in result
         assert "last_run_status" in result
         assert "details" in result
+
+
+# ---------------------------------------------------------------------------
+# Phase G — DSPy LM configuration + aggregate /healthz status
+# ---------------------------------------------------------------------------
+
+
+class TestConfigureDspyLM:
+    """The runner must wire DSPy to LiteLLM at startup so dspy.GEPA has an
+    LM to call. Without this, every prompt errors and /healthz lies green."""
+
+    def test_configure_uses_litellm_envs(self, monkeypatch):
+        from services.optimizer.gepa_runner import runner as runner_mod
+
+        monkeypatch.setenv("LITELLM_BASE_URL", "http://litellm:4000")
+        monkeypatch.setenv("LITELLM_API_KEY", "sk-test")
+        monkeypatch.setenv("GEPA_MODEL", "executor")
+
+        captured: dict[str, object] = {}
+
+        def fake_lm(model, **kwargs):
+            captured["model"] = model
+            captured.update(kwargs)
+            return MagicMock(name="LM")
+
+        monkeypatch.setattr("dspy.LM", fake_lm, raising=False)
+
+        configured: dict[str, object] = {}
+
+        def fake_configure(**kwargs):
+            configured.update(kwargs)
+
+        monkeypatch.setattr("dspy.configure", fake_configure)
+
+        runner_mod._configure_dspy_lm()
+
+        assert captured["model"] == "openai/executor"
+        assert captured["api_base"] == "http://litellm:4000"
+        assert captured["api_key"] == "sk-test"
+        assert "lm" in configured
+
+    def test_configure_raises_when_envs_missing(self, monkeypatch):
+        """Refuse to silently start without an LM. The runner caller turns
+        this into a `_last_run_status='error'` so /healthz is honest."""
+        from services.optimizer.gepa_runner import runner as runner_mod
+
+        monkeypatch.delenv("LITELLM_BASE_URL", raising=False)
+        monkeypatch.delenv("LITELLM_API_KEY", raising=False)
+        with pytest.raises(RuntimeError, match="LITELLM_BASE_URL"):
+            runner_mod._configure_dspy_lm()
+
+
+class TestAggregateStatus:
+    """Per-prompt errors must NOT be masked by 'ok'. /healthz must surface
+    'degraded' when any prompt errored so the operator notices."""
+
+    @pytest.mark.asyncio
+    async def test_per_prompt_error_yields_degraded(self, tmp_path, monkeypatch):
+        from services.optimizer.gepa_runner import runner as runner_mod
+
+        traces = [
+            {
+                "id": f"t{i}",
+                "input": {"messages": [{"role": "user", "content": "What retro route?"}]},
+                "output": {"answer": "x"},
+                "observations": [],
+            }
+            for i in range(31)
+        ]
+        lf_client = MockLangfuseClient(traces=traces)
+
+        fixture = tmp_path / "g.jsonl"
+        fixture.write_text(
+            '{"question":"q","answer":"a","expected_classes":["retrosynthesis"]}\n'
+        )
+
+        with patch(
+            "services.optimizer.gepa_runner.runner.run_gepa",
+            side_effect=RuntimeError("boom"),
+        ):
+            with patch(
+                "services.optimizer.gepa_runner.runner._configure_dspy_lm",
+                return_value=None,
+            ):
+                with patch(
+                    "services.optimizer.gepa_runner.runner._get_dsn",
+                    return_value="dummy",
+                ):
+                    with patch("psycopg.connect") as mock_connect:
+                        mock_conn = _make_mock_conn(
+                            prompts=[
+                                {
+                                    "id": "abc",
+                                    "name": "agent.system",
+                                    "version": 1,
+                                    "template": "T",
+                                }
+                            ]
+                        )
+                        mock_connect.return_value.__enter__ = MagicMock(
+                            return_value=mock_conn
+                        )
+                        mock_connect.return_value.__exit__ = MagicMock(return_value=False)
+
+                        await runner_mod.run_gepa_nightly(
+                            langfuse_client=lf_client,
+                            fixture_path=str(fixture),
+                        )
+
+        from services.optimizer.gepa_runner.runner import (
+            _last_run_status,
+            _last_run_details,
+        )
+
+        assert _last_run_status == "degraded"
+        assert _last_run_details["agent.system"]["status"] == "error"

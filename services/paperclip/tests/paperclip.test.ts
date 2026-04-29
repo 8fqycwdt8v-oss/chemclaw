@@ -197,3 +197,41 @@ describe("DEFAULT_BUDGET_CONFIG", () => {
     expect(DEFAULT_BUDGET_CONFIG.maxUsdPerDay).toBe(25.0);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Phase G — rehydrate daily USD from persistence (deep-review #11)
+// ---------------------------------------------------------------------------
+
+describe("BudgetManager.rehydrateDailyUsd", () => {
+  it("replaces the in-memory ledger with the snapshot", () => {
+    const mgr = new BudgetManager({
+      maxConcurrentPerUser: 4,
+      maxTokensPerTurn: 10_000,
+      maxUsdPerDay: 25.0,
+    });
+    expect(mgr.todayUsd("u1")).toBe(0);
+
+    const today = new Date();
+    const ymd = `${today.getUTCFullYear()}-${String(today.getUTCMonth() + 1).padStart(2, "0")}-${String(today.getUTCDate()).padStart(2, "0")}`;
+    mgr.rehydrateDailyUsd(new Map([[`u1:${ymd}`, 18.0]]));
+
+    expect(mgr.todayUsd("u1")).toBeCloseTo(18.0);
+    // The check should reject any new reservation that would push past 25.
+    const result = mgr.check({ userEntraId: "u1", estTokens: 100, estUsd: 8.0 });
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("usd_budget");
+  });
+
+  it("rehydrate is idempotent — calling again replaces the prior snapshot", () => {
+    const mgr = new BudgetManager({
+      maxConcurrentPerUser: 4,
+      maxTokensPerTurn: 10_000,
+      maxUsdPerDay: 25.0,
+    });
+    const today = new Date();
+    const ymd = `${today.getUTCFullYear()}-${String(today.getUTCMonth() + 1).padStart(2, "0")}-${String(today.getUTCDate()).padStart(2, "0")}`;
+    mgr.rehydrateDailyUsd(new Map([[`u1:${ymd}`, 5.0]]));
+    mgr.rehydrateDailyUsd(new Map([[`u1:${ymd}`, 12.0]]));
+    expect(mgr.todayUsd("u1")).toBeCloseTo(12.0);
+  });
+});
