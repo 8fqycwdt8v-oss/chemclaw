@@ -241,7 +241,10 @@ class PersonsQueryResponse(BaseModel):
 # ---------------------------------------------------------------------------
 # Backend wiring
 # ---------------------------------------------------------------------------
-_backend_holder: dict[str, Any] = {}
+# Two single-key dicts instead of one mixed-value dict so mypy can narrow
+# the backend access at the use site without a runtime isinstance check.
+_backend_holder: dict[str, FakePostgresBackend | RealLogsBackend] = {}
+_health_holder: dict[str, bool] = {}
 
 
 def _build_backend() -> FakePostgresBackend | RealLogsBackend:
@@ -285,11 +288,12 @@ async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
             "LOGS_REAL_API_KEY; refusing to start with empty config."
         )
     _backend_holder["backend"] = _build_backend()
-    _backend_holder["healthy"] = settings.backend == "fake-postgres"
+    _health_holder["healthy"] = settings.backend == "fake-postgres"
     try:
         yield
     finally:
         _backend_holder.clear()
+        _health_holder.clear()
 
 
 def _backend() -> FakePostgresBackend | RealLogsBackend:
@@ -306,7 +310,7 @@ def _ready_check() -> bool:
     # The real backend is intentionally unhealthy until the SDK lands —
     # fail-closed is the safer default while NotImplementedError is the
     # only behaviour the routes expose.
-    return bool(_backend_holder.get("healthy"))
+    return bool(_health_holder.get("healthy"))
 
 
 app = create_app(
