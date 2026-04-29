@@ -104,18 +104,18 @@ function extractElnEntryFacts(entry: Record<string, unknown>): SourceFactPayload
   const facts: SourceFactPayload[] = [];
   const now = nowIso();
   const entryValidUntil =
-    typeof entry["valid_until"] === "string"
-      ? (entry["valid_until"] as string)
+    typeof entry.valid_until === "string"
+      ? (entry.valid_until)
       : validUntilIso();
   const sourceTs =
-    (entry["modified_at"] as string | undefined) ??
-    (entry["created_at"] as string | undefined) ??
+    (entry.modified_at as string | undefined) ??
+    (entry.created_at as string | undefined) ??
     now;
-  const subjectId = String(entry["id"] ?? "");
+  const subjectId = String(entry.id ?? "");
   if (!subjectId) return facts;
 
   // New typed shape: fields_jsonb is a flat Record<string, unknown>.
-  const fieldsJsonb = entry["fields_jsonb"];
+  const fieldsJsonb = entry.fields_jsonb;
   if (fieldsJsonb && typeof fieldsJsonb === "object" && !Array.isArray(fieldsJsonb)) {
     const fj = fieldsJsonb as Record<string, unknown>;
     for (const [key, predicate] of Object.entries(ELN_FIELD_PREDICATES)) {
@@ -135,12 +135,12 @@ function extractElnEntryFacts(entry: Record<string, unknown>): SourceFactPayload
   }
 
   // Legacy shape: fields[key] = { value, displayValue }.
-  const fields = entry["fields"];
+  const fields = entry.fields;
   if (fields && typeof fields === "object" && !Array.isArray(fields)) {
     const f = fields as Record<string, unknown>;
     for (const [key, predicate] of Object.entries(ELN_FIELD_PREDICATES)) {
       const fieldObj = f[key];
-      if (fieldObj && typeof fieldObj === "object" && "value" in (fieldObj as object)) {
+      if (fieldObj && typeof fieldObj === "object" && "value" in (fieldObj)) {
         const v = toObjectValue((fieldObj as { value?: unknown }).value);
         if (v !== undefined) {
           facts.push({
@@ -169,13 +169,13 @@ function extractCanonicalReactionFacts(rxn: Record<string, unknown>): SourceFact
   const facts: SourceFactPayload[] = [];
   const now = nowIso();
   const validUntil =
-    typeof rxn["valid_until"] === "string" ? (rxn["valid_until"] as string) : validUntilIso();
+    typeof rxn.valid_until === "string" ? (rxn.valid_until) : validUntilIso();
   const sourceTs =
-    (rxn["last_activity_at"] as string | undefined) ?? now;
-  const subjectId = String(rxn["reaction_id"] ?? "");
+    (rxn.last_activity_at as string | undefined) ?? now;
+  const subjectId = String(rxn.reaction_id ?? "");
   if (!subjectId) return facts;
 
-  const meanYield = toObjectValue(rxn["mean_yield"]);
+  const meanYield = toObjectValue(rxn.mean_yield);
   if (meanYield !== undefined) {
     facts.push({
       source_system_id: "eln",
@@ -188,7 +188,7 @@ function extractCanonicalReactionFacts(rxn: Record<string, unknown>): SourceFact
     });
   }
 
-  const ofatCount = toObjectValue(rxn["ofat_count"]);
+  const ofatCount = toObjectValue(rxn.ofat_count);
   if (ofatCount !== undefined) {
     facts.push({
       source_system_id: "eln",
@@ -214,15 +214,15 @@ function extractSampleFacts(sample: Record<string, unknown>): SourceFactPayload[
   const facts: SourceFactPayload[] = [];
   const now = nowIso();
   const validUntil =
-    typeof sample["valid_until"] === "string"
-      ? (sample["valid_until"] as string)
+    typeof sample.valid_until === "string"
+      ? (sample.valid_until)
       : validUntilIso();
   const sourceTs =
-    (sample["created_at"] as string | undefined) ?? now;
-  const subjectId = String(sample["id"] ?? "");
+    (sample.created_at as string | undefined) ?? now;
+  const subjectId = String(sample.id ?? "");
   if (!subjectId) return facts;
 
-  const purity = toObjectValue(sample["purity_pct"]);
+  const purity = toObjectValue(sample.purity_pct);
   if (purity !== undefined) {
     facts.push({
       source_system_id: "eln",
@@ -235,7 +235,7 @@ function extractSampleFacts(sample: Record<string, unknown>): SourceFactPayload[
     });
   }
 
-  const amount = toObjectValue(sample["amount_mg"]);
+  const amount = toObjectValue(sample.amount_mg);
   if (amount !== undefined) {
     facts.push({
       source_system_id: "eln",
@@ -249,14 +249,14 @@ function extractSampleFacts(sample: Record<string, unknown>): SourceFactPayload[
   }
 
   // Nested results: each row has metric + value_num (or value_text).
-  if (Array.isArray(sample["results"])) {
-    for (const r of sample["results"] as Record<string, unknown>[]) {
-      const metric = typeof r["metric"] === "string" ? (r["metric"] as string) : null;
+  if (Array.isArray(sample.results)) {
+    for (const r of sample.results as Record<string, unknown>[]) {
+      const metric = typeof r.metric === "string" ? (r.metric) : null;
       if (!metric) continue;
-      const value = toObjectValue(r["value_num"] ?? r["value_text"]);
+      const value = toObjectValue(r.value_num ?? r.value_text);
       if (value === undefined) continue;
       const measuredAt =
-        (r["measured_at"] as string | undefined) ?? sourceTs;
+        (r.measured_at as string | undefined) ?? sourceTs;
       const predicate = `HAS_${metric.toUpperCase().replace(/[^A-Z0-9]+/g, "_")}`;
       facts.push({
         source_system_id: "eln",
@@ -264,7 +264,7 @@ function extractSampleFacts(sample: Record<string, unknown>): SourceFactPayload[
         fetched_at: now,
         valid_until: validUntil,
         predicate,
-        subject_id: `${subjectId}:${String(r["id"] ?? metric)}`,
+        subject_id: `${subjectId}:${String(r.id ?? metric)}`,
         object_value: value,
       });
     }
@@ -284,12 +284,12 @@ function extractInstrumentFacts(dataset: Record<string, unknown>): SourceFactPay
   const now = nowIso();
   const validUntil = validUntilIso();
   const sourceTs =
-    (dataset["measured_at"] as string | undefined) ?? now;
-  const subjectId = String(dataset["uid"] ?? dataset["id"] ?? "");
+    (dataset.measured_at as string | undefined) ?? now;
+  const subjectId = String(dataset.uid ?? dataset.id ?? "");
   if (!subjectId) return facts;
 
   // Cross-link fact: dataset → sample.
-  const sampleId = dataset["sample_id"];
+  const sampleId = dataset.sample_id;
   if (typeof sampleId === "string" && sampleId.length > 0) {
     facts.push({
       source_system_id: "logs-sciy",
@@ -303,7 +303,7 @@ function extractInstrumentFacts(dataset: Record<string, unknown>): SourceFactPay
   }
 
   // Instrument kind as a categorical fact.
-  const kind = toObjectValue(dataset["instrument_kind"]);
+  const kind = toObjectValue(dataset.instrument_kind);
   if (kind !== undefined) {
     facts.push({
       source_system_id: "logs-sciy",
@@ -318,7 +318,7 @@ function extractInstrumentFacts(dataset: Record<string, unknown>): SourceFactPay
 
   // Mine parameters jsonb for known numeric facts; mirrors the ELN
   // fields_jsonb extraction pattern.
-  const params = dataset["parameters"];
+  const params = dataset.parameters;
   if (params && typeof params === "object" && !Array.isArray(params)) {
     const p = params as Record<string, unknown>;
     for (const [key, predicate] of Object.entries({
@@ -429,29 +429,29 @@ export async function sourceCachePostToolHook(
 
   // Top-level ELN entry (`fetch_eln_entry`): has id + fields_jsonb (or legacy fields).
   if (
-    typeof out["id"] === "string" &&
-    (typeof out["fields_jsonb"] === "object" ||
-      typeof out["fields"] === "object" ||
-      typeof out["entry_shape"] === "string")
+    typeof out.id === "string" &&
+    (typeof out.fields_jsonb === "object" ||
+      typeof out.fields === "object" ||
+      typeof out.entry_shape === "string")
   ) {
     facts.push(...extractElnEntryFacts(out));
   }
 
   // Top-level ELN sample (`fetch_eln_sample`): has id + sample_code + entry_id.
   if (
-    typeof out["id"] === "string" &&
-    typeof out["sample_code"] === "string" &&
-    typeof out["entry_id"] === "string"
+    typeof out.id === "string" &&
+    typeof out.sample_code === "string" &&
+    typeof out.entry_id === "string"
   ) {
     facts.push(...extractSampleFacts(out));
   }
 
   // Top-level CanonicalReactionDetail (`fetch_eln_canonical_reaction`):
   // has reaction_id; may include ofat_children which are ElnEntries.
-  if (typeof out["reaction_id"] === "string") {
+  if (typeof out.reaction_id === "string") {
     facts.push(...extractCanonicalReactionFacts(out));
-    if (Array.isArray(out["ofat_children"])) {
-      for (const child of out["ofat_children"] as Record<string, unknown>[]) {
+    if (Array.isArray(out.ofat_children)) {
+      for (const child of out.ofat_children as Record<string, unknown>[]) {
         facts.push(...extractElnEntryFacts(child));
       }
     }
@@ -459,43 +459,43 @@ export async function sourceCachePostToolHook(
 
   // `items: [...]` envelope (query_eln_experiments,
   // query_eln_canonical_reactions). The element shape determines extraction.
-  if (Array.isArray(out["items"])) {
-    for (const item of out["items"] as Record<string, unknown>[]) {
-      if (typeof item["reaction_id"] === "string") {
+  if (Array.isArray(out.items)) {
+    for (const item of out.items as Record<string, unknown>[]) {
+      if (typeof item.reaction_id === "string") {
         facts.push(...extractCanonicalReactionFacts(item));
-        if (Array.isArray(item["ofat_children"])) {
-          for (const child of item["ofat_children"] as Record<string, unknown>[]) {
+        if (Array.isArray(item.ofat_children)) {
+          for (const child of item.ofat_children as Record<string, unknown>[]) {
             facts.push(...extractElnEntryFacts(child));
           }
         }
-      } else if (typeof item["id"] === "string") {
+      } else if (typeof item.id === "string") {
         facts.push(...extractElnEntryFacts(item));
       }
     }
   }
 
   // `samples: [...]` envelope (query_eln_samples_by_entry).
-  if (Array.isArray(out["samples"])) {
-    for (const sample of out["samples"] as Record<string, unknown>[]) {
+  if (Array.isArray(out.samples)) {
+    for (const sample of out.samples as Record<string, unknown>[]) {
       facts.push(...extractSampleFacts(sample));
     }
   }
 
   // `datasets: [...]` envelope (query_instrument_runs, query_instrument_datasets).
-  if (Array.isArray(out["datasets"])) {
-    for (const ds of out["datasets"] as Record<string, unknown>[]) {
+  if (Array.isArray(out.datasets)) {
+    for (const ds of out.datasets as Record<string, unknown>[]) {
       facts.push(...extractInstrumentFacts(ds));
     }
   }
 
   // `dataset: ...` envelope (fetch_instrument_run wraps a single LogsDataset).
-  if (out["dataset"] && typeof out["dataset"] === "object" && !Array.isArray(out["dataset"])) {
-    facts.push(...extractInstrumentFacts(out["dataset"] as Record<string, unknown>));
+  if (out.dataset && typeof out.dataset === "object" && !Array.isArray(out.dataset)) {
+    facts.push(...extractInstrumentFacts(out.dataset as Record<string, unknown>));
   }
 
   // Top-level LogsDataset (rare — included for symmetry; the typed adapters
   // wrap in `{ dataset }` instead).
-  if (typeof out["uid"] === "string" && typeof out["instrument_kind"] === "string") {
+  if (typeof out.uid === "string" && typeof out.instrument_kind === "string") {
     facts.push(...extractInstrumentFacts(out));
   }
 

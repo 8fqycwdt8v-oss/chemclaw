@@ -122,9 +122,9 @@ const allowedOrigins = cfg.AGENT_CORS_ORIGINS.split(",")
 
 await app.register(cors, {
   origin: (origin, cb) => {
-    if (!origin) return cb(null, true); // curl / server-to-server
-    if (allowedOrigins.includes(origin)) return cb(null, true);
-    return cb(new Error("origin not allowed"), false);
+    if (!origin) { cb(null, true); return; } // curl / server-to-server
+    if (allowedOrigins.includes(origin)) { cb(null, true); return; }
+    cb(new Error("origin not allowed"), false);
   },
   credentials: true,
 });
@@ -329,16 +329,16 @@ registerDeepResearchRoute(app, routeDeps);
 registerSkillsRoutes(app, {
   loader: skillLoader,
   pool,
-  getUser: getUser as (req: import("fastify").FastifyRequest) => string,
+  getUser: getUser,
 });
 registerPlanRoutes(app, routeDeps);
-registerDocumentsRoute(app, { config: cfg, pool, getUser: getUser as (req: import("fastify").FastifyRequest) => string });
-registerArtifactsRoutes(app, { pool, getUser: getUser as (req: import("fastify").FastifyRequest) => string });
-registerLearnRoute(app, { pool, llm: llmProvider, getUser: getUser as (req: import("fastify").FastifyRequest) => string });
+registerDocumentsRoute(app, { config: cfg, pool, getUser: getUser });
+registerArtifactsRoutes(app, { pool, getUser: getUser });
+registerLearnRoute(app, { pool, llm: llmProvider, getUser: getUser });
 registerFeedbackRoute(app, {
   pool,
   promptRegistry,
-  getUser: getUser as (req: import("fastify").FastifyRequest) => string,
+  getUser: getUser,
   langfuseHost: cfg.LANGFUSE_HOST,
   langfusePublicKey: cfg.LANGFUSE_PUBLIC_KEY,
   langfuseSecretKey: cfg.LANGFUSE_SECRET_KEY,
@@ -348,15 +348,15 @@ registerEvalRoute(app, {
   pool,
   promptRegistry,
   llm: llmProvider,
-  getUser: getUser as (req: import("fastify").FastifyRequest) => string,
+  getUser: getUser,
 });
 registerOptimizerRoutes(app, {
   pool,
-  getUser: getUser as (req: import("fastify").FastifyRequest) => string,
+  getUser: getUser,
 });
 registerSessionsRoute(app, {
   pool,
-  getUser: getUser as (req: import("fastify").FastifyRequest) => string,
+  getUser: getUser,
   // Phase E + I: chained-run + resume endpoints share the chat harness deps.
   config: cfg,
   llm: llmProvider,

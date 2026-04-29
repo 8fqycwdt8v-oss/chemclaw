@@ -47,7 +47,7 @@ describe("buildSynthesizeInsightsTool", () => {
       vi.fn().mockResolvedValue({
         ok: true,
         text: async () => JSON.stringify({ facts: [] }),
-      } as Response),
+      }),
     );
 
     const { pool, client } = mockPool();
@@ -93,7 +93,7 @@ describe("buildSynthesizeInsightsTool", () => {
       vi.fn().mockResolvedValue({
         ok: true,
         text: async () => JSON.stringify({ facts: [] }),
-      } as Response),
+      }),
     );
 
     const { pool, client } = mockPool();

@@ -344,7 +344,7 @@ export function registerSessionsRoute(
     const registry = deps.registry;
 
     // Verify the JWT.
-    const authz = req.headers["authorization"];
+    const authz = req.headers.authorization;
     let claimedUser: string;
     try {
       const claims = verifyBearerHeader(typeof authz === "string" ? authz : undefined, {

@@ -11,7 +11,7 @@ import { randomUUID } from "crypto";
 
 // Replicate the isAdmin logic from the route (needs AGENT_ADMIN_USERS env var).
 function isAdmin(userEntraId: string): boolean {
-  const raw = process.env["AGENT_ADMIN_USERS"] ?? "";
+  const raw = process.env.AGENT_ADMIN_USERS ?? "";
   if (!raw.trim()) return false;
   const admins = raw
     .split(",")
@@ -22,33 +22,33 @@ function isAdmin(userEntraId: string): boolean {
 
 describe("isAdmin", () => {
   it("returns false when AGENT_ADMIN_USERS is unset", () => {
-    delete process.env["AGENT_ADMIN_USERS"];
+    delete process.env.AGENT_ADMIN_USERS;
     expect(isAdmin("anyone@test.com")).toBe(false);
   });
 
   it("returns true for a listed admin", () => {
-    process.env["AGENT_ADMIN_USERS"] = "admin@test.com,super@test.com";
+    process.env.AGENT_ADMIN_USERS = "admin@test.com,super@test.com";
     expect(isAdmin("admin@test.com")).toBe(true);
   });
 
   it("is case-insensitive", () => {
-    process.env["AGENT_ADMIN_USERS"] = "Admin@Test.Com";
+    process.env.AGENT_ADMIN_USERS = "Admin@Test.Com";
     expect(isAdmin("admin@test.com")).toBe(true);
   });
 
   it("returns false for non-listed user", () => {
-    process.env["AGENT_ADMIN_USERS"] = "admin@test.com";
+    process.env.AGENT_ADMIN_USERS = "admin@test.com";
     expect(isAdmin("other@test.com")).toBe(false);
   });
 
   it("handles trailing comma / whitespace", () => {
-    process.env["AGENT_ADMIN_USERS"] = "admin@test.com, , ";
+    process.env.AGENT_ADMIN_USERS = "admin@test.com, , ";
     expect(isAdmin("admin@test.com")).toBe(true);
     expect(isAdmin("")).toBe(false);
   });
 
   it("returns false when AGENT_ADMIN_USERS is empty string", () => {
-    process.env["AGENT_ADMIN_USERS"] = "";
+    process.env.AGENT_ADMIN_USERS = "";
     expect(isAdmin("anyone@test.com")).toBe(false);
   });
 });
@@ -62,14 +62,14 @@ function canMutate(
   proposedByUserEntraId: string,
   adminEnvUsers: string,
 ): boolean {
-  process.env["AGENT_ADMIN_USERS"] = adminEnvUsers;
+  process.env.AGENT_ADMIN_USERS = adminEnvUsers;
   const isOwner = proposedByUserEntraId === userEntraId;
   return isOwner || isAdmin(userEntraId);
 }
 
 describe("canMutate — owner-or-admin gate", () => {
   afterEach(() => {
-    delete process.env["AGENT_ADMIN_USERS"];
+    delete process.env.AGENT_ADMIN_USERS;
   });
 
   it("allows the owner to mutate", () => {

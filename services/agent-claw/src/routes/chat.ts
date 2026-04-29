@@ -331,7 +331,7 @@ async function handleChat(
   const messages: Message[] = [
     { role: "system", content: systemPrompt },
     ...body.messages.map((m) => ({
-      role: m.role as Message["role"],
+      role: m.role,
       content: m.content,
       toolId: m.toolId,
     })),
@@ -353,7 +353,7 @@ async function handleChat(
   let sessionOutputUsed = 0;
   let sessionStepsUsed = 0;
   let sessionInputCap = deps.config.AGENT_SESSION_INPUT_TOKEN_BUDGET;
-  let sessionOutputCap = deps.config.AGENT_SESSION_OUTPUT_TOKEN_BUDGET;
+  const sessionOutputCap = deps.config.AGENT_SESSION_OUTPUT_TOKEN_BUDGET;
   if (sessionId) {
     try {
       const loaded = await loadSession(deps.pool, user, sessionId);

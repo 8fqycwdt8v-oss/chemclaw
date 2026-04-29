@@ -41,7 +41,7 @@ describe("PromptRegistry — shadow serving (Phase E)", () => {
   describe("getShadowPrompts", () => {
     it("returns shadow prompts when they exist", async () => {
       const pool = makePool();
-      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValue({
+      (pool.query).mockResolvedValue({
         rows: [
           { template: "Shadow T", version: 2, shadow_until: new Date("2030-01-01") },
         ],
@@ -57,7 +57,7 @@ describe("PromptRegistry — shadow serving (Phase E)", () => {
 
     it("returns empty array when no shadow prompts", async () => {
       const pool = makePool();
-      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValue({ rows: [] });
+      (pool.query).mockResolvedValue({ rows: [] });
 
       const registry = new PromptRegistry(pool as never);
       const shadows = await registry.getShadowPrompts("agent.system");
@@ -69,7 +69,7 @@ describe("PromptRegistry — shadow serving (Phase E)", () => {
   describe("recordShadowScore", () => {
     it("inserts a row without error", async () => {
       const pool = makePool();
-      (pool.query as ReturnType<typeof vi.fn>).mockResolvedValue({});
+      (pool.query).mockResolvedValue({});
 
       const registry = new PromptRegistry(pool as never);
       await expect(
@@ -77,7 +77,7 @@ describe("PromptRegistry — shadow serving (Phase E)", () => {
       ).resolves.toBeUndefined();
 
       expect(pool.query).toHaveBeenCalledOnce();
-      const sql = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0]![0] as string;
+      const sql = (pool.query).mock.calls[0]![0] as string;
       expect(sql).toContain("shadow_run_scores");
     });
   });
@@ -85,7 +85,7 @@ describe("PromptRegistry — shadow serving (Phase E)", () => {
   describe("getShadowSummary", () => {
     it("returns null when no rows exist (run_count=0)", async () => {
       const pool = makePool();
-      (pool.query as ReturnType<typeof vi.fn>)
+      (pool.query)
         .mockResolvedValueOnce({ rows: [{ mean_score: 0.0, run_count: "0", latest_run_at: null }] })
         .mockResolvedValueOnce({ rows: [] });
 
@@ -96,7 +96,7 @@ describe("PromptRegistry — shadow serving (Phase E)", () => {
 
     it("returns summary when rows exist", async () => {
       const pool = makePool();
-      (pool.query as ReturnType<typeof vi.fn>)
+      (pool.query)
         .mockResolvedValueOnce({
           rows: [{ mean_score: 0.82, run_count: "15", latest_run_at: new Date("2025-04-01") }],
         })

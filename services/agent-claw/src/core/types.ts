@@ -343,7 +343,7 @@ export type HookPoint =
 // dispatch() generics. Lives here (not lifecycle.ts) so callers that build
 // typed HookCallbacks can import it without pulling in the dispatcher.
 // ---------------------------------------------------------------------------
-export type HookPayloadMap = {
+export interface HookPayloadMap {
   pre_turn: PreTurnPayload;
   pre_tool: PreToolPayload;
   post_tool: PostToolPayload;
@@ -361,7 +361,7 @@ export type HookPayloadMap = {
   subagent_stop: SubAgentStopPayload;
   task_created: TaskCreatedPayload;
   task_completed: TaskCompletedPayload;
-};
+}
 
 // ---------------------------------------------------------------------------
 // Citation — typed provenance record surfaced in tool-result events.

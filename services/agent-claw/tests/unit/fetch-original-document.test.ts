@@ -45,7 +45,7 @@ function mockFetchOk(body: unknown) {
   return vi.fn().mockResolvedValue({
     ok: true,
     text: async () => JSON.stringify(body),
-  } as Response);
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -308,7 +308,7 @@ describe("buildFetchOriginalDocumentTool", () => {
         ok: false,
         status: 501,
         text: async () => "smb:// not yet wired",
-      } as unknown as Response),
+      }),
     );
 
     const tool = buildFetchOriginalDocumentTool(pool, DOC_FETCHER_URL);

@@ -34,7 +34,7 @@ const ROLE_TIER: Record<ModelRole, number> = {
 // Supports: string, number, boolean, object (one level deep), array.
 // ---------------------------------------------------------------------------
 
-type JsonSchemaProperty = {
+interface JsonSchemaProperty {
   type: string;
   description?: string;
   minLength?: number;
@@ -42,13 +42,13 @@ type JsonSchemaProperty = {
   properties?: Record<string, JsonSchemaProperty>;
   items?: JsonSchemaProperty;
   required?: string[];
-};
+}
 
-type JsonSchema = {
+interface JsonSchema {
   type: string;
   properties?: Record<string, JsonSchemaProperty>;
   required?: string[];
-};
+}
 
 function zodFromJsonSchema(schema: JsonSchema): z.ZodTypeAny {
   if (schema.type !== "object") {
@@ -134,21 +134,21 @@ interface ToolMeta {
 }
 
 export class ToolRegistry {
-  private readonly _tools: Map<string, Tool> = new Map();
+  private readonly _tools = new Map<string, Tool>();
   // Phase D.5: stores role/model metadata for each tool (keyed by tool id).
-  private readonly _meta: Map<string, ToolMeta> = new Map();
+  private readonly _meta = new Map<string, ToolMeta>();
 
   // Map of builtin name → factory function.
   // Register factories here before calling loadFromDb() so that DB rows with
   // source='builtin' can find their implementation.
-  private readonly _builtinFactories: Map<string, () => Tool> = new Map();
+  private readonly _builtinFactories = new Map<string, () => Tool>();
 
   // Sandbox client injected for source='forged' tool execution.
   // Set via setSandboxClient() before loadFromDb() if forged tools are in use.
   private _sandboxClient: SandboxClient | null = null;
 
   // In-process code cache for forged tools (read once per process startup).
-  private readonly _forgedCodeCache: Map<string, string> = new Map();
+  private readonly _forgedCodeCache = new Map<string, string>();
 
   /**
    * Inject a SandboxClient so the registry can execute forged tools.
@@ -318,7 +318,7 @@ export class ToolRegistry {
       const isProgrammaticBuiltin =
         existing !== undefined && row.source !== "builtin";
       if (isProgrammaticBuiltin) {
-        // eslint-disable-next-line no-console
+         
         console.warn(
           `[ToolRegistry] DB row source="${row.source}" for "${row.name}" ` +
             `would overwrite a programmatically-registered tool — skipping.`,
@@ -388,7 +388,7 @@ export class ToolRegistry {
       }
       if (!this._sandboxClient) {
         // SandboxClient not injected — log and skip.
-        // eslint-disable-next-line no-console
+         
         console.warn(
           `ToolRegistry: skipping forged tool '${row.name}' — setSandboxClient() was not called.`,
         );
@@ -436,7 +436,7 @@ export class ToolRegistry {
             }
           } else if (!codeCache.has(name)) {
             // First call for a legacy tool with no stored hash. Log once.
-            // eslint-disable-next-line no-console
+             
             console.warn(
               `ToolRegistry: forged tool '${name}' has no code_sha256 (legacy row). Re-forge to enable integrity checking.`,
             );
@@ -445,7 +445,7 @@ export class ToolRegistry {
 
           const inputRecord = input as Record<string, unknown>;
           const expectedOutputs = Object.keys(
-            (row.schema_json as Record<string, unknown>)["properties"] ?? {},
+            (row.schema_json as unknown as Record<string, unknown>).properties ?? {},
           );
 
           const handle = await sandboxClient.createSandbox();

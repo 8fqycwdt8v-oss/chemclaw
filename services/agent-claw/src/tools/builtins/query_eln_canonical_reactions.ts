@@ -34,9 +34,9 @@ export type QueryElnCanonicalReactionsInput = z.infer<
 export const QueryElnCanonicalReactionsOut = z.object({
   items: z.array(CanonicalReactionSchema),
 });
-export type QueryElnCanonicalReactionsOutput = {
+export interface QueryElnCanonicalReactionsOutput {
   items: CanonicalReaction[];
-};
+}
 
 const TIMEOUT_MS = 15_000;
 

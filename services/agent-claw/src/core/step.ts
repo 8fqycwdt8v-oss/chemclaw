@@ -162,7 +162,7 @@ async function _runOneTool(opts: {
     // No logger is in scope at this layer (stepOnce is called from the
     // harness loop, which is reached from many routes / sub-agent flows).
     // Use console.warn so the gap is observable in dev + production.
-    // eslint-disable-next-line no-console
+     
     console.warn(
       `[step] decision=${preResult.decision} treated as allow ` +
         `(Phase 6 will implement the route-level resolver) ` +
@@ -234,7 +234,7 @@ async function _runOneTool(opts: {
     effectiveOutput &&
     typeof effectiveOutput === "object" &&
     "todos" in effectiveOutput &&
-    Array.isArray((effectiveOutput as { todos: unknown }).todos)
+    Array.isArray((effectiveOutput).todos)
   ) {
     streamSink.onTodoUpdate(
       (effectiveOutput as { todos: TodoSnapshot[] }).todos,

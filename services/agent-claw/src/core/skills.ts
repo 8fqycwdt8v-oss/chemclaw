@@ -100,9 +100,9 @@ function parseFrontmatter(raw: string): { frontmatter: SkillFrontmatter; body: s
 // ---------------------------------------------------------------------------
 
 export class SkillLoader {
-  private readonly _skills: Map<string, Skill> = new Map();
+  private readonly _skills = new Map<string, Skill>();
   /** Per-session active skill IDs. */
-  private readonly _active: Set<string> = new Set();
+  private readonly _active = new Set<string>();
 
   /**
    * Load all skill packs from the given directory (default: skills/ at repo root).
@@ -120,7 +120,7 @@ export class SkillLoader {
     try {
       entries = readdirSync(dir, { withFileTypes: true })
         .filter((e) => e.isDirectory() && !e.name.startsWith("_"))
-        .map((e) => e.name as string);
+        .map((e) => e.name);
     } catch {
       return;
     }

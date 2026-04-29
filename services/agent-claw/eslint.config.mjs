@@ -67,7 +67,7 @@ export default tseslint.config(
       '@typescript-eslint/no-unnecessary-type-arguments': 'error',
       '@typescript-eslint/prefer-nullish-coalescing': 'error',
       '@typescript-eslint/prefer-reduce-type-parameter': 'warn',
-      '@typescript-eslint/consistent-type-definitions': 'warn',
+      '@typescript-eslint/consistent-type-definitions': ['error', 'interface'],
       '@typescript-eslint/dot-notation': 'warn',
       '@typescript-eslint/consistent-generic-constructors': 'warn',
       '@typescript-eslint/no-dynamic-delete': 'warn',

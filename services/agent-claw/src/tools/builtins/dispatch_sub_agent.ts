@@ -68,7 +68,7 @@ export function buildDispatchSubAgentTool(allTools: Tool[], llm: LlmProvider) {
       const deps: SubAgentDeps = { allTools, llm, lifecycle };
 
       const result = await spawnSubAgent(
-        input.type as SubAgentType,
+        input.type,
         {
           goal: input.goal,
           inputs: input.inputs ?? {},

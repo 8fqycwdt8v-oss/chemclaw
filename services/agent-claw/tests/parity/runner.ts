@@ -193,7 +193,7 @@ export async function runScenario(
         if (id === "ask_user") {
           const q =
             input && typeof input === "object" && "question" in input
-              ? String((input as { question: unknown }).question)
+              ? String((input).question)
               : "(scenario ask_user)";
           throw new AwaitingUserInputError(q);
         }

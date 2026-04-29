@@ -18,7 +18,7 @@ import { promises as fsp } from "fs";
 // ---------------------------------------------------------------------------
 
 function isAdmin(userEntraId: string): boolean {
-  const raw = process.env["AGENT_ADMIN_USERS"] ?? "";
+  const raw = process.env.AGENT_ADMIN_USERS ?? "";
   if (!raw.trim()) return false;
   const admins = raw
     .split(",")

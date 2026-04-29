@@ -157,7 +157,7 @@ async function emitLangfuseScore(opts: {
     "Content-Type": "application/json",
   };
   if (publicKey && secretKey) {
-    headers["Authorization"] =
+    headers.Authorization =
       `Basic ${Buffer.from(`${publicKey}:${secretKey}`).toString("base64")}`;
   }
 

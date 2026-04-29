@@ -106,7 +106,7 @@ describe("analyze_csv — size cap", () => {
 describe("analyze_csv — validation", () => {
   it("throws when neither document_id nor csv_text is supplied", async () => {
     await expect(
-      tool.execute(ctx, { query: "count" } as never),
+      tool.execute(ctx, { query: "count" }),
     ).rejects.toThrow(/document_id or csv_text/);
   });
 

@@ -21,7 +21,7 @@ import type { HookDeps } from "../../src/core/hook-loader.js";
  * failure) and accidental thenable detection don't cause spurious throws.
  */
 function throwingStub<T extends object>(label: string): T {
-  return new Proxy({} as object, {
+  return new Proxy({}, {
     get(_, prop) {
       if (
         prop === Symbol.toPrimitive ||

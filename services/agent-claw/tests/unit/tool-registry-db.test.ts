@@ -99,7 +99,7 @@ describe("ToolRegistry.loadFromDb()", () => {
     const mockFetch = vi.fn().mockResolvedValue({
       ok: true,
       text: async () => JSON.stringify({ canonical_smiles: "c1ccccc1" }),
-    } as Response);
+    });
     vi.stubGlobal("fetch", mockFetch);
 
     const pool = buildFakePool([

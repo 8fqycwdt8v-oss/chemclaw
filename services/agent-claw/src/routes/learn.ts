@@ -78,8 +78,8 @@ export function registerLearnRoute(
       })) as Record<string, unknown>;
 
       promptMd =
-        typeof result["prompt_md"] === "string" && result["prompt_md"].trim().length > 0
-          ? result["prompt_md"].trim()
+        typeof result.prompt_md === "string" && result.prompt_md.trim().length > 0
+          ? result.prompt_md.trim()
           : `# ${title}\n\n${last_turn_text.slice(0, 600)}`;
     } catch {
       // Fallback: use a truncated version of the turn text.

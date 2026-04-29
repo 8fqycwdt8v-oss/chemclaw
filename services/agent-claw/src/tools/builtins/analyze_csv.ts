@@ -292,7 +292,7 @@ export function buildAnalyzeCsvTool(pool: Pool, docFetcherUrl: string) {
         );
       }
 
-      const allRows = parsed.data as string[][];
+      const allRows = parsed.data;
       if (allRows.length < 1) {
         throw new Error("analyze_csv: CSV is empty.");
       }

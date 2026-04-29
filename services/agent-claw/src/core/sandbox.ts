@@ -47,24 +47,24 @@ export class SandboxError extends Error {
 // Per-execution cap constants (read from env, with defaults).
 // ---------------------------------------------------------------------------
 
-export const SANDBOX_MAX_CPU_S = Number(process.env["SANDBOX_MAX_CPU_S"] ?? 30);
-export const SANDBOX_MAX_MEM_MB = Number(process.env["SANDBOX_MAX_MEM_MB"] ?? 2048);
+export const SANDBOX_MAX_CPU_S = Number(process.env.SANDBOX_MAX_CPU_S ?? 30);
+export const SANDBOX_MAX_MEM_MB = Number(process.env.SANDBOX_MAX_MEM_MB ?? 2048);
 // Set to "true" to allow forged code to make outbound HTTP. Off by default.
 // SANDBOX_ALLOW_NET_EGRESS is the canonical name. SANDBOX_MAX_NET_EGRESS was
 // the original (misleading — sounded like a byte cap) and is read as a
 // migration fallback so existing deployments don't silently change behavior.
 export const SANDBOX_ALLOW_NET_EGRESS =
-  process.env["SANDBOX_ALLOW_NET_EGRESS"] === "true" ||
-  process.env["SANDBOX_MAX_NET_EGRESS"] === "true";
+  process.env.SANDBOX_ALLOW_NET_EGRESS === "true" ||
+  process.env.SANDBOX_MAX_NET_EGRESS === "true";
 
 // ---------------------------------------------------------------------------
 // Lazy E2B SDK loader — avoids hard import at module level so tests can mock
 // the `e2b` module without hitting its SDK constructor.
 // ---------------------------------------------------------------------------
 
-type E2BSdkSandbox = {
+interface E2BSdkSandbox {
   create(opts: { apiKey: string; template: string; timeoutMs?: number }): Promise<E2BSandboxInstance>;
-};
+}
 
 interface E2BSandboxInstance {
   sandboxId: string;
@@ -171,7 +171,7 @@ export function buildSandboxClient(cfg: Pick<Config, "E2B_API_KEY" | "E2B_TEMPLA
       const envs: Record<string, string> = { ...env };
       if (!SANDBOX_ALLOW_NET_EGRESS) {
         // These vars are advisory — actual blocking is enforced at E2B template level.
-        envs["CHEMCLAW_NO_NET"] = "1";
+        envs.CHEMCLAW_NO_NET = "1";
       }
 
       let result: { exitCode: number; stdout: string; stderr: string };
@@ -239,7 +239,7 @@ export function buildSandboxClient(cfg: Pick<Config, "E2B_API_KEY" | "E2B_TEMPLA
         await instance.kill();
       } catch (err) {
         // Non-fatal — log but don't throw.
-        // eslint-disable-next-line no-console
+         
         console.warn(`SandboxClient: kill() failed for sandbox ${handle.id}: ${(err as Error).message}`);
       }
     },

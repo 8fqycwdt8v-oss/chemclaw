@@ -75,7 +75,7 @@ export function signMcpToken(opts: {
   // .trim() prevents a misconfigured deploy with MCP_AUTH_SIGNING_KEY=" "
   // from minting tokens whose effective entropy is zero. The length
   // check below uses the trimmed value so "32 spaces" is rejected.
-  const key = (opts.signingKey ?? process.env["MCP_AUTH_SIGNING_KEY"] ?? "").trim();
+  const key = (opts.signingKey ?? process.env.MCP_AUTH_SIGNING_KEY ?? "").trim();
   if (!key) {
     throw new McpAuthError(
       "MCP_AUTH_SIGNING_KEY is empty; refusing to mint an unsigned token",
@@ -142,7 +142,7 @@ export function verifyMcpToken(
   opts: { signingKey?: string; now?: number; expectedAudience?: string } = {},
 ): McpTokenClaims {
   // .trim() mirrors signMcpToken: a whitespace-only key cannot verify either.
-  const key = (opts.signingKey ?? process.env["MCP_AUTH_SIGNING_KEY"] ?? "").trim();
+  const key = (opts.signingKey ?? process.env.MCP_AUTH_SIGNING_KEY ?? "").trim();
   if (!key) {
     throw new McpAuthError("MCP_AUTH_SIGNING_KEY is empty; cannot verify token");
   }

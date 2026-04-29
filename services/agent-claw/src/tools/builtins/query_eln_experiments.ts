@@ -40,10 +40,10 @@ export const QueryElnExperimentsOut = z.object({
   items: z.array(ElnEntrySchema),
   next_cursor: z.string().nullable().optional(),
 });
-export type QueryElnExperimentsOutput = {
+export interface QueryElnExperimentsOutput {
   items: ElnEntry[];
   next_cursor?: string | null;
-};
+}
 
 const TIMEOUT_MS = 15_000;
 

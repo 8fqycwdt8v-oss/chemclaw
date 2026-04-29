@@ -114,7 +114,7 @@ describe("validateJsonSchema", () => {
 
   it("rejects schema where properties is not an object", () => {
     expect(() =>
-      validateJsonSchema({ type: "object", properties: "bad" } as unknown as Record<string, unknown>),
+      validateJsonSchema({ type: "object", properties: "bad" }),
     ).toThrow(/properties/);
   });
 });

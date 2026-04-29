@@ -63,7 +63,7 @@ export async function postJson<TReq, TRes>(
   opts: RequestOptions = {},
 ): Promise<TRes> {
   const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), timeoutMs);
+  const t = setTimeout(() => { ctl.abort(); }, timeoutMs);
   try {
     const r = await fetch(url, {
       method: "POST",
@@ -107,7 +107,7 @@ export async function getJson<TRes>(
   opts: RequestOptions = {},
 ): Promise<TRes> {
   const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), timeoutMs);
+  const t = setTimeout(() => { ctl.abort(); }, timeoutMs);
   try {
     const r = await fetch(url, {
       method: "GET",

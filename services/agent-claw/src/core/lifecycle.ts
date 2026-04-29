@@ -65,7 +65,7 @@ const DEFAULT_HOOK_TIMEOUT_MS = 60_000;
 export class Lifecycle {
   // Map<point, RegisteredHook<unknown>[]> — payloads are erased at storage
   // time and re-narrowed at dispatch time via the generic.
-  private readonly _hooks: Map<HookPoint, RegisteredHook<unknown>[]> = new Map();
+  private readonly _hooks = new Map<HookPoint, RegisteredHook<unknown>[]>();
 
   /**
    * Register a hook handler for the given lifecycle point.
@@ -163,7 +163,7 @@ export class Lifecycle {
 
       const ac = new AbortController();
       const timer = setTimeout(
-        () => ac.abort(new Error(`hook timeout: ${hook.name}`)),
+        () => { ac.abort(new Error(`hook timeout: ${hook.name}`)); },
         hook.timeout,
       );
 
@@ -206,9 +206,7 @@ export class Lifecycle {
                 { once: true },
               );
             });
-            return Promise.race([handlerPromise, abortPromise]) as Promise<
-              HookJSONOutput | undefined
-            >;
+            return Promise.race([handlerPromise, abortPromise]);
           },
         );
 
@@ -254,7 +252,7 @@ export class Lifecycle {
         // exists yet; the per-hook OTel span emits ERROR status with
         // recordException so the failure is observable in Langfuse — this
         // console.error remains as a developer-facing fallback).
-        // eslint-disable-next-line no-console
+         
         console.error(
           `[lifecycle] non-pre_tool hook "${hook.name}" at "${point}" threw — continuing with remaining hooks`,
           err,

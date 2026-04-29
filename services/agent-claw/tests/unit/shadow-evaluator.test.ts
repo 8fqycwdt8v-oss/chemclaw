@@ -45,7 +45,7 @@ describe("ShadowEvaluator", () => {
     const registry = makeRegistry([]);
     const llm = makeLlm("response");
 
-    const evaluator = new ShadowEvaluator(registry as never, llm as never, makePool() as never, 1.0);
+    const evaluator = new ShadowEvaluator(registry as never, llm, makePool() as never, 1.0);
     const ctx: ShadowEvalContext = {
       promptName: "agent.system",
       messages: [{ role: "user", content: "Q?" }],
@@ -68,7 +68,7 @@ describe("ShadowEvaluator", () => {
     const registry = makeRegistry([shadow]);
     const llm = makeLlm("A detailed response about synthesis routes with 10 words here for scoring.");
 
-    const evaluator = new ShadowEvaluator(registry as never, llm as never, makePool() as never, 1.0);
+    const evaluator = new ShadowEvaluator(registry as never, llm, makePool() as never, 1.0);
     const ctx: ShadowEvalContext = {
       promptName: "agent.system",
       messages: [{ role: "user", content: "Q?" }],
@@ -93,7 +93,7 @@ describe("ShadowEvaluator", () => {
     const registry = makeRegistry([{ template: "T", version: 2, shadowUntil: new Date(Date.now() + 86400000) }]);
     const llm = makeLlm("response");
 
-    const evaluator = new ShadowEvaluator(registry as never, llm as never, makePool() as never, 0.0);
+    const evaluator = new ShadowEvaluator(registry as never, llm, makePool() as never, 0.0);
     const ctx: ShadowEvalContext = {
       promptName: "agent.system",
       messages: [{ role: "user", content: "Q?" }],
@@ -113,7 +113,7 @@ describe("ShadowEvaluator", () => {
     };
     const llm = makeLlm("response");
 
-    const evaluator = new ShadowEvaluator(registry as never, llm as never, makePool() as never, 1.0);
+    const evaluator = new ShadowEvaluator(registry as never, llm, makePool() as never, 1.0);
     const ctx: ShadowEvalContext = {
       promptName: "agent.system",
       messages: [{ role: "user", content: "Q?" }],
@@ -135,7 +135,7 @@ describe("ShadowEvaluator", () => {
     const registry = makeRegistry([shadow]);
     const llm = makeLlm("Short response.");
 
-    const evaluator = new ShadowEvaluator(registry as never, llm as never, makePool() as never, 1.0);
+    const evaluator = new ShadowEvaluator(registry as never, llm, makePool() as never, 1.0);
     const ctx: ShadowEvalContext = {
       promptName: "agent.system",
       messages: [{ role: "user", content: "Q?" }],
@@ -145,7 +145,7 @@ describe("ShadowEvaluator", () => {
 
     await evaluator.evaluateAsync(ctx);
 
-    const callArgs = (registry.recordShadowScore as ReturnType<typeof vi.fn>).mock.calls[0]!;
+    const callArgs = (registry.recordShadowScore).mock.calls[0]!;
     // callArgs = [promptName, version, traceId, score, perClassScores]
     const score = callArgs[3] as number;
     expect(score).toBeGreaterThanOrEqual(0);
@@ -166,7 +166,7 @@ describe("ShadowEvaluator — citation-faithfulness scoring", () => {
     ]);
     // Plain response, no UUIDs — should score high (faith=1.0 trivially).
     const llm = makeLlm("Use a C18 column with 30:70 ACN/water mobile phase.");
-    const evaluator = new ShadowEvaluator(registry as never, llm as never, makePool() as never, 1.0);
+    const evaluator = new ShadowEvaluator(registry as never, llm, makePool() as never, 1.0);
     await evaluator.evaluateAsync({
       promptName: "agent.system",
       messages: [{ role: "user", content: "What HPLC method?" }],
@@ -191,7 +191,7 @@ describe("ShadowEvaluator — citation-faithfulness scoring", () => {
     const fakeUuid = "12345678-1234-1234-1234-123456789012";
     const responseText = `According to fact ${fakeUuid}, use C18.`;
     const llm = makeLlm(responseText);
-    const evaluator = new ShadowEvaluator(registry as never, llm as never, makePool() as never, 1.0);
+    const evaluator = new ShadowEvaluator(registry as never, llm, makePool() as never, 1.0);
     await evaluator.evaluateAsync({
       promptName: "agent.system",
       messages: [{ role: "user", content: "What HPLC method?" }],

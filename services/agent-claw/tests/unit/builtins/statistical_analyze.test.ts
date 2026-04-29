@@ -23,7 +23,7 @@ function mockFetchTabicl(body: unknown) {
   return vi.fn().mockResolvedValue({
     ok: true,
     text: async () => JSON.stringify(body),
-  } as Response);
+  });
 }
 
 function makeReactionDbRows(ids: string[]) {
@@ -49,7 +49,7 @@ describe("buildStatisticalAnalyzeTool — compare_conditions", () => {
       ok: false,
       status: 500,
       text: async () => "should not call",
-    } as unknown as Response);
+    });
     vi.stubGlobal("fetch", guardFetch);
 
     const { pool, client } = mockPool();

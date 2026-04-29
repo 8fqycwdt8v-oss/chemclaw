@@ -56,13 +56,13 @@ async function buildApp(llm?: StubLlmProvider) {
       const client = {
         query: async <T = unknown>(sql: string, params?: unknown[]): Promise<QueryResult<T>> => {
           if (sql.startsWith("SET LOCAL")) {
-            return { rows: [], rowCount: 0, command: "SET", oid: 0, fields: [] } as QueryResult<T>;
+            return { rows: [], rowCount: 0, command: "SET", oid: 0, fields: [] };
           }
           if (sql.startsWith("BEGIN")) {
-            return { rows: [], rowCount: 0, command: "BEGIN", oid: 0, fields: [] } as QueryResult<T>;
+            return { rows: [], rowCount: 0, command: "BEGIN", oid: 0, fields: [] };
           }
           if (sql.startsWith("COMMIT")) {
-            return { rows: [], rowCount: 0, command: "COMMIT", oid: 0, fields: [] } as QueryResult<T>;
+            return { rows: [], rowCount: 0, command: "COMMIT", oid: 0, fields: [] };
           }
           if (sql.includes("INSERT INTO skill_library")) {
             const name = (params?.[0] as string) ?? "unnamed";

@@ -183,7 +183,7 @@ export function parseOutputs(stdout: string): Record<string, unknown> | null {
     if (trimmed.includes('"__chemclaw_output__"')) {
       try {
         const parsed = JSON.parse(trimmed) as Record<string, unknown>;
-        const out = parsed["__chemclaw_output__"];
+        const out = parsed.__chemclaw_output__;
         if (out && typeof out === "object" && !Array.isArray(out)) {
           return out as Record<string, unknown>;
         }
@@ -304,18 +304,18 @@ export function buildRunProgramTool(
         for (const v of Object.values(outputs)) {
           if (v && typeof v === "object") {
             const obj = v as Record<string, unknown>;
-            if (typeof obj["fact_id"] === "string") {
+            if (typeof obj.fact_id === "string") {
               citation = {
-                source_id: obj["fact_id"] as string,
+                source_id: obj.fact_id,
                 source_kind: "kg_fact",
               };
               break;
             }
-            if (typeof obj["url"] === "string") {
+            if (typeof obj.url === "string") {
               citation = {
-                source_id: obj["url"] as string,
+                source_id: obj.url,
                 source_kind: "external_url",
-                source_uri: obj["url"] as string,
+                source_uri: obj.url,
               };
               break;
             }

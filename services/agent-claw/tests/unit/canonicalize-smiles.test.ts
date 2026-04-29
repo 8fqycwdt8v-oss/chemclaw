@@ -25,7 +25,7 @@ function mockFetchOk(body: unknown) {
   return vi.fn().mockResolvedValue({
     ok: true,
     text: async () => JSON.stringify(body),
-  } as Response);
+  });
 }
 
 describe("buildCanonicalizeSmilesTool", () => {
@@ -88,7 +88,7 @@ describe("buildCanonicalizeSmilesTool", () => {
         ok: false,
         status: 422,
         text: async () => "invalid SMILES",
-      } as unknown as Response),
+      }),
     );
 
     const tool = buildCanonicalizeSmilesTool(MOCK_RDKIT_URL);

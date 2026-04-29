@@ -37,7 +37,7 @@ export function stampMaturity(output: unknown): unknown {
   ) {
     const obj = output as Record<string, unknown>;
     if (!("maturity" in obj)) {
-      obj["maturity"] = "EXPLORATORY";
+      obj.maturity = "EXPLORATORY";
     }
     return obj;
   }
@@ -55,7 +55,7 @@ export function resolveMaturity(output: unknown): "EXPLORATORY" | "WORKING" | "F
     typeof output === "object" &&
     !Array.isArray(output)
   ) {
-    const tier = (output as Record<string, unknown>)["maturity"];
+    const tier = (output as Record<string, unknown>).maturity;
     if (tier === "WORKING" || tier === "FOUNDATION") return tier;
   }
   return "EXPLORATORY";
@@ -107,9 +107,9 @@ export async function tagMaturityHook(
         );
         const artifactId = result.rows[0]?.id;
         if (artifactId) {
-          maturityMap!.set(artifactId, maturity);
+          maturityMap.set(artifactId, maturity);
           // Also stamp the artifact_id onto the output so the agent can reference it.
-          (output as Record<string, unknown>)["artifact_id"] = artifactId;
+          (output as Record<string, unknown>).artifact_id = artifactId;
         }
       });
     } catch {

@@ -39,9 +39,9 @@ export type LangfuseTraceReader = (traceId: string) => Promise<LangfuseTrace>;
 /** Production implementation — reads from Langfuse REST API. */
 export function makeLangfuseTraceReader(): LangfuseTraceReader {
   return async (traceId: string): Promise<LangfuseTrace> => {
-    const host = process.env["LANGFUSE_HOST"] ?? "http://localhost:3000";
-    const publicKey = process.env["LANGFUSE_PUBLIC_KEY"] ?? "";
-    const secretKey = process.env["LANGFUSE_SECRET_KEY"] ?? "";
+    const host = process.env.LANGFUSE_HOST ?? "http://localhost:3000";
+    const publicKey = process.env.LANGFUSE_PUBLIC_KEY ?? "";
+    const secretKey = process.env.LANGFUSE_SECRET_KEY ?? "";
 
     const auth = Buffer.from(`${publicKey}:${secretKey}`).toString("base64");
     const url = `${host}/api/public/traces/${encodeURIComponent(traceId)}`;
@@ -59,15 +59,15 @@ export function makeLangfuseTraceReader(): LangfuseTraceReader {
     const body = (await res.json()) as Record<string, unknown>;
 
     // Extract tool-call observations from the Langfuse trace JSON.
-    const observations = (body["observations"] ?? []) as Array<Record<string, unknown>>;
+    const observations = (body.observations ?? []) as Array<Record<string, unknown>>;
     const toolEvents: LangfuseTraceEvent[] = [];
 
     for (const obs of observations) {
-      if (obs["type"] === "SPAN" && obs["name"] && String(obs["name"]).startsWith("tool:")) {
-        const toolId = String(obs["name"]).replace(/^tool:/, "");
-        const input = (obs["input"] as Record<string, unknown>) ?? {};
-        const output = (obs["output"] as Record<string, unknown>) ?? {};
-        const timestamp = String(obs["startTime"] ?? "");
+      if (obs.type === "SPAN" && obs.name && String(obs.name).startsWith("tool:")) {
+        const toolId = String(obs.name).replace(/^tool:/, "");
+        const input = (obs.input as Record<string, unknown>) ?? {};
+        const output = (obs.output as Record<string, unknown>) ?? {};
+        const timestamp = String(obs.startTime ?? "");
         toolEvents.push({ tool_id: toolId, input, output, timestamp });
       }
     }
@@ -167,20 +167,20 @@ Generalize this sequence into a single reusable Python tool.`;
       >;
 
       // Validate the response contains required keys.
-      if (!raw["input_schema_json"] || !raw["output_schema_json"]) {
+      if (!raw.input_schema_json || !raw.output_schema_json) {
         throw new Error(
           "induce_forged_tool_from_trace: LLM did not return input_schema_json or output_schema_json.",
         );
       }
-      if (!Array.isArray(raw["test_cases"]) || (raw["test_cases"] as unknown[]).length < 2) {
+      if (!Array.isArray(raw.test_cases) || (raw.test_cases as unknown[]).length < 2) {
         throw new Error(
           "induce_forged_tool_from_trace: LLM must return at least 2 test_cases.",
         );
       }
 
       try {
-        validateJsonSchema(raw["input_schema_json"] as Record<string, unknown>);
-        validateJsonSchema(raw["output_schema_json"] as Record<string, unknown>);
+        validateJsonSchema(raw.input_schema_json as Record<string, unknown>);
+        validateJsonSchema(raw.output_schema_json as Record<string, unknown>);
       } catch (err) {
         throw new Error(
           `induce_forged_tool_from_trace: schema validation failed: ${(err as Error).message}`,
@@ -198,7 +198,7 @@ Generalize this sequence into a single reusable Python tool.`;
         "planner", // forgedByRole — induced tools are planner-level
       );
 
-      const testCases = (raw["test_cases"] as Array<{ input: unknown; expected_output: unknown }>).map(
+      const testCases = (raw.test_cases as Array<{ input: unknown; expected_output: unknown }>).map(
         (tc) => ({
           input: tc.input as Record<string, unknown>,
           expected_output: tc.expected_output as Record<string, unknown>,
@@ -208,11 +208,11 @@ Generalize this sequence into a single reusable Python tool.`;
       const forgeResult = await forgeTool.execute(ctx, {
         name: input.name,
         description: input.description,
-        input_schema_json: raw["input_schema_json"] as Record<string, unknown>,
-        output_schema_json: raw["output_schema_json"] as Record<string, unknown>,
+        input_schema_json: raw.input_schema_json as Record<string, unknown>,
+        output_schema_json: raw.output_schema_json as Record<string, unknown>,
         test_cases: testCases.slice(0, 10), // max 10 per forge_tool schema
-        implementation_hint: typeof raw["implementation_hint"] === "string"
-          ? raw["implementation_hint"]
+        implementation_hint: typeof raw.implementation_hint === "string"
+          ? raw.implementation_hint
           : undefined,
       });
 

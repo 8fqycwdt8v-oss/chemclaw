@@ -69,7 +69,7 @@ describe("/eval route — unit logic", () => {
         const obj = JSON.parse(line) as Record<string, unknown>;
         expect(obj).toHaveProperty("question");
         expect(obj).toHaveProperty("answer");
-        expect(Array.isArray(obj["expected_classes"])).toBe(true);
+        expect(Array.isArray(obj.expected_classes)).toBe(true);
       }
     });
   });

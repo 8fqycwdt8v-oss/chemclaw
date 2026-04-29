@@ -58,7 +58,7 @@ function toAiSdkMessages(messages: Message[]): ModelMessage[] {
         ],
       };
     }
-    return { role: m.role, content: m.content } as ModelMessage;
+    return { role: m.role, content: m.content };
   });
 }
 
@@ -77,7 +77,7 @@ function toAiSdkTools(tools: Tool[]): ToolSet {
   for (const t of tools) {
     result[t.id] = tool({
       description: t.description,
-      inputSchema: t.inputSchema as z.ZodType<unknown>,
+      inputSchema: t.inputSchema,
     });
   }
   return result;
