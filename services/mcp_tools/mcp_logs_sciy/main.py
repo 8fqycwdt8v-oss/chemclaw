@@ -16,6 +16,7 @@ from __future__ import annotations
 import logging
 import os
 import re
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
 from typing import Annotated, Any, Literal
@@ -269,7 +270,7 @@ def _check_dsn_safety() -> None:
 
 
 @asynccontextmanager
-async def _lifespan(_app: FastAPI):  # type: ignore[no-untyped-def]
+async def _lifespan(_app: FastAPI) -> AsyncIterator[None]:
     _check_dsn_safety()
     log.info("mcp-logs-sciy starting; backend=%s", settings.backend)
     # Fail fast for the real backend if it hasn't been wired yet — better

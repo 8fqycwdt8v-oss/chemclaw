@@ -13,8 +13,8 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import Callable
-from contextlib import asynccontextmanager
+from collections.abc import AsyncIterator, Callable
+from contextlib import AbstractAsyncContextManager, asynccontextmanager
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Request, status
@@ -40,7 +40,7 @@ def create_app(
     version: str,
     log_level: str = "INFO",
     ready_check: Callable[[], bool] | Callable[[], Any] | None = None,
-    lifespan: Callable[[FastAPI], Any] | None = None,
+    lifespan: Callable[[FastAPI], AbstractAsyncContextManager[Any]] | None = None,
     required_scope: str | None = None,
 ) -> FastAPI:
     """Build a FastAPI app with the standard shape for an MCP tool service.
@@ -124,10 +124,10 @@ def create_app(
         )
 
     @asynccontextmanager
-    async def _default_lifespan(app: FastAPI) -> Any:
+    async def _default_lifespan(app: FastAPI) -> AsyncIterator[None]:
         log.info("starting %s@%s", name, version)
         if lifespan is not None:
-            async with lifespan(app):  # type: ignore[misc]
+            async with lifespan(app):
                 yield
         else:
             yield

@@ -84,22 +84,45 @@ interface E2BSandboxInstance {
 
 let _sdkCache: E2BSdkSandbox | null = null;
 
+/**
+ * Runtime narrowing for an unknown value into the E2B SDK shape we depend
+ * on. Replaces the prior `any`-cast triplet by checking that `create` is
+ * callable; PR-4 type-safety hardening.
+ */
+function isE2BSdkSandbox(x: unknown): x is E2BSdkSandbox {
+  return (
+    typeof x === "object" &&
+    x !== null &&
+    typeof (x as { create?: unknown }).create === "function"
+  );
+}
+
+/**
+ * `SandboxHandle._raw` is deliberately typed `unknown` so callers don't
+ * couple to the E2B SDK shape (audit M14 — making the field generic would
+ * be a public-interface break). Internally each SandboxClient method needs
+ * to access the SDK methods via the instance, so this helper performs the
+ * single justified cast in one place rather than scattering `as` casts.
+ */
+function instanceFromHandle(handle: SandboxHandle): E2BSandboxInstance {
+  return handle._raw as E2BSandboxInstance;
+}
+
 async function loadSdk(): Promise<E2BSdkSandbox> {
   if (_sdkCache) return _sdkCache;
   try {
     // Dynamic import — keeps the test bundle lightweight and avoids a hard
     // dependency on the e2b package at typecheck time. The real package is
-    // installed in production; tests inject a vi.mock("e2b").
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const _importer: (spec: string) => Promise<any> = (s) => import(/* @vite-ignore */ s);
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any
-    const mod: any = await _importer("e2b");
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any
-    const sdk: any = mod.Sandbox ?? mod.default;
-    if (!sdk || typeof sdk.create !== "function") {
+    // installed in production; tests inject a vi.mock("e2b"). The import
+    // result is `unknown` (not `any`) so we narrow before use.
+    const _importer: (spec: string) => Promise<unknown> = (s) =>
+      import(/* @vite-ignore */ s);
+    const mod = (await _importer("e2b")) as { Sandbox?: unknown; default?: unknown };
+    const sdkCandidate: unknown = mod.Sandbox ?? mod.default;
+    if (!isE2BSdkSandbox(sdkCandidate)) {
       throw new Error("e2b module does not export a Sandbox.create function");
     }
-    _sdkCache = sdk as E2BSdkSandbox;
+    _sdkCache = sdkCandidate;
     return _sdkCache;
   } catch (err) {
     throw new SandboxError("create", `e2b SDK import failed: ${(err as Error).message}`);
@@ -156,7 +179,7 @@ export function buildSandboxClient(cfg: Pick<Config, "E2B_API_KEY" | "E2B_TEMPLA
       _stdin?: string,
       timeoutMs = SANDBOX_MAX_CPU_S * 1000,
     ): Promise<ExecutionResult> {
-      const instance = handle._raw as E2BSandboxInstance;
+      const instance = instanceFromHandle(handle);
       const start = Date.now();
 
       // Write the code to a temp file inside the sandbox.
@@ -208,7 +231,7 @@ export function buildSandboxClient(cfg: Pick<Config, "E2B_API_KEY" | "E2B_TEMPLA
 
     async installPackages(handle: SandboxHandle, packages: string[]): Promise<void> {
       if (packages.length === 0) return;
-      const instance = handle._raw as E2BSandboxInstance;
+      const instance = instanceFromHandle(handle);
       const cmd = `pip install --quiet ${packages.map((p) => JSON.stringify(p)).join(" ")}`;
       try {
         const result = await instance.process.startAndWait({ cmd, timeoutMs: 120_000 });
@@ -225,7 +248,7 @@ export function buildSandboxClient(cfg: Pick<Config, "E2B_API_KEY" | "E2B_TEMPLA
     },
 
     async mountReadOnlyFile(handle: SandboxHandle, source: Buffer, path: string): Promise<void> {
-      const instance = handle._raw as E2BSandboxInstance;
+      const instance = instanceFromHandle(handle);
       try {
         await instance.filesystem.write(path, source);
       } catch (err) {
@@ -234,7 +257,7 @@ export function buildSandboxClient(cfg: Pick<Config, "E2B_API_KEY" | "E2B_TEMPLA
     },
 
     async closeSandbox(handle: SandboxHandle): Promise<void> {
-      const instance = handle._raw as E2BSandboxInstance;
+      const instance = instanceFromHandle(handle);
       try {
         await instance.kill();
       } catch (err) {

@@ -229,10 +229,12 @@ export function buildForgeToolTool(
         );
       }
 
-      // Validate schemas.
+      // Validate schemas. `input_schema_json` and `output_schema_json` are
+      // typed `Record<string, unknown>` via z.record(z.unknown()), so no
+      // cast is needed (PR-4 type-safety).
       try {
-        validateJsonSchema(input.input_schema_json as Record<string, unknown>);
-        validateJsonSchema(input.output_schema_json as Record<string, unknown>);
+        validateJsonSchema(input.input_schema_json);
+        validateJsonSchema(input.output_schema_json);
       } catch (err) {
         throw new Error(`forge_tool: schema validation failed: ${(err as Error).message}`);
       }
@@ -298,21 +300,23 @@ export function buildForgeToolTool(
         parentCode ?? undefined,
       );
 
-      const raw = await llm.completeJson({ system, user, role: forgedByRole });
-      const rawObj = raw as Record<string, unknown>;
+      const raw: unknown = await llm.completeJson({ system, user, role: forgedByRole });
 
-      let pythonCode: string;
-
-      if (
-        !rawObj ||
-        typeof rawObj["python_code"] !== "string" ||
-        !rawObj["python_code"].trim()
-      ) {
+      // Narrow the LLM's JSON response to the shape we expect; throw a
+      // structured error if anything is missing/typed wrong (PR-4).
+      if (!raw || typeof raw !== "object") {
+        throw new Error(
+          "forge_tool: LLM did not return a JSON object in stage 2 (generate).",
+        );
+      }
+      const rawObj: Record<string, unknown> = raw as Record<string, unknown>;
+      const pythonCodeRaw = rawObj["python_code"];
+      if (typeof pythonCodeRaw !== "string" || !pythonCodeRaw.trim()) {
         throw new Error(
           "forge_tool: LLM did not return a valid python_code field in stage 2 (generate).",
         );
       }
-      pythonCode = rawObj["python_code"] as string;
+      const pythonCode: string = pythonCodeRaw;
 
       // ---- Stage 3: Execute + Stage 4: Evaluate ----------------------------
 
@@ -397,8 +401,8 @@ export function buildForgeToolTool(
         const schemaJson = {
           type: "object",
           description: input.description,
-          properties: (input.input_schema_json as Record<string, unknown>)["properties"] ?? {},
-          required: (input.input_schema_json as Record<string, unknown>)["required"] ?? [],
+          properties: input.input_schema_json["properties"] ?? {},
+          required: input.input_schema_json["required"] ?? [],
         };
 
         // Insert skill_library row (Phase D.5: includes scope, forged_by_model/role, parent_tool_id, version).

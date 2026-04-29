@@ -23,8 +23,9 @@ import type {
   ToolContext,
 } from "./types.js";
 import type { Tool } from "../tools/tool.js";
-import type { StreamSink, TodoSnapshot } from "./streaming-sink.js";
+import type { StreamSink } from "./streaming-sink.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
+import { isManageTodosOutput } from "../tools/builtins/manage_todos.js";
 import { resolveDecision } from "./permissions/resolver.js";
 import { withToolSpan } from "../observability/tool-spans.js";
 
@@ -228,18 +229,14 @@ async function _runOneTool(opts: {
   streamSink?.onToolResult?.(toolId, effectiveOutput);
 
   // manage_todos special-case: surface the latest checklist via
-  // onTodoUpdate so the route can emit a `todo_update` SSE event.
+  // onTodoUpdate so the route can emit a `todo_update` SSE event. The
+  // typed predicate replaces a structural-cast pair (PR-4).
   if (
     streamSink?.onTodoUpdate &&
     toolId === "manage_todos" &&
-    effectiveOutput &&
-    typeof effectiveOutput === "object" &&
-    "todos" in effectiveOutput &&
-    Array.isArray((effectiveOutput as { todos: unknown }).todos)
+    isManageTodosOutput(effectiveOutput)
   ) {
-    streamSink.onTodoUpdate(
-      (effectiveOutput as { todos: TodoSnapshot[] }).todos,
-    );
+    streamSink.onTodoUpdate(effectiveOutput.todos);
   }
 
   return { toolId, output: effectiveOutput };

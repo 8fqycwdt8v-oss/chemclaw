@@ -88,6 +88,10 @@ export class Lifecycle {
     this._hooks.get(point)!.push({
       name,
       matcher: opts.matcher ? new RegExp(opts.matcher) : undefined,
+      // Storage erases the payload generic so all hook points share one
+      // `Map<HookPoint, RegisteredHook<unknown>[]>`; the cast is the
+      // single point where we drop the typed `P` and rely on the per-point
+      // dispatch matching the registered point. Justified narrowing.
       handler: handler as HookCallback<unknown>,
       timeout: opts.timeout ?? DEFAULT_HOOK_TIMEOUT_MS,
     });
@@ -187,9 +191,14 @@ export class Lifecycle {
             toolUseId: opts.toolUseID,
           },
           () => {
-            const handlerPromise = (
-              hook.handler as HookCallback<unknown>
-            )(payload, opts.toolUseID, { signal: ac.signal });
+            // hook.handler is already HookCallback<unknown> via the storage
+            // type; calling with payload (typed HookPayloadMap[P]) is safe
+            // because dispatch<P> caller guarantees the `point` matches.
+            const handlerPromise = hook.handler(
+              payload,
+              opts.toolUseID,
+              { signal: ac.signal },
+            );
             const abortPromise = new Promise<never>((_, reject) => {
               if (ac.signal.aborted) {
                 reject(
@@ -209,9 +218,11 @@ export class Lifecycle {
                 { once: true },
               );
             });
-            return Promise.race([handlerPromise, abortPromise]) as Promise<
-              HookJSONOutput | undefined | void
-            >;
+            // Promise.race typing infers Promise<HookJSONOutput | never>,
+            // i.e. Promise<HookJSONOutput>. The withHookSpan signature
+            // accepts undefined/void so the Promise widens implicitly —
+            // no cast needed at this site.
+            return Promise.race([handlerPromise, abortPromise]);
           },
         );
 
@@ -221,31 +232,52 @@ export class Lifecycle {
         if (!result) continue;
 
         // Fire-and-forget: ignore the result, move to the next hook.
-        if ("async" in result && result.async) continue;
+        if ("async" in result && result.async === true) continue;
 
-        // After the async-branch guard, `result` is the synchronous-shape
-        // variant. Pick out hookSpecificOutput as the loosely-typed object
-        // it is on the wire — its inner fields are then narrowed below.
-        const hso = (result as { hookSpecificOutput?: unknown }).hookSpecificOutput as
-          | {
-              permissionDecision?: PermissionDecision;
-              permissionDecisionReason?: string;
-              updatedInput?: Record<string, unknown>;
-            }
-          | undefined;
+        // Discriminate the union: the async-branch was handled above, so
+        // the remaining narrowing is to the sync variant. The narrow-by
+        // `"hookSpecificOutput" in result` is structural, but TS doesn't
+        // distribute the discriminator across the union without help, so
+        // we extract the field via a typed alias.
+        const syncResult = result as Exclude<typeof result, { async: true }>;
+        const hso = syncResult.hookSpecificOutput;
+
+        // hookSpecificOutput is the union of pre_tool / post_tool /
+        // forward-compat shapes. Extract the three permission-related
+        // fields via `in`-based narrowing rather than `as`-casts.
+        let permissionDecisionFromHso: PermissionDecision | undefined;
+        let permissionDecisionReasonFromHso: string | undefined;
+        let updatedInputFromHso: Record<string, unknown> | undefined;
+        if (hso && typeof hso === "object") {
+          if ("permissionDecision" in hso && typeof hso.permissionDecision === "string") {
+            permissionDecisionFromHso = hso.permissionDecision as PermissionDecision;
+          }
+          if (
+            "permissionDecisionReason" in hso &&
+            typeof hso.permissionDecisionReason === "string"
+          ) {
+            permissionDecisionReasonFromHso = hso.permissionDecisionReason;
+          }
+          if (
+            "updatedInput" in hso &&
+            hso.updatedInput &&
+            typeof hso.updatedInput === "object"
+          ) {
+            updatedInputFromHso = hso.updatedInput as Record<string, unknown>;
+          }
+        }
 
         // Aggregate permission decision.
-        const dec = hso?.permissionDecision;
-        if (dec) {
-          const next = mostRestrictive(decision, dec);
+        if (permissionDecisionFromHso) {
+          const next = mostRestrictive(decision, permissionDecisionFromHso);
           if (next !== decision) {
             decision = next;
-            reason = hso?.permissionDecisionReason;
+            reason = permissionDecisionReasonFromHso;
           }
         }
 
         // Capture updatedInput (last-write-wins).
-        if (hso?.updatedInput) updatedInput = hso.updatedInput;
+        if (updatedInputFromHso) updatedInput = updatedInputFromHso;
       } catch (err) {
         if (point === "pre_tool") {
           // Strict-throw semantics for pre_tool: budget-guard etc. abort
