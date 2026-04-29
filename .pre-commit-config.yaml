@@ -51,7 +51,7 @@ repos:
       - id: mypy
         # Run only on the small clean subset (see .github/workflows/ci.yml).
         # Pre-commit's `files:` regex is matched against staged paths.
-        files: ^services/(optimizer/session_purger|litellm_redactor)/.*\.py$
+        files: ^services/(optimizer/(session_purger|forged_tool_validator)|litellm_redactor)/.*\.py$
         additional_dependencies:
           - apscheduler
           - psycopg
