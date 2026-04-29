@@ -1,89 +1,149 @@
-# ADR 010 — Deferred Phases (Out of `v1.2.0-harness`)
+# ADR 010 — Deferred Phases: Retrospective + Remaining v1.4 Deferrals
 
-**Status:** Accepted
-**Date:** 2026-04-28
-**Context:** ChemClaw harness control-plane rebuild — closure (v1.2.0-harness)
+**Status:** Accepted (revised 2026-04-29)
+**Date:** 2026-04-28 (original) — superseded 2026-04-29
+**Context:** ChemClaw harness control-plane rebuild — closure
 
 ---
 
 ## Context
 
-The harness control-plane rebuild plan had eleven phases. Phases 0, 1A,
-1B, 1C, 2A, 2B, 2C, 3, 4A, 4B, 4C, 5, 7, and 10 land in `v1.2.0-harness`.
-Four phases (6, 8, 9, 11) are deferred to a v1.3 follow-up. This ADR
-documents what is **not** in v1.2 and why, so reviewers have an explicit
-scope boundary and operators know what is still expected.
+The harness control-plane rebuild plan had eleven phases. The original
+v1.2.0-harness closure (commit `ecc2fc0`, dated 2026-04-28) deferred
+Phases 6, 8, 9, and 11 to a v1.3 follow-up. Between that closure and
+the merge to a release branch, those four phases landed on the same
+working branch (commits `73c93ac` through `c0c949e`, 2026-04-28..29).
+
+This ADR was originally written as a forward-looking deferral
+statement; it is rewritten here as a **retrospective** of what
+followed, plus the remaining v1.4 deferrals that are still genuinely
+out of scope.
 
 ---
 
-## Decision
+## What landed after the original closure
 
-The following phases are deferred to `v1.3` and tracked in `docs/PARITY.md`:
+The following items were marked "deferred (Phase 6/8/9/11, v1.3)" in
+the first draft of `docs/PARITY.md` and ADR 010, then implemented on
+the same branch before merge:
 
 ### Phase 6 — Permission system foundation
 
-**Scope:** Route-level resolver that combines `permissionMode`
-(`default | acceptEdits | plan | dontAsk | auto | bypassPermissions`),
-`allowedTools` / `disallowedTools` filters, and per-route hook
-decisions; workspace-boundary validation for filesystem-scoped tools.
-
-**Why deferred:** The harness contract (ADR 009) locks the hook side.
-The route-level resolver needs design work — interactive `ask` flows
-(elicit user → resume), `defer` budgeting semantics, and the tool-list
-filter need a coherent UX before code lands. This is a v1.3 design +
-implementation pair, not a harness change.
+- Route-level resolver
+  (`services/agent-claw/src/core/permissions/resolver.ts`) combines
+  `permissionMode` (`default | acceptEdits | plan | dontAsk |
+  bypassPermissions`), `allowedTools` / `disallowedTools` filters, and
+  per-route hook decisions.
+- `permission_request` lifecycle point fires when `ask` / `defer`
+  decisions surface; the `permission` hook
+  (`services/agent-claw/src/core/hooks/permission.ts`) gates flow.
+- Workspace-boundary validation
+  (`services/agent-claw/src/security/workspace-boundary.ts`) rejects
+  filesystem-shaped tool inputs that resolve outside the configured
+  workspace root.
+- Tested by `tests/unit/permission-mode.test.ts` and
+  `tests/unit/workspace-boundary.test.ts`.
 
 ### Phase 8 — etag / chained / reanimator integration tests
 
-**Scope:** Testcontainer-driven integration tests that exercise
-session etag conflict resolution, `/api/sessions/:id/plan/run` chained
-execution under token-budget exhaustion, and the reanimator daemon
-round-trip (stalled todo → POST `/api/internal/sessions/:id/resume`).
+- Testcontainer harness
+  (`services/agent-claw/tests/helpers/postgres-container.ts`) spins up
+  a Postgres + RLS-aware fixture per suite.
+- `tests/integration/etag-conflict.test.ts` exercises optimistic
+  concurrency on `agent_sessions.etag`.
+- `tests/integration/chained-execution.test.ts` exercises
+  `/api/sessions/:id/plan/run` token-budget exhaustion and per-session
+  budget enforcement.
+- `tests/integration/reanimator-roundtrip.test.ts` exercises the
+  stalled-todo → POST `/api/internal/sessions/:id/resume` round-trip
+  and verifies the reanimator's JWT scope contract.
 
-**Why deferred:** Significant test infrastructure investment
-(testcontainers, Postgres + Neo4j start-up cost, RLS-aware fixtures).
-The audit-flagged session paths are correct by inspection (RLS-verified
-in `db/init/13_agent_sessions.sql`; reanimator JWT scope verified in
-ADR 006), but no testcontainer-driven test pins the behaviour today.
-Phase 8 will land before any session-layer refactor.
+### Phase 9 — Per-hook + per-tool spans
 
-### Phase 9 — Per-hook + per-tool Langfuse spans
-
-**Scope:** Decorate every hook dispatch and every tool invocation with
-an OTel span exported via the existing OTLP pipeline to Langfuse. Tag
-spans with `hook.name`, `hook.point`, `tool.name`, `permission.decision`
-so the cost / latency / decision-distribution data is queryable per
-hook and per tool.
-
-**Why deferred:** The OTLP exporter is wired in
-`services/agent-claw/src/observability/`, but spans don't yet decorate
-the hot paths. This is the next obvious observability work; it lands
-once the v1.2 contract is in operator hands and we have real traffic
-to instrument against. Doing it before v1.2 ships would be premature
-optimization on a moving target.
+- `services/agent-claw/src/observability/hook-spans.ts` decorates each
+  hook dispatch with an OTel span tagged `hook.name`, `hook.point`,
+  `permission.decision`.
+- `services/agent-claw/src/observability/tool-spans.ts` decorates each
+  tool invocation with `tool.name` and parent-context propagation.
+- Tested by `tests/unit/observability-spans.test.ts`.
 
 ### Phase 11 — Mock parity harness with scenario JSON files
 
-**Scope:** A `tests/parity/` harness that replays scripted scenario
-JSON files (à la `ultraworkers/claw-code`) through the agent and
-asserts on the SSE wire format + final state. Lets us pin parity
-with Claude Agent SDK behaviour as the SDK evolves.
+- `tests/parity/runner.ts` + `tests/parity/scenario.ts` replay scripted
+  agent runs from JSON definitions; assertions cover SSE wire format
+  + final state.
+- 8 canonical scenarios under `tests/parity/scenarios/` exercise:
+  tool-call-then-text, deny-precedence, todo-lifecycle, text-only,
+  permission-deny-via-mode, ask-user-pause, parallel-readonly-batch,
+  pre-compact-fires.
 
-**Why deferred:** Significant test-infrastructure work; needs a stable
-permission story (Phase 6) and a stable observability story (Phase 9)
-to be useful as a regression net. Defer until those land first.
+`docs/PARITY.md` flips the corresponding rows from `deferred` to
+`implemented` and points at the file/symbol that backs each claim.
+
+---
+
+## What remains genuinely deferred (v1.4+)
+
+The following primitives are still **not** in this release. They are
+tracked in `docs/PARITY.md` with status `deferred (v1.4+)`:
+
+### Setting sources (user / project / local)
+
+**Scope:** Three-tier configuration cascade matching Claude Code's
+`~/.claude/settings.json` (user) → `<project>/.claude/settings.json`
+(project) → `<project>/.claude/settings.local.json` (local) layout.
+Currently, all configuration is environment-variable driven.
+
+**Why deferred:** The config-cascade design intersects with secret
+handling and the redactor's redaction rules in non-trivial ways. A
+clean design pass is needed before code lands; this is a v1.4 design +
+implementation pair.
+
+### ToolSearch (lazy tool loading)
+
+**Scope:** A registry shape where tools are referenced by name in the
+LLM-visible tool list but their full JSONSchema is loaded only when
+the agent decides to invoke them — matching the "deferred tools"
+pattern Claude Code uses for MCP servers.
+
+**Why deferred:** Saves LLM context on long tool lists, but only
+matters when ChemClaw's tool count crosses ~50 and the per-turn token
+cost of the tool list becomes material. Today the registry is at ~36
+builtins + chemistry MCPs; not yet a budget item.
+
+### Effort levels (low/medium/high/xhigh/max)
+
+**Scope:** Per-call inference effort knob borrowed from Claude Code's
+prompt control surface.
+
+**Why deferred:** LiteLLM does not expose the `effort` parameter
+uniformly across providers; ChemClaw routes through LiteLLM as a
+single egress chokepoint and does not bypass it. A custom translation
+layer would be needed; not justified yet.
+
+### Cost-correct streamed-text refactor (ADR 008 follow-up)
+
+**Scope:** Today text turns make 2× LLM round-trips (one for the
+finishReason / token estimate, one for the streamed text). A
+single-call streaming pipeline would halve LLM cost on text-heavy
+turns.
+
+**Why deferred:** Functionally correct as-is; correctness work has to
+land before cost-optimization work. Tracked in `core/harness.ts`
+TODO and ADR 008's "future work" section.
 
 ---
 
 ## Consequences
 
-- v1.2.0-harness ships with the harness rebuild proper: 16 hook points,
-  unified ReAct loop, fail-closed MCP auth, parallel readonly batches,
-  ADRs 007-009.
-- v1.3 is scoped: permission resolver, integration tests, observability,
-  parity harness. Each is a discrete, independently shippable piece.
-- The deferral is documented in `docs/PARITY.md` so reviewers and
-  operators can see the gap between "contract locked" and "fully
-  enforced end-to-end" without reading source.
+- v1.2.0+harness ships with **all originally-numbered phases of the
+  rebuild plan** (0 through 11). The originally-deferred phases (6, 8,
+  9, 11) landed on the same working branch as the rebuild proper.
+- The remaining v1.4 deferrals are scope-limited and individually
+  shippable; none is a prerequisite for the others.
+- Reviewers reading the ADR sequence (007 → 010) get a coherent
+  narrative: contract → reduction-to-one-loop → decisions →
+  retrospective + what's still pending.
 
-Related ADRs: 007, 008, 009.
+Related ADRs: 007 (hook system rebuild), 008 (collapsed ReAct loop),
+009 (permission and decision contract).

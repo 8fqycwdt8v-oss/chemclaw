@@ -220,12 +220,18 @@ The plan document is at `~/.claude/plans/go-through-the-three-vivid-sunset.md`.
 ## Test counts (current branch)
 
 ```
-cd services/agent-claw && npm test          →  704 passed
+cd services/agent-claw && npm test          →  757 passed | 2 skipped (102 files)
 cd services/agent-claw && npx tsc --noEmit  →  ok
 cd services/paperclip && npm test           →  17 passed
 .venv/bin/pytest services/mcp_tools/common/tests/ -q   →  33 passed
 npm audit (root)                            →  0 vulnerabilities
 ```
+
+The integration trio (`etag-conflict`, `chained-execution`,
+`reanimator-roundtrip`) requires Docker — the testcontainer harness in
+`services/agent-claw/tests/helpers/postgres-container.ts` self-skips
+when Docker is unavailable. The full suite above was run with Docker
+present.
 
 ## Harness Primitives
 
