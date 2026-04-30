@@ -2,9 +2,15 @@ FROM python:3.11-slim
 
 WORKDIR /app
 
+# Cleaner logs (no buffered stdout) and a smaller image (no .pyc cruft).
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1
+
 # rdkit-pypi wheels embed their native deps, so no apt-get installs needed.
 COPY services/mcp_tools/mcp_synthegy_mech/requirements.txt /app/services/mcp_tools/mcp_synthegy_mech/requirements.txt
-RUN pip install --no-cache-dir -r /app/services/mcp_tools/mcp_synthegy_mech/requirements.txt
+RUN pip install -r /app/services/mcp_tools/mcp_synthegy_mech/requirements.txt
 
 COPY services/__init__.py /app/services/__init__.py
 COPY services/mcp_tools/__init__.py /app/services/mcp_tools/__init__.py
