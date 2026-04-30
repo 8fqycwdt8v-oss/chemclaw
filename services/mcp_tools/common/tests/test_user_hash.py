@@ -69,6 +69,38 @@ def test_default_dev_salt_used_without_env() -> None:
     assert out_via_helper == expected
 
 
+def test_throws_when_salt_unset_and_no_dev_signal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Mirror of the TS-side throw-path test.
+
+    Pytest sets PYTEST_CURRENT_TEST automatically — `is_dev` is True
+    inside any test by default. This case explicitly clears every
+    dev-mode signal so the production fail-closed path actually fires,
+    catching a future regression that flips the gate back to
+    fail-open.
+    """
+    monkeypatch.delenv("LOG_USER_SALT", raising=False)
+    monkeypatch.delenv("CHEMCLAW_DEV_MODE", raising=False)
+    monkeypatch.delenv("MCP_AUTH_DEV_MODE", raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    reset_user_hash_for_tests()
+    with pytest.raises(RuntimeError, match=r"LOG_USER_SALT"):
+        hash_user("alice@example.com")
+
+
+def test_does_not_throw_when_dev_mode_true_and_salt_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.delenv("LOG_USER_SALT", raising=False)
+    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+    monkeypatch.setenv("CHEMCLAW_DEV_MODE", "true")
+    reset_user_hash_for_tests()
+    # Falls back to the public dev salt — should produce a 16-hex hash
+    # rather than throw. This is the local-dev path that must keep
+    # working.
+    out = hash_user("alice@example.com")
+    assert len(out) == 16
+
+
 def test_ts_python_parity_with_known_salt() -> None:
     """The TS hashUser and Python hash_user must agree on the same salt+input.
 

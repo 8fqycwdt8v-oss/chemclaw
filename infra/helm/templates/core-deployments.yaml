@@ -43,6 +43,27 @@ spec:
                 secretKeyRef:
                   name: {{ .Values.global.postgres.passwordSecret }}
                   key: {{ .Values.global.postgres.passwordKey }}
+            # LOG_USER_SALT is required outside dev mode (see
+            # services/agent-claw/src/observability/user-hash.ts) and
+            # must match the Postgres `app.log_user_salt` parameter
+            # so audit_log hashes line up with Loki user hashes for
+            # the same person. The Helm chart's NOTES.txt reminds the
+            # operator to run:
+            #   ALTER DATABASE chemclaw SET app.log_user_salt = '<same value>';
+            {{- if .Values.global.logUserSalt.secretName }}
+            - name: LOG_USER_SALT
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.logUserSalt.secretName }}
+                  key: {{ .Values.global.logUserSalt.secretKey | default "salt" }}
+            {{- end }}
+            {{- if .Values.global.mcpAuth.signingKeySecret }}
+            - name: MCP_AUTH_SIGNING_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: {{ .Values.global.mcpAuth.signingKeySecret }}
+                  key: {{ .Values.global.mcpAuth.signingKeyField | default "key" }}
+            {{- end }}
           resources:
             requests: {{ .Values.agentClaw.resources.requests | toYaml | nindent 14 }}
             limits:   {{ .Values.agentClaw.resources.limits | toYaml | nindent 14 }}

@@ -46,4 +46,32 @@ describe("hashUser", () => {
     expect(hashUser(raw)).not.toContain("alice");
     expect(hashUser(raw)).not.toContain("@");
   });
+
+  it("throws when LOG_USER_SALT unset and CHEMCLAW_DEV_MODE != true", () => {
+    // Vitest sets CHEMCLAW_DEV_MODE=true globally; this test
+    // explicitly drops it (and LOG_USER_SALT) to exercise the
+    // production fail-closed path. Without this regression test, a
+    // future refactor that flips the gate back to "fail open" would
+    // silently re-enable the public-salt rainbow-table window —
+    // exactly the cycle-1 audit finding.
+    delete process.env.LOG_USER_SALT;
+    const prevDev = process.env.CHEMCLAW_DEV_MODE;
+    delete process.env.CHEMCLAW_DEV_MODE;
+    __resetUserHashForTests();
+    try {
+      expect(() => hashUser("alice@example.com")).toThrow(/LOG_USER_SALT/);
+    } finally {
+      if (prevDev !== undefined) process.env.CHEMCLAW_DEV_MODE = prevDev;
+      __resetUserHashForTests();
+    }
+  });
+
+  it("does not throw when CHEMCLAW_DEV_MODE=true and salt is unset", () => {
+    delete process.env.LOG_USER_SALT;
+    process.env.CHEMCLAW_DEV_MODE = "true";
+    __resetUserHashForTests();
+    // Falls back to the public dev salt — produces a hash, doesn't
+    // throw. This is the test-default path so it must keep working.
+    expect(hashUser("alice@example.com")).toMatch(/^[0-9a-f]{16}$/);
+  });
 });
