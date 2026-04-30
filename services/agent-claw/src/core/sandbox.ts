@@ -3,7 +3,7 @@
 // Design:
 //   - Wraps the `e2b` Node SDK (Apache 2.0).
 //   - All real E2B traffic is gated behind the E2B_API_KEY env var.
-//   - Per-execution caps: SANDBOX_MAX_CPU_S=30, SANDBOX_MAX_MEM_MB=2048.
+//   - Per-execution cap: SANDBOX_MAX_CPU_S=30.
 //   - Network egress is disabled by default; enabled only when explicitly requested.
 //   - All methods throw SandboxError on failure.
 
@@ -48,7 +48,10 @@ export class SandboxError extends Error {
 // ---------------------------------------------------------------------------
 
 export const SANDBOX_MAX_CPU_S = Number(process.env.SANDBOX_MAX_CPU_S ?? 30);
-export const SANDBOX_MAX_MEM_MB = Number(process.env.SANDBOX_MAX_MEM_MB ?? 2048);
+// SANDBOX_MAX_MEM_MB was previously exported here but never wired into the
+// E2B SDK call — the SDK doesn't expose a runtime memory limit hook on
+// the current `e2b` package version. Dropped per audit L8 (orphan export);
+// add it back together with the SDK call when memory caps are needed.
 // Set to "true" to allow forged code to make outbound HTTP. Off by default.
 // SANDBOX_ALLOW_NET_EGRESS is the canonical name. SANDBOX_MAX_NET_EGRESS was
 // the original (misleading — sounded like a byte cap) and is read as a
