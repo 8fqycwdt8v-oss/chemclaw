@@ -224,7 +224,6 @@ export async function loadHooks(
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const module = await import(scriptPath);
         // Convention: the module must export a default async function.
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
         const def: unknown = (module as { default?: unknown }).default;
         if (typeof def !== "function") {
           result.skipped.push(`${file}: script does not export a default function`);

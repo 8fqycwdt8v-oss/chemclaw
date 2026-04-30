@@ -170,8 +170,12 @@ export function verifyMcpToken(
   let header: { alg?: string };
   let payload: Partial<McpTokenClaims>;
   try {
-    header = JSON.parse(Buffer.from(b64UrlDecode(h)).toString("utf-8"));
-    payload = JSON.parse(Buffer.from(b64UrlDecode(p)).toString("utf-8"));
+    // JSON.parse returns `any` — narrow at the boundary by casting through
+    // `unknown` to the expected partial shapes. Both fields are validated
+    // by the field-level checks immediately below, so an unexpected shape
+    // only manifests as a checked McpAuthError, not as a downstream crash.
+    header = JSON.parse(Buffer.from(b64UrlDecode(h)).toString("utf-8")) as { alg?: string };
+    payload = JSON.parse(Buffer.from(b64UrlDecode(p)).toString("utf-8")) as Partial<McpTokenClaims>;
   } catch (err) {
     throw new McpAuthError(`malformed JSON: ${(err as Error).message}`);
   }

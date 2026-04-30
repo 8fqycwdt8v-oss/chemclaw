@@ -52,7 +52,14 @@ function toAiSdkMessages(messages: Message[]): ModelMessage[] {
             type: "tool-result",
             toolCallId: m.toolId ?? "unknown",
             toolName: m.toolId ?? "unknown",
-            output: { type: "json", value: parsed as Parameters<typeof JSON.stringify>[0] },
+            // The AI SDK's tool-result output.value field expects a
+            // JSONValue. The runtime value is `unknown` (parsed from a
+            // tool's content string); a cast through never preserves
+            // the unknown intent without using `any`.
+            output: {
+              type: "json",
+              value: parsed as never,
+            },
           },
         ],
       };
@@ -154,7 +161,10 @@ export class LiteLLMProvider implements LlmProvider {
             kind: "tool_calls",
             calls: result.toolCalls.map((tc) => ({
               toolId: tc.toolName,
-              input: tc.input,
+              // tc.input is typed `any` by the AI SDK (tool inputs are
+              // dynamic per tool). Narrow at the boundary; the harness
+              // re-validates via Zod before the tool fires.
+              input: tc.input as unknown,
             })),
           },
           usage,

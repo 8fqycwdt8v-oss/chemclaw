@@ -51,7 +51,7 @@ async function boundedMap<T, R>(
   limit: number,
   fn: (t: T) => Promise<R>,
 ): Promise<R[]> {
-  const out: (R | undefined)[] = new Array(items.length);
+  const out: (R | undefined)[] = new Array<R | undefined>(items.length);
   let idx = 0;
   const workers = Array.from(
     { length: Math.min(limit, items.length) },
