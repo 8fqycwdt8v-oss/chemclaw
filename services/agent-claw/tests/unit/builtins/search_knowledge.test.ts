@@ -29,7 +29,7 @@ function mockFetchEmbed(embedBody: unknown) {
   return vi.fn().mockResolvedValue({
     ok: true,
     text: async () => JSON.stringify(embedBody),
-  } as Response);
+  });
 }
 
 describe("buildSearchKnowledgeTool", () => {
@@ -67,7 +67,7 @@ describe("buildSearchKnowledgeTool", () => {
       vi.fn().mockResolvedValue({
         ok: true,
         text: async () => JSON.stringify({ vectors: [[]] }),
-      } as Response),
+      }),
     );
 
     const { pool } = mockPool();
@@ -84,7 +84,7 @@ describe("buildSearchKnowledgeTool", () => {
       ok: false,
       status: 500,
       text: async () => "should not be called",
-    } as unknown as Response);
+    });
     vi.stubGlobal("fetch", mockFetch);
 
     const { pool, client } = mockPool();

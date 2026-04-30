@@ -14,7 +14,7 @@ from __future__ import annotations
 import logging
 import os
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 from fastapi import Body
 from pydantic import BaseModel, Field
@@ -47,10 +47,14 @@ app = create_app(
 # Lazy ASKCOS client (avoids import-time crash when askcos is not installed)
 # ---------------------------------------------------------------------------
 
-def _get_askcos_client():
-    """Return an ASKCOS v2 client.  Raises ImportError if not installed."""
+def _get_askcos_client() -> Any:
+    """Return an ASKCOS v2 client.  Raises ImportError if not installed.
+
+    Returns Any because askcos2 ships no stubs; callers treat the client
+    as a duck-typed object (see retrosynthesis() / forward_prediction()).
+    """
     try:
-        from askcos2 import AskCOSClient  # type: ignore[import]  # noqa: PLC0415
+        from askcos2 import AskCOSClient  # noqa: PLC0415
     except ImportError as exc:
         raise ImportError(
             "askcos2 package not installed; install it inside the Docker image"

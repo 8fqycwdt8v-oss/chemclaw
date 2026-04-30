@@ -128,7 +128,7 @@ describe("POST /api/deep_research — route existence", () => {
     });
 
     const events = parseSseEvents(res.body);
-    expect(events.some((e) => e["type"] === "finish")).toBe(true);
+    expect(events.some((e) => e.type === "finish")).toBe(true);
   });
 
   it("returns a finish event in non-streaming mode (stream=false)", async () => {
@@ -197,8 +197,8 @@ describe("POST /api/deep_research — DR mode marker", () => {
     const originalCall = llm.call.bind(llm);
     let capturedMessages: Array<{ role: string; content: string }> = [];
     vi.spyOn(llm, "call").mockImplementation(async (msgs, tools) => {
-      capturedMessages = msgs as Array<{ role: string; content: string }>;
-      return originalCall(msgs, tools);
+      capturedMessages = msgs;
+      return await originalCall(msgs, tools);
     });
 
     registerDeepResearchRoute(app, {

@@ -62,7 +62,7 @@ export function hydrateScratchpad(
   tokenBudget: number,
 ): { scratchpad: Map<string, unknown>; seenFactIds: Set<string> } {
   const seenFactIds = new Set<string>(
-    Array.isArray(prior["seenFactIds"]) ? (prior["seenFactIds"] as string[]) : [],
+    Array.isArray(prior.seenFactIds) ? (prior.seenFactIds as string[]) : [],
   );
   const scratchpad = new Map<string, unknown>();
   for (const [k, v] of Object.entries(prior)) {
@@ -106,8 +106,8 @@ export async function persistTurnState(
     dump[k] = v instanceof Set ? Array.from(v) : v;
   }
   const rawAwaitingQuestion =
-    typeof dump["awaitingQuestion"] === "string"
-      ? (dump["awaitingQuestion"] as string)
+    typeof dump.awaitingQuestion === "string"
+      ? (dump.awaitingQuestion)
       : null;
 
   // Redact awaitingQuestion BEFORE truncation + persistence. The model may
@@ -142,7 +142,7 @@ export async function persistTurnState(
       ];
       ctx.scratchpad.set("redact_log", updated);
       // Re-dump so the redact_log update lands in the persisted scratchpad.
-      dump["redact_log"] = updated;
+      dump.redact_log = updated;
     }
   }
 

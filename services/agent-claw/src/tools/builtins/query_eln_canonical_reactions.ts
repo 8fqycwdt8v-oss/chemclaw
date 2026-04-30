@@ -16,12 +16,12 @@ export const QueryElnCanonicalReactionsIn = z.object({
   family: z
     .string()
     .max(64)
-    .regex(/^[A-Za-z0-9_\-]+$/, "family must be alphanumeric/_/-")
+    .regex(/^[A-Za-z0-9_-]+$/, "family must be alphanumeric/_/-")
     .optional(),
   project_code: z
     .string()
     .max(64)
-    .regex(/^[A-Za-z0-9_\-\.]+$/, "project_code must be alphanumeric/.-/_")
+    .regex(/^[A-Za-z0-9_.-]+$/, "project_code must be alphanumeric/.-/_")
     .optional(),
   step_number: z.number().int().min(0).max(100).optional(),
   min_ofat_count: z.number().int().min(0).max(10_000).optional(),
@@ -34,9 +34,9 @@ export type QueryElnCanonicalReactionsInput = z.infer<
 export const QueryElnCanonicalReactionsOut = z.object({
   items: z.array(CanonicalReactionSchema),
 });
-export type QueryElnCanonicalReactionsOutput = {
+export interface QueryElnCanonicalReactionsOutput {
   items: CanonicalReaction[];
-};
+}
 
 const TIMEOUT_MS = 15_000;
 

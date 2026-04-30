@@ -43,7 +43,7 @@ async function buildApp(loader: SkillLoader) {
     getUser: () => "test@local.test",
   });
   await app.ready();
-  return app;
+  return await app;
 }
 
 describe("GET /api/skills/list", () => {

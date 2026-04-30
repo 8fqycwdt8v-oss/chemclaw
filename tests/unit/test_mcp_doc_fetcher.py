@@ -94,6 +94,22 @@ def clear_deny_hosts_env():
         os.environ.pop("MCP_DOC_FETCHER_DENY_HOSTS", None)
 
 
+@pytest.fixture(autouse=True)
+def configure_file_roots_for_tests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Permit file:// reads from /tmp during tests.
+
+    The doc-fetcher's `file://` backend is fail-closed by default and refuses
+    to read any file unless `MCP_DOC_FETCHER_FILE_ROOTS` is set to a colon-
+    separated allow-list. PR-1 of the cleanup wave (refactor/tooling) makes
+    the test suite self-configure rather than failing loudly when the env
+    var is unset (see audit 05-coverage-baseline.md §7.2 / M15).
+    """
+    monkeypatch.setenv(
+        "MCP_DOC_FETCHER_FILE_ROOTS",
+        f"{tmp_path}:/tmp:/private/tmp:/var/folders",
+    )
+
+
 # ---------------------------------------------------------------------------
 # 1. file:// round-trip
 # ---------------------------------------------------------------------------
@@ -215,6 +231,7 @@ def test_pdf_pages_text_fallback(tmp_pdf_file: Path) -> None:
 
     # Simulate missing pdf2image by temporarily hiding it.
     import builtins as _builtins
+
     real_import = _builtins.__import__
 
     def _block_pdf2image(name: str, *args: Any, **kwargs: Any):
@@ -297,6 +314,7 @@ def test_deny_list_host_blocked() -> None:
     deny_hosts = frozenset(h.strip().lower() for h in raw_deny.split(",") if h.strip())
 
     import urllib.parse
+
     parsed = urllib.parse.urlparse("https://internal.corp.com/file.pdf")
     host = parsed.hostname or ""
     assert host.lower() in deny_hosts, "host should be in deny list"

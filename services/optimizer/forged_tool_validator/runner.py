@@ -106,13 +106,15 @@ def _fetch_active_forged_tools(conn: Any) -> list[ForgedTool]:
     return tools
 
 
-def _parse_schemas_from_prompt_md(prompt_md: str) -> tuple[dict, dict]:
+def _parse_schemas_from_prompt_md(
+    prompt_md: str,
+) -> tuple[dict[str, Any], dict[str, Any]]:
     """Extract input and output JSON schemas from the stored prompt_md markdown."""
     import re
 
     # Match ``` json blocks after Input schema / Output schema headers.
-    input_schema: dict = {"type": "object", "properties": {}}
-    output_schema: dict = {"type": "object", "properties": {}}
+    input_schema: dict[str, Any] = {"type": "object", "properties": {}}
+    output_schema: dict[str, Any] = {"type": "object", "properties": {}}
 
     blocks = re.findall(r"```json\s*([\s\S]*?)```", prompt_md)
     if len(blocks) >= 1:

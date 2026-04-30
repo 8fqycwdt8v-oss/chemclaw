@@ -39,7 +39,7 @@ export async function foundationCitationGuardHook(
   const obj = input as Record<string, unknown>;
 
   // Only fire when the caller explicitly declares FOUNDATION.
-  if (obj["maturity_tier"] !== "FOUNDATION") {
+  if (obj.maturity_tier !== "FOUNDATION") {
     return {};
   }
 

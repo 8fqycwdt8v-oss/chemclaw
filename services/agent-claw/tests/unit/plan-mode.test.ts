@@ -1,6 +1,6 @@
 // Tests for the plan-mode module: plan creation, store TTL, approve/reject lifecycle.
 
-import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
+import { describe, it, expect, beforeEach } from "vitest";
 import {
   planStore,
   createPlan,

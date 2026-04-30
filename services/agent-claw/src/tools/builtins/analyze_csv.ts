@@ -61,7 +61,7 @@ function detectType(values: string[]): "number" | "string" | "date" {
   if (nonEmpty.length === 0) return "string";
 
   // Date detection: ISO 8601 or common date patterns.
-  const dateRe = /^\d{4}-\d{2}-\d{2}(T[\d:Z.+\-]+)?$|^\d{1,2}\/\d{1,2}\/\d{4}$/;
+  const dateRe = /^\d{4}-\d{2}-\d{2}(T[\d:Z.+-]+)?$|^\d{1,2}\/\d{1,2}\/\d{4}$/;
   if (nonEmpty.every((v) => dateRe.test(v.trim()))) return "date";
 
   // Number detection.
@@ -175,8 +175,8 @@ function answerQuery(
       }
       if (/summar|stat/i.test(query)) {
         return (
-          `${col.name}: min=${col.min}, max=${col.max}, ` +
-          `mean=${col.mean?.toFixed(4)}, missing=${col.n_missing}.`
+          `${col.name}: min=${col.min ?? "n/a"}, max=${col.max ?? "n/a"}, ` +
+          `mean=${col.mean?.toFixed(4) ?? "n/a"}, missing=${col.n_missing}.`
         );
       }
     }
@@ -258,12 +258,12 @@ export function buildAnalyzeCsvTool(pool: Pool, docFetcherUrl: string) {
 
         if (!row) {
           throw new Error(
-            `analyze_csv: document ${input.document_id} not found or not accessible.`,
+            `analyze_csv: document ${input.document_id ?? "(unknown)"} not found or not accessible.`,
           );
         }
         if (!row.original_uri) {
           throw new Error(
-            `analyze_csv: document ${input.document_id} has no original_uri. ` +
+            `analyze_csv: document ${input.document_id ?? "(unknown)"} has no original_uri. ` +
               "Use csv_text to pass the CSV content directly.",
           );
         }
@@ -292,18 +292,18 @@ export function buildAnalyzeCsvTool(pool: Pool, docFetcherUrl: string) {
         );
       }
 
-      const allRows = parsed.data as string[][];
+      const allRows = parsed.data;
       if (allRows.length < 1) {
         throw new Error("analyze_csv: CSV is empty.");
       }
 
-      const headers = (allRows[0] ?? []).map((h) => String(h).trim());
+      const headers = (allRows[0] ?? []).map((h) => h.trim());
       const dataRows = allRows.slice(1);
       const rowCount = dataRows.length;
 
       // ── Build column summaries. ─────────────────────────────────────────────
       const columnSummaries: ColumnSummaryItem[] = headers.map((header, idx) => {
-        const values = dataRows.map((row) => String(row[idx] ?? ""));
+        const values = dataRows.map((row) => row[idx] ?? "");
         return buildColumnSummary(header, values);
       });
 

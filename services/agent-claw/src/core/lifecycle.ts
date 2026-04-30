@@ -65,7 +65,7 @@ const DEFAULT_HOOK_TIMEOUT_MS = 60_000;
 export class Lifecycle {
   // Map<point, RegisteredHook<unknown>[]> — payloads are erased at storage
   // time and re-narrowed at dispatch time via the generic.
-  private readonly _hooks: Map<HookPoint, RegisteredHook<unknown>[]> = new Map();
+  private readonly _hooks = new Map<HookPoint, RegisteredHook<unknown>[]>();
 
   /**
    * Register a hook handler for the given lifecycle point.
@@ -82,13 +82,15 @@ export class Lifecycle {
     handler: HookCallback<HookPayloadMap[P]>,
     opts: { matcher?: string; timeout?: number } = {},
   ): this {
-    if (!this._hooks.has(point)) {
-      this._hooks.set(point, []);
+    let bucket = this._hooks.get(point);
+    if (!bucket) {
+      bucket = [];
+      this._hooks.set(point, bucket);
     }
-    this._hooks.get(point)!.push({
+    bucket.push({
       name,
       matcher: opts.matcher ? new RegExp(opts.matcher) : undefined,
-      handler: handler as HookCallback<unknown>,
+      handler: handler as HookCallback,
       timeout: opts.timeout ?? DEFAULT_HOOK_TIMEOUT_MS,
     });
     return this;
@@ -163,7 +165,7 @@ export class Lifecycle {
 
       const ac = new AbortController();
       const timer = setTimeout(
-        () => ac.abort(new Error(`hook timeout: ${hook.name}`)),
+        () => { ac.abort(new Error(`hook timeout: ${hook.name}`)); },
         hook.timeout,
       );
 
@@ -179,7 +181,7 @@ export class Lifecycle {
         // sees one span per hook invocation with name, point, matcher
         // target, tool-use id, duration, and OK/ERROR status. A timeout
         // (abort-rejection wins the race) shows up as an ERROR span.
-        const result: HookJSONOutput | undefined | void = await withHookSpan(
+        const result: HookJSONOutput | undefined = await withHookSpan(
           {
             point,
             hookName: hook.name,
@@ -188,30 +190,25 @@ export class Lifecycle {
           },
           () => {
             const handlerPromise = (
-              hook.handler as HookCallback<unknown>
+              hook.handler as HookCallback
             )(payload, opts.toolUseID, { signal: ac.signal });
             const abortPromise = new Promise<never>((_, reject) => {
+              const reasonAsError = (): Error => {
+                const reason: unknown = ac.signal.reason;
+                if (reason instanceof Error) return reason;
+                return new Error(`hook timeout: ${hook.name}`);
+              };
               if (ac.signal.aborted) {
-                reject(
-                  ac.signal.reason ??
-                    new Error(`hook timeout: ${hook.name}`),
-                );
+                reject(reasonAsError());
                 return;
               }
               ac.signal.addEventListener(
                 "abort",
-                () => {
-                  reject(
-                    ac.signal.reason ??
-                      new Error(`hook timeout: ${hook.name}`),
-                  );
-                },
+                () => { reject(reasonAsError()); },
                 { once: true },
               );
             });
-            return Promise.race([handlerPromise, abortPromise]) as Promise<
-              HookJSONOutput | undefined | void
-            >;
+            return Promise.race([handlerPromise, abortPromise]);
           },
         );
 
@@ -257,7 +254,7 @@ export class Lifecycle {
         // exists yet; the per-hook OTel span emits ERROR status with
         // recordException so the failure is observable in Langfuse — this
         // console.error remains as a developer-facing fallback).
-        // eslint-disable-next-line no-console
+         
         console.error(
           `[lifecycle] non-pre_tool hook "${hook.name}" at "${point}" threw — continuing with remaining hooks`,
           err,

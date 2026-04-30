@@ -52,7 +52,7 @@ export function extractVerbalizedConfidence(output: unknown): number | null {
     return null;
   }
   const obj = output as Record<string, unknown>;
-  const val = obj["confidence"];
+  const val = obj.confidence;
   if (typeof val === "number" && val >= 0 && val <= 1) {
     return val;
   }
@@ -95,9 +95,9 @@ export async function crossModelAgreement(
       result !== null &&
       typeof result === "object" &&
       !Array.isArray(result) &&
-      typeof (result as Record<string, unknown>)["agreement"] === "number"
+      typeof (result as Record<string, unknown>).agreement === "number"
     ) {
-      const score = (result as Record<string, unknown>)["agreement"] as number;
+      const score = (result as Record<string, unknown>).agreement as number;
       if (score >= 0 && score <= 1) return Math.round(score * 1000) / 1000;
     }
     return null;
@@ -123,33 +123,33 @@ export function extractFactIds(output: unknown): Set<string> {
   const obj = output as Record<string, unknown>;
 
   // Direct fact_ids array.
-  if (Array.isArray(obj["fact_ids"])) {
-    for (const id of obj["fact_ids"] as unknown[]) {
+  if (Array.isArray(obj.fact_ids)) {
+    for (const id of obj.fact_ids as unknown[]) {
       if (typeof id === "string" && id.length > 0) ids.add(id);
     }
   }
 
   // evidence_fact_ids (synthesize_insights pattern).
-  if (Array.isArray(obj["evidence_fact_ids"])) {
-    for (const id of obj["evidence_fact_ids"] as unknown[]) {
+  if (Array.isArray(obj.evidence_fact_ids)) {
+    for (const id of obj.evidence_fact_ids as unknown[]) {
       if (typeof id === "string" && id.length > 0) ids.add(id);
     }
   }
 
   // cited_fact_ids (propose_hypothesis pattern).
-  if (Array.isArray(obj["cited_fact_ids"])) {
-    for (const id of obj["cited_fact_ids"] as unknown[]) {
+  if (Array.isArray(obj.cited_fact_ids)) {
+    for (const id of obj.cited_fact_ids as unknown[]) {
       if (typeof id === "string" && id.length > 0) ids.add(id);
     }
   }
 
   // citations array (Citation type — read source_id).
-  if (Array.isArray(obj["citations"])) {
-    for (const c of obj["citations"] as unknown[]) {
+  if (Array.isArray(obj.citations)) {
+    for (const c of obj.citations as unknown[]) {
       if (c && typeof c === "object" && !Array.isArray(c)) {
         const cObj = c as Record<string, unknown>;
-        if (typeof cObj["source_id"] === "string" && cObj["source_id"].length > 0) {
-          ids.add(cObj["source_id"]);
+        if (typeof cObj.source_id === "string" && cObj.source_id.length > 0) {
+          ids.add(cObj.source_id);
         }
       }
     }

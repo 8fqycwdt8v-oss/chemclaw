@@ -42,7 +42,7 @@ export function registerDocumentsRoute(app: FastifyInstance, deps: DocumentsRout
     // Validate UUID format.
     const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
     if (!uuidRe.test(id)) {
-      return reply.code(400).send({ error: "invalid_document_id" });
+      return await reply.code(400).send({ error: "invalid_document_id" });
     }
 
     // RLS-scoped document lookup.
@@ -57,14 +57,14 @@ export function registerDocumentsRoute(app: FastifyInstance, deps: DocumentsRout
       });
     } catch (err) {
       req.log.error({ err }, "documents/original: DB lookup failed");
-      return reply.code(500).send({ error: "internal" });
+      return await reply.code(500).send({ error: "internal" });
     }
 
     if (!row) {
-      return reply.code(404).send({ error: "document_not_found" });
+      return await reply.code(404).send({ error: "document_not_found" });
     }
     if (!row.original_uri) {
-      return reply.code(404).send({
+      return await reply.code(404).send({
         error: "no_original_uri",
         detail: "This document has no recorded original file URI.",
       });
@@ -73,7 +73,7 @@ export function registerDocumentsRoute(app: FastifyInstance, deps: DocumentsRout
     // Fetch raw bytes from mcp-doc-fetcher.
     const base = deps.config.MCP_DOC_FETCHER_URL?.replace(/\/$/, "") ?? "";
     if (!base) {
-      return reply.code(503).send({ error: "mcp_doc_fetcher_not_configured" });
+      return await reply.code(503).send({ error: "mcp_doc_fetcher_not_configured" });
     }
 
     let fetched: { content_type: string; base64_bytes: string; byte_count: number };
@@ -87,7 +87,7 @@ export function registerDocumentsRoute(app: FastifyInstance, deps: DocumentsRout
       );
     } catch (err) {
       req.log.error({ err }, "documents/original: mcp-doc-fetcher failed");
-      return reply.code(502).send({ error: "upstream_failed" });
+      return await reply.code(502).send({ error: "upstream_failed" });
     }
 
     const bytes = Buffer.from(fetched.base64_bytes, "base64");
