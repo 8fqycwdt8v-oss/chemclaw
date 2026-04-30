@@ -34,12 +34,8 @@ import { parseSlash } from "../core/slash.js";
 import type { RedactReplacement } from "../core/hooks/redact-secrets.js";
 import { hydrateScratchpad, persistTurnState } from "../core/session-state.js";
 import { lifecycle } from "../core/runtime.js";
-import {
-  createSession,
-  loadSession,
-  saveSession,
-  OptimisticLockError,
-} from "../core/session-store.js";
+import { OptimisticLockError } from "../core/session-store.js";
+import { buildSystemPromptForTurn, resolveSession } from "./chat-setup.js";
 import { savePlanForSession } from "../core/plan-store-db.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 import { runWithRequestContext } from "../core/request-context.js";
@@ -53,7 +49,6 @@ import {
   planStore,
   createPlan,
   parsePlanSteps,
-  PLAN_MODE_SYSTEM_SUFFIX,
 } from "../core/plan-mode.js";
 import { VERB_TO_SKILL } from "../core/skills.js";
 import { writeEvent, setupSse } from "../streaming/sse.js";
@@ -136,31 +131,13 @@ async function handleChat(
   }
 
   // Build system prompt: base + active-skill prompts + plan-mode suffix.
-  let systemPrompt = "";
-  let activePromptVersion: number | undefined;
-  try {
-    try {
-      const active = await deps.promptRegistry.getActive("agent.system");
-      systemPrompt = active.template;
-      activePromptVersion = active.version;
-    } catch {
-      req.log.warn("agent.system prompt not found in prompt_registry; using minimal fallback");
-      systemPrompt = "You are ChemClaw, an autonomous chemistry knowledge agent.";
-    }
-  } catch (err) {
-    req.log.error({ err }, "failed to load system prompt");
-    systemPrompt = "You are ChemClaw, an autonomous chemistry knowledge agent.";
-  }
-
-  // Prepend active-skill prompts.
-  if (loader && loader.activeIds.size > 0) {
-    systemPrompt = loader.buildSystemPrompt(systemPrompt);
-  }
-
-  // Append plan-mode instructions.
-  if (isPlanMode) {
-    systemPrompt = systemPrompt + PLAN_MODE_SYSTEM_SUFFIX;
-  }
+  // See chat-setup.ts for the assembly contract.
+  const { systemPrompt, activePromptVersion } = await buildSystemPromptForTurn(
+    deps.promptRegistry,
+    loader,
+    isPlanMode,
+    req.log,
+  );
 
   const messages: Message[] = [
     { role: "system", content: systemPrompt },
@@ -172,70 +149,31 @@ async function handleChat(
   ];
 
   // ── Session: load existing or create fresh. ───────────────────────────────
-  // If the client supplied session_id, load the prior scratchpad and clear
-  // any awaiting_question (the new user message IS the answer). If not,
-  // mint a new session — the SSE path emits a `session` event so the client
-  // can resume on the next turn.
-  let sessionId: string | null = body.session_id ?? null;
+  // See chat-setup.ts/resolveSession for the load-or-create contract.
+  // If the client supplied session_id, the prior scratchpad / etag /
+  // budget totals are captured and awaiting_question is cleared (the
+  // new user message IS the answer). If not, a fresh session id is
+  // minted — the SSE path emits a `session` event so the client can
+  // resume on the next turn.
+  const sessionResolution = await resolveSession(
+    deps.pool,
+    user,
+    deps.config,
+    body.session_id,
+    req.log,
+  );
+  const sessionId = sessionResolution.sessionId;
   // Phase 4B: track whether the session existed at the start of this turn
   // so the session_start dispatch can pass source ∈ {"create", "resume"}.
-  let sessionExisted = false;
-  let priorScratchpad: Record<string, unknown> = {};
+  const sessionExisted = sessionResolution.sessionExisted;
+  const priorScratchpad = sessionResolution.priorScratchpad;
   // Phase F + H state captured at turn start.
-  let sessionEtag: string | undefined;
-  let sessionInputUsed = 0;
-  let sessionOutputUsed = 0;
-  let sessionStepsUsed = 0;
-  let sessionInputCap = deps.config.AGENT_SESSION_INPUT_TOKEN_BUDGET;
+  const sessionEtag = sessionResolution.sessionEtag;
+  const sessionInputUsed = sessionResolution.sessionInputUsed;
+  const sessionOutputUsed = sessionResolution.sessionOutputUsed;
+  const sessionStepsUsed = sessionResolution.sessionStepsUsed;
+  const sessionInputCap = sessionResolution.sessionInputCap;
   const sessionOutputCap = deps.config.AGENT_SESSION_OUTPUT_TOKEN_BUDGET;
-  if (sessionId) {
-    try {
-      const loaded = await loadSession(deps.pool, user, sessionId);
-      if (loaded) {
-        sessionExisted = true;
-        priorScratchpad = loaded.scratchpad;
-        sessionEtag = loaded.etag;
-        sessionInputUsed = loaded.sessionInputTokens;
-        sessionOutputUsed = loaded.sessionOutputTokens;
-        sessionStepsUsed = loaded.sessionSteps;
-        if (loaded.sessionTokenBudget != null) {
-          sessionInputCap = loaded.sessionTokenBudget;
-          // Output budget defaults to 1/5 of input cap unless overridden via env.
-          // (Per-session override of the output cap is a follow-up.)
-        }
-        // Clear awaiting_question — the just-arrived message answers it.
-        // Use the loaded etag so we don't race a concurrent saveSession.
-        const saved = await saveSession(deps.pool, user, sessionId, {
-          awaitingQuestion: null,
-          expectedEtag: loaded.etag,
-        });
-        sessionEtag = saved.etag;
-      } else {
-        // Unknown session id: ignore and treat as a fresh session. This is
-        // a legitimate "row doesn't exist or wasn't visible to this user"
-        // case (e.g., session expired, or wrong tenant).
-        sessionId = null;
-      }
-    } catch (err) {
-      // loadSession threw — that's a DB / RLS / connectivity error, not a
-      // missing-row case. Log at error level so misconfiguration is visible
-      // (e.g., chemclaw_app role missing FORCE-RLS bypass would cause every
-      // load to fail and every chat to silently lose continuity). We still
-      // fall through to "fresh session" so the user gets a working response,
-      // but the loud log makes the bug findable.
-      req.log.error({ err, sessionId }, "loadSession threw — DB/RLS error; treating as fresh");
-      sessionId = null;
-    }
-  }
-  if (!sessionId) {
-    try {
-      sessionId = await createSession(deps.pool, user);
-    } catch (err) {
-      // Non-fatal: if session creation fails the agent can still serve the
-      // turn statelessly. Log and proceed.
-      req.log.warn({ err }, "createSession failed; continuing without session");
-    }
-  }
 
   const { scratchpad, seenFactIds } = hydrateScratchpad(
     priorScratchpad,
