@@ -1,0 +1,9 @@
+fastapi>=0.115
+uvicorn[standard]>=0.32
+pydantic>=2.8
+pydantic-settings>=2.4
+rdkit>=2024.9
+litellm>=1.51
+numpy>=1.24
+# colorama is imported by the vendored molecule_set.py for ANSI logging.
+colorama>=0.4

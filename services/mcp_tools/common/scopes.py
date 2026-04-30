@@ -31,4 +31,5 @@ SERVICE_SCOPES: dict[str, str] = {
     "mcp-sirius": "mcp_sirius:invoke",
     "mcp-eln-local": "mcp_eln:read",
     "mcp-logs-sciy": "mcp_instrument:read",
+    "mcp-synthegy-mech": "mcp_synthegy_mech:invoke",
 }
