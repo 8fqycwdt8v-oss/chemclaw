@@ -185,7 +185,7 @@ async function writeFeedback(
     await client.query(
       `INSERT INTO feedback_events (user_entra_id, signal, query_text, trace_id)
        VALUES ($1, $2, $3, $4)`,
-      [userEntraId, signal, reason ?? null, traceId ?? null],
+      [userEntraId, signal, reason, traceId ?? null],
     );
   });
 }
@@ -377,7 +377,7 @@ async function handleChat(
       const loaded = await loadSession(deps.pool, user, sessionId);
       if (loaded) {
         sessionExisted = true;
-        priorScratchpad = loaded.scratchpad ?? {};
+        priorScratchpad = loaded.scratchpad;
         sessionEtag = loaded.etag;
         sessionInputUsed = loaded.sessionInputTokens;
         sessionOutputUsed = loaded.sessionOutputTokens;
@@ -634,8 +634,10 @@ async function handleChat(
   // sink. We do NOT emit it here directly — that would double-fire when
   // runHarness runs.
 
-  let closed = false;
-  const onClose = () => { closed = true; };
+  // Boxed so the value can be mutated by the close-handler closure without
+  // TS narrowing every subsequent read to the literal `false` initializer.
+  const conn: { closed: boolean } = { closed: false };
+  const onClose = () => { conn.closed = true; };
   req.raw.on("close", onClose);
   req.raw.on("aborted", onClose);
 
@@ -677,7 +679,7 @@ async function handleChat(
 
         // Emit plan_step events.
         for (const step of steps) {
-          if (closed) break;
+          if (conn.closed) break;
           writeEvent(reply, {
             type: "plan_step",
             step_number: step.step_number,
@@ -706,7 +708,7 @@ async function handleChat(
           }
         }
 
-        if (!closed) {
+        if (!conn.closed) {
           writeEvent(reply, {
             type: "plan_ready",
             plan_id: plan.plan_id,
@@ -724,7 +726,7 @@ async function handleChat(
         finishReason = "plan_ready";
       } catch (err) {
         req.log.error({ err }, "plan-mode failed");
-        if (!closed) writeEvent(reply, { type: "error", error: "plan_mode_failed" });
+        if (!conn.closed) writeEvent(reply, { type: "error", error: "plan_mode_failed" });
       } finally {
         cleanupSkillForTurn?.();
         try { reply.raw.end(); } catch { /* already closed */ }
@@ -799,7 +801,7 @@ async function handleChat(
     if (err instanceof SessionBudgetExceededError) {
       req.log.warn({ err }, "chat stream stopped: session budget exceeded");
       finishReason = "session_budget_exceeded";
-      if (!closed) {
+      if (!conn.closed) {
         writeEvent(reply, { type: "error", error: "session_budget_exceeded" });
       }
     } else if (err instanceof BudgetExceededError) {
@@ -810,13 +812,13 @@ async function handleChat(
       // generic else below.
       req.log.warn({ err }, "chat stream stopped: per-turn budget exceeded");
       finishReason = "budget_exceeded";
-      if (!closed) {
+      if (!conn.closed) {
         writeEvent(reply, { type: "error", error: "budget_exceeded" });
       }
     } else if (err instanceof OptimisticLockError) {
       req.log.warn({ err }, "chat stream stopped: concurrent modification");
       finishReason = "concurrent_modification";
-      if (!closed) {
+      if (!conn.closed) {
         writeEvent(reply, { type: "error", error: "concurrent_modification" });
       }
     } else if (err instanceof AwaitingUserInputError) {
@@ -833,13 +835,13 @@ async function handleChat(
       // terminal `cancelled` event (best-effort — socket may already be
       // gone, in which case the writeEvent silently no-ops).
       _isAbortLikeError(err) ||
-      req.signal?.aborted
+      req.signal.aborted
     ) {
       finishReason = "cancelled";
       req.log.info({ err: err instanceof Error ? err.message : err }, "chat stream cancelled by client");
     } else {
       req.log.error({ err }, "chat stream failed");
-      if (!closed) {
+      if (!conn.closed) {
         writeEvent(reply, { type: "error", error: "internal" });
       }
     }
@@ -852,11 +854,13 @@ async function handleChat(
     if (_streamRedactions.length > 0) {
       try {
         const existing =
-          (ctx.scratchpad.get("redact_log") as Array<{
-            scope: string;
-            replacements: RedactReplacement[];
-            timestamp: string;
-          }>) ?? [];
+          (ctx.scratchpad.get("redact_log") as
+            | Array<{
+                scope: string;
+                replacements: RedactReplacement[];
+                timestamp: string;
+              }>
+            | undefined) ?? [];
         ctx.scratchpad.set("redact_log", [
           ...existing,
           {
@@ -895,7 +899,7 @@ async function handleChat(
 
         // If the model called ask_user, emit the awaiting_user_input event
         // before the final `finish` so clients render the prompt UI.
-        if (safeAwaitingQuestion && !closed) {
+        if (safeAwaitingQuestion && !conn.closed) {
           try {
             writeEvent(reply, {
               type: "awaiting_user_input",
@@ -934,7 +938,7 @@ async function handleChat(
     // reply.raw.end(). When a peer truly drops there is nothing for the
     // event to land on; the cancellation is recorded in the DB
     // (last_finish_reason='cancelled') for the next session load.
-    if (finishReason === "cancelled" && !closed) {
+    if (finishReason === "cancelled" && !conn.closed) {
       try {
         writeEvent(reply, {
           type: "cancelled",
@@ -945,7 +949,7 @@ async function handleChat(
       }
     }
 
-    if (!closed) {
+    if (!conn.closed) {
       try {
         writeEvent(reply, {
           type: "finish",
