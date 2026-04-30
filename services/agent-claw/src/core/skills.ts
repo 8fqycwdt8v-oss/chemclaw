@@ -50,7 +50,32 @@ const ALWAYS_ON_TOOLS = new Set<string>([
 ]);
 
 // Max simultaneously active skills (context management).
-const MAX_ACTIVE_SKILLS = 8;
+//
+// Default lives here so the loader works without the config_settings table
+// (which wasn't created until Phase 2 of the configuration concept). The
+// effective limit is read at enable() time via getEffectiveMaxActiveSkills,
+// which consults config_settings (key 'agent.max_active_skills') and falls
+// back to this value when no row exists.
+const DEFAULT_MAX_ACTIVE_SKILLS = 8;
+
+/**
+ * Resolve the effective MAX_ACTIVE_SKILLS limit for the current scope.
+ *
+ * Read order: config_settings(key='agent.max_active_skills') → constant
+ * default. The ConfigRegistry singleton may not be initialised in unit
+ * tests, so a missing singleton silently returns the default.
+ */
+async function getEffectiveMaxActiveSkills(): Promise<number> {
+  try {
+    const { getConfigRegistry } = await import("../config/registry.js");
+    const reg = getConfigRegistry();
+    const v = await reg.getNumber("agent.max_active_skills", {}, DEFAULT_MAX_ACTIVE_SKILLS);
+    // Hard upper-bound to prevent absurd values from breaking context budgeting.
+    return Math.max(1, Math.min(50, Math.trunc(v)));
+  } catch {
+    return DEFAULT_MAX_ACTIVE_SKILLS;
+  }
+}
 
 // ---------------------------------------------------------------------------
 // Frontmatter parser — splits "---\n<yaml>\n---\n<body>" documents.
@@ -162,14 +187,42 @@ export class SkillLoader {
     if (!this._skills.has(id)) {
       return { ok: false, reason: `skill '${id}' not found` };
     }
-    if (this._active.size >= MAX_ACTIVE_SKILLS && !this._active.has(id)) {
+    if (this._active.size >= this._activeCap && !this._active.has(id)) {
       return {
         ok: false,
-        reason: `cannot activate more than ${MAX_ACTIVE_SKILLS} skills simultaneously`,
+        reason: `cannot activate more than ${this._activeCap} skills simultaneously`,
       };
     }
     this._active.add(id);
     return { ok: true };
+  }
+
+  /**
+   * In-memory snapshot of the active-skills cap. Updated by
+   * refreshLimits() (called from the apply-skills hook on a TTL) so
+   * config_settings(key='agent.max_active_skills') wins without making
+   * enable() async.
+   */
+  private _activeCap: number = DEFAULT_MAX_ACTIVE_SKILLS;
+  private _capLastRefreshedAt = 0;
+  private static readonly _CAP_TTL_MS = 60_000;
+
+  /**
+   * Refresh limits from config_settings. Cheap, async, idempotent — call
+   * before any enable() that might bump up against the cap. Honours the
+   * 60s TTL to avoid hot-loop DB hits.
+   */
+  async refreshLimits(): Promise<void> {
+    const now = Date.now();
+    if (now - this._capLastRefreshedAt < SkillLoader._CAP_TTL_MS) return;
+    this._capLastRefreshedAt = now;
+    this._activeCap = await getEffectiveMaxActiveSkills();
+  }
+
+  /** Test hook — force the cap snapshot. */
+  setActiveSkillsCapForTesting(cap: number): void {
+    this._activeCap = cap;
+    this._capLastRefreshedAt = Date.now();
   }
 
   /** Disable a skill by ID. Returns false if not found. */

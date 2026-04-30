@@ -1,13 +1,14 @@
-// Phase 1 of the configuration concept.
-//
-// Aggregator for all /api/admin/* routes. Future phases (config_settings,
-// feature_flags, redaction_patterns, permission_policies, etc.) register
-// their endpoints here so the admin surface stays mounted in one place.
+// Aggregator for all /api/admin/* routes.
+// Phase 1: admin_users, admin_audit.
+// Phase 2: admin_config, admin_flags.
+// Future phases (redaction_patterns, permission_policies) register here.
 
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Pool } from "pg";
 import { registerAdminUsersRoutes } from "./admin-users.js";
 import { registerAdminAuditRoute } from "./admin-audit.js";
+import { registerAdminConfigRoutes } from "./admin-config.js";
+import { registerAdminFlagsRoutes } from "./admin-flags.js";
 
 export function registerAdminRoutes(
   app: FastifyInstance,
@@ -16,6 +17,8 @@ export function registerAdminRoutes(
 ): void {
   registerAdminUsersRoutes(app, pool, getUserEntraId);
   registerAdminAuditRoute(app, pool, getUserEntraId);
+  registerAdminConfigRoutes(app, pool, getUserEntraId);
+  registerAdminFlagsRoutes(app, pool, getUserEntraId);
 }
 
 export { isAdmin, requireAdmin, guardAdmin, AdminPermissionError } from "../../middleware/require-admin.js";

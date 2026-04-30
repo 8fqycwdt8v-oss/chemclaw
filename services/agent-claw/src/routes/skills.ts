@@ -64,6 +64,10 @@ export function registerSkillsRoutes(app: FastifyInstance, deps: SkillsRouteDeps
     if (!parsed.success) {
       return await reply.code(400).send({ error: "invalid_input", detail: parsed.error.issues });
     }
+    // Phase 2 of the configuration concept: ensure the activeCap snapshot is
+    // fresh from config_settings(key='agent.max_active_skills') before
+    // checking it. TTL-cached so this is a no-op the second time within 60s.
+    await deps.loader.refreshLimits();
     const result = deps.loader.enable(parsed.data.id);
     if (!result.ok) {
       return await reply.code(400).send({ error: result.reason });

@@ -17,6 +17,8 @@ import { SkillLoader } from "../core/skills.js";
 import { PaperclipClient } from "../core/paperclip-client.js";
 import { ShadowEvaluator } from "../prompts/shadow-evaluator.js";
 import type { Tool } from "../tools/tool.js";
+import { ConfigRegistry, setConfigRegistry } from "../config/registry.js";
+import { FeatureFlagRegistry, setFeatureFlagRegistry } from "../config/flags.js";
 
 // Chemistry / KG (URL-only).
 import { buildCanonicalizeSmilesTool } from "../tools/builtins/canonicalize_smiles.js";
@@ -63,6 +65,8 @@ export interface Deps {
   skillLoader: SkillLoader;
   paperclipClient: PaperclipClient;
   shadowEvaluator: ShadowEvaluator;
+  configRegistry: ConfigRegistry;
+  featureFlags: FeatureFlagRegistry;
 }
 
 export function buildDependencies(cfg: Config): Deps {
@@ -90,7 +94,26 @@ export function buildDependencies(cfg: Config): Deps {
 
   registerBuiltinTools(registry, cfg, pool, promptRegistry, llmProvider);
 
-  return { pool, llmProvider, registry, promptRegistry, skillLoader, paperclipClient, shadowEvaluator };
+  // Phase 2 of the configuration concept — scoped key/value reader and
+  // feature-flag catalog. Both are wired as process-wide singletons so any
+  // call site (route, hook, sub-agent) can fetch via getConfigRegistry() /
+  // isFeatureEnabled() without threading them through Deps.
+  const configRegistry = new ConfigRegistry(pool);
+  setConfigRegistry(configRegistry);
+  const featureFlags = new FeatureFlagRegistry(pool);
+  setFeatureFlagRegistry(featureFlags);
+
+  return {
+    pool,
+    llmProvider,
+    registry,
+    promptRegistry,
+    skillLoader,
+    paperclipClient,
+    shadowEvaluator,
+    configRegistry,
+    featureFlags,
+  };
 }
 
 // Cast through Tool (unknown) to satisfy the registry's covariant Tool<unknown,unknown> map.
