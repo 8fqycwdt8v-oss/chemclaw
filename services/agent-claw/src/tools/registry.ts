@@ -337,9 +337,12 @@ export class ToolRegistry {
   }
 
   private _buildTool(row: ToolRow): Tool | null {
-    let inputSchema: z.ZodTypeAny;
+    let inputSchema: z.ZodType<unknown>;
     try {
-      inputSchema = zodFromJsonSchema(row.schema_json);
+      // zodFromJsonSchema returns ZodTypeAny; widen to ZodType<unknown> at
+      // this boundary so the rest of the registry uses the strict typing
+      // the Tool interface expects.
+      inputSchema = zodFromJsonSchema(row.schema_json) as z.ZodType<unknown>;
     } catch {
       // Malformed schema_json — skip rather than crash.
       return null;
