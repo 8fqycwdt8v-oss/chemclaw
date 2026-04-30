@@ -73,9 +73,7 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
   // can dispatch fine-grained events (task_created, task_completed). Any
   // pre-existing ctx.lifecycle is preserved — this only fills in the gap
   // for callers that constructed ctx without one.
-  if (!ctx.lifecycle) {
-    ctx.lifecycle = lifecycle;
-  }
+  ctx.lifecycle ??= lifecycle;
 
   // AbortSignal propagation: see HarnessOptions.signal. Threaded onto ctx
   // so step.ts can pass it to llm.call / llm.streamCompletion, and into

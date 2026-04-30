@@ -274,10 +274,11 @@ export interface PostToolBatchPayload {
   batch: PostToolBatchEntry[];
 }
 
-// TODO(phase-6-permissions): no dispatch site yet. Phase 6's permission
-// resolver will fire this when a tool needs an interactive permission
-// decision; for now the type exists so downstream hook authors can
-// register against it without a follow-up patch.
+// Phase 6 permissions: see docs/adr/009-permission-and-decision-contract.md
+// and docs/adr/010-deferred-phases.md. The type is declared so downstream
+// hook authors can register against it without a follow-up patch; the
+// resolver in core/permissions/resolver.ts only fires when a route passes
+// a `permissions` option to runHarness, which no production route does today.
 export interface PermissionRequestPayload {
   ctx: ToolContext;
   toolId: string;
@@ -363,7 +364,7 @@ export type HookPoint =
 // dispatch() generics. Lives here (not lifecycle.ts) so callers that build
 // typed HookCallbacks can import it without pulling in the dispatcher.
 // ---------------------------------------------------------------------------
-export type HookPayloadMap = {
+export interface HookPayloadMap {
   pre_turn: PreTurnPayload;
   pre_tool: PreToolPayload;
   post_tool: PostToolPayload;
@@ -381,7 +382,7 @@ export type HookPayloadMap = {
   subagent_stop: SubAgentStopPayload;
   task_created: TaskCreatedPayload;
   task_completed: TaskCompletedPayload;
-};
+}
 
 // ---------------------------------------------------------------------------
 // Citation — typed provenance record surfaced in tool-result events.

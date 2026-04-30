@@ -155,8 +155,8 @@ describe("POST /api/chat — slash short-circuit: /help", () => {
 
     expect(res.headers["content-type"]).toContain("text/event-stream");
     const events = parseSseEvents(res.body);
-    expect(events.some((e) => e["type"] === "text_delta")).toBe(true);
-    expect(events.some((e) => e["type"] === "finish")).toBe(true);
+    expect(events.some((e) => e.type === "text_delta")).toBe(true);
+    expect(events.some((e) => e.type === "finish")).toBe(true);
   });
 });
 
@@ -312,7 +312,7 @@ describe("POST /api/chat — terminal-event guarantee", () => {
 
     const events = parseSseEvents(res.body);
     const hasTerminal = events.some(
-      (e) => e["type"] === "finish" || e["type"] === "error",
+      (e) => e.type === "finish" || e.type === "error",
     );
     expect(hasTerminal).toBe(true);
   });

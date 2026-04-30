@@ -94,6 +94,22 @@ def clear_deny_hosts_env():
         os.environ.pop("MCP_DOC_FETCHER_DENY_HOSTS", None)
 
 
+@pytest.fixture(autouse=True)
+def configure_file_roots_for_tests(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Permit file:// reads from /tmp during tests.
+
+    The doc-fetcher's `file://` backend is fail-closed by default and refuses
+    to read any file unless `MCP_DOC_FETCHER_FILE_ROOTS` is set to a colon-
+    separated allow-list. PR-1 of the cleanup wave (refactor/tooling) makes
+    the test suite self-configure rather than failing loudly when the env
+    var is unset (see audit 05-coverage-baseline.md §7.2 / M15).
+    """
+    monkeypatch.setenv(
+        "MCP_DOC_FETCHER_FILE_ROOTS",
+        f"{tmp_path}:/tmp:/private/tmp:/var/folders",
+    )
+
+
 # ---------------------------------------------------------------------------
 # 1. file:// round-trip
 # ---------------------------------------------------------------------------
@@ -215,6 +231,7 @@ def test_pdf_pages_text_fallback(tmp_pdf_file: Path) -> None:
 
     # Simulate missing pdf2image by temporarily hiding it.
     import builtins as _builtins
+
     real_import = _builtins.__import__
 
     def _block_pdf2image(name: str, *args: Any, **kwargs: Any):
@@ -297,6 +314,7 @@ def test_deny_list_host_blocked() -> None:
     deny_hosts = frozenset(h.strip().lower() for h in raw_deny.split(",") if h.strip())
 
     import urllib.parse
+
     parsed = urllib.parse.urlparse("https://internal.corp.com/file.pdf")
     host = parsed.hostname or ""
     assert host.lower() in deny_hosts, "host should be in deny list"
@@ -371,3 +389,64 @@ def test_byte_offset_nonnegative_validator() -> None:
 
     with pytest.raises(ValidationError, match="non-negative"):
         ByteOffsetToPageIn(uri="file:///tmp/f.pdf", byte_offsets=[-1, 0, 1])
+
+
+# ---------------------------------------------------------------------------
+# Audit P1 — IPv6 SSRF normalisation (regression for `_ip_is_blocked`)
+# ---------------------------------------------------------------------------
+
+
+def test_ip_is_blocked_rejects_ipv4_mapped_ipv6_loopback() -> None:
+    """`::ffff:127.0.0.1` is the IPv6-encoded form of 127.0.0.1. Before the
+    fix this slipped through `_ip_is_blocked` because the IPv6 address itself
+    didn't fall inside any of the blocked IPv4 networks."""
+    from services.mcp_tools.mcp_doc_fetcher.main import _ip_is_blocked
+
+    assert _ip_is_blocked("::ffff:127.0.0.1") is True
+
+
+def test_ip_is_blocked_rejects_ipv4_mapped_metadata() -> None:
+    """Cloud metadata is the highest-impact target — the IPv4-mapped form
+    must also be denied."""
+    from services.mcp_tools.mcp_doc_fetcher.main import _ip_is_blocked
+
+    assert _ip_is_blocked("::ffff:169.254.169.254") is True
+
+
+def test_ip_is_blocked_rejects_ipv4_mapped_rfc1918() -> None:
+    from services.mcp_tools.mcp_doc_fetcher.main import _ip_is_blocked
+
+    assert _ip_is_blocked("::ffff:10.0.0.1") is True
+    assert _ip_is_blocked("::ffff:192.168.1.1") is True
+    assert _ip_is_blocked("::ffff:172.16.5.5") is True
+
+
+def test_ip_is_blocked_rejects_6to4_wrapping_loopback() -> None:
+    """6to4 (2002::/16) carries an IPv4 address in the upper 32 bits.
+    `2002:7f00:0001::` decodes to 127.0.0.1 and must be blocked."""
+    from services.mcp_tools.mcp_doc_fetcher.main import _ip_is_blocked
+
+    assert _ip_is_blocked("2002:7f00:0001::") is True
+
+
+def test_ip_is_blocked_allows_normal_public_ipv6() -> None:
+    """Sanity: legitimate public IPv6 addresses must still be allowed."""
+    from services.mcp_tools.mcp_doc_fetcher.main import _ip_is_blocked
+
+    # Cloudflare DNS over IPv6 — public, not in any blocked range.
+    assert _ip_is_blocked("2606:4700:4700::1111") is False
+
+
+def test_ip_is_blocked_allows_normal_public_ipv4() -> None:
+    from services.mcp_tools.mcp_doc_fetcher.main import _ip_is_blocked
+
+    # Cloudflare 1.1.1.1.
+    assert _ip_is_blocked("1.1.1.1") is False
+
+
+def test_ip_is_blocked_rejects_garbage_input() -> None:
+    """Fail-closed on unparseable input."""
+    from services.mcp_tools.mcp_doc_fetcher.main import _ip_is_blocked
+
+    assert _ip_is_blocked("not-an-ip") is True
+    assert _ip_is_blocked("") is True

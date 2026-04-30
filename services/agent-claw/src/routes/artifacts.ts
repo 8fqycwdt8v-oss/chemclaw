@@ -32,7 +32,7 @@ export function registerArtifactsRoutes(
     async (req, reply) => {
       const paramsResult = ParamsSchema.safeParse(req.params);
       if (!paramsResult.success) {
-        return reply.code(400).send({
+        return await reply.code(400).send({
           error: "invalid_params",
           detail: paramsResult.error.issues,
         });
@@ -40,7 +40,7 @@ export function registerArtifactsRoutes(
 
       const bodyResult = MaturityTierSchema.safeParse(req.body);
       if (!bodyResult.success) {
-        return reply.code(400).send({
+        return await reply.code(400).send({
           error: "invalid_input",
           detail: bodyResult.error.issues,
         });
@@ -68,19 +68,19 @@ export function registerArtifactsRoutes(
         );
 
         if (!updated) {
-          return reply.code(404).send({
+          return await reply.code(404).send({
             error: "not_found",
             detail: "Artifact not found or not owned by the current user.",
           });
         }
 
-        return reply.send({
+        return await reply.send({
           artifact_id: updated.id,
           maturity: updated.maturity,
         });
       } catch (err) {
         req.log.error({ err }, "artifact maturity update failed");
-        return reply.code(500).send({ error: "internal" });
+        return await reply.code(500).send({ error: "internal" });
       }
     },
   );
@@ -91,7 +91,7 @@ export function registerArtifactsRoutes(
     async (req, reply) => {
       const paramsResult = ParamsSchema.safeParse(req.params);
       if (!paramsResult.success) {
-        return reply.code(400).send({
+        return await reply.code(400).send({
           error: "invalid_params",
           detail: paramsResult.error.issues,
         });
@@ -124,13 +124,13 @@ export function registerArtifactsRoutes(
         );
 
         if (!artifact) {
-          return reply.code(404).send({ error: "not_found" });
+          return await reply.code(404).send({ error: "not_found" });
         }
 
-        return reply.send(artifact);
+        return await reply.send(artifact);
       } catch (err) {
         req.log.error({ err }, "artifact fetch failed");
-        return reply.code(500).send({ error: "internal" });
+        return await reply.code(500).send({ error: "internal" });
       }
     },
   );

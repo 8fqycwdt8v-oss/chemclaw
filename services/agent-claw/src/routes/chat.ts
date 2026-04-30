@@ -41,7 +41,6 @@ import {
   shortCircuitResponse,
   HELP_TEXT,
 } from "../core/slash.js";
-import { redactString } from "../core/hooks/redact-secrets.js";
 import type { RedactReplacement } from "../core/hooks/redact-secrets.js";
 import { hydrateScratchpad, persistTurnState } from "../core/session-state.js";
 import { lifecycle } from "../core/runtime.js";
@@ -51,7 +50,6 @@ import {
   saveSession,
   OptimisticLockError,
 } from "../core/session-store.js";
-import type { SessionFinishReason } from "../core/session-store.js";
 import { savePlanForSession } from "../core/plan-store-db.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 import { runWithRequestContext } from "../core/request-context.js";
@@ -187,7 +185,7 @@ async function writeFeedback(
     await client.query(
       `INSERT INTO feedback_events (user_entra_id, signal, query_text, trace_id)
        VALUES ($1, $2, $3, $4)`,
-      [userEntraId, signal, reason || null, traceId || null],
+      [userEntraId, signal, reason ?? null, traceId ?? null],
     );
   });
 }
@@ -351,7 +349,7 @@ async function handleChat(
   const messages: Message[] = [
     { role: "system", content: systemPrompt },
     ...body.messages.map((m) => ({
-      role: m.role as Message["role"],
+      role: m.role,
       content: m.content,
       toolId: m.toolId,
     })),
@@ -373,7 +371,7 @@ async function handleChat(
   let sessionOutputUsed = 0;
   let sessionStepsUsed = 0;
   let sessionInputCap = deps.config.AGENT_SESSION_INPUT_TOKEN_BUDGET;
-  let sessionOutputCap = deps.config.AGENT_SESSION_OUTPUT_TOKEN_BUDGET;
+  const sessionOutputCap = deps.config.AGENT_SESSION_OUTPUT_TOKEN_BUDGET;
   if (sessionId) {
     try {
       const loaded = await loadSession(deps.pool, user, sessionId);

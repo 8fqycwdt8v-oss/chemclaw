@@ -17,7 +17,7 @@ export const QueryElnExperimentsIn = z.object({
     .string()
     .min(1)
     .max(64)
-    .regex(/^[A-Za-z0-9_\-\.]+$/, "project_code must be alphanumeric/.-/_"),
+    .regex(/^[A-Za-z0-9_.-]+$/, "project_code must be alphanumeric/.-/_"),
   schema_kind: z.string().max(64).optional(),
   reaction_id: z.string().max(128).optional(),
   since: z
@@ -40,10 +40,10 @@ export const QueryElnExperimentsOut = z.object({
   items: z.array(ElnEntrySchema),
   next_cursor: z.string().nullable().optional(),
 });
-export type QueryElnExperimentsOutput = {
+export interface QueryElnExperimentsOutput {
   items: ElnEntry[];
   next_cursor?: string | null;
-};
+}
 
 const TIMEOUT_MS = 15_000;
 

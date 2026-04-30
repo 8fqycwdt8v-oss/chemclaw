@@ -37,19 +37,19 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
   app.post("/api/chat/plan/approve", async (req, reply) => {
     const parsed = PlanActionSchema.safeParse(req.body);
     if (!parsed.success) {
-      return reply.code(400).send({ error: "invalid_input", detail: parsed.error.issues });
+      return await reply.code(400).send({ error: "invalid_input", detail: parsed.error.issues });
     }
 
     const plan = planStore.get(parsed.data.plan_id);
     if (!plan) {
-      return reply.code(404).send({ error: "plan_not_found" });
+      return await reply.code(404).send({ error: "plan_not_found" });
     }
 
     // Owner check: a leaked plan_id mustn't let user A run user B's plan.
     const user = deps.getUser(req);
     if (plan.user_entra_id !== user) {
       // 404 (not 403) so we don't leak the existence of plans across users.
-      return reply.code(404).send({ error: "plan_not_found" });
+      return await reply.code(404).send({ error: "plan_not_found" });
     }
 
     // Remove plan from store (consumed).
@@ -64,10 +64,14 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
       null,
       deps.config.AGENT_TOKEN_BUDGET,
     );
+    // Pass `lifecycle` explicitly so tools that fire fine-grained events
+    // (e.g. manage_todos → task_created / task_completed) work even before
+    // the harness's own backfill at harness.ts:57-59 runs.
     const ctx: ToolContext = {
       userEntraId: user,
       seenFactIds,
       scratchpad,
+      lifecycle,
     };
 
     const budget = new Budget({
@@ -122,21 +126,21 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
   app.post("/api/chat/plan/reject", async (req, reply) => {
     const parsed = PlanActionSchema.safeParse(req.body);
     if (!parsed.success) {
-      return reply.code(400).send({ error: "invalid_input", detail: parsed.error.issues });
+      return await reply.code(400).send({ error: "invalid_input", detail: parsed.error.issues });
     }
 
     // Owner check before delete.
     const plan = planStore.get(parsed.data.plan_id);
     if (!plan) {
-      return reply.code(404).send({ error: "plan_not_found" });
+      return await reply.code(404).send({ error: "plan_not_found" });
     }
     const user = deps.getUser(req);
     if (plan.user_entra_id !== user) {
-      return reply.code(404).send({ error: "plan_not_found" });
+      return await reply.code(404).send({ error: "plan_not_found" });
     }
 
     planStore.delete(parsed.data.plan_id);
-    return reply.send({ ok: true, message: "Plan rejected and discarded." });
+    return await reply.send({ ok: true, message: "Plan rejected and discarded." });
   });
 
   // GET /api/chat/plan/:plan_id — retrieve plan details (for testing + UI preview).
@@ -144,14 +148,14 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     const { plan_id } = req.params as { plan_id: string };
     const plan = planStore.get(plan_id);
     if (!plan) {
-      return reply.code(404).send({ error: "plan_not_found" });
+      return await reply.code(404).send({ error: "plan_not_found" });
     }
     // Owner check.
     const user = deps.getUser(req);
     if (plan.user_entra_id !== user) {
-      return reply.code(404).send({ error: "plan_not_found" });
+      return await reply.code(404).send({ error: "plan_not_found" });
     }
-    return reply.send({
+    return await reply.send({
       plan_id: plan.plan_id,
       steps: plan.steps,
       created_at: plan.created_at,

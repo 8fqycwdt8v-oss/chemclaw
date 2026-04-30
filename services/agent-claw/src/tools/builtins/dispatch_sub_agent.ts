@@ -10,7 +10,6 @@ import { defineTool } from "../tool.js";
 import {
   spawnSubAgent,
   type SubAgentDeps,
-  type SubAgentType,
 } from "../../core/sub-agent.js";
 import { lifecycle } from "../../core/runtime.js";
 import type { Tool } from "../tool.js";
@@ -68,7 +67,7 @@ export function buildDispatchSubAgentTool(allTools: Tool[], llm: LlmProvider) {
       const deps: SubAgentDeps = { allTools, llm, lifecycle };
 
       const result = await spawnSubAgent(
-        input.type as SubAgentType,
+        input.type,
         {
           goal: input.goal,
           inputs: input.inputs ?? {},

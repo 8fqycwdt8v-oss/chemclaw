@@ -123,7 +123,7 @@ export function buildExpandReactionContextTool(pool: Pool, mcpKgUrl: string) {
 
       // 1. Core reaction row.
       const rows = await withUserContext(pool, ctx.userEntraId, async (client) => {
-        const q = await client.query(
+        const q = await client.query<Record<string, unknown>>(
           `SELECT r.id::text                AS reaction_id,
                   r.rxn_smiles, r.rxno_class,
                   r.experiment_id::text     AS experiment_id,
@@ -142,20 +142,20 @@ export function buildExpandReactionContextTool(pool: Pool, mcpKgUrl: string) {
         return q.rows;
       });
 
-      if (rows.length === 0) {
+      const row = rows[0];
+      if (!row) {
         throw new Error(`reaction ${input.reaction_id} not found or not accessible`);
       }
-      const row = rows[0];
 
       const out: ExpandReactionContextOutput = {
         reaction: {
-          reaction_id: row.reaction_id,
-          rxn_smiles: row.rxn_smiles,
-          rxno_class: row.rxno_class,
-          experiment_id: row.experiment_id,
-          project_internal_id: row.project_internal_id,
+          reaction_id: row.reaction_id as string,
+          rxn_smiles: row.rxn_smiles as string | null,
+          rxno_class: row.rxno_class as string | null,
+          experiment_id: row.experiment_id as string,
+          project_internal_id: row.project_internal_id as string,
           yield_pct: row.yield_pct != null ? Number(row.yield_pct) : null,
-          outcome_status: row.outcome_status,
+          outcome_status: row.outcome_status as string | null,
         },
         surfaced_fact_ids: [],
       };
@@ -163,7 +163,7 @@ export function buildExpandReactionContextTool(pool: Pool, mcpKgUrl: string) {
       // 2. Reagents.
       if (include.has("reagents")) {
         const reagents = await withUserContext(pool, ctx.userEntraId, async (client) => {
-          const q = await client.query(
+          const q = await client.query<Record<string, unknown>>(
             `SELECT ru.role, ru.smiles, ru.equivalents, ru.source_eln_entry_id
                FROM reagents_used ru
               WHERE ru.reaction_id = $1::uuid`,
@@ -204,12 +204,16 @@ export function buildExpandReactionContextTool(pool: Pool, mcpKgUrl: string) {
             TIMEOUT_KG_MS,
             "mcp-kg",
           );
-          out.outcomes = kgOut.facts.map((f) => ({
-            metric_name: (f.edge_properties?.metric_name as string) ?? "unknown",
-            value: (f.edge_properties?.value as number) ?? null,
-            unit: (f.edge_properties?.unit as string) ?? null,
-            source_fact_id: f.fact_id,
-          }));
+          out.outcomes = kgOut.facts.map((f) => {
+            const props = f.edge_properties as Record<string, unknown>;
+            return {
+              metric_name:
+                typeof props.metric_name === "string" ? props.metric_name : "unknown",
+              value: typeof props.value === "number" ? props.value : null,
+              unit: typeof props.unit === "string" ? props.unit : null,
+              source_fact_id: f.fact_id,
+            };
+          });
           out.surfaced_fact_ids.push(...kgOut.facts.map((f) => f.fact_id));
         } catch {
           out.outcomes = [];
@@ -232,11 +236,16 @@ export function buildExpandReactionContextTool(pool: Pool, mcpKgUrl: string) {
             TIMEOUT_KG_MS,
             "mcp-kg",
           );
-          out.failures = kgOut.facts.map((f) => ({
-            failure_mode: (f.edge_properties?.failure_mode as string) ?? "unspecified",
-            evidence_text: (f.edge_properties?.evidence_text as string) ?? "",
-            source_fact_id: f.fact_id,
-          }));
+          out.failures = kgOut.facts.map((f) => {
+            const props = f.edge_properties as Record<string, unknown>;
+            return {
+              failure_mode:
+                typeof props.failure_mode === "string" ? props.failure_mode : "unspecified",
+              evidence_text:
+                typeof props.evidence_text === "string" ? props.evidence_text : "",
+              source_fact_id: f.fact_id,
+            };
+          });
           out.surfaced_fact_ids.push(...kgOut.facts.map((f) => f.fact_id));
         } catch {
           out.failures = [];
@@ -251,7 +260,7 @@ export function buildExpandReactionContextTool(pool: Pool, mcpKgUrl: string) {
       // 7. Predecessors (hop_limit=2 required).
       if (include.has("predecessors") && input.hop_limit === 2) {
         const preds = await withUserContext(pool, ctx.userEntraId, async (client) => {
-          const q = await client.query(
+          const q = await client.query<Record<string, unknown>>(
             `SELECT r2.id::text AS reaction_id,
                     'prior_step_in_same_synthetic_step' AS relationship
                FROM reactions r1

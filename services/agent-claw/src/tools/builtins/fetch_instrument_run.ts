@@ -13,7 +13,7 @@ export const FetchInstrumentRunIn = z.object({
     .string()
     .min(1)
     .max(128)
-    .regex(/^[A-Za-z0-9_.\-]+$/)
+    .regex(/^[A-Za-z0-9_.-]+$/)
     .describe("LOGS dataset UID."),
 });
 export type FetchInstrumentRunInput = z.infer<typeof FetchInstrumentRunIn>;
@@ -39,7 +39,7 @@ export function buildFetchInstrumentRunTool(mcpLogsSciyUrl: string) {
     annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
-      return postJson(
+      return await postJson(
         `${base}/datasets/fetch`,
         { uid: input.uid },
         FetchInstrumentRunOut,

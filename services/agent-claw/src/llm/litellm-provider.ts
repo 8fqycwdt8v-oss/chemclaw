@@ -28,7 +28,6 @@ import type { LlmCallOptions, LlmProvider, LlmResponse, ModelRole, StreamChunk }
 import type { Message } from "../core/types.js";
 import type { Tool } from "../tools/tool.js";
 import type { ModelMessage, ToolSet } from "ai";
-import { z } from "zod";
 
 // ---------------------------------------------------------------------------
 // Internal helper: translate harness Message[] → AI SDK ModelMessage[].
@@ -53,12 +52,19 @@ function toAiSdkMessages(messages: Message[]): ModelMessage[] {
             type: "tool-result",
             toolCallId: m.toolId ?? "unknown",
             toolName: m.toolId ?? "unknown",
-            output: { type: "json", value: parsed as Parameters<typeof JSON.stringify>[0] },
+            // The AI SDK's tool-result output.value field expects a
+            // JSONValue. The runtime value is `unknown` (parsed from a
+            // tool's content string); a cast through never preserves
+            // the unknown intent without using `any`.
+            output: {
+              type: "json",
+              value: parsed as never,
+            },
           },
         ],
       };
     }
-    return { role: m.role, content: m.content } as ModelMessage;
+    return { role: m.role, content: m.content };
   });
 }
 
@@ -77,7 +83,7 @@ function toAiSdkTools(tools: Tool[]): ToolSet {
   for (const t of tools) {
     result[t.id] = tool({
       description: t.description,
-      inputSchema: t.inputSchema as z.ZodType<unknown>,
+      inputSchema: t.inputSchema,
     });
   }
   return result;
@@ -164,13 +170,20 @@ export class LiteLLMProvider implements LlmProvider {
             kind: "tool_calls",
             calls: result.toolCalls.map((tc) => ({
               toolId: tc.toolName,
-              input: tc.input,
+              // tc.input is typed `any` by the AI SDK (tool inputs are
+              // dynamic per tool). Narrow at the boundary; the harness
+              // re-validates via Zod before the tool fires.
+              input: tc.input as unknown,
             })),
           },
           usage,
         };
       }
-      const first = result.toolCalls[0]!;
+      const first = result.toolCalls[0];
+      if (!first) {
+        // unreachable: we just checked toolCalls.length > 0 above.
+        throw new Error("litellm: empty tool_calls array after non-empty check");
+      }
       // v5 renamed args → input on tool-call parts.
       return {
         result: {
@@ -230,12 +243,14 @@ export class LiteLLMProvider implements LlmProvider {
 
     // Emit tool_call if the model switched to tool use during streaming.
     if (toolCalls && toolCalls.length > 0) {
-      const first = toolCalls[0]!;
-      yield {
-        type: "tool_call",
-        toolId: first.toolName,
-        input: first.input,
-      };
+      const first = toolCalls[0];
+      if (first) {
+        yield {
+          type: "tool_call",
+          toolId: first.toolName,
+          input: first.input,
+        };
+      }
     }
 
     yield {

@@ -165,7 +165,7 @@ describe("integration: /api/chat streaming routes through runHarness", () => {
     });
 
     const events = parseSse(res.body);
-    const types = events.map((e) => e["type"] as string);
+    const types = events.map((e) => e.type as string);
 
     // Required event types are all present.
     expect(types).toContain("session");
@@ -176,20 +176,20 @@ describe("integration: /api/chat streaming routes through runHarness", () => {
 
     // First event is `session` with a non-empty session_id (from runHarness
     // onSession — the route does NOT emit session anymore on the streamed path).
-    expect(events[0]?.["type"]).toBe("session");
-    expect(typeof events[0]?.["session_id"]).toBe("string");
-    expect((events[0]?.["session_id"] as string).length).toBeGreaterThan(0);
+    expect(events[0]?.type).toBe("session");
+    expect(typeof events[0]?.session_id).toBe("string");
+    expect((events[0]?.session_id as string).length).toBeGreaterThan(0);
 
     // tool_call carries the toolId we registered.
-    const toolCallEvt = events.find((e) => e["type"] === "tool_call");
-    expect(toolCallEvt?.["toolId"]).toBe("search_knowledge");
-    const toolResultEvt = events.find((e) => e["type"] === "tool_result");
-    expect(toolResultEvt?.["toolId"]).toBe("search_knowledge");
+    const toolCallEvt = events.find((e) => e.type === "tool_call");
+    expect(toolCallEvt?.toolId).toBe("search_knowledge");
+    const toolResultEvt = events.find((e) => e.type === "tool_result");
+    expect(toolResultEvt?.toolId).toBe("search_knowledge");
 
     // Last event is `finish` with a finishReason field.
     const last = events[events.length - 1];
-    expect(last?.["type"]).toBe("finish");
-    expect(typeof last?.["finishReason"]).toBe("string");
+    expect(last?.type).toBe("finish");
+    expect(typeof last?.finishReason).toBe("string");
 
     // Strict ordering: session < tool_call < tool_result < first text_delta < finish.
     const idx = (t: string) => types.indexOf(t);

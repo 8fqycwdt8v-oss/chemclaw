@@ -132,7 +132,7 @@ async function handleDeepResearch(
   const messages: Message[] = [
     { role: "system", content: systemPrompt },
     ...body.messages.map((m) => ({
-      role: m.role as Message["role"],
+      role: m.role,
       content: m.content,
       toolId: m.toolId,
     })),

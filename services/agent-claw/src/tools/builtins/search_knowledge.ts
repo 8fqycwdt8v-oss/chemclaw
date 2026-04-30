@@ -213,16 +213,18 @@ export function buildSearchKnowledgeTool(pool: Pool, mcpEmbedderUrl: string) {
       const rows = await withUserContext(pool, ctx.userEntraId, async (client) => {
         switch (mode) {
           case "dense": {
-            const dense = await denseSearch(client, embedding!, k, sourceTypes);
-            return dense.map((r) => ({ ...r, score: 1 - Number(r.distance ?? 0) }));
+            if (!embedding) throw new Error("dense search requires an embedding");
+            const dense = await denseSearch(client, embedding, k, sourceTypes);
+            return dense.map((r) => ({ ...r, score: 1 - (r.distance ?? 0) }));
           }
           case "sparse": {
             const sparse = await sparseSearch(client, query, k, sourceTypes);
-            return sparse.map((r) => ({ ...r, score: Number(r.trgm_sim ?? 0) }));
+            return sparse.map((r) => ({ ...r, score: r.trgm_sim ?? 0 }));
           }
           default: {
+            if (!embedding) throw new Error("hybrid search requires an embedding");
             const [dense, sparse] = await Promise.all([
-              denseSearch(client, embedding!, k * 2, sourceTypes),
+              denseSearch(client, embedding, k * 2, sourceTypes),
               sparseSearch(client, query, k * 2, sourceTypes),
             ]);
             return reciprocalRankFusion([dense, sparse], _RRF_K, k);

@@ -43,7 +43,7 @@ export function buildCanonicalizeSmilesTool(mcpRdkitUrl: string) {
     outputSchema: CanonicalizeOut,
     annotations: { readOnly: true },
     execute: async (ctx, input) => {
-      return postJson(
+      return await postJson(
         `${mcpRdkitUrl.replace(/\/$/, "")}/tools/canonicalize_smiles`,
         input,
         CanonicalizeOut,

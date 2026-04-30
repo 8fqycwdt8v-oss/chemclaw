@@ -20,8 +20,12 @@ import type { HookDeps } from "../../src/core/hook-loader.js";
  * vitest's diff renderer (which may stringify the deps when reporting a
  * failure) and accidental thenable detection don't cause spurious throws.
  */
+// T is structural here: the test helper hands callers a typed view onto a
+// shared Proxy. The runtime object is identical for every T; the type
+// parameter exists so callers don't have to cast at every call site.
+// eslint-disable-next-line @typescript-eslint/no-unnecessary-type-parameters -- structural cast helper, see comment above
 function throwingStub<T extends object>(label: string): T {
-  return new Proxy({} as object, {
+  return new Proxy({}, {
     get(_, prop) {
       if (
         prop === Symbol.toPrimitive ||

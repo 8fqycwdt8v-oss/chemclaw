@@ -26,6 +26,7 @@ import io
 import logging
 import zipfile
 from pathlib import Path
+from typing import Any
 
 from defusedxml import ElementTree as DefusedET
 
@@ -89,7 +90,7 @@ def _parse_pdf(path: Path) -> tuple[str, str]:
     return title, markdown
 
 
-def _extract_pdf_title(reader) -> str | None:  # noqa: ANN001 — pypdf private type
+def _extract_pdf_title(reader: Any) -> str | None:  # pypdf no stubs
     try:
         meta = reader.metadata or {}
         title = (meta.get("/Title") or "").strip()

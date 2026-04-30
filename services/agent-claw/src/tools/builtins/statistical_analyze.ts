@@ -100,7 +100,7 @@ async function loadReactionRows(
   userEntraId: string,
   ids: string[],
 ): Promise<ReactionRow[]> {
-  return withUserContext(pool, userEntraId, async (client) => {
+  return await withUserContext(pool, userEntraId, async (client) => {
     const q = await client.query(
       `SELECT r.id::text               AS reaction_id,
               r.rxn_smiles, r.rxno_class,
@@ -153,7 +153,7 @@ export function buildStatisticalAnalyzeTool(pool: Pool, mcpTabiclUrl: string) {
       // ── compare_conditions: pure SQL, no ML ────────────────────────────────
       if (input.question === "compare_conditions") {
         const rows = await withUserContext(pool, ctx.userEntraId, async (client) => {
-          const q = await client.query(
+          const q = await client.query<Record<string, unknown>>(
             `SELECT CONCAT(COALESCE(e.solvent,'?'), '·',
                           width_bucket(COALESCE(e.temperature_c,0), 0, 200, 10)::text) AS bucket_label,
                     COUNT(*)::int AS n,
@@ -250,11 +250,19 @@ export function buildStatisticalAnalyzeTool(pool: Pool, mcpTabiclUrl: string) {
         return StatisticalAnalyzeOut.parse({
           task: "regression",
           support_size: featurized.rows.length,
-          predictions: pred.predictions.map((p, i) => ({
-            query_reaction_id: input.query_reaction_ids![i]!,
-            predicted_yield_pct: p,
-            std: pred.prediction_std[i] ?? 0,
-          })),
+          predictions: pred.predictions.map((p, i) => {
+            const ids = input.query_reaction_ids;
+            if (!ids || ids[i] === undefined) {
+              throw new Error(
+                `statistical_analyze: missing query_reaction_id at index ${i}`,
+              );
+            }
+            return {
+              query_reaction_id: ids[i],
+              predicted_yield_pct: p,
+              std: pred.prediction_std[i] ?? 0,
+            };
+          }),
           caveats,
         });
       }
