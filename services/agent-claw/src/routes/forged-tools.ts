@@ -64,11 +64,11 @@ interface ForgedToolRow {
 // Route registration
 // ---------------------------------------------------------------------------
 
-export async function registerForgedToolsRoutes(
+export function registerForgedToolsRoutes(
   app: FastifyInstance,
   pool: Pool,
   getUserEntraId: (req: FastifyRequest) => string,
-): Promise<void> {
+): void {
 
   // GET /api/forged-tools — list all forged tools visible via RLS.
   app.get("/api/forged-tools", async (req: FastifyRequest, reply: FastifyReply) => {
