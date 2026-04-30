@@ -72,7 +72,7 @@ function combineSignals(
   timeoutMs: number,
 ): { signal: AbortSignal; cleanup: () => void } {
   const ctl = new AbortController();
-  const timer = setTimeout(() => ctl.abort(new Error("mcp request timeout")), timeoutMs);
+  const timer = setTimeout(() => { ctl.abort(new Error("mcp request timeout")); }, timeoutMs);
   let externalListener: (() => void) | undefined;
   if (external) {
     if (external.aborted) {
@@ -95,9 +95,9 @@ function combineSignals(
   };
 }
 
-export async function postJson<TReq, TRes>(
+export async function postJson<TRes>(
   url: string,
-  body: TReq,
+  body: unknown,
   respSchema: z.ZodType<TRes>,
   timeoutMs: number,
   service: string,
