@@ -33,6 +33,17 @@ export async function startServer(
   cfg: Config,
   deps: Deps,
 ): Promise<void> {
+  // Install process-level handlers FIRST, before any awaits. The pre-PR-6
+  // monolithic index.ts registered SIGINT / SIGTERM / unhandledRejection /
+  // uncaughtException at module top level so the entire startup sequence
+  // (registry hydrate, hook load, skills, app.listen) was covered by them.
+  // Splitting startServer out moved the registration after app.listen,
+  // which left a ~5-await window where a SIGTERM from k8s would default-
+  // exit (no app.close / pool.end) and any unhandled rejection during
+  // startup would bypass the structured logger. Hoisted here to restore
+  // the v1.3.0 contract — see the post-session review log for details.
+  registerProcessHandlers(app, deps);
+
   try {
     // 1. Load tools from DB (non-fatal if DB is unavailable during dev startup).
     try {
@@ -85,11 +96,11 @@ export async function startServer(
     await app.listen({ host: cfg.AGENT_HOST, port: cfg.AGENT_PORT });
     app.log.info({ llmProvider: cfg.AGENT_MODEL, port: cfg.AGENT_PORT }, "agent-claw started");
 
-    // 6. Start the mcp_tools health probe loop (non-blocking).
+    // 6. Start the mcp_tools health probe loop (non-blocking). Process-
+    // level handlers were already installed at the top of startServer
+    // so SIGINT / SIGTERM during the probe loop runs through the
+    // structured shutdown path.
     startMcpProbeLoop(app, deps.pool);
-
-    // Signal handlers + last-resort process-level error loggers.
-    registerProcessHandlers(app, deps);
   } catch (err) {
     app.log.error(err);
     process.exit(1);
