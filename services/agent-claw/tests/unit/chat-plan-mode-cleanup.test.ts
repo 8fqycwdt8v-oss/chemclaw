@@ -92,8 +92,11 @@ describe("chat-plan-mode — cleanupSkillForTurn is caller-owned", () => {
       },
     );
 
-    // Helper failed — finishReason stays undefined per the contract.
-    expect(finishReason).toBeUndefined();
+    // Helper failed — finishReason maps to "error" per the review-v2
+    // cycle-1 fix so the outer finally's persistTurnState writes
+    // last_finish_reason='error' and the session_end gate (which
+    // fires on "stop") correctly skips the failed-plan path.
+    expect(finishReason).toBe("error");
     expect(cleanup).not.toHaveBeenCalled();
     expect(fakeReply.raw.end).toHaveBeenCalledTimes(1);
   });
