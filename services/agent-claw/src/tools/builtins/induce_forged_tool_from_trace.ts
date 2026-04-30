@@ -66,8 +66,8 @@ export function makeLangfuseTraceReader(): LangfuseTraceReader {
       const obsName = typeof obs.name === "string" ? obs.name : "";
       if (obs.type === "SPAN" && obsName.startsWith("tool:")) {
         const toolId = obsName.replace(/^tool:/, "");
-        const input = (obs.input as Record<string, unknown>) ?? {};
-        const output = (obs.output as Record<string, unknown>) ?? {};
+        const input = (obs.input as Record<string, unknown> | undefined) ?? {};
+        const output = (obs.output as Record<string, unknown> | undefined) ?? {};
         const timestamp =
           typeof obs.startTime === "string" ? obs.startTime : "";
         toolEvents.push({ tool_id: toolId, input, output, timestamp });
