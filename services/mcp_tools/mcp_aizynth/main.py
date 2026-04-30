@@ -46,9 +46,13 @@ app = create_app(
 # Lazy AiZynthFinder import
 # ---------------------------------------------------------------------------
 
-def _get_finder(config_path: Path):
+def _get_finder(config_path: Path) -> Any:
+    """Return an AiZynthFinder instance. Raises ImportError if not installed.
+
+    Returns Any because aizynthfinder ships no stubs.
+    """
     try:
-        from aizynthfinder.aizynthfinder import AiZynthFinder  # type: ignore[import]  # noqa: PLC0415
+        from aizynthfinder.aizynthfinder import AiZynthFinder  # noqa: PLC0415
     except ImportError as exc:
         raise ImportError(
             "aizynthfinder package not installed; install it inside the Docker image"

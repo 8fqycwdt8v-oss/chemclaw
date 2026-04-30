@@ -162,7 +162,7 @@ describe("LiteLLMProvider", () => {
         | { tools?: Record<string, unknown> }
         | undefined;
       expect(callArgs?.tools).toBeDefined();
-      expect(callArgs?.tools?.["canonicalize_smiles"]).toBeDefined();
+      expect(callArgs?.tools?.canonicalize_smiles).toBeDefined();
     });
   });
 

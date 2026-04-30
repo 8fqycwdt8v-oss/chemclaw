@@ -29,6 +29,24 @@ import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 export { type HarnessOptions, type HarnessResult };
 
 /**
+ * Recognise an AbortError regardless of its concrete constructor.
+ *
+ * The Node fetch built-in, the AI SDK, and our own DOMException("aborted",
+ * "AbortError") all surface aborts via `.name === "AbortError"`. This helper
+ * lets the harness's catch arm detect cancellation without coupling to a
+ * single error class — DOMException vs Error vs SDK-specific subclasses
+ * all share the .name discriminator.
+ */
+function _isAbortError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "name" in err &&
+    (err as { name?: unknown }).name === "AbortError"
+  );
+}
+
+/**
  * Run the autonomous ReAct loop.
  *
  * Mutates `options.messages` in-place by appending assistant + tool messages
@@ -45,6 +63,7 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
     streamSink,
     sessionId,
     permissions,
+    signal,
   } = options;
 
   let finalText = "";
@@ -54,8 +73,16 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
   // can dispatch fine-grained events (task_created, task_completed). Any
   // pre-existing ctx.lifecycle is preserved — this only fills in the gap
   // for callers that constructed ctx without one.
-  if (!ctx.lifecycle) {
-    ctx.lifecycle = lifecycle;
+  ctx.lifecycle ??= lifecycle;
+
+  // AbortSignal propagation: see HarnessOptions.signal. Threaded onto ctx
+  // so step.ts can pass it to llm.call / llm.streamCompletion, and into
+  // ctx for tools that observe ctx.signal. postJson / getJson read it
+  // off the AsyncLocalStorage RequestContext (set by the route's
+  // runWithRequestContext wrapper), so MCP calls cancel transparently
+  // without every tool needing the signal threaded explicitly.
+  if (signal && !ctx.signal) {
+    ctx.signal = signal;
   }
 
   // -------------------------------------------------------------------------
@@ -86,6 +113,13 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
   // -------------------------------------------------------------------------
   try {
     loop: while (true) {
+      // Cancellation check between iterations — caught by the catch arm
+      // below so the route sees a "cancelled" finishReason after post_turn
+      // runs. Done before the step cap check because cancellation is the
+      // higher-priority terminal state.
+      if (ctx.signal?.aborted) {
+        throw ctx.signal.reason ?? new DOMException("aborted", "AbortError");
+      }
       // Step cap check — done BEFORE the LLM call so the cap is exact.
       if (budget.isStepCapReached()) {
         finishReason = "max_steps";
@@ -175,6 +209,17 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
       // post_turn still fires in the finally block below.
       throw err;
     }
+    // AbortError — recognised from the upstream signal firing, the LLM
+    // SDK's AbortError on a cancelled fetch, an MCP postJson abort, or a
+    // tool that propagated its own AbortError. We treat all of these as
+    // "cancelled" so the route's finally block can persist scratchpad and
+    // emit the terminal SSE event. Detection is name-based for cross-runtime
+    // compatibility (DOMException vs Error) and includes the case where
+    // the caller's signal aborted mid-step.
+    if (_isAbortError(err) || ctx.signal?.aborted) {
+      finishReason = "cancelled";
+      throw err;
+    }
     if (err instanceof AwaitingUserInputError) {
       // ask_user is a control-flow exception, not an error: the model
       // legitimately asked for clarification. Set finishReason and return
@@ -246,6 +291,8 @@ export interface AgentDeps {
 export interface AgentCallOptions {
   messages: Message[];
   ctx: ToolContext;
+  /** Forwarded into HarnessOptions.signal for upstream-disconnect propagation. */
+  signal?: AbortSignal;
 }
 
 import { Budget } from "./budget.js";
@@ -269,6 +316,7 @@ export function buildAgent(deps: AgentDeps) {
         budget,
         lifecycle: deps.lifecycle,
         ctx: callOpts.ctx,
+        signal: callOpts.signal,
       });
     },
   };

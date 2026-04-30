@@ -12,13 +12,13 @@ describe("stampMaturity", () => {
   it("stamps maturity: EXPLORATORY on a plain object", () => {
     const obj = { result: "some data" };
     const result = stampMaturity(obj) as Record<string, unknown>;
-    expect(result["maturity"]).toBe("EXPLORATORY");
+    expect(result.maturity).toBe("EXPLORATORY");
   });
 
   it("does not overwrite an existing maturity field", () => {
     const obj = { result: "data", maturity: "FOUNDATION" };
     const result = stampMaturity(obj) as Record<string, unknown>;
-    expect(result["maturity"]).toBe("FOUNDATION");
+    expect(result.maturity).toBe("FOUNDATION");
   });
 
   it("is a no-op for a string (primitive)", () => {
@@ -38,7 +38,7 @@ describe("stampMaturity", () => {
     const result = stampMaturity(arr);
     expect(result).toEqual([1, 2, 3]);
     // Arrays are not stamped.
-    expect((result as Record<string, unknown>)["maturity"]).toBeUndefined();
+    expect((result as Record<string, unknown>).maturity).toBeUndefined();
   });
 });
 
@@ -65,7 +65,7 @@ describe("tagMaturityHook — payload mutation", () => {
   it("stamps object output in-place", async () => {
     const payload = makePayload({ smiles: "CCO", inchikey: "LFQSCWFLJHTTHZ" });
     await tagMaturityHook(payload);
-    expect((payload.output as Record<string, unknown>)["maturity"]).toBe("EXPLORATORY");
+    expect((payload.output as Record<string, unknown>).maturity).toBe("EXPLORATORY");
   });
 
   it("is a no-op for primitive output", async () => {

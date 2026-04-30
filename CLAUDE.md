@@ -129,6 +129,22 @@ Use the helper functions:
 
 **Never bypass RLS by connecting as the DB owner from user-facing code.** If a query returns rows the user shouldn't see, the bug is a missing or wrong `SET LOCAL`, not a missing WHERE clause.
 
+## Confidence model and bi-temporal canonical columns (PR-8)
+
+`17_unified_confidence_and_temporal.sql` adds an additive (no readers broken) layer on top of the existing schema:
+
+| Table | Score column | Tier column | Bi-temporal cols |
+|---|---|---|---|
+| `reactions` | `confidence_score NUMERIC(4,3)` (PR-8, backfilled from tier) | `confidence_tier TEXT` (5-value, original) | `valid_from`, `valid_to`, `invalidated` |
+| `hypotheses` | `confidence NUMERIC(4,3)` (original) | `confidence_tier` GENERATED 3-value (original) | `valid_from`, `valid_to`, `refuted_at` |
+| `artifacts` | `confidence_score NUMERIC(4,3)` (PR-8) | — | `valid_from`, `superseded_at` |
+
+`skill_library` and `forged_tool_tests` now have `maturity TEXT NOT NULL DEFAULT 'EXPLORATORY' CHECK (maturity IN ('EXPLORATORY', 'WORKING', 'FOUNDATION'))`, consistent with the maturity tiers used by `hypotheses`, `artifacts`, and `document_chunks`.
+
+PR-8 also added two indexes (`idx_user_project_access_user_project`, `idx_synthetic_steps_project`) to fix unindexed RLS EXISTS subqueries that were sequential-scanning on every authenticated query, and gave `skill_library` an explicit DELETE policy so users can remove their own skills.
+
+Track which init files have been applied via the `schema_version` table populated by the `make db.init` loop — `SELECT * FROM schema_version ORDER BY filename`.
+
 ## Persistent agent sessions (autonomy upgrade)
 
 ChemClaw's agent has Claude-Code-like autonomy primitives backed by three new tables (`db/init/13_agent_sessions.sql` + `14_agent_session_extensions.sql`):

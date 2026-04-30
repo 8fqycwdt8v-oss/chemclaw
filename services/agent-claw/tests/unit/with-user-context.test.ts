@@ -1,7 +1,7 @@
 // Tests for withUserContext — verifies SET LOCAL is issued and connection
 // is released on both success and throw paths.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import { withUserContext } from "../../src/db/with-user-context.js";
 import { mockPool } from "../helpers/mock-pg.js";
 

@@ -91,36 +91,36 @@ export interface HookDeps {
 
 type BuiltinRegistrar = (lifecycle: Lifecycle, deps: HookDeps) => void;
 
-const BUILTIN_REGISTRARS: Map<string, BuiltinRegistrar> = new Map([
-  ["redact-secrets", (lc) => registerRedactSecretsHook(lc)],
+const BUILTIN_REGISTRARS = new Map<string, BuiltinRegistrar>([
+  ["redact-secrets", (lc) => { registerRedactSecretsHook(lc); }],
   // Pool is needed for the artifact-row INSERT path (ARTIFACT_TOOL_IDS like
   // propose_hypothesis). Without it the hook silently skips persistence.
-  ["tag-maturity", (lc, deps) => registerTagMaturityHook(lc, deps.pool)],
-  ["budget-guard", (lc) => registerBudgetGuardHook(lc)],
-  ["init-scratch", (lc) => registerInitScratchHook(lc)],
-  ["anti-fabrication", (lc) => registerAntiFabricationHook(lc)],
-  ["foundation-citation-guard", (lc) => registerFoundationCitationGuardHook(lc)],
-  ["source-cache", (lc, deps) => registerSourceCacheHook(lc, deps.pool)],
+  ["tag-maturity", (lc, deps) => { registerTagMaturityHook(lc, deps.pool); }],
+  ["budget-guard", (lc) => { registerBudgetGuardHook(lc); }],
+  ["init-scratch", (lc) => { registerInitScratchHook(lc); }],
+  ["anti-fabrication", (lc) => { registerAntiFabricationHook(lc); }],
+  ["foundation-citation-guard", (lc) => { registerFoundationCitationGuardHook(lc); }],
+  ["source-cache", (lc, deps) => { registerSourceCacheHook(lc, deps.pool); }],
   [
     "compact-window",
     (lc, deps) =>
-      registerCompactWindowHook(lc, {
+      { registerCompactWindowHook(lc, {
         llm: deps.llm,
         tokenBudget: deps.tokenBudget,
-      }),
+      }); },
   ],
   [
     "apply-skills",
-    (lc, deps) => registerApplySkillsHook(lc, deps.skillLoader, deps.allTools),
+    (lc, deps) => { registerApplySkillsHook(lc, deps.skillLoader, deps.allTools); },
   ],
   // Phase 4B: no-op session-events hook gives operators a YAML-discoverable
   // attach point for session_start telemetry without forcing a code change.
-  ["session-events", (lc) => registerSessionEventsHook(lc)],
+  ["session-events", (lc) => { registerSessionEventsHook(lc); }],
   // Phase 6: no-op permission hook — operators replace with custom policy.
   // Registers at permission_request; the route-level resolver dispatches
   // before pre_tool, so a custom policy here gates tools BEFORE the
   // budget-guard / foundation-citation-guard pre_tool chain runs.
-  ["permission", (lc) => registerPermissionHook(lc)],
+  ["permission", (lc) => { registerPermissionHook(lc); }],
 ]);
 
 // ---------------------------------------------------------------------------
@@ -207,7 +207,10 @@ export async function loadHooks(
       continue;
     }
 
-    if (hook.enabled === false) {
+    // explicit-false check: undefined or true means "enabled"; only an
+    // explicit `enabled: false` in YAML disables the hook. Don't simplify
+    // to `!hook.enabled` — that would treat undefined as disabled too.
+    if (hook.enabled !== undefined && !hook.enabled) {
       result.skipped.push(`${file}: disabled`);
       continue;
     }
@@ -221,13 +224,12 @@ export async function loadHooks(
         // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment
         const module = await import(scriptPath);
         // Convention: the module must export a default async function.
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        if (typeof module.default !== "function") {
+        const def: unknown = (module as { default?: unknown }).default;
+        if (typeof def !== "function") {
           result.skipped.push(`${file}: script does not export a default function`);
           continue;
         }
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-        lifecycle.on(hookPoint, hook.name, module.default);
+        lifecycle.on(hookPoint, hook.name, def as Parameters<typeof lifecycle.on>[2]);
         result.registered++;
       } catch (err) {
         result.skipped.push(`${file}: script import failed — ${String(err)}`);

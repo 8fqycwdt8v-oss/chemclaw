@@ -13,6 +13,11 @@
 //   session             — emitted once per turn so clients can resume
 //   todo_update         — manage_todos changed the todo list
 //   awaiting_user_input — model asked a question via ask_user
+//   cancelled           — terminal: client disconnected mid-stream and the
+//                         harness loop bailed out cleanly. Best-effort —
+//                         emitted only when the socket is still writable
+//                         after the abort, otherwise the route silently
+//                         persists `finish_reason=cancelled` and ends.
 //   finish              — terminal: stream successfully ended
 //   error               — terminal: stream failed (always pair with finish-equivalent)
 //
@@ -33,6 +38,7 @@ export type StreamEvent =
   | { type: "session"; session_id: string }
   | { type: "todo_update"; todos: Array<{ id: string; ordering: number; content: string; status: string }> }
   | { type: "awaiting_user_input"; session_id: string; question: string }
+  | { type: "cancelled"; session_id?: string }
   | { type: "finish"; finishReason: string; usage: { promptTokens: number; completionTokens: number } }
   | { type: "error"; error: string };
 

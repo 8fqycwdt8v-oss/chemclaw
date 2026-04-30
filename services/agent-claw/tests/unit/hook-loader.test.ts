@@ -13,7 +13,7 @@ import { mockHookDeps } from "../helpers/mocks.js";
 // ---------------------------------------------------------------------------
 
 async function makeTmpDir(): Promise<string> {
-  return mkdtemp(join(tmpdir(), "hook-loader-test-"));
+  return await mkdtemp(join(tmpdir(), "hook-loader-test-"));
 }
 
 async function writeYaml(dir: string, name: string, content: string): Promise<void> {

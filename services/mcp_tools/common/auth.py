@@ -35,6 +35,7 @@ import json
 import logging
 import os
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Annotated, Any
 
@@ -233,7 +234,9 @@ def _require_or_skip() -> bool:
 # ---------------------------------------------------------------------------
 
 
-def make_require_mcp_token(expected_audience: str | None = None):
+def make_require_mcp_token(
+    expected_audience: str | None = None,
+) -> Callable[..., Any]:
     """Build a FastAPI dependency that validates the Authorization header.
 
     `expected_audience` is the calling service's own name; the verifier

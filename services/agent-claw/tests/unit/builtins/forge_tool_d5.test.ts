@@ -133,7 +133,7 @@ describe("forge_tool — parent_tool_id forking", () => {
   });
 
   it("new tool (no parent) has version 1", async () => {
-    const pool = makeMockPool();
+    const _pool = makeMockPool();
     const pool2: Pool = {
       query: vi.fn().mockImplementation((sql: string) => {
         if (sql.includes("EXISTS")) return Promise.resolve({ rows: [{ exists: false }] });
@@ -171,7 +171,7 @@ describe("forge_tool — forged_by_model / forged_by_role passed through", () =>
   it("persists forged_by_model and forged_by_role in the INSERT", async () => {
     const queries: string[] = [];
     const pool: Pool = {
-      query: vi.fn().mockImplementation((sql: string, params?: unknown[]) => {
+      query: vi.fn().mockImplementation((sql: string, _params?: unknown[]) => {
         queries.push(sql);
         if (sql.includes("EXISTS")) return Promise.resolve({ rows: [{ exists: false }] });
         if (sql.includes("INSERT INTO skill_library")) return Promise.resolve({ rows: [{ id: randomUUID() }] });

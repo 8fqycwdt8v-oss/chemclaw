@@ -92,7 +92,8 @@ class KGExperimentsProjector(BaseProjector):
                 # be a proprietary structure and logs are long-lived.
                 return None
             r.raise_for_status()
-            return r.json()["inchikey"]
+            inchikey: str | None = r.json().get("inchikey")
+            return inchikey
         except httpx.HTTPError as exc:
             # Transient upstream failure. Log the error class, not the SMILES.
             log.warning("rdkit call failed: %s", exc.__class__.__name__)

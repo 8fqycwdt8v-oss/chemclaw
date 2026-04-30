@@ -28,7 +28,7 @@ function mockFetchDrfp(drfpBody: unknown) {
   return vi.fn().mockResolvedValue({
     ok: true,
     text: async () => JSON.stringify(drfpBody),
-  } as Response);
+  });
 }
 
 describe("buildFindSimilarReactionsTool", () => {
@@ -64,7 +64,7 @@ describe("buildFindSimilarReactionsTool", () => {
       vi.fn().mockResolvedValue({
         ok: true,
         text: async () => JSON.stringify({ vector: [0, 1, 0], on_bit_count: 1 }),
-      } as Response),
+      }),
     );
 
     const { pool } = mockPool();

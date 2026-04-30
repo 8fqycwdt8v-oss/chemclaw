@@ -129,7 +129,7 @@ export async function createSession(
   pool: Pool,
   userEntraId: string,
 ): Promise<string> {
-  return withUserContext(pool, userEntraId, async (client) => {
+  return await withUserContext(pool, userEntraId, async (client) => {
     const r = await client.query<{ id: string }>(
       `INSERT INTO agent_sessions (user_entra_id)
        VALUES ($1)
@@ -154,7 +154,7 @@ export async function loadSession(
   userEntraId: string,
   sessionId: string,
 ): Promise<SessionState | null> {
-  return withUserContext(pool, userEntraId, async (client) => {
+  return await withUserContext(pool, userEntraId, async (client) => {
     const sessionResult = await client.query<SessionRow>(
       `SELECT id::text AS id,
               user_entra_id,
@@ -239,13 +239,13 @@ export async function saveSession(
     expectedEtag?: string;
   },
 ): Promise<{ etag: string }> {
-  return withUserContext(pool, userEntraId, async (client) => {
+  return await withUserContext(pool, userEntraId, async (client) => {
     // JSON-safe serialization: Sets and Maps don't serialize natively.
-    const safeScratch = patch.scratchpad
+    const safeScratch: unknown = patch.scratchpad
       ? JSON.parse(
-          JSON.stringify(patch.scratchpad, (_k, v) => {
-            if (v instanceof Set) return Array.from(v);
-            if (v instanceof Map) return Object.fromEntries(v);
+          JSON.stringify(patch.scratchpad, (_k, v: unknown) => {
+            if (v instanceof Set) return Array.from(v as Set<unknown>);
+            if (v instanceof Map) return Object.fromEntries(v as Map<string, unknown>);
             return v;
           }),
         )
@@ -326,7 +326,7 @@ export async function createTodos(
   contents: string[],
 ): Promise<Todo[]> {
   if (contents.length === 0) return [];
-  return withUserContext(pool, userEntraId, async (client) => {
+  return await withUserContext(pool, userEntraId, async (client) => {
     const maxR = await client.query<{ max: number | null }>(
       `SELECT COALESCE(MAX(ordering), 0) AS max
          FROM agent_todos WHERE session_id = $1::uuid`,
@@ -357,7 +357,7 @@ export async function updateTodo(
   todoId: string,
   patch: { status?: TodoStatus; content?: string },
 ): Promise<Todo | null> {
-  return withUserContext(pool, userEntraId, async (client) => {
+  return await withUserContext(pool, userEntraId, async (client) => {
     const sets: string[] = [];
     const params: unknown[] = [];
     if (patch.status !== undefined) {
@@ -396,7 +396,7 @@ export async function tryIncrementAutoResumeCount(
   userEntraId: string,
   sessionId: string,
 ): Promise<number | null> {
-  return withUserContext(pool, userEntraId, async (client) => {
+  return await withUserContext(pool, userEntraId, async (client) => {
     const r = await client.query<{ auto_resume_count: number }>(
       `UPDATE agent_sessions
           SET auto_resume_count = auto_resume_count + 1
@@ -416,7 +416,7 @@ export async function listTodos(
   userEntraId: string,
   sessionId: string,
 ): Promise<Todo[]> {
-  return withUserContext(pool, userEntraId, async (client) => {
+  return await withUserContext(pool, userEntraId, async (client) => {
     const r = await client.query<TodoRow>(
       `SELECT id::text AS id, ordering, content, status, created_at, updated_at
          FROM agent_todos

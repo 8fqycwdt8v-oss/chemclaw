@@ -24,7 +24,7 @@ async function requireAdmin(
   pool: Pool,
   user: string,
 ): Promise<boolean> {
-  return withUserContext(pool, user, async (client) => {
+  return await withUserContext(pool, user, async (client) => {
     const r = await client.query<{ has_admin: boolean }>(
       `SELECT EXISTS (
          SELECT 1 FROM user_project_access
@@ -88,7 +88,7 @@ export function registerOptimizerRoutes(
           LIMIT 100`,
       ),
     );
-    return reply.code(200).send({ runs: r.rows });
+    return await reply.code(200).send({ runs: r.rows });
   });
 
   // -----------------------------------------------------------------------
@@ -104,7 +104,7 @@ export function registerOptimizerRoutes(
           LIMIT 200`,
       ),
     );
-    return reply.code(200).send({ events: r.rows });
+    return await reply.code(200).send({ events: r.rows });
   });
 
   // -----------------------------------------------------------------------
@@ -124,7 +124,7 @@ export function registerOptimizerRoutes(
           ORDER BY last_run_at DESC`,
       ),
     );
-    return reply.code(200).send({ shadows: r.rows });
+    return await reply.code(200).send({ shadows: r.rows });
   });
 
   // -----------------------------------------------------------------------
@@ -140,6 +140,6 @@ export function registerOptimizerRoutes(
           LIMIT 30`,
       ),
     );
-    return reply.code(200).send({ scores: r.rows });
+    return await reply.code(200).send({ scores: r.rows });
   });
 }

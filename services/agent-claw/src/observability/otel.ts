@@ -21,7 +21,6 @@ import {
   trace,
   type Tracer,
   type TracerProvider,
-  ProxyTracerProvider,
 } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
 
@@ -48,12 +47,12 @@ export function initTracer(opts?: {
   // Determine endpoint: explicit OTLP env > Langfuse host /v1/traces > none.
   const endpoint =
     opts?.otlpEndpoint ??
-    process.env["OTEL_EXPORTER_OTLP_ENDPOINT"] ??
+    process.env.OTEL_EXPORTER_OTLP_ENDPOINT ??
     (opts?.langfuseHost
       ? `${opts.langfuseHost.replace(/\/$/, "")}/api/public/otel/v1/traces`
       : undefined) ??
-    (process.env["LANGFUSE_HOST"]
-      ? `${process.env["LANGFUSE_HOST"].replace(/\/$/, "")}/api/public/otel/v1/traces`
+    (process.env.LANGFUSE_HOST
+      ? `${process.env.LANGFUSE_HOST.replace(/\/$/, "")}/api/public/otel/v1/traces`
       : undefined);
 
   if (!endpoint) {
@@ -64,10 +63,10 @@ export function initTracer(opts?: {
 
   const headers: Record<string, string> = {};
   // Langfuse uses Basic auth: Authorization: Basic base64(pk:sk)
-  const pk = process.env["LANGFUSE_PUBLIC_KEY"];
-  const sk = process.env["LANGFUSE_SECRET_KEY"];
+  const pk = process.env.LANGFUSE_PUBLIC_KEY;
+  const sk = process.env.LANGFUSE_SECRET_KEY;
   if (pk && sk) {
-    headers["Authorization"] = `Basic ${Buffer.from(`${pk}:${sk}`).toString("base64")}`;
+    headers.Authorization = `Basic ${Buffer.from(`${pk}:${sk}`).toString("base64")}`;
   }
 
   const exporter = new OTLPTraceExporter({
@@ -107,5 +106,5 @@ export function getTracer(): Tracer {
  * Get the current TracerProvider (useful for tests).
  */
 export function getProvider(): TracerProvider {
-  return trace.getTracerProvider() as TracerProvider | ProxyTracerProvider;
+  return trace.getTracerProvider();
 }

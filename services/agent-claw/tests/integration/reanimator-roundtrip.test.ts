@@ -252,10 +252,10 @@ describe.skipIf(!dockerAvailable)(
     // -----------------------------------------------------------------------
     describe("internal resume endpoint", () => {
       let app: FastifyInstance;
-      const previousKey = process.env["MCP_AUTH_SIGNING_KEY"];
+      const previousKey = process.env.MCP_AUTH_SIGNING_KEY;
 
       beforeAll(async () => {
-        process.env["MCP_AUTH_SIGNING_KEY"] = TEST_SIGNING_KEY;
+        process.env.MCP_AUTH_SIGNING_KEY = TEST_SIGNING_KEY;
         app = Fastify({ logger: false });
         const llm = new StubLlmProvider();
         // Each request consumes one queued response. Pre-stage a generous
@@ -279,9 +279,9 @@ describe.skipIf(!dockerAvailable)(
       afterAll(async () => {
         await app.close();
         if (previousKey === undefined) {
-          delete process.env["MCP_AUTH_SIGNING_KEY"];
+          delete process.env.MCP_AUTH_SIGNING_KEY;
         } else {
-          process.env["MCP_AUTH_SIGNING_KEY"] = previousKey;
+          process.env.MCP_AUTH_SIGNING_KEY = previousKey;
         }
       });
 
@@ -346,11 +346,7 @@ describe.skipIf(!dockerAvailable)(
           headers: { authorization: `Bearer ${token}` },
         });
         expect(res.statusCode).toBe(200);
-        const body = res.json() as {
-          session_id: string;
-          final_finish_reason: string;
-          auto_resume_count: number;
-        };
+        const body = res.json();
         expect(body.session_id).toBe(sid);
         expect(body.final_finish_reason).toBe("stop");
         expect(body.auto_resume_count).toBe(1);

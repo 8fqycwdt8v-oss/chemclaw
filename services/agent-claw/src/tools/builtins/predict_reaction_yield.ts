@@ -47,7 +47,7 @@ export function buildPredictReactionYieldTool(mcpChempropUrl: string) {
     annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
-      return postJson(
+      return await postJson(
         `${base}/predict_yield`,
         { rxn_smiles_list: input.rxn_smiles_list },
         PredictReactionYieldOut,

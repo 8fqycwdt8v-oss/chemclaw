@@ -24,7 +24,15 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from typing import Any
+
+# Defense against pathological input: real prompts are <100KB. Anything past
+# this is refused (returned unmodified) to bound the worst-case CPU spent in
+# the regex engine. Even bounded quantifiers do O(n*k) work; with n in the
+# megabytes that gets expensive enough to be a soft DoS vector.
+_MAX_REDACTION_INPUT_LEN = 5 * 1024 * 1024
 
 # SMILES heuristic: any token containing at least 5 bond/atom characters and
 # at least one ring-closure or bond symbol. Tightened with word boundaries to
@@ -39,6 +47,8 @@ _SMILES_TOKEN = re.compile(
 
 # Reaction SMILES: two '>' separators. Bounded lengths prevent a single
 # token from sweeping up unbounded text.
+# Always pre-gated on a cheap O(n) >=2 '>' count before .sub() is called so
+# that prose without any reaction arrows skips the regex engine entirely.
 _RXN_SMILES = re.compile(r"\S{1,400}>\S{0,400}>\S{1,400}")
 
 # Email: each component length-capped to avoid pathological inputs.
@@ -87,9 +97,18 @@ def redact(text: str) -> RedactionResult:
     if not text:
         return RedactionResult(text=text)
 
+    # Bound the worst-case CPU cost. A 5 MB prompt is already 50× larger than
+    # any real chat message; refuse outright rather than burn seconds on it.
+    if len(text) > _MAX_REDACTION_INPUT_LEN:
+        return RedactionResult(text=text)
+
     result = RedactionResult(text=text)
 
-    def _sub(pattern: re.Pattern[str], kind: str, extra_check=None):
+    def _sub(
+        pattern: re.Pattern[str],
+        kind: str,
+        extra_check: Callable[[str], bool] | None = None,
+    ) -> None:
         def replace(match: re.Match[str]) -> str:
             value = match.group(0)
             if extra_check is not None and not extra_check(value):
@@ -102,7 +121,11 @@ def redact(text: str) -> RedactionResult:
         result.text = pattern.sub(replace, result.text)
 
     # Order matters: run reaction SMILES before generic SMILES token.
-    _sub(_RXN_SMILES, "RXN_SMILES", extra_check=lambda v: v.count(">") >= 2)
+    # Pre-gate on a cheap O(n) >=2 arrow count: text without two '>' chars
+    # cannot match RXN_SMILES, so we skip the bounded-quantifier scan that
+    # otherwise costs O(n*400) per call.
+    if text.count(">") >= 2:
+        _sub(_RXN_SMILES, "RXN_SMILES", extra_check=lambda v: v.count(">") >= 2)
     _sub(_SMILES_TOKEN, "SMILES", extra_check=_looks_like_smiles)
     _sub(_EMAIL, "EMAIL")
     _sub(_NCE_PROJECT, "NCE")
@@ -111,7 +134,7 @@ def redact(text: str) -> RedactionResult:
     return result
 
 
-def redact_messages(messages: list[dict]) -> list[dict]:
+def redact_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Apply redact() to every 'content' field in a list of chat messages.
 
     Also scrubs OpenAI-style assistant tool_calls (each tool_call's

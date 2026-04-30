@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import numpy as np
-from sklearn.decomposition import PCA  # type: ignore[import-untyped]
+from sklearn.decomposition import PCA
 
 PCA_N_COMPONENTS: int = 32
 PCA_N_FEATURES: int = 2048
@@ -90,4 +90,6 @@ def transform(X: np.ndarray, fitted: FittedPca) -> np.ndarray:
     if X.ndim != 2 or X.shape[1] != PCA_N_FEATURES:
         raise ValueError(f"X must be 2-D with {PCA_N_FEATURES} columns; got shape {X.shape}")
     centered = X.astype("float64", copy=False) - fitted.mean
-    return centered @ fitted.components.T
+    # numpy stubs return Any from `@` (matmul); narrow back to ndarray.
+    result: np.ndarray = centered @ fitted.components.T
+    return result

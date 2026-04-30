@@ -126,9 +126,9 @@ describe("POST /api/chat — SSE streaming (token-by-token)", () => {
     });
 
     const events = parseSseEvents(res.body);
-    const textDeltas = events.filter((e) => e["type"] === "text_delta");
+    const textDeltas = events.filter((e) => e.type === "text_delta");
     expect(textDeltas.length).toBeGreaterThanOrEqual(2);
-    expect(textDeltas.map((e) => e["delta"]).join("")).toBe("hello world");
+    expect(textDeltas.map((e) => e.delta).join("")).toBe("hello world");
   });
 
   it("always ends with a finish event (terminal guarantee)", async () => {
@@ -145,7 +145,7 @@ describe("POST /api/chat — SSE streaming (token-by-token)", () => {
 
     const events = parseSseEvents(res.body);
     const last = events[events.length - 1];
-    expect(last?.["type"]).toBe("finish");
+    expect(last?.type).toBe("finish");
   });
 
   it("events arrive in order: text_delta events before finish", async () => {
@@ -164,7 +164,7 @@ describe("POST /api/chat — SSE streaming (token-by-token)", () => {
     });
 
     const events = parseSseEvents(res.body);
-    const types = events.map((e) => e["type"]);
+    const types = events.map((e) => e.type);
     const finishIdx = types.lastIndexOf("finish");
     const lastDeltaIdx = types.lastIndexOf("text_delta");
 
@@ -187,8 +187,8 @@ describe("POST /api/chat — SSE streaming (token-by-token)", () => {
     });
 
     const events = parseSseEvents(res.body);
-    expect(events.some((e) => e["type"] === "text_delta")).toBe(true);
-    expect(events.some((e) => e["type"] === "finish")).toBe(true);
+    expect(events.some((e) => e.type === "text_delta")).toBe(true);
+    expect(events.some((e) => e.type === "finish")).toBe(true);
   });
 
   it("emits tool_call + tool_result events when model uses a tool", async () => {
@@ -220,7 +220,7 @@ describe("POST /api/chat — SSE streaming (token-by-token)", () => {
     });
 
     const events = parseSseEvents(res.body);
-    const types = events.map((e) => e["type"]);
+    const types = events.map((e) => e.type);
     expect(types).toContain("tool_call");
     expect(types).toContain("tool_result");
     expect(types).toContain("finish");

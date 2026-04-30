@@ -23,7 +23,7 @@ const DEFAULT_EMPTY: QueryResult = {
   command: "",
   oid: 0,
   fields: [],
-} as unknown as QueryResult;
+};
 
 function isTxControl(sql: unknown): boolean {
   if (typeof sql !== "string") return false;

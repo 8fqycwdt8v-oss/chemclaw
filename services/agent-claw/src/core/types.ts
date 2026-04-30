@@ -38,6 +38,16 @@ export interface ToolContext {
    * a Lifecycle in scope leave it undefined and tools tolerate the absence.
    */
   lifecycle?: Lifecycle;
+  /**
+   * Optional AbortSignal carrying the upstream request's lifetime. Tools
+   * that perform long-running work (LLM calls, tool MCP postJson/getJson,
+   * subprocesses) should observe this so a client disconnect propagates
+   * down. The harness reads `signal` off `HarnessOptions`, sets it here,
+   * and forwards it into the AsyncLocalStorage RequestContext so
+   * postJson / getJson pick it up transparently. May be undefined when
+   * the caller has no upstream signal (background tasks, tests).
+   */
+  signal?: AbortSignal;
 }
 
 // ---------------------------------------------------------------------------
@@ -132,6 +142,16 @@ export interface HarnessOptions {
    * and can short-circuit the call with deny / defer.
    */
   permissions?: PermissionOptions;
+  /**
+   * Optional AbortSignal threaded into ctx + AsyncLocalStorage so that
+   * client disconnects mid-stream propagate to LLM calls, MCP postJson /
+   * getJson, and tool subprocesses. Routes pass `req.raw?.signal` from
+   * Fastify's underlying Node IncomingMessage (Node 18+). On abort, the
+   * harness lets the typed AbortError bubble out so the route's catch
+   * + finally can record the cancellation, persist scratchpad with
+   * finish_reason="cancelled", and emit the terminal SSE event.
+   */
+  signal?: AbortSignal;
 }
 
 // ---------------------------------------------------------------------------
@@ -254,10 +274,11 @@ export interface PostToolBatchPayload {
   batch: PostToolBatchEntry[];
 }
 
-// TODO(phase-6-permissions): no dispatch site yet. Phase 6's permission
-// resolver will fire this when a tool needs an interactive permission
-// decision; for now the type exists so downstream hook authors can
-// register against it without a follow-up patch.
+// Phase 6 permissions: see docs/adr/009-permission-and-decision-contract.md
+// and docs/adr/010-deferred-phases.md. The type is declared so downstream
+// hook authors can register against it without a follow-up patch; the
+// resolver in core/permissions/resolver.ts only fires when a route passes
+// a `permissions` option to runHarness, which no production route does today.
 export interface PermissionRequestPayload {
   ctx: ToolContext;
   toolId: string;
@@ -343,7 +364,7 @@ export type HookPoint =
 // dispatch() generics. Lives here (not lifecycle.ts) so callers that build
 // typed HookCallbacks can import it without pulling in the dispatcher.
 // ---------------------------------------------------------------------------
-export type HookPayloadMap = {
+export interface HookPayloadMap {
   pre_turn: PreTurnPayload;
   pre_tool: PreToolPayload;
   post_tool: PostToolPayload;
@@ -361,7 +382,7 @@ export type HookPayloadMap = {
   subagent_stop: SubAgentStopPayload;
   task_created: TaskCreatedPayload;
   task_completed: TaskCompletedPayload;
-};
+}
 
 // ---------------------------------------------------------------------------
 // Citation — typed provenance record surfaced in tool-result events.

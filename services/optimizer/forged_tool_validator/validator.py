@@ -162,7 +162,11 @@ def _parse_output(stdout: str) -> dict[str, Any] | None:
         try:
             obj = json.loads(line)
             if "__chemclaw_output__" in obj:
-                return obj["__chemclaw_output__"]
+                value = obj["__chemclaw_output__"]
+                if isinstance(value, dict):
+                    return value
+                # Sandbox produced something non-dict-shaped — treat as no output.
+                return None
         except (json.JSONDecodeError, KeyError):
             pass
     return None

@@ -12,6 +12,7 @@ regex. We re-validate here as defense in depth.
 from __future__ import annotations
 
 import re
+from typing import Any
 
 from services.mcp_tools.mcp_kg.models import QueryAtTimeRequest, WriteFactRequest
 
@@ -60,7 +61,7 @@ def bootstrap_cyphers() -> list[str]:
 # ---------------------------------------------------------------------------
 # WRITE FACT (race-safe, single statement)
 # ---------------------------------------------------------------------------
-def build_write_fact_cypher(req: WriteFactRequest) -> tuple[str, dict]:
+def build_write_fact_cypher(req: WriteFactRequest) -> tuple[str, dict[str, Any]]:
     """Build an idempotent, race-safe MERGE that creates the edge only when
     no edge with the same fact_id exists anywhere in the graph.
 
@@ -134,7 +135,7 @@ def build_invalidate_fact_cypher() -> str:
 # ---------------------------------------------------------------------------
 # QUERY AT TIME
 # ---------------------------------------------------------------------------
-def build_query_at_time_cypher(req: QueryAtTimeRequest) -> tuple[str, dict]:
+def build_query_at_time_cypher(req: QueryAtTimeRequest) -> tuple[str, dict[str, Any]]:
     """Return all facts incident to an entity, optionally at a given time."""
     label = _safe_label(req.entity.label)
     id_prop = _safe_id_property(req.entity.id_property)

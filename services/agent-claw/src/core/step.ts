@@ -157,12 +157,13 @@ async function _runOneTool(opts: {
     return { toolId, output: denyOutput };
   }
   // "ask" / "defer" require route-level handling; for now treat as allow.
-  // TODO(phase-6-permissions): wire ask/defer to a route-level prompt.
+  // Phase 6 permissions: see docs/adr/009-permission-and-decision-contract.md
+  // and docs/adr/010-deferred-phases.md.
   if (preResult.decision === "ask" || preResult.decision === "defer") {
     // No logger is in scope at this layer (stepOnce is called from the
     // harness loop, which is reached from many routes / sub-agent flows).
     // Use console.warn so the gap is observable in dev + production.
-    // eslint-disable-next-line no-console
+     
     console.warn(
       `[step] decision=${preResult.decision} treated as allow ` +
         `(Phase 6 will implement the route-level resolver) ` +
@@ -171,8 +172,7 @@ async function _runOneTool(opts: {
   }
 
   // updatedInput from a hook supersedes any in-place mutation.
-  const effectiveInput =
-    preResult.updatedInput !== undefined ? preResult.updatedInput : prePayload.input;
+  const effectiveInput = preResult.updatedInput ?? prePayload.input;
 
   // Validate input.
   const parsedInput = tool.inputSchema.parse(effectiveInput);
@@ -235,7 +235,7 @@ async function _runOneTool(opts: {
     effectiveOutput &&
     typeof effectiveOutput === "object" &&
     "todos" in effectiveOutput &&
-    Array.isArray((effectiveOutput as { todos: unknown }).todos)
+    Array.isArray((effectiveOutput).todos)
   ) {
     streamSink.onTodoUpdate(
       (effectiveOutput as { todos: TodoSnapshot[] }).todos,
@@ -262,9 +262,14 @@ async function _runOneTool(opts: {
  */
 export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
   const { llm, tools, messages, lifecycle, ctx, streamSink, permissions } = opts;
+  // Propagate the upstream AbortSignal (set by runHarness from
+  // HarnessOptions.signal) into every LLM call so a client disconnect
+  // cancels the underlying fetch instead of running the model to
+  // completion. Tool dispatch reads the same signal off ctx.
+  const signal = ctx.signal;
 
   // 1. LLM call.
-  const { result, usage } = await llm.call(messages, tools);
+  const { result, usage } = await llm.call(messages, tools, { signal });
 
   if (result.kind === "text") {
     // Text path with streaming sink — re-run the call as a stream so tokens
@@ -274,7 +279,7 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
     // the more complex stream-first approach.
     if (streamSink) {
       let streamed = "";
-      for await (const chunk of llm.streamCompletion(messages, tools)) {
+      for await (const chunk of llm.streamCompletion(messages, tools, { signal })) {
         if (chunk.type === "text_delta") {
           streamSink.onTextDelta?.(chunk.delta);
           streamed += chunk.delta;
@@ -367,11 +372,19 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
   // size (1 for single-tool turns, N for multi-tool turns).
   await lifecycle.dispatch("post_tool_batch", {
     ctx,
-    batch: toolOutputs.map((o, i) => ({
-      toolId: o.toolId,
-      input: calls[i]!.input,
-      output: o.output,
-    })),
+    batch: toolOutputs.map((o, i) => {
+      const call = calls[i];
+      // Invariant: toolOutputs comes from the same calls[] indexing path,
+      // so calls[i] is always present here.
+      if (!call) {
+        throw new Error(`step: calls[${i}] missing for toolOutput ${o.toolId}`);
+      }
+      return {
+        toolId: o.toolId,
+        input: call.input,
+        output: o.output,
+      };
+    }),
   });
 
   return {

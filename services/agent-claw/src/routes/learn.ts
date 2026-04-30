@@ -45,7 +45,7 @@ export function registerLearnRoute(
   app.post("/api/learn", async (req, reply) => {
     const parsed = LearnRequestSchema.safeParse(req.body);
     if (!parsed.success) {
-      return reply.code(400).send({
+      return await reply.code(400).send({
         error: "invalid_input",
         detail: parsed.error.issues,
       });
@@ -56,7 +56,7 @@ export function registerLearnRoute(
     const name = sanitizeName(title);
 
     if (!name) {
-      return reply.code(400).send({
+      return await reply.code(400).send({
         error: "invalid_title",
         detail: "Title must contain at least one alphanumeric character.",
       });
@@ -78,8 +78,8 @@ export function registerLearnRoute(
       })) as Record<string, unknown>;
 
       promptMd =
-        typeof result["prompt_md"] === "string" && result["prompt_md"].trim().length > 0
-          ? result["prompt_md"].trim()
+        typeof result.prompt_md === "string" && result.prompt_md.trim().length > 0
+          ? result.prompt_md.trim()
           : `# ${title}\n\n${last_turn_text.slice(0, 600)}`;
     } catch {
       // Fallback: use a truncated version of the turn text.
@@ -103,10 +103,10 @@ export function registerLearnRoute(
       });
 
       if (!result) {
-        return reply.code(500).send({ error: "insert_failed" });
+        return await reply.code(500).send({ error: "insert_failed" });
       }
 
-      return reply.send({
+      return await reply.send({
         ok: true,
         skill_id: result.id,
         name: result.name,
@@ -117,7 +117,7 @@ export function registerLearnRoute(
       });
     } catch (err) {
       req.log.error({ err }, "/learn insert failed");
-      return reply.code(500).send({ error: "internal" });
+      return await reply.code(500).send({ error: "internal" });
     }
   });
 }

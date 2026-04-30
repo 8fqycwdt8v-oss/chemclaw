@@ -1,7 +1,7 @@
 // Tests pinning loop semantics for runHarness / buildAgent.
 // All tests use StubLlmProvider for deterministic, zero-network execution.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { runHarness } from "../../src/core/harness.js";
 import { Budget, BudgetExceededError } from "../../src/core/budget.js";
 import { Lifecycle } from "../../src/core/lifecycle.js";
@@ -125,7 +125,7 @@ describe("runHarness — loop semantics", () => {
     const realCall = spyProvider.call.bind(spyProvider);
     spyProvider.call = async (messages, tools) => {
       capturedMessages.push([...messages]);
-      return realCall(messages, tools);
+      return await realCall(messages, tools);
     };
 
     spyProvider

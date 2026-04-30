@@ -51,7 +51,7 @@ app = create_app(
 # subprocess helper
 # ---------------------------------------------------------------------------
 
-def _run_sirius(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
+def _run_sirius(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     """Run sirius CLI with shell=False for security."""
     return subprocess.run(  # noqa: S603
         args,
