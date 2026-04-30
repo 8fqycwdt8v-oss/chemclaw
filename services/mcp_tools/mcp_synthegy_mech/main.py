@@ -160,7 +160,34 @@ class ElucidateMechanismOut(BaseModel):
 
 # Crude but consistent with the paper's documented limitation: ionic chemistry
 # only. We surface a warning when the input looks radical-y or pericyclic.
-_RADICAL_HINT = re.compile(r"\[[A-Za-z]+\.[+-]?\d*\]")  # e.g. [O.] or [C.+]
+# Quantifiers are bounded per CLAUDE.md's "bound every quantifier" rule.
+# Element symbols are 1-3 chars (Uup, Uuh exist); explicit-charge tail is at
+# most 4 digits (no real molecule has more than that). 8 + tail keeps this
+# linear-time even on a 10 000-char input.
+_RADICAL_HINT = re.compile(r"\[[A-Za-z]{1,3}\.[+-]?\d{0,4}\]")  # e.g. [O.] or [C.+]
+
+# Synthegy's canonical prompt template uses these XML tags as structural
+# delimiters. Any user-supplied free-text field is concatenated *into* that
+# template — if a malicious caller types a closing tag mid-string, the LLM
+# can be tricked into reading subsequent text as instructions outside the
+# query block. Strip these tokens (case-insensitive) before concatenation.
+# Worst-case sans this stripper is biased scoring, not RCE (temperature=0.1,
+# no tool-calling on the scored prompt) — but biased scoring on a system
+# meant to act autonomously on pharma-data is its own integrity issue.
+_PROMPT_STRUCTURAL_TAGS = re.compile(
+    r"</?\s*(target_reaction|proposed_mechanism|potential_next_step|"
+    r"mechanism_evaluation|score_justification|score|query|analysis)\s*>",
+    re.IGNORECASE,
+)
+
+
+def _strip_prompt_tags(text: str) -> str:
+    """Remove Synthegy's structural XML tags from user-supplied free text.
+
+    Keeps the rest of the text intact; just neutralizes the delimiters that
+    would otherwise let a caller escape into instruction position. Idempotent.
+    """
+    return _PROMPT_STRUCTURAL_TAGS.sub("", text)
 
 
 def _diagnose_warnings(reactants: str, products: str) -> list[str]:
@@ -178,7 +205,10 @@ def _canonical_smiles(smiles: str) -> str:
     from rdkit import Chem  # noqa: PLC0415
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
-        raise ValueError(f"invalid SMILES: {smiles!r}")
+        # Don't echo the input value into the error — proprietary SMILES
+        # would round-trip through the response body. The request_id in the
+        # server log correlates to the rejected payload for debugging.
+        raise ValueError("invalid SMILES (RDKit parse failed)")
     return Chem.MolToSmiles(mol)
 
 
@@ -204,18 +234,21 @@ async def elucidate_mechanism(
     # Build the prompt for the LLM policy. If the user supplied a guidance
     # prompt, prepend it as a "## Guidance" block before the canonical prompt
     # — the paper documents this materially boosts scoring (Figure 4E).
+    # User-supplied free text is run through `_strip_prompt_tags` first so
+    # that a closing-tag injection can't escape the canonical template's
+    # query/proposed_mechanism/score delimiters.
     prefix = prompt_canonical.prefix
     if req.guidance_prompt:
         prefix = (
             "## Guidance from caller\n\n"
-            + req.guidance_prompt.strip()
+            + _strip_prompt_tags(req.guidance_prompt.strip())
             + "\n\n"
             + prefix
         )
     if req.conditions:
         prefix = (
             "## Reaction conditions\n\n"
-            + req.conditions.strip()
+            + _strip_prompt_tags(req.conditions.strip())
             + "\n\n"
             + prefix
         )

@@ -21,16 +21,28 @@ misbehaving move never crashes the whole search.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 log = logging.getLogger("mcp-synthegy-mech.policy")
 
 # Compile once. Score is the integer between <score>...</score>.
 _SCORE_RE = re.compile(r"<score>\s*(-?\d+(?:\.\d+)?)\s*</score>", re.IGNORECASE)
+
+
+def _smiles_tag(smiles: str) -> str:
+    """Stable, non-reversible identifier for a SMILES, safe to log.
+
+    Proprietary compound structures must not appear in production logs even
+    truncated — 80 chars is enough to identify most NCEs by structure search.
+    A short blake2s digest is sufficient to correlate log lines for the same
+    intermediate without revealing the structure itself.
+    """
+    return hashlib.blake2s(smiles.encode("utf-8"), digest_size=8).hexdigest()
 
 
 @dataclass
@@ -42,7 +54,6 @@ class PolicyStats:
     completion_tokens: int = 0
     parse_failures: int = 0
     upstream_errors: int = 0
-    rationales: list[str] = field(default_factory=list)
 
 
 class LiteLLMScoringPolicy:
@@ -111,7 +122,13 @@ class LiteLLMScoringPolicy:
                 response = await self._acompletion(messages)
             except Exception as exc:  # pragma: no cover — surfaced via stats
                 self.stats.upstream_errors += 1
-                log.warning("LiteLLM call failed for move %r: %s", move[:80], exc)
+                # Log a stable hash, not a SMILES prefix — proprietary
+                # compound structures must not appear in log aggregation.
+                log.warning(
+                    "LiteLLM call failed for move %s: %s",
+                    _smiles_tag(move),
+                    exc,
+                )
                 return 0.0
 
             self.stats.total_calls += 1
@@ -122,13 +139,14 @@ class LiteLLMScoringPolicy:
             score = self._parse_score(content)
             if score is None:
                 self.stats.parse_failures += 1
+                # Log only the move's hash and the parse-failure type. The
+                # raw LLM completion is intentionally not logged: it could
+                # echo redacted tokens or proprietary SMILES from the prompt.
                 log.warning(
-                    "Could not parse <score> from response (move=%r, head=%r)",
-                    move[:80],
-                    content[:120],
+                    "Could not parse <score> from response for move %s",
+                    _smiles_tag(move),
                 )
                 return 0.0
-            self.stats.rationales.append(content)
             return score
 
     async def _acompletion(self, messages: list[dict[str, Any]]) -> Any:

@@ -22,6 +22,7 @@ mechanism elucidation entirely.
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 import os
 import uuid
@@ -32,6 +33,16 @@ import httpx
 from services.mcp_tools.common.auth import McpAuthError, sign_mcp_token
 
 log = logging.getLogger("mcp-synthegy-mech.xtb_validator")
+
+
+def _smiles_tag(smiles: str) -> str:
+    """Stable, non-reversible identifier for a SMILES, safe to log.
+
+    Same convention as llm_policy._smiles_tag — keeps log aggregation free
+    of proprietary structural data while still allowing correlation across
+    log lines for the same intermediate.
+    """
+    return hashlib.blake2s(smiles.encode("utf-8"), digest_size=8).hexdigest()
 
 _DEFAULT_TIMEOUT_S = 60.0  # xtb opt for small molecules takes ~5–30 s.
 _TARGET_SCOPE = "mcp_xtb:invoke"
@@ -95,15 +106,16 @@ class XtbValidator:
         energy_map: dict[str, float] = {}
         warnings: list[str] = []
         for smi, result in zip(unique, results):
+            tag = _smiles_tag(smi)
             if isinstance(result, BaseException):
                 warnings.append(
-                    f"xTB validation failed for intermediate {smi[:40]!r}: "
-                    f"{type(result).__name__}: {str(result)[:120]}"
+                    f"xTB validation failed for intermediate {tag}: "
+                    f"{type(result).__name__}"
                 )
                 continue
             if result is None:
                 warnings.append(
-                    f"xTB returned no energy for intermediate {smi[:40]!r}; "
+                    f"xTB returned no energy for intermediate {tag}; "
                     f"see mcp-xtb logs."
                 )
                 continue
@@ -117,6 +129,7 @@ class XtbValidator:
         headers: dict[str, str],
         smiles: str,
     ) -> float | None:
+        tag = _smiles_tag(smiles)
         async with self._sem:
             try:
                 response = await client.post(
@@ -125,15 +138,14 @@ class XtbValidator:
                     headers=headers,
                 )
             except httpx.HTTPError as exc:
-                log.warning("HTTP error calling mcp-xtb for %r: %s", smiles[:40], exc)
+                log.warning("HTTP error calling mcp-xtb for %s: %s", tag, exc)
                 return None
 
             if response.status_code != 200:
                 log.warning(
-                    "mcp-xtb returned %d for %r: %s",
+                    "mcp-xtb returned %d for %s",
                     response.status_code,
-                    smiles[:40],
-                    response.text[:120],
+                    tag,
                 )
                 return None
 
