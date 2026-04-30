@@ -486,13 +486,22 @@ export async function sourceCachePostToolHook(
  * pool, userEntraId)` into the lifecycle's HookJSONOutput shape.
  */
 export function registerSourceCacheHook(lifecycle: Lifecycle, pool: Pool): void {
-  lifecycle.on("post_tool", "source-cache", async (payload: PostToolPayload) => {
-    await sourceCachePostToolHook(
-      payload.toolId,
-      payload.output,
-      pool,
-      payload.ctx.userEntraId,
-    );
-    return {};
-  });
+  lifecycle.on(
+    "post_tool",
+    "source-cache",
+    async (payload: PostToolPayload, _toolUseID, options) => {
+      // Audit M11: skip the DB write if the per-call AbortSignal already
+      // fired (route disconnect, hook timeout). The fact extraction is
+      // pure-function so even a partial run hasn't caused side effects;
+      // bailing here just avoids burning pool time.
+      if (options.signal.aborted) return {};
+      await sourceCachePostToolHook(
+        payload.toolId,
+        payload.output,
+        pool,
+        payload.ctx.userEntraId,
+      );
+      return {};
+    },
+  );
 }
