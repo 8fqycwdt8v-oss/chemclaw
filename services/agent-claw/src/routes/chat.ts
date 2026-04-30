@@ -23,19 +23,13 @@
 //   - Plan mode: LLM asked to produce JSON plan; plan_step + plan_ready events emitted; no tools execute.
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import {
-  Budget,
-  BudgetExceededError,
-  SessionBudgetExceededError,
-} from "../core/budget.js";
+import { Budget } from "../core/budget.js";
 import { buildAgent, runHarness } from "../core/harness.js";
 import { parseSlash } from "../core/slash.js";
 import type { RedactReplacement } from "../core/hooks/redact-secrets.js";
 import { hydrateScratchpad, persistTurnState } from "../core/session-state.js";
 import { lifecycle } from "../core/runtime.js";
-import { OptimisticLockError } from "../core/session-store.js";
 import { buildSystemPromptForTurn, resolveSession } from "./chat-setup.js";
-import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 import { runWithRequestContext } from "../core/request-context.js";
 import type {
   Message,
@@ -50,7 +44,6 @@ import { USD_PER_TOKEN_ESTIMATE } from "../core/paperclip-client.js";
 import {
   ChatRequestSchema,
   enforceBounds,
-  isAbortLikeError,
   type ChatRouteDeps,
 } from "./chat-helpers.js";
 import { handleSlashShortCircuit } from "./chat-slash.js";
@@ -58,6 +51,7 @@ import { dispatchManualCompact } from "./chat-compact.js";
 import { reserveTurnBudget } from "./chat-paperclip.js";
 import { handleNonStreamingTurn } from "./chat-non-streaming.js";
 import { runPlanModeStreaming } from "./chat-plan-mode.js";
+import { classifyStreamError } from "./chat-streaming-error.js";
 
 // Re-exported so existing imports `import type { StreamEvent } from "./chat.js"`
 // keep compiling — the canonical home is now ../streaming/sse.ts.
@@ -410,55 +404,13 @@ async function handleChat(
     // events. Keep the route handler short — see ADR 008.
     finishReason = result.finishReason;
   } catch (err) {
-    // Distinguish typed control-flow / quota errors so clients can render
-    // appropriate UI. instanceof checks instead of err.name strings —
-    // safer under minification and rename refactors.
-    if (err instanceof SessionBudgetExceededError) {
-      req.log.warn({ err }, "chat stream stopped: session budget exceeded");
-      finishReason = "session_budget_exceeded";
-      if (!conn.closed) {
-        writeEvent(reply, { type: "error", error: "session_budget_exceeded" });
-      }
-    } else if (err instanceof BudgetExceededError) {
-      // Per-turn budget overrun. runHarness sets finishReason="budget_exceeded"
-      // and re-throws so the route can render a typed error event. Before
-      // Phase 2B this branch was unreachable because chat.ts checked the
-      // step cap manually and the prompt-token cap path was caught by the
-      // generic else below.
-      req.log.warn({ err }, "chat stream stopped: per-turn budget exceeded");
-      finishReason = "budget_exceeded";
-      if (!conn.closed) {
-        writeEvent(reply, { type: "error", error: "budget_exceeded" });
-      }
-    } else if (err instanceof OptimisticLockError) {
-      req.log.warn({ err }, "chat stream stopped: concurrent modification");
-      finishReason = "concurrent_modification";
-      if (!conn.closed) {
-        writeEvent(reply, { type: "error", error: "concurrent_modification" });
-      }
-    } else if (err instanceof AwaitingUserInputError) {
-      // runHarness re-throws AwaitingUserInputError after dispatching
-      // post_turn (which persists the awaiting_question to scratchpad).
-      // Treat as a normal awaiting-input exit, NOT an error — the route's
-      // finally block lifts the question from scratchpad and emits the
-      // awaiting_user_input SSE event.
-      finishReason = "awaiting_user_input";
-    } else if (
-      // Client disconnected mid-stream: harness threw an AbortError after
-      // its post_turn ran. Treat as a clean exit so the finally block
-      // persists scratchpad with finish_reason="cancelled" and emits the
-      // terminal `cancelled` event (best-effort — socket may already be
-      // gone, in which case the writeEvent silently no-ops).
-      isAbortLikeError(err) ||
-      req.signal.aborted
-    ) {
-      finishReason = "cancelled";
-      req.log.info({ err: err instanceof Error ? err.message : err }, "chat stream cancelled by client");
-    } else {
-      req.log.error({ err }, "chat stream failed");
-      if (!conn.closed) {
-        writeEvent(reply, { type: "error", error: "internal" });
-      }
+    // Six classified shapes (typed control-flow + quota errors + abort
+    // detection + generic). See routes/chat-streaming-error.ts for the
+    // full classification contract; the helper emits the typed `error`
+    // event and returns the finishReason for our outer-scope `let`.
+    const classified = classifyStreamError(err, conn, reply, req);
+    if (classified.finishReason !== undefined) {
+      finishReason = classified.finishReason;
     }
   } finally {
     // Persist in-flight stream redactions to scratchpad for observability.
