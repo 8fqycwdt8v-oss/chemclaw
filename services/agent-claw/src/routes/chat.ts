@@ -23,11 +23,6 @@
 //   - Plan mode: LLM asked to produce JSON plan; plan_step + plan_ready events emitted; no tools execute.
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
-import { z } from "zod";
-import type { Pool } from "pg";
-import type { Config } from "../config.js";
-import type { LlmProvider } from "../llm/provider.js";
-import type { ToolRegistry } from "../tools/registry.js";
 import {
   Budget,
   BudgetExceededError,
@@ -35,12 +30,7 @@ import {
   estimateTokenCount,
 } from "../core/budget.js";
 import { buildAgent, runHarness } from "../core/harness.js";
-import {
-  parseSlash,
-  parseFeedbackArgs,
-  shortCircuitResponse,
-  HELP_TEXT,
-} from "../core/slash.js";
+import { parseSlash } from "../core/slash.js";
 import type { RedactReplacement } from "../core/hooks/redact-secrets.js";
 import { hydrateScratchpad, persistTurnState } from "../core/session-state.js";
 import { lifecycle } from "../core/runtime.js";
@@ -53,8 +43,6 @@ import {
 import { savePlanForSession } from "../core/plan-store-db.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 import { runWithRequestContext } from "../core/request-context.js";
-import { withUserContext } from "../db/with-user-context.js";
-import { PromptRegistry } from "../prompts/registry.js";
 import type {
   Message,
   PostCompactPayload,
@@ -67,128 +55,30 @@ import {
   parsePlanSteps,
   PLAN_MODE_SYSTEM_SUFFIX,
 } from "../core/plan-mode.js";
-import type { SkillLoader } from "../core/skills.js";
 import { VERB_TO_SKILL } from "../core/skills.js";
 import { writeEvent, setupSse } from "../streaming/sse.js";
 import { makeSseSink } from "../streaming/sse-sink.js";
 import { startRootTurnSpan, recordLlmUsage, recordSpanError } from "../observability/spans.js";
 import { context as otelContext, trace } from "@opentelemetry/api";
 import {
-  PaperclipClient,
   PaperclipBudgetError,
   USD_PER_TOKEN_ESTIMATE,
   type ReservationHandle,
 } from "../core/paperclip-client.js";
-import { ShadowEvaluator } from "../prompts/shadow-evaluator.js";
+import {
+  ChatRequestSchema,
+  enforceBounds,
+  isAbortLikeError,
+  type ChatRouteDeps,
+} from "./chat-helpers.js";
+import { handleSlashShortCircuit } from "./chat-slash.js";
+
 // Re-exported so existing imports `import type { StreamEvent } from "./chat.js"`
 // keep compiling — the canonical home is now ../streaming/sse.ts.
 export type { StreamEvent } from "../streaming/sse.js";
-
-const ChatMessageSchema = z.object({
-  role: z.enum(["user", "assistant", "system", "tool"]),
-  content: z.string(),
-  toolId: z.string().optional(),
-});
-
-const ChatRequestSchema = z.object({
-  messages: z.array(ChatMessageSchema).min(1),
-  stream: z.boolean().optional(),
-  agent_trace_id: z.string().optional(),
-  // Resume an existing session: scratchpad + todos + awaiting_question
-  // are loaded from the agent_sessions row and threaded into ctx. If
-  // omitted, a new session is created and emitted via the `session` SSE event.
-  session_id: z.string().uuid().optional(),
-});
-
-type ChatRequest = z.infer<typeof ChatRequestSchema>;
-
-// ---------------------------------------------------------------------------
-// Dependencies
-// ---------------------------------------------------------------------------
-
-export interface ChatRouteDeps {
-  config: Config;
-  pool: Pool;
-  llm: LlmProvider;
-  registry: ToolRegistry;
-  promptRegistry: PromptRegistry;
-  /** Extract the user's Entra-ID (or dev email) from the request. */
-  getUser: (req: FastifyRequest) => string;
-  /** Skill loader — optional; if absent, skill filtering is skipped. */
-  skillLoader?: SkillLoader;
-  /** Paperclip-lite client. When configured, reserves/releases per-turn
-   * budget against the sidecar; a 429 surfaces as HTTP 429 with Retry-After. */
-  paperclip?: PaperclipClient;
-  /** Shadow evaluator — fires off shadow prompts after the user response. */
-  shadowEvaluator?: ShadowEvaluator;
-}
-
-// ---------------------------------------------------------------------------
-// AbortError detection
-// ---------------------------------------------------------------------------
-
-/**
- * Recognise a thrown AbortError regardless of its concrete constructor.
- * Mirrors core/harness.ts._isAbortError — duplicated to keep this file's
- * import surface narrow (no import from core/harness.ts internals). The
- * AI SDK, Node fetch, and our own DOMException all share the .name
- * discriminator.
- */
-function _isAbortLikeError(err: unknown): boolean {
-  return (
-    typeof err === "object" &&
-    err !== null &&
-    "name" in err &&
-    (err as { name?: unknown }).name === "AbortError"
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Bounds check
-// ---------------------------------------------------------------------------
-
-function enforceBounds(
-  req: ChatRequest,
-  config: Config,
-): { ok: true } | { ok: false; status: number; body: Record<string, unknown> } {
-  if (req.messages.length > config.AGENT_CHAT_MAX_HISTORY) {
-    return {
-      ok: false,
-      status: 413,
-      body: { error: "history_too_long", max: config.AGENT_CHAT_MAX_HISTORY },
-    };
-  }
-  for (const m of req.messages) {
-    if (m.content.length > config.AGENT_CHAT_MAX_INPUT_CHARS) {
-      return {
-        ok: false,
-        status: 413,
-        body: { error: "message_too_long", max: config.AGENT_CHAT_MAX_INPUT_CHARS },
-      };
-    }
-  }
-  return { ok: true };
-}
-
-// ---------------------------------------------------------------------------
-// Feedback writer
-// ---------------------------------------------------------------------------
-
-async function writeFeedback(
-  pool: Pool,
-  userEntraId: string,
-  signal: string,
-  reason: string,
-  traceId: string | undefined,
-): Promise<void> {
-  await withUserContext(pool, userEntraId, async (client) => {
-    await client.query(
-      `INSERT INTO feedback_events (user_entra_id, signal, query_text, trace_id)
-       VALUES ($1, $2, $3, $4)`,
-      [userEntraId, signal, reason, traceId ?? null],
-    );
-  });
-}
+// Re-exported so the bootstrap layer's existing route-deps wiring keeps
+// importing ChatRouteDeps from this module.
+export type { ChatRouteDeps } from "./chat-helpers.js";
 
 // ---------------------------------------------------------------------------
 // Main handler
@@ -223,83 +113,9 @@ async function handleChat(
     ? parseSlash(lastUserMessage.content)
     : { verb: "", args: "", remainingText: "", isStreamable: true };
 
-  // Short-circuit verbs that don't need the LLM.
-  if (!slashResult.isStreamable && slashResult.verb !== "") {
-    const verb = slashResult.verb;
-
-    // Unknown verb.
-    if (!["help", "skills", "feedback", "check", "learn"].includes(verb)) {
-      const errText = `Unknown command /${verb}. Try /help.`;
-      if (!doStream) {
-        return void reply.send({ text: errText });
-      }
-      setupSse(reply);
-      writeEvent(reply, { type: "text_delta", delta: errText });
-      writeEvent(reply, {
-        type: "finish",
-        finishReason: "stop",
-        usage: { promptTokens: 0, completionTokens: 0 },
-      });
-      reply.raw.end();
-      return;
-    }
-
-    // /feedback — needs DB write.
-    if (verb === "feedback") {
-      const fbArgs = parseFeedbackArgs(slashResult.args);
-      if (!fbArgs) {
-        const errText = `Invalid /feedback syntax. Usage: /feedback up|down "reason"`;
-        if (!doStream) return void reply.send({ text: errText });
-        setupSse(reply);
-        writeEvent(reply, { type: "text_delta", delta: errText });
-        writeEvent(reply, {
-          type: "finish",
-          finishReason: "stop",
-          usage: { promptTokens: 0, completionTokens: 0 },
-        });
-        reply.raw.end();
-        return;
-      }
-      try {
-        await writeFeedback(
-          deps.pool,
-          user,
-          fbArgs.signal,
-          fbArgs.reason,
-          body.agent_trace_id,
-        );
-        const text = `Thanks for your feedback (${fbArgs.signal}).`;
-        if (!doStream) return void reply.send({ text });
-        setupSse(reply);
-        writeEvent(reply, { type: "text_delta", delta: text });
-        writeEvent(reply, {
-          type: "finish",
-          finishReason: "stop",
-          usage: { promptTokens: 0, completionTokens: 0 },
-        });
-        reply.raw.end();
-        return;
-      } catch (err) {
-        req.log.error({ err }, "feedback write failed");
-        if (!doStream) return void reply.code(500).send({ error: "internal" });
-        setupSse(reply);
-        writeEvent(reply, { type: "error", error: "feedback_write_failed" });
-        reply.raw.end();
-        return;
-      }
-    }
-
-    // Other short-circuit verbs (/help, /skills, /check, /learn).
-    const text = shortCircuitResponse(verb) ?? HELP_TEXT;
-    if (!doStream) return void reply.send({ text });
-    setupSse(reply);
-    writeEvent(reply, { type: "text_delta", delta: text });
-    writeEvent(reply, {
-      type: "finish",
-      finishReason: "stop",
-      usage: { promptTokens: 0, completionTokens: 0 },
-    });
-    reply.raw.end();
+  // Short-circuit verbs that don't need the LLM (/help, /skills, /feedback,
+  // /check, /learn, unknown). Returns true when handled — see chat-slash.ts.
+  if (await handleSlashShortCircuit(req, reply, deps, body, user, slashResult, doStream)) {
     return;
   }
 
@@ -834,7 +650,7 @@ async function handleChat(
       // persists scratchpad with finish_reason="cancelled" and emits the
       // terminal `cancelled` event (best-effort — socket may already be
       // gone, in which case the writeEvent silently no-ops).
-      _isAbortLikeError(err) ||
+      isAbortLikeError(err) ||
       req.signal.aborted
     ) {
       finishReason = "cancelled";
