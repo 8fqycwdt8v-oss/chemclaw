@@ -160,7 +160,11 @@ export class LiteLLMProvider implements LlmProvider {
           usage,
         };
       }
-      const first = result.toolCalls[0]!;
+      const first = result.toolCalls[0];
+      if (!first) {
+        // unreachable: we just checked toolCalls.length > 0 above.
+        throw new Error("litellm: empty tool_calls array after non-empty check");
+      }
       // v5 renamed args → input on tool-call parts.
       return {
         result: {
@@ -217,12 +221,14 @@ export class LiteLLMProvider implements LlmProvider {
 
     // Emit tool_call if the model switched to tool use during streaming.
     if (toolCalls && toolCalls.length > 0) {
-      const first = toolCalls[0]!;
-      yield {
-        type: "tool_call",
-        toolId: first.toolName,
-        input: first.input,
-      };
+      const first = toolCalls[0];
+      if (first) {
+        yield {
+          type: "tool_call",
+          toolId: first.toolName,
+          input: first.input,
+        };
+      }
     }
 
     yield {

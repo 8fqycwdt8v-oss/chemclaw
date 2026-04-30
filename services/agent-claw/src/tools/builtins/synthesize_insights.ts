@@ -59,7 +59,9 @@ async function boundedMap<T, R>(
       for (;;) {
         const i = idx++;
         if (i >= items.length) return;
-        out[i] = await fn(items[i]!);
+        const item = items[i];
+        if (item === undefined) continue;
+        out[i] = await fn(item);
       }
     },
   );

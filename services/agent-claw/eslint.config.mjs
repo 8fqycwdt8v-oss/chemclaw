@@ -71,7 +71,7 @@ export default tseslint.config(
       '@typescript-eslint/dot-notation': 'warn',
       '@typescript-eslint/consistent-generic-constructors': 'warn',
       '@typescript-eslint/no-dynamic-delete': 'warn',
-      '@typescript-eslint/no-non-null-assertion': 'warn',
+      '@typescript-eslint/no-non-null-assertion': 'error',
       '@typescript-eslint/no-meaningless-void-operator': 'warn',
       '@typescript-eslint/no-duplicate-type-constituents': 'warn',
       '@typescript-eslint/prefer-promise-reject-errors': 'warn',

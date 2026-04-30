@@ -325,7 +325,9 @@ export function buildForgeToolTool(
       }> = [];
 
       for (let i = 0; i < input.test_cases.length; i++) {
-        const tc = input.test_cases[i]!;
+        const tc = input.test_cases[i];
+        // Loop bound guarantees this is defined; satisfy strict null checks.
+        if (!tc) continue;
         const expectedOutputKeys = Object.keys(tc.expected_output);
 
         const handle = await sandboxClient.createSandbox();

@@ -366,11 +366,19 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
   // size (1 for single-tool turns, N for multi-tool turns).
   await lifecycle.dispatch("post_tool_batch", {
     ctx,
-    batch: toolOutputs.map((o, i) => ({
-      toolId: o.toolId,
-      input: calls[i]!.input,
-      output: o.output,
-    })),
+    batch: toolOutputs.map((o, i) => {
+      const call = calls[i];
+      // Invariant: toolOutputs comes from the same calls[] indexing path,
+      // so calls[i] is always present here.
+      if (!call) {
+        throw new Error(`step: calls[${i}] missing for toolOutput ${o.toolId}`);
+      }
+      return {
+        toolId: o.toolId,
+        input: call.input,
+        output: o.output,
+      };
+    }),
   });
 
   return {

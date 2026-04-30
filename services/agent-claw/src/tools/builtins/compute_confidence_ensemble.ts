@@ -85,10 +85,10 @@ export function buildComputeConfidenceEnsembleTool(pool: Pool) {
           "SELECT id::text AS id, payload FROM artifacts WHERE id = $1::uuid",
           [input.artifact_id],
         );
-        if (rows.length === 0) {
+        const row = rows[0];
+        if (!row) {
           throw new Error(`artifact not found: ${input.artifact_id}`);
         }
-        const row = rows[0]!;
 
         // Signal 1: verbalized confidence.
         const verbalized = extractVerbalizedConfidence(row.payload);

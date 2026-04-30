@@ -165,8 +165,8 @@ export function preflightCheck(code: string): { ok: boolean; unknownHelpers: str
   const unknown: string[] = [];
   let match: RegExpExecArray | null;
   while ((match = CHEMCLAW_CALL_RE.exec(code)) !== null) {
-    const name = match[1]!;
-    if (!KNOWN_HELPERS.has(name)) {
+    const name = match[1];
+    if (name && !KNOWN_HELPERS.has(name)) {
       unknown.push(name);
     }
   }

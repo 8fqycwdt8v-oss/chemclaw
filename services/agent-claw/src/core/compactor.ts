@@ -91,8 +91,9 @@ export async function compact(
   if (messages.length === 0) return messages;
 
   // The system prompt (if any) is always at index 0.
-  const hasSystem = messages[0]?.role === "system";
-  const systemMessages = hasSystem ? [messages[0]!] : [];
+  const first = messages[0];
+  const hasSystem = first?.role === "system";
+  const systemMessages = hasSystem && first ? [first] : [];
   const nonSystem = hasSystem ? messages.slice(1) : [...messages];
 
   // If there are not enough messages to compact (all fit within recentKeep),

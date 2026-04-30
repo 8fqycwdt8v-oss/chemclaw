@@ -82,10 +82,12 @@ export class Lifecycle {
     handler: HookCallback<HookPayloadMap[P]>,
     opts: { matcher?: string; timeout?: number } = {},
   ): this {
-    if (!this._hooks.has(point)) {
-      this._hooks.set(point, []);
+    let bucket = this._hooks.get(point);
+    if (!bucket) {
+      bucket = [];
+      this._hooks.set(point, bucket);
     }
-    this._hooks.get(point)!.push({
+    bucket.push({
       name,
       matcher: opts.matcher ? new RegExp(opts.matcher) : undefined,
       handler: handler as HookCallback,

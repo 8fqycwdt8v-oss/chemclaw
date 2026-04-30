@@ -250,11 +250,19 @@ export function buildStatisticalAnalyzeTool(pool: Pool, mcpTabiclUrl: string) {
         return StatisticalAnalyzeOut.parse({
           task: "regression",
           support_size: featurized.rows.length,
-          predictions: pred.predictions.map((p, i) => ({
-            query_reaction_id: input.query_reaction_ids![i]!,
-            predicted_yield_pct: p,
-            std: pred.prediction_std[i] ?? 0,
-          })),
+          predictions: pred.predictions.map((p, i) => {
+            const ids = input.query_reaction_ids;
+            if (!ids || ids[i] === undefined) {
+              throw new Error(
+                `statistical_analyze: missing query_reaction_id at index ${i}`,
+              );
+            }
+            return {
+              query_reaction_id: ids[i],
+              predicted_yield_pct: p,
+              std: pred.prediction_std[i] ?? 0,
+            };
+          }),
           caveats,
         });
       }
