@@ -35,7 +35,7 @@ export class SlidingWindowCounter {
 
     if (fresh.length >= this._maxRequests) {
       // Oldest timestamp in window determines when a slot opens.
-      const oldest = fresh[0]!;
+      const oldest = fresh[0];
       const retryAfterMs = oldest + this._windowMs - now;
       return { allowed: false, retryAfterMs: Math.max(0, retryAfterMs) };
     }

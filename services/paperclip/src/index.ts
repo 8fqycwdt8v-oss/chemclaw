@@ -15,7 +15,7 @@ import Fastify from "fastify";
 import { z } from "zod";
 import { randomUUID } from "crypto";
 import { Pool } from "pg";
-import { BudgetManager, DEFAULT_BUDGET_CONFIG } from "./budget.js";
+import { BudgetManager } from "./budget.js";
 import { HeartbeatTracker } from "./heartbeat.js";
 import { MetricsCollector } from "./metrics.js";
 import { PaperclipState } from "./persistence.js";
@@ -24,13 +24,13 @@ import { PaperclipState } from "./persistence.js";
 // Config from env
 // ---------------------------------------------------------------------------
 
-const PORT = Number(process.env["PAPERCLIP_PORT"] ?? 3200);
-const HOST = process.env["PAPERCLIP_HOST"] ?? "0.0.0.0";
-const MAX_CONCURRENT = Number(process.env["PAPERCLIP_MAX_CONCURRENT"] ?? 4);
-const MAX_TOKENS_PER_TURN = Number(process.env["PAPERCLIP_MAX_TOKENS"] ?? 80_000);
-const MAX_USD_PER_DAY = Number(process.env["PAPERCLIP_MAX_USD_PER_DAY"] ?? 25.0);
-const STALE_RESERVATION_MS = Number(process.env["PAPERCLIP_STALE_MS"] ?? 5 * 60_000);
-const HEARTBEAT_TTL_MS = Number(process.env["PAPERCLIP_HEARTBEAT_TTL_MS"] ?? 90_000);
+const PORT = Number(process.env.PAPERCLIP_PORT ?? 3200);
+const HOST = process.env.PAPERCLIP_HOST ?? "0.0.0.0";
+const MAX_CONCURRENT = Number(process.env.PAPERCLIP_MAX_CONCURRENT ?? 4);
+const MAX_TOKENS_PER_TURN = Number(process.env.PAPERCLIP_MAX_TOKENS ?? 80_000);
+const MAX_USD_PER_DAY = Number(process.env.PAPERCLIP_MAX_USD_PER_DAY ?? 25.0);
+const STALE_RESERVATION_MS = Number(process.env.PAPERCLIP_STALE_MS ?? 5 * 60_000);
+const HEARTBEAT_TTL_MS = Number(process.env.PAPERCLIP_HEARTBEAT_TTL_MS ?? 90_000);
 
 // ---------------------------------------------------------------------------
 // Singletons
@@ -54,7 +54,7 @@ const metrics = new MetricsCollector();
 // unset (single-instance dev / tests), the persistence object is null and
 // the sidecar matches its pre-Phase-G behaviour exactly.
 
-const PG_DSN = process.env["PAPERCLIP_PG_DSN"];
+const PG_DSN = process.env.PAPERCLIP_PG_DSN;
 const persistence: PaperclipState | null = PG_DSN
   ? new PaperclipState(new Pool({ connectionString: PG_DSN }))
   : null;
@@ -90,19 +90,19 @@ export function buildApp() {
 
   // ── GET /healthz ──────────────────────────────────────────────────────────
   app.get("/healthz", async (_req, reply) => {
-    return reply.code(200).send({ status: "ok" });
+    return await reply.code(200).send({ status: "ok" });
   });
 
   // Alias: GET /heartbeat/health (used as compose healthcheck target)
   app.get("/heartbeat/health", async (_req, reply) => {
-    return reply.code(200).send({ status: "ok" });
+    return await reply.code(200).send({ status: "ok" });
   });
 
   // ── POST /reserve ─────────────────────────────────────────────────────────
   app.post("/reserve", async (req, reply) => {
     const parsed = ReserveSchema.safeParse(req.body);
     if (!parsed.success) {
-      return reply.code(400).send({ error: "invalid_input", detail: parsed.error.issues });
+      return await reply.code(400).send({ error: "invalid_input", detail: parsed.error.issues });
     }
     const { user_entra_id, session_id, est_tokens, est_usd } = parsed.data;
 
@@ -112,7 +112,7 @@ export function buildApp() {
       const retryAfter = check.retryAfterMs !== undefined
         ? Math.ceil(check.retryAfterMs / 1000)
         : 30;
-      return reply
+      return await reply
         .code(429)
         .header("Retry-After", String(retryAfter))
         .send({ error: "budget_exceeded", reason: check.reason, retry_after_seconds: retryAfter });
@@ -142,20 +142,20 @@ export function buildApp() {
       });
     }
 
-    return reply.code(200).send({ reservation_id: reservationId });
+    return await reply.code(200).send({ reservation_id: reservationId });
   });
 
   // ── POST /release ─────────────────────────────────────────────────────────
   app.post("/release", async (req, reply) => {
     const parsed = ReleaseSchema.safeParse(req.body);
     if (!parsed.success) {
-      return reply.code(400).send({ error: "invalid_input", detail: parsed.error.issues });
+      return await reply.code(400).send({ error: "invalid_input", detail: parsed.error.issues });
     }
     const { reservation_id, actual_tokens: _tokens, actual_usd } = parsed.data;
 
     const found = budgetMgr.release(reservation_id, actual_usd ?? 0);
     if (!found) {
-      return reply.code(404).send({ error: "reservation_not_found" });
+      return await reply.code(404).send({ error: "reservation_not_found" });
     }
 
     // Record turn duration (not tracked individually — just accumulate ms).
@@ -171,26 +171,26 @@ export function buildApp() {
       );
     }
 
-    return reply.code(200).send({ status: "released" });
+    return await reply.code(200).send({ status: "released" });
   });
 
   // ── POST /heartbeat ───────────────────────────────────────────────────────
   app.post("/heartbeat", async (req, reply) => {
     const parsed = HeartbeatPostSchema.safeParse(req.body);
     if (!parsed.success) {
-      return reply.code(400).send({ error: "invalid_input", detail: parsed.error.issues });
+      return await reply.code(400).send({ error: "invalid_input", detail: parsed.error.issues });
     }
     heartbeat.touch(parsed.data.session_id, parsed.data.user_entra_id);
-    return reply.code(200).send({ status: "ok" });
+    return await reply.code(200).send({ status: "ok" });
   });
 
   // ── GET /heartbeat/:session_id ────────────────────────────────────────────
   app.get<{ Params: { session_id: string } }>("/heartbeat/:session_id", async (req, reply) => {
     const { session_id } = req.params;
     if (heartbeat.isAlive(session_id)) {
-      return reply.code(200).send({ status: "alive" });
+      return await reply.code(200).send({ status: "alive" });
     }
-    return reply.code(410).send({ status: "gone" });
+    return await reply.code(410).send({ status: "gone" });
   });
 
   // ── GET /metrics ──────────────────────────────────────────────────────────
@@ -235,7 +235,7 @@ function startCleanupLoop(intervalMs = 60_000): void {
 // design than a distributed lock and is sufficient for the small-team
 // pharma deployment profile (4 users typical, daily cap measured in $).
 
-const REFRESH_INTERVAL_MS = Number(process.env["PAPERCLIP_REFRESH_INTERVAL_MS"] ?? 60_000);
+const REFRESH_INTERVAL_MS = Number(process.env.PAPERCLIP_REFRESH_INTERVAL_MS ?? 60_000);
 
 function startLedgerRefreshLoop(p: PaperclipState, log: { info: (...a: unknown[]) => void; warn: (...a: unknown[]) => void }): void {
   const run = async () => {
@@ -255,7 +255,7 @@ function startLedgerRefreshLoop(p: PaperclipState, log: { info: (...a: unknown[]
 // Startup (skipped in test imports)
 // ---------------------------------------------------------------------------
 
-if (process.env["PAPERCLIP_SKIP_START"] !== "true") {
+if (process.env.PAPERCLIP_SKIP_START !== "true") {
   const app = buildApp();
 
   // Rehydrate the daily-USD ledger from paperclip_state BEFORE opening
@@ -283,7 +283,7 @@ if (process.env["PAPERCLIP_SKIP_START"] !== "true") {
   })();
 
   // Surface unhandled rejections from the IIFE so Node doesn't silently swallow.
-  startup.catch((err) => {
+  startup.catch((err: unknown) => {
     app.log.error(err);
     process.exit(1);
   });
