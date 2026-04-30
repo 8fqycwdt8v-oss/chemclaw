@@ -6,19 +6,22 @@
 // v8's first-class flat-config exports.
 //
 // Status (post PR-1 paydown campaign):
-//   - 40 rules from the strict-type-checked preset are now flipped to
-//     `error` and locked in via CI. New violations on those rules fail
-//     the build.
-//   - 8 rules remain on `warn` — all high-volume rules that need
-//     genuine per-site code work to pay down:
-//       * no-explicit-any            (top-level any reduction)
-//       * no-unsafe-assignment       (~26 sites; mostly pg row types)
-//       * no-unsafe-member-access    (~28 sites; mostly pg row types)
-//       * no-unsafe-return           (~10 sites; pg row types)
-//       * restrict-template-expressions (~98 sites; needs typed locals)
-//       * no-unnecessary-condition   (~65 sites; needs guard rewrites)
-//       * require-await              (~15 intentional async-contract conformance)
-//       * no-useless-escape          (~16 cosmetic, inside char classes)
+//   - 45 rules from the strict-type-checked preset are flipped to
+//     `error` and locked in via CI. The complete `no-unsafe-*` family
+//     plus the capstone `no-explicit-any` are strictly enforced —
+//     every implicit `any` that flows through agent-claw now fails CI.
+//   - 4 rules remain on `warn` — each is genuine high-volume per-site
+//     code work that warrants its own focused PR rather than the
+//     rolling-paydown approach used for the other 45:
+//       * restrict-template-expressions (~98 sites; needs typed locals
+//         around every `\${val}` interpolation of non-string values)
+//       * no-unnecessary-condition      (~65 sites; needs guard
+//         rewrites where TS proves the check is always true/false)
+//       * require-await                 (~15 sites; intentional
+//         async-contract conformance for hooks/tools/provider methods
+//         that don't happen to await but must return Promises)
+//       * no-useless-escape             (~16 cosmetic; regex escapes
+//         inside character classes that are legal-but-redundant)
 //   - Tests get extra latitude via the test-file override block below.
 
 import tseslint from 'typescript-eslint';
