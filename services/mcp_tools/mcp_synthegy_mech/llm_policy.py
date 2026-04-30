@@ -117,10 +117,20 @@ class LiteLLMScoringPolicy:
 
     async def _score_one(self, rxn: str, history: list[str], move: str) -> float:
         async with self._sem:
-            messages = self._build_messages(rxn, history, move)
             try:
+                # Cycle-2 fix H-3: keep _build_messages INSIDE the try.
+                # A bad `{step}` placeholder in self.suffix would otherwise
+                # raise KeyError out of _score_one and bubble through
+                # asyncio.gather (return_exceptions=False) → 500 to caller
+                # with no partial path.
+                messages = self._build_messages(rxn, history, move)
                 response = await self._acompletion(messages)
-            except Exception as exc:  # pragma: no cover — surfaced via stats
+            except asyncio.CancelledError:
+                # NEVER swallow CancelledError — it's the asyncio cooperative
+                # cancellation signal. Letting it propagate makes the search
+                # responsive to caller cancellation (request abort, timeout).
+                raise
+            except Exception as exc:
                 self.stats.upstream_errors += 1
                 # Log a stable hash, not a SMILES prefix — proprietary
                 # compound structures must not appear in log aggregation.

@@ -26,6 +26,7 @@ Limitations (from the paper):
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -226,8 +227,11 @@ async def elucidate_mechanism(
     req: Annotated[ElucidateMechanismIn, Body(...)],
 ) -> ElucidateMechanismOut:
     # Validate inputs via RDKit canonicalization. Raises ValueError → 400.
-    reactants_canonical = _canonical_smiles(req.reactants_smiles)
-    products_canonical = _canonical_smiles(req.products_smiles)
+    # Off-thread because RDKit MolFromSmiles/MolToSmiles are synchronous
+    # C-extension calls (~0.5-2 ms each on normal-size molecules) and we
+    # don't want them stalling the event loop.
+    reactants_canonical = await asyncio.to_thread(_canonical_smiles, req.reactants_smiles)
+    products_canonical = await asyncio.to_thread(_canonical_smiles, req.products_smiles)
 
     warnings = _diagnose_warnings(req.reactants_smiles, req.products_smiles)
 
@@ -265,6 +269,14 @@ async def elucidate_mechanism(
 
     # The path is [src, intermediate1, intermediate2, ..., dest]. Convert to
     # consecutive (from, to) moves with their scores.
+    # Cycle-2 fix M-3: pin the invariant that scores and path align.
+    # Otherwise zip(...) silently truncates if a future refactor diverges
+    # the two lengths, dropping moves from the response with no error.
+    if len(result.scores) != len(result.path):
+        raise RuntimeError(
+            f"Internal: search returned scores/path length mismatch "
+            f"({len(result.scores)} vs {len(result.path)})"
+        )
     move_endpoints: list[tuple[str, str]] = []
     for i in range(1, len(result.path)):
         move_endpoints.append((result.path[i - 1], result.path[i]))

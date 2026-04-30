@@ -14,6 +14,7 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
+import { MAX_SMILES_LEN } from "../_limits.js";
 
 // ---------- Schemas ----------------------------------------------------------
 
@@ -21,14 +22,14 @@ export const ElucidateMechanismIn = z.object({
   reactants_smiles: z
     .string()
     .min(1)
-    .max(10_000)
+    .max(MAX_SMILES_LEN)
     .describe(
       "SMILES for the reactants. Multi-component is fine (use '.' to separate, e.g. 'CC=O.[OH-]').",
     ),
   products_smiles: z
     .string()
     .min(1)
-    .max(10_000)
+    .max(MAX_SMILES_LEN)
     .describe("SMILES for the expected products."),
   max_nodes: z
     .number()

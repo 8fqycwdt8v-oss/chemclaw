@@ -44,6 +44,26 @@ def _smiles_tag(smiles: str) -> str:
     """
     return hashlib.blake2s(smiles.encode("utf-8"), digest_size=8).hexdigest()
 
+
+def _canonicalize_batch(smiles_list: list[str]) -> list[str]:
+    """Canonicalize a batch of SMILES via RDKit. Falls back to the input
+    string on parse failure so the caller can still look up by the original
+    key (and can detect failures via `compute_energy_deltas` returning None).
+    """
+    from rdkit import Chem  # noqa: PLC0415 — only call on validate path
+
+    out: list[str] = []
+    for s in smiles_list:
+        mol = Chem.MolFromSmiles(s)
+        if mol is None:
+            out.append(s)
+            continue
+        try:
+            out.append(Chem.MolToSmiles(mol))
+        except Exception:  # pragma: no cover — defensive
+            out.append(s)
+    return out
+
 _DEFAULT_TIMEOUT_S = 60.0  # xtb opt for small molecules takes ~5–30 s.
 _TARGET_SCOPE = "mcp_xtb:invoke"
 _TARGET_AUDIENCE = "mcp-xtb"
@@ -82,11 +102,20 @@ class XtbValidator:
     async def validate(self, intermediates: list[str]) -> ValidationResult:
         """Compute single-point energies for each unique intermediate SMILES.
 
-        Deduplicates intermediates so we don't pay xtb's ~10 s cost twice
-        for the same state (the search occasionally revisits intermediates).
+        Cycle-2 fix M-2: dedup by RDKit canonical form, not by Python string
+        identity. Two SMILES like "c1ccccc1" and "C1=CC=CC=C1" both denote
+        benzene; without canonicalization the dedup misses the duplicate
+        and we'd pay xtb's ~10 s cost twice. Energies are stored under
+        canonical keys; `compute_energy_deltas` looks up by canonical too.
         """
-        unique = list(dict.fromkeys(intermediates))  # order-preserving dedupe
-        if not unique:
+        # Off-thread RDKit canonicalization (synchronous C-ext) — keeps the
+        # event loop responsive on a long path.
+        canonical_inputs = await asyncio.to_thread(_canonicalize_batch, intermediates)
+        # Order-preserving dedup by canonical form. Empty/None entries
+        # from RDKit parse failure are kept under their original key so
+        # the caller still sees them in `compute_energy_deltas`.
+        unique_canonical: list[str] = list(dict.fromkeys(canonical_inputs))
+        if not unique_canonical:
             return ValidationResult(energy_per_smiles={}, warnings=[])
 
         try:
@@ -100,13 +129,17 @@ class XtbValidator:
             )
 
         async with httpx.AsyncClient(timeout=self.timeout_s) as client:
-            tasks = [self._optimize_one(client, headers, smi) for smi in unique]
+            tasks = [self._optimize_one(client, headers, smi) for smi in unique_canonical]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        energy_map: dict[str, float] = {}
+        energy_map_canonical: dict[str, float] = {}
         warnings: list[str] = []
-        for smi, result in zip(unique, results):
+        for smi, result in zip(unique_canonical, results):
             tag = _smiles_tag(smi)
+            if isinstance(result, asyncio.CancelledError):
+                # Never swallow CancelledError — propagate so the outer
+                # request's cancellation actually cancels.
+                raise result
             if isinstance(result, BaseException):
                 warnings.append(
                     f"xTB validation failed for intermediate {tag}: "
@@ -119,7 +152,15 @@ class XtbValidator:
                     f"see mcp-xtb logs."
                 )
                 continue
-            energy_map[smi] = result
+            energy_map_canonical[smi] = result
+
+        # Re-key the energy map back to the ORIGINAL SMILES so callers can
+        # look up by the same string they passed in. canonical_inputs is
+        # aligned with `intermediates` so we can map orig→canonical→energy.
+        energy_map: dict[str, float] = {}
+        for orig, canonical in zip(intermediates, canonical_inputs):
+            if canonical in energy_map_canonical:
+                energy_map[orig] = energy_map_canonical[canonical]
 
         return ValidationResult(energy_per_smiles=energy_map, warnings=warnings)
 
