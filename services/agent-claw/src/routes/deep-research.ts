@@ -188,8 +188,10 @@ async function handleDeepResearch(
   // Streaming path — delegated to runHarness with an SSE sink.
   setupSse(reply);
 
-  let closed = false;
-  const onClose = () => { closed = true; };
+  // Boxed so the value can be mutated by the close-handler closure without
+  // TS narrowing every subsequent read to the literal `false` initializer.
+  const conn: { closed: boolean } = { closed: false };
+  const onClose = () => { conn.closed = true; };
   req.raw.on("close", onClose);
   req.raw.on("aborted", onClose);
 
@@ -229,12 +231,12 @@ async function handleDeepResearch(
       // ask_user fired; runHarness already notified the sink, so the
       // awaiting_user_input event has been written to the wire. Treat
       // as a normal exit.
-    } else if (_isAbortLikeError(err) || req.signal?.aborted) {
+    } else if (_isAbortLikeError(err) || req.signal.aborted) {
       // Client disconnected mid-stream. Emit `cancelled` (best-effort) so
       // any SSE consumer that's still listening sees the typed terminal
       // frame instead of an abrupt socket close.
       req.log.info({ err: err instanceof Error ? err.message : err }, "deep_research stream cancelled by client");
-      if (!closed) {
+      if (!conn.closed) {
         try {
           writeEvent(reply, { type: "cancelled" });
         } catch {
@@ -243,7 +245,7 @@ async function handleDeepResearch(
       }
     } else {
       req.log.error({ err }, "deep_research stream failed");
-      if (!closed) {
+      if (!conn.closed) {
         writeEvent(reply, { type: "error", error: "internal" });
       }
     }

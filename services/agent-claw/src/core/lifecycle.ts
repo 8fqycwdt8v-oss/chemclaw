@@ -181,7 +181,7 @@ export class Lifecycle {
         // sees one span per hook invocation with name, point, matcher
         // target, tool-use id, duration, and OK/ERROR status. A timeout
         // (abort-rejection wins the race) shows up as an ERROR span.
-        const result: HookJSONOutput | undefined = await withHookSpan(
+        const result = (await withHookSpan(
           {
             point,
             hookName: hook.name,
@@ -210,15 +210,18 @@ export class Lifecycle {
             });
             return Promise.race([handlerPromise, abortPromise]);
           },
-        );
+        )) as HookJSONOutput | undefined;
 
         // Tolerate hooks that return nothing (legacy void-returning shape
         // surfaced by older tests and any third-party hook that hasn't
-        // migrated yet). Treat as a no-op success.
+        // migrated yet). Treat as a no-op success. The cast above preserves
+        // this defensive read at the type level — withHookSpan's inferred
+        // T is HookJSONOutput, but the runtime can hand us undefined when
+        // a third-party hook returns nothing.
         if (!result) continue;
 
         // Fire-and-forget: ignore the result, move to the next hook.
-        if ("async" in result && result.async) continue;
+        if ("async" in result) continue;
 
         // After the async-branch guard, `result` is the synchronous-shape
         // variant. Pick out hookSpecificOutput as the loosely-typed object
@@ -237,7 +240,7 @@ export class Lifecycle {
           const next = mostRestrictive(decision, dec);
           if (next !== decision) {
             decision = next;
-            reason = hso?.permissionDecisionReason;
+            reason = hso.permissionDecisionReason;
           }
         }
 

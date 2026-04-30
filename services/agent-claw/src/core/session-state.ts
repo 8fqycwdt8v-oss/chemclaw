@@ -41,11 +41,10 @@ export function syncSeenFactIdsFromScratch(ctx: ToolContext): void {
     ctx.seenFactIds = fromScratch as Set<string>;
     return;
   }
-  if (!ctx.seenFactIds) {
-    const fresh = new Set<string>();
-    ctx.scratchpad.set("seenFactIds", fresh);
-    ctx.seenFactIds = fresh;
-  }
+  // ctx.seenFactIds is non-optional in ToolContext, so the harness has
+  // already initialised it to an empty Set; mirror that into scratchpad
+  // so subsequent saves/restores see it.
+  ctx.scratchpad.set("seenFactIds", ctx.seenFactIds);
 }
 
 /**
@@ -127,11 +126,13 @@ export async function persistTurnState(
     safeAwaitingQuestion = redactString(rawAwaitingQuestion, replacements);
     if (replacements.length > 0) {
       const existing =
-        (ctx.scratchpad.get("redact_log") as Array<{
-          scope: string;
-          replacements: RedactReplacement[];
-          timestamp: string;
-        }>) ?? [];
+        (ctx.scratchpad.get("redact_log") as
+          | Array<{
+              scope: string;
+              replacements: RedactReplacement[];
+              timestamp: string;
+            }>
+          | undefined) ?? [];
       const updated = [
         ...existing,
         {
@@ -155,7 +156,7 @@ export async function persistTurnState(
   const sessTotals = budget?.sessionTotals();
   await saveSession(pool, userEntraId, sessionId, {
     scratchpad: dump,
-    lastFinishReason: (finishReason as SessionFinishReason) ?? null,
+    lastFinishReason: (finishReason as SessionFinishReason | null | undefined) ?? null,
     awaitingQuestion,
     messageCount: opts.messageCount,
     sessionInputTokens: sessTotals?.inputTokens,
