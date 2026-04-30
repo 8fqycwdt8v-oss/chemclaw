@@ -12,7 +12,7 @@
 //   9. default pages=[0] when pages not provided for pdf_pages.
 //  10. mcp-doc-fetcher error propagates as UpstreamError.
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import type { Pool, PoolClient } from "pg";
 import { buildFetchOriginalDocumentTool } from "../../src/tools/builtins/fetch_original_document.js";
 
@@ -30,7 +30,7 @@ function makeCtx(userId = "chemist@example.com") {
 }
 
 // Build a mock Pool that returns a fixed set of rows.
-function makePool(rows: unknown[]): Pool {
+function _makePool(rows: unknown[]): Pool {
   const mockClient: Partial<PoolClient> = {
     query: vi.fn().mockResolvedValue({ rows }),
     release: vi.fn(),

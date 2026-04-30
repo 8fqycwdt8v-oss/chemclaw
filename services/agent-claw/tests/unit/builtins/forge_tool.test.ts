@@ -14,7 +14,6 @@ import {
   buildGenerationPrompt,
 } from "../../../src/tools/builtins/forge_tool.js";
 import type { SandboxClient, SandboxHandle } from "../../../src/core/sandbox.js";
-import type { LlmProvider } from "../../../src/llm/provider.js";
 import { StubLlmProvider } from "../../../src/llm/provider.js";
 import { makeCtx } from "../../helpers/make-ctx.js";
 import type { Pool } from "pg";

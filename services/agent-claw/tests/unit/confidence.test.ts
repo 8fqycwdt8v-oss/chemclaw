@@ -98,7 +98,7 @@ describe("jaccardSimilarity", () => {
 
   it("returns 0.5 for 50% overlap", () => {
     const a = new Set(["a", "b"]);
-    const b = new Set(["a", "c"]);
+    const _b = new Set(["a", "c"]);
     // intersection=1, union=3 → 1/3 is not 0.5. Let's use a, b vs a, b, c:
     // intersection=2, union=3 → 2/3
     const c = new Set(["a", "b", "c"]);

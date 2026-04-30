@@ -10,7 +10,6 @@ import { defineTool } from "../tool.js";
 import {
   spawnSubAgent,
   type SubAgentDeps,
-  type SubAgentType,
 } from "../../core/sub-agent.js";
 import { lifecycle } from "../../core/runtime.js";
 import type { Tool } from "../tool.js";

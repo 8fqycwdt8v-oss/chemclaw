@@ -1,6 +1,6 @@
 // Tests for POST /api/chat/plan/approve and POST /api/chat/plan/reject.
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect } from "vitest";
 import Fastify from "fastify";
 import { registerPlanRoutes } from "../../src/routes/plan.js";
 import { planStore, createPlan } from "../../src/core/plan-mode.js";

@@ -1,6 +1,6 @@
 // Tests for ToolRegistry: source='forged' tool loading (Phase D.1).
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { ToolRegistry } from "../../src/tools/registry.js";
 import type { SandboxClient, SandboxHandle } from "../../src/core/sandbox.js";
 import { makeCtx } from "../helpers/make-ctx.js";

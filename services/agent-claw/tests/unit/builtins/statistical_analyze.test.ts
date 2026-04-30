@@ -19,7 +19,7 @@ const COMPARE_CONDITION_ROWS = [
   { bucket_label: "DCM·5", n: 12, mean_yield: 82.5, median_yield: 83.0, p25: 78.0, p75: 87.0 },
 ];
 
-function mockFetchTabicl(body: unknown) {
+function _mockFetchTabicl(body: unknown) {
   return vi.fn().mockResolvedValue({
     ok: true,
     text: async () => JSON.stringify(body),

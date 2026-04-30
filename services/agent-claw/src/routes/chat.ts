@@ -41,7 +41,6 @@ import {
   shortCircuitResponse,
   HELP_TEXT,
 } from "../core/slash.js";
-import { redactString } from "../core/hooks/redact-secrets.js";
 import type { RedactReplacement } from "../core/hooks/redact-secrets.js";
 import { hydrateScratchpad, persistTurnState } from "../core/session-state.js";
 import { lifecycle } from "../core/runtime.js";
@@ -51,7 +50,6 @@ import {
   saveSession,
   OptimisticLockError,
 } from "../core/session-store.js";
-import type { SessionFinishReason } from "../core/session-store.js";
 import { savePlanForSession } from "../core/plan-store-db.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 import { runWithRequestContext } from "../core/request-context.js";

@@ -10,7 +10,7 @@ import { registerLearnRoute } from "../../src/routes/learn.js";
 // Minimal stub pool
 // ---------------------------------------------------------------------------
 
-function makePool(
+function _makePool(
   insertFn: (sql: string, params: unknown[]) => { rows: Array<{ id: string; name: string }> },
 ): Pool {
   return {

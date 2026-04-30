@@ -8,7 +8,7 @@
 // endpoints are the multi-hour-autonomy unlock — both run a harness turn
 // without requiring a fresh user message.
 
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Pool } from "pg";
 import type { Config } from "../config.js";
 import type { LlmProvider } from "../llm/provider.js";
@@ -16,10 +16,8 @@ import type { ToolRegistry } from "../tools/registry.js";
 import type { PromptRegistry } from "../prompts/registry.js";
 import {
   loadSession,
-  saveSession,
   tryIncrementAutoResumeCount,
   OptimisticLockError,
-  type SessionFinishReason,
 } from "../core/session-store.js";
 import {
   loadActivePlanForSession,

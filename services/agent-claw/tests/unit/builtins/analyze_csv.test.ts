@@ -1,7 +1,7 @@
 // Tests for the analyze_csv builtin tool.
 // Uses csv_text path only (no DB / mcp-doc-fetcher needed).
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { buildAnalyzeCsvTool } from "../../../src/tools/builtins/analyze_csv.js";
 import type { ToolContext } from "../../../src/core/types.js";
 import type { Pool } from "pg";

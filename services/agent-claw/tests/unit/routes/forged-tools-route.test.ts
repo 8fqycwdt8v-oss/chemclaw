@@ -2,8 +2,7 @@
 //
 // Uses mocked withUserContext + mocked pool; no real HTTP or Postgres.
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { randomUUID } from "crypto";
+import { describe, it, expect, afterEach } from "vitest";
 
 // ---------------------------------------------------------------------------
 // We test the business logic extracted from the route handler directly.

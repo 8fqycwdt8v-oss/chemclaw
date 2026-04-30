@@ -28,7 +28,6 @@ import type { LlmProvider, LlmResponse, ModelRole, StreamChunk } from "./provide
 import type { Message } from "../core/types.js";
 import type { Tool } from "../tools/tool.js";
 import type { ModelMessage, ToolSet } from "ai";
-import { z } from "zod";
 
 // ---------------------------------------------------------------------------
 // Internal helper: translate harness Message[] → AI SDK ModelMessage[].

@@ -1,6 +1,6 @@
 // Tests for /api/eval route — Phase E.
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { parseEvalArgs } from "../../../src/core/slash.js";
 
 // ---------------------------------------------------------------------------

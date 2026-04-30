@@ -1,6 +1,6 @@
 // Tests for shadow prompt evaluator — Phase E.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import type { ShadowEvalContext } from "../../src/prompts/shadow-evaluator.js";
 
 // ---------------------------------------------------------------------------

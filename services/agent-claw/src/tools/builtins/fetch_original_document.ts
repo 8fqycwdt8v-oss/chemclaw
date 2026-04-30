@@ -102,7 +102,7 @@ interface DocRow {
 // Timeout constants
 // --------------------------------------------------------------------------
 
-const TIMEOUT_MARKDOWN_MS = 5_000;
+const _TIMEOUT_MARKDOWN_MS = 5_000;
 const TIMEOUT_BYTES_MS = 60_000;
 const TIMEOUT_PDF_PAGES_MS = 60_000;
 

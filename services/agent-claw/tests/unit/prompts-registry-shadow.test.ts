@@ -1,6 +1,6 @@
 // Tests for Phase E shadow-serving additions to PromptRegistry.
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { PromptRegistry } from "../../src/prompts/registry.js";
 
 // ---------------------------------------------------------------------------

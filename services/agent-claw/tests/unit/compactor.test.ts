@@ -120,7 +120,7 @@ describe("compact", () => {
     const llm = makeLlm();
     const msgs = makeMessages(4, true); // system + 8 non-system messages
     const result = await compact(msgs, { tokenBudget: 1000, llm, recentKeep: 3 });
-    const nonSystem = result.filter((m) => m.role !== "system" || result.indexOf(m) > 1);
+    const _nonSystem = result.filter((m) => m.role !== "system" || result.indexOf(m) > 1);
     // After system (index 0) and synopsis (index 1), we should have 3 recent messages.
     const afterSynopsis = result.slice(2);
     expect(afterSynopsis.length).toBe(3);

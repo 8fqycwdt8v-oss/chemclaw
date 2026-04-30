@@ -87,6 +87,15 @@ export default tseslint.config(
       // PR-1 paydown: prefer-promise-reject-errors flipped to error after
       // wrapping signal.reason narrowing in lifecycle.ts.
 
+      '@typescript-eslint/no-unused-vars': [
+        'error',
+        {
+          argsIgnorePattern: '^_',
+          varsIgnorePattern: '^_',
+          caughtErrorsIgnorePattern: '^_',
+        },
+      ],
+
       // Plain ESLint rules that strict-type-checked also enables.
       'no-empty': 'warn',
       'no-control-regex': 'warn',

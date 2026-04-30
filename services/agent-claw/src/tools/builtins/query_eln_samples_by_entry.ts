@@ -15,7 +15,7 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
-import { SampleSchema, type Sample } from "./_eln_shared.js";
+import { SampleSchema } from "./_eln_shared.js";
 
 export const QueryElnSamplesByEntryIn = z.object({
   entry_id: z

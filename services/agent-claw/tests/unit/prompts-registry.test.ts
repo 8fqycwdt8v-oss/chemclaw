@@ -1,6 +1,6 @@
 // Tests for the PromptRegistry (ported from legacy + cache TTL coverage).
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { PromptRegistry } from "../../src/prompts/registry.js";
 import type { Pool, QueryResult } from "pg";
 

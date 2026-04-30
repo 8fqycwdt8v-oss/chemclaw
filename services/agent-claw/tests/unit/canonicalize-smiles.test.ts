@@ -3,7 +3,7 @@
 //   - Zod validation on response shape
 //   - MCP URL trailing-slash handling
 
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, afterEach } from "vitest";
 import { buildCanonicalizeSmilesTool } from "../../src/tools/builtins/canonicalize_smiles.js";
 
 const MOCK_RDKIT_URL = "http://mcp-rdkit:8001";
