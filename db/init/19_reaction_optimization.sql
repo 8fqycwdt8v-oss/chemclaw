@@ -121,6 +121,7 @@ INSERT INTO model_cards (
 )
 ON CONFLICT (service_name, model_version) DO NOTHING;
 
+<<<<<<< HEAD
 -- ── Z4 model_cards row ───────────────────────────────────────────────────
 
 INSERT INTO model_cards (
@@ -135,6 +136,49 @@ INSERT INTO model_cards (
   '{"sampling_strategy": "space_filling", "deterministic_seed": true}'::jsonb,
   'No mechanistic causal model. DoE is information-theoretic (space-filling). The chemist supplies the design space; the sampler covers it uniformly.',
   'BoFire 0.3.x DoE module. CHEM21 solvent classification from Prat et al., Green Chem. 2016 (built-in 24-solvent allowlist mirroring Z1).'
+=======
+-- ── Z1 model_cards rows ──────────────────────────────────────────────────
+
+INSERT INTO model_cards (
+  service_name,
+  model_version,
+  defined_endpoint,
+  algorithm,
+  applicability_domain,
+  predictivity_metrics,
+  mechanistic_interpretation,
+  trained_on
+) VALUES (
+  'mcp_applicability_domain',
+  'ad_3signal@v1',
+  'Three-signal AD verdict for a reaction: in_domain / borderline / out_of_domain plus per-signal scores (Tanimoto distance, Mahalanobis distance, conformal-prediction half-width).',
+  'Deterministic threshold logic on three independent metrics: cosine distance to nearest in-house DRFP neighbor; diagonal Mahalanobis distance against shipped DRFP corpus stats; inductive conformal prediction over per-project chemprop residuals (alpha=0.20, 80% nominal coverage). Verdict aggregates by majority vote when conformal usable; tighter rule when conformal abstains.',
+  'Operates on any reaction the upstream mcp_drfp service can encode. Conformal signal abstains when project (or cross-RLS-accessible projects) has < 30 yield-labeled reactions.',
+  '{"verdict_distribution_target": {"in_domain": 0.70, "borderline": 0.25, "out_of_domain": 0.05}, "notes": "Z7 wires /eval evaluation against held-out mock_eln slice."}'::jsonb,
+  'Tanimoto reflects nearest-analog availability; Mahalanobis reflects feature-space density; conformal interval reflects yield-model calibrated uncertainty. None are causal; all three are statistical proxies for predictive reliability.',
+  'DRFP stats over mock_eln seed (~2000 reactions); per-project conformal calibration over experiments.yield_pct (RLS-scoped).'
+)
+ON CONFLICT (service_name, model_version) DO NOTHING;
+
+INSERT INTO model_cards (
+  service_name,
+  model_version,
+  defined_endpoint,
+  algorithm,
+  applicability_domain,
+  predictivity_metrics,
+  mechanistic_interpretation,
+  trained_on
+) VALUES (
+  'mcp_green_chemistry',
+  'solvent_lookup@v1',
+  'Per-solvent CHEM21 / GSK / Pfizer / AZ / Sanofi / ACS GCI-PR class + reaction-safety estimate (PMI, Bretherick group hits).',
+  'Dictionary lookup keyed on RDKit-canonicalized SMILES with InChIKey + fuzzy-name fallback (rapidfuzz, score>=90); PMI from (mass_input - mass_product) / mass_product computed via RDKit MolWt; Bretherick SMARTS matching against shipped hazardous-group library.',
+  'Solvents present in any of the seven shipped guides; unmatched solvents return match_confidence: unmatched and null class fields. Bretherick group library covers ~10 high-frequency hazard motifs (azide, peroxide, organolithium, etc.); not exhaustive.',
+  '{}'::jsonb,
+  'No mechanistic model. Industry / academic guides curated by their authors. PMI is a widely-used pharmaceutical greenness proxy; Bretherick groups encode known thermal / shock / reactive hazards.',
+  'Prat et al. Green Chem. 2016 (CHEM21); GSK guide; Alfonsi et al. Green Chem. 2008 (Pfizer); Diorazio et al. Org. Process Res. Dev. 2016 (AZ); Prat et al. Org. Process Res. Dev. 2013 (Sanofi); Byrne et al. 2016 (ACS GCI-PR); Bretherick subset (public-disclosable patterns only).'
+>>>>>>> 53aed91 (feat(z1): wire AD + green-chem builtins; condition-design skill v1->v2)
 )
 ON CONFLICT (service_name, model_version) DO NOTHING;
 
