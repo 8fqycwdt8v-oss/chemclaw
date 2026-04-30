@@ -21,6 +21,15 @@ export interface RequestContext {
   userEntraId: string;
   /** Active session id (if any) — useful for log correlation. */
   sessionId?: string;
+  /**
+   * Upstream AbortSignal threaded through from the route's FastifyRequest.
+   * postJson / getJson in `mcp/postJson.ts` read this to cancel in-flight
+   * MCP calls when the originating client disconnects mid-stream. Optional
+   * — background tasks (reanimator, optimizer) and tests run without an
+   * upstream signal and the helpers fall back to their own per-call timeout
+   * AbortController as before.
+   */
+  signal?: AbortSignal;
 }
 
 const _storage = new AsyncLocalStorage<RequestContext>();

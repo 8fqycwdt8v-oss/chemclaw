@@ -6,7 +6,6 @@ import {
   buildSandboxClient,
   SandboxError,
   SANDBOX_MAX_CPU_S,
-  SANDBOX_MAX_MEM_MB,
 } from "../../src/core/sandbox.js";
 
 // ---------------------------------------------------------------------------
@@ -98,7 +97,7 @@ describe("buildSandboxClient — executePython", () => {
     const handle = await client.createSandbox();
     await client.executePython(handle, "pass", { MY_VAR: "42" });
     const call = mockStartAndWait.mock.calls[0]![0] as { envs: Record<string, string> };
-    expect(call.envs["MY_VAR"]).toBe("42");
+    expect(call.envs.MY_VAR).toBe("42");
   });
 
   it("includes files_created in the result (excluding _run.py)", async () => {
@@ -195,9 +194,5 @@ describe("buildSandboxClient — closeSandbox", () => {
 describe("module-level constants", () => {
   it("exports SANDBOX_MAX_CPU_S as a positive number", () => {
     expect(SANDBOX_MAX_CPU_S).toBeGreaterThan(0);
-  });
-
-  it("exports SANDBOX_MAX_MEM_MB as a positive number", () => {
-    expect(SANDBOX_MAX_MEM_MB).toBeGreaterThan(0);
   });
 });

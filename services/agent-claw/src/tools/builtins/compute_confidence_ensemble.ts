@@ -79,16 +79,16 @@ export function buildComputeConfidenceEnsembleTool(pool: Pool) {
     inputSchema: ComputeConfidenceEnsembleIn,
     outputSchema: ComputeConfidenceEnsembleOut,
     execute: async (ctx, input) => {
-      return withUserContext(pool, ctx.userEntraId, async (client) => {
+      return await withUserContext(pool, ctx.userEntraId, async (client) => {
         // Fetch the artifact payload.
         const { rows } = await client.query<{ id: string; payload: unknown }>(
           "SELECT id::text AS id, payload FROM artifacts WHERE id = $1::uuid",
           [input.artifact_id],
         );
-        if (rows.length === 0) {
+        const row = rows[0];
+        if (!row) {
           throw new Error(`artifact not found: ${input.artifact_id}`);
         }
-        const row = rows[0]!;
 
         // Signal 1: verbalized confidence.
         const verbalized = extractVerbalizedConfidence(row.payload);

@@ -52,7 +52,7 @@ describe("StubLlmProvider role parameter", () => {
     const stub = new StubLlmProvider();
     stub.enqueueJson({ agreement: 0.85 });
     const result = await stub.completeJson({ system: "judge prompt", user: "text", role: "judge" });
-    expect((result as Record<string, unknown>)["agreement"]).toBe(0.85);
+    expect((result as Record<string, unknown>).agreement).toBe(0.85);
   });
 
   it("all four ModelRole values are accepted without TypeScript error", () => {

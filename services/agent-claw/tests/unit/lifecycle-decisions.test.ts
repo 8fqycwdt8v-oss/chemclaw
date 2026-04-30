@@ -214,7 +214,7 @@ describe("Lifecycle AbortSignal", () => {
     lc.on(
       "post_tool",
       "stuck",
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+       
       (_payload, _id, _opts) => new Promise<never>(() => {
         /* never resolves, ignores AbortSignal */
       }),
@@ -241,7 +241,7 @@ describe("Lifecycle AbortSignal", () => {
     lc.on(
       "pre_tool",
       "stuck",
-      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+       
       (_payload, _id, _opts) => new Promise<never>(() => {
         /* never resolves */
       }),

@@ -18,7 +18,7 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from fastapi import Body
 from pydantic import BaseModel, Field
@@ -51,12 +51,20 @@ app = create_app(
 # ---------------------------------------------------------------------------
 
 def _smiles_to_xyz(smiles: str) -> str:
-    """Convert a SMILES to 3-D XYZ block via RDKit ETKDG."""
+    """Convert a SMILES to 3-D XYZ block via RDKit ETKDG.
+
+    rdkit ships no stubs, so we keep the imports and module objects
+    typed as Any. Each call through Chem/AllChem is then duck-typed
+    rather than flagged by mypy strict mode.
+    """
     try:
-        from rdkit import Chem  # type: ignore[import]  # noqa: PLC0415
-        from rdkit.Chem import AllChem  # type: ignore[import]  # noqa: PLC0415
+        from rdkit import Chem as _Chem  # noqa: PLC0415
+        from rdkit.Chem import AllChem as _AllChem  # noqa: PLC0415
     except ImportError as exc:
         raise ImportError("rdkit required inside the Docker image") from exc
+
+    Chem: Any = _Chem
+    AllChem: Any = _AllChem
 
     if not smiles or not smiles.strip():
         raise ValueError("smiles must be a non-empty string")
@@ -80,7 +88,7 @@ def _smiles_to_xyz(smiles: str) -> str:
 # subprocess helper
 # ---------------------------------------------------------------------------
 
-def _run_xtb(args: list[str], cwd: Path) -> subprocess.CompletedProcess:
+def _run_xtb(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
     """Run xtb with shell=False for security."""
     return subprocess.run(  # noqa: S603
         args,

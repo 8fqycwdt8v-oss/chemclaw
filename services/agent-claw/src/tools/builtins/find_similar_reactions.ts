@@ -111,7 +111,7 @@ export function buildFindSimilarReactionsTool(pool: Pool, mcpDrfpUrl: string) {
            ORDER BY r.drfp_vector <=> $1::vector ASC
            LIMIT $4::int
         `;
-        const q = await client.query(sql, [
+        const q = await client.query<Record<string, unknown>>(sql, [
           vectorLiteral,
           input.rxno_class ?? null,
           input.min_yield_pct ?? null,

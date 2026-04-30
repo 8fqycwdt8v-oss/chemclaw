@@ -83,8 +83,16 @@ db.psql: ## Open psql shell into the app DB
 	docker compose exec postgres psql -U chemclaw -d chemclaw
 
 .PHONY: db.init
-db.init: ## Re-apply schema (idempotent)
-	docker compose exec -T postgres psql -U chemclaw -d chemclaw < db/init/01_schema.sql
+db.init: ## Re-apply schema (idempotent — applies all db/init/*.sql in lex order)
+	@for f in db/init/*.sql; do \
+	  echo "  applying $$f"; \
+	  docker compose exec -T postgres psql -U chemclaw -d chemclaw \
+	    -v ON_ERROR_STOP=1 < "$$f" || exit 1; \
+	  docker compose exec -T postgres psql -U chemclaw -d chemclaw \
+	    -c "INSERT INTO schema_version (filename) VALUES ('$$f') ON CONFLICT DO NOTHING" \
+	    >/dev/null 2>&1 || true; \
+	done
+	@echo "  db.init complete"
 
 .PHONY: db.seed
 db.seed: ## Load sample seed data
@@ -167,6 +175,48 @@ typecheck: ## Type-check Python + TS
 test: ## Run all tests
 	$(VENV)/bin/pytest
 	npm run test
+
+.PHONY: coverage
+coverage: ## Run TS + Python coverage and emit lcov / coverage.xml for diff-cover
+	# TypeScript: vitest with @vitest/coverage-v8 (lcov + json-summary)
+	npm run coverage --workspaces --if-present
+	# Python: coverage.py over the same scope used by `make test`.
+	# Emits coverage.xml (Cobertura) for diff-cover and a text summary.
+	$(VENV)/bin/coverage erase
+	-$(VENV)/bin/coverage run --rcfile=pyproject.toml -m pytest \
+	  tests/unit/test_redactor.py \
+	  tests/unit/optimizer/test_session_purger.py \
+	  services/mcp_tools/common/tests/ \
+	  services/projectors/kg_source_cache/tests/
+	$(VENV)/bin/coverage combine || true
+	$(VENV)/bin/coverage xml -o coverage.xml
+	$(VENV)/bin/coverage report --skip-empty || true
+
+.PHONY: diff-cover
+diff-cover: coverage ## Enforce changed-line coverage thresholds against main
+	# Thresholds per docs/review/2026-04-29-codebase-audit/05-coverage-baseline.md §8.
+	# TypeScript (excluding routes, boot, config — carve-out at 60% below):
+	$(VENV)/bin/diff-cover services/agent-claw/coverage/lcov.info \
+	  --compare-branch=origin/main \
+	  --fail-under=75 \
+	  --fail-paths-not-found=false \
+	  --exclude='services/agent-claw/src/routes/**' \
+	  --exclude='services/agent-claw/src/index.ts' \
+	  --exclude='services/agent-claw/src/config.ts'
+	# TypeScript routes: 60% carve-out
+	$(VENV)/bin/diff-cover services/agent-claw/coverage/lcov.info \
+	  --compare-branch=origin/main \
+	  --fail-under=60 \
+	  --include='services/agent-claw/src/routes/**'
+	# Python: 70% with NO-TESTS-services excluded (PR-N adds tests + removes excludes)
+	$(VENV)/bin/diff-cover coverage.xml \
+	  --compare-branch=origin/main \
+	  --fail-under=70 \
+	  --exclude='services/optimizer/session_reanimator/**' \
+	  --exclude='services/projectors/kg_hypotheses/**' \
+	  --exclude='services/mcp_tools/mcp_drfp/**' \
+	  --exclude='services/mcp_tools/mcp_rdkit/**' \
+	  --exclude='services/ingestion/eln_json_importer.legacy/**'
 
 # --------------------------------------------------------------------------
 # Smoke

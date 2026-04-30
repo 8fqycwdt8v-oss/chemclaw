@@ -65,7 +65,7 @@ const DEFAULT_HOOK_TIMEOUT_MS = 60_000;
 export class Lifecycle {
   // Map<point, RegisteredHook<unknown>[]> — payloads are erased at storage
   // time and re-narrowed at dispatch time via the generic.
-  private readonly _hooks: Map<HookPoint, RegisteredHook<unknown>[]> = new Map();
+  private readonly _hooks = new Map<HookPoint, RegisteredHook<unknown>[]>();
 
   /**
    * Register a hook handler for the given lifecycle point.
@@ -82,17 +82,15 @@ export class Lifecycle {
     handler: HookCallback<HookPayloadMap[P]>,
     opts: { matcher?: string; timeout?: number } = {},
   ): this {
-    if (!this._hooks.has(point)) {
-      this._hooks.set(point, []);
+    let bucket = this._hooks.get(point);
+    if (!bucket) {
+      bucket = [];
+      this._hooks.set(point, bucket);
     }
-    this._hooks.get(point)!.push({
+    bucket.push({
       name,
       matcher: opts.matcher ? new RegExp(opts.matcher) : undefined,
-      // Storage erases the payload generic so all hook points share one
-      // `Map<HookPoint, RegisteredHook<unknown>[]>`; the cast is the
-      // single point where we drop the typed `P` and rely on the per-point
-      // dispatch matching the registered point. Justified narrowing.
-      handler: handler as HookCallback<unknown>,
+      handler: handler as HookCallback,
       timeout: opts.timeout ?? DEFAULT_HOOK_TIMEOUT_MS,
     });
     return this;
@@ -167,7 +165,7 @@ export class Lifecycle {
 
       const ac = new AbortController();
       const timer = setTimeout(
-        () => ac.abort(new Error(`hook timeout: ${hook.name}`)),
+        () => { ac.abort(new Error(`hook timeout: ${hook.name}`)); },
         hook.timeout,
       );
 
@@ -183,7 +181,7 @@ export class Lifecycle {
         // sees one span per hook invocation with name, point, matcher
         // target, tool-use id, duration, and OK/ERROR status. A timeout
         // (abort-rejection wins the race) shows up as an ERROR span.
-        const result: HookJSONOutput | undefined | void = await withHookSpan(
+        const result: HookJSONOutput | undefined = await withHookSpan(
           {
             point,
             hookName: hook.name,
@@ -191,37 +189,25 @@ export class Lifecycle {
             toolUseId: opts.toolUseID,
           },
           () => {
-            // hook.handler is already HookCallback<unknown> via the storage
-            // type; calling with payload (typed HookPayloadMap[P]) is safe
-            // because dispatch<P> caller guarantees the `point` matches.
-            const handlerPromise = hook.handler(
-              payload,
-              opts.toolUseID,
-              { signal: ac.signal },
-            );
+            const handlerPromise = (
+              hook.handler as HookCallback
+            )(payload, opts.toolUseID, { signal: ac.signal });
             const abortPromise = new Promise<never>((_, reject) => {
+              const reasonAsError = (): Error => {
+                const reason: unknown = ac.signal.reason;
+                if (reason instanceof Error) return reason;
+                return new Error(`hook timeout: ${hook.name}`);
+              };
               if (ac.signal.aborted) {
-                reject(
-                  ac.signal.reason ??
-                    new Error(`hook timeout: ${hook.name}`),
-                );
+                reject(reasonAsError());
                 return;
               }
               ac.signal.addEventListener(
                 "abort",
-                () => {
-                  reject(
-                    ac.signal.reason ??
-                      new Error(`hook timeout: ${hook.name}`),
-                  );
-                },
+                () => { reject(reasonAsError()); },
                 { once: true },
               );
             });
-            // Promise.race typing infers Promise<HookJSONOutput | never>,
-            // i.e. Promise<HookJSONOutput>. The withHookSpan signature
-            // accepts undefined/void so the Promise widens implicitly —
-            // no cast needed at this site.
             return Promise.race([handlerPromise, abortPromise]);
           },
         );
@@ -232,52 +218,31 @@ export class Lifecycle {
         if (!result) continue;
 
         // Fire-and-forget: ignore the result, move to the next hook.
-        if ("async" in result && result.async === true) continue;
+        if ("async" in result && result.async) continue;
 
-        // Discriminate the union: the async-branch was handled above, so
-        // the remaining narrowing is to the sync variant. The narrow-by
-        // `"hookSpecificOutput" in result` is structural, but TS doesn't
-        // distribute the discriminator across the union without help, so
-        // we extract the field via a typed alias.
-        const syncResult = result as Exclude<typeof result, { async: true }>;
-        const hso = syncResult.hookSpecificOutput;
-
-        // hookSpecificOutput is the union of pre_tool / post_tool /
-        // forward-compat shapes. Extract the three permission-related
-        // fields via `in`-based narrowing rather than `as`-casts.
-        let permissionDecisionFromHso: PermissionDecision | undefined;
-        let permissionDecisionReasonFromHso: string | undefined;
-        let updatedInputFromHso: Record<string, unknown> | undefined;
-        if (hso && typeof hso === "object") {
-          if ("permissionDecision" in hso && typeof hso.permissionDecision === "string") {
-            permissionDecisionFromHso = hso.permissionDecision as PermissionDecision;
-          }
-          if (
-            "permissionDecisionReason" in hso &&
-            typeof hso.permissionDecisionReason === "string"
-          ) {
-            permissionDecisionReasonFromHso = hso.permissionDecisionReason;
-          }
-          if (
-            "updatedInput" in hso &&
-            hso.updatedInput &&
-            typeof hso.updatedInput === "object"
-          ) {
-            updatedInputFromHso = hso.updatedInput as Record<string, unknown>;
-          }
-        }
+        // After the async-branch guard, `result` is the synchronous-shape
+        // variant. Pick out hookSpecificOutput as the loosely-typed object
+        // it is on the wire — its inner fields are then narrowed below.
+        const hso = (result as { hookSpecificOutput?: unknown }).hookSpecificOutput as
+          | {
+              permissionDecision?: PermissionDecision;
+              permissionDecisionReason?: string;
+              updatedInput?: Record<string, unknown>;
+            }
+          | undefined;
 
         // Aggregate permission decision.
-        if (permissionDecisionFromHso) {
-          const next = mostRestrictive(decision, permissionDecisionFromHso);
+        const dec = hso?.permissionDecision;
+        if (dec) {
+          const next = mostRestrictive(decision, dec);
           if (next !== decision) {
             decision = next;
-            reason = permissionDecisionReasonFromHso;
+            reason = hso?.permissionDecisionReason;
           }
         }
 
         // Capture updatedInput (last-write-wins).
-        if (updatedInputFromHso) updatedInput = updatedInputFromHso;
+        if (hso?.updatedInput) updatedInput = hso.updatedInput;
       } catch (err) {
         if (point === "pre_tool") {
           // Strict-throw semantics for pre_tool: budget-guard etc. abort
@@ -289,7 +254,7 @@ export class Lifecycle {
         // exists yet; the per-hook OTel span emits ERROR status with
         // recordException so the failure is observable in Langfuse — this
         // console.error remains as a developer-facing fallback).
-        // eslint-disable-next-line no-console
+         
         console.error(
           `[lifecycle] non-pre_tool hook "${hook.name}" at "${point}" threw — continuing with remaining hooks`,
           err,

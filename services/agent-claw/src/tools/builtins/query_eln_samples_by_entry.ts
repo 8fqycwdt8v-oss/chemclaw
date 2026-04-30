@@ -15,7 +15,7 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
-import { SampleSchema, type Sample } from "./_eln_shared.js";
+import { SampleSchema } from "./_eln_shared.js";
 
 export const QueryElnSamplesByEntryIn = z.object({
   entry_id: z
@@ -23,7 +23,7 @@ export const QueryElnSamplesByEntryIn = z.object({
     .min(1)
     .max(128)
     .regex(
-      /^[A-Za-z0-9_\-\.:]+$/,
+      /^[A-Za-z0-9_.:-]+$/,
       "entry_id must match [A-Za-z0-9_-.:]+",
     ),
 });

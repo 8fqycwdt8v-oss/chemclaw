@@ -25,6 +25,8 @@ class Chunk:
     index: int
     heading_path: str
     text: str
+    byte_start: int
+    byte_end: int
 
 
 def _update_heading_path(path: list[str], line: str) -> list[str]:
@@ -68,32 +70,49 @@ def chunk_markdown(
     buf: list[str] = []
     buf_len = 0
     chunk_start_path: list[str] = []
+    # Byte offset (UTF-8) in the source markdown where the next chunk will
+    # begin. Updated after every flush. The contextual_chunker projector reads
+    # byte_start to map PDF chunks back to their page number, so the offset
+    # must be a stable index into the parsed_markdown column.
+    chunk_byte_start = 0
+    cursor_byte = 0
 
     def flush() -> None:
-        nonlocal buf, buf_len
+        nonlocal buf, buf_len, chunk_byte_start
         if not buf:
             return
         text = "\n".join(buf).strip()
         if not text:
             buf = []
             buf_len = 0
+            chunk_byte_start = cursor_byte
             return
+        text_bytes = len(text.encode("utf-8"))
         chunks.append(
             Chunk(
                 index=len(chunks),
                 heading_path=" > ".join(chunk_start_path),
                 text=text,
+                byte_start=chunk_byte_start,
+                byte_end=chunk_byte_start + text_bytes,
             )
         )
         if overlap_chars > 0:
             tail = text[-overlap_chars:]
             buf = [tail]
             buf_len = len(tail)
+            # Next chunk starts where the overlap window ends in the source.
+            chunk_byte_start = cursor_byte - len(tail.encode("utf-8"))
         else:
             buf = []
             buf_len = 0
+            chunk_byte_start = cursor_byte
 
     for raw_line in markdown.splitlines():
+        # `splitlines()` strips the trailing newline; account for one byte per
+        # newline regardless of \n vs \r\n (close enough for offset mapping).
+        line_bytes = len(raw_line.encode("utf-8")) + 1
+
         # Heading: flush current buffer (hard boundary) and update ancestry.
         if _HEADING_RE.match(raw_line):
             flush()
@@ -101,6 +120,7 @@ def chunk_markdown(
             chunk_start_path = heading_path[:]
             buf.append(raw_line)
             buf_len = len(raw_line) + 1
+            cursor_byte += line_bytes
             continue
 
         if not chunk_start_path and heading_path:
@@ -108,6 +128,7 @@ def chunk_markdown(
 
         buf.append(raw_line)
         buf_len += len(raw_line) + 1
+        cursor_byte += line_bytes
 
         if buf_len >= target_chars:
             flush()

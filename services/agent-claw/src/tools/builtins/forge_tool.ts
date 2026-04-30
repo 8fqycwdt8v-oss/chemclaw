@@ -91,10 +91,10 @@ export function validateJsonSchema(schema: Record<string, unknown>): void {
   if (!schema || typeof schema !== "object") {
     throw new Error("schema must be a non-null object");
   }
-  if (schema["type"] !== "object") {
+  if (schema.type !== "object") {
     throw new Error("top-level schema type must be 'object'");
   }
-  if (schema["properties"] !== undefined && typeof schema["properties"] !== "object") {
+  if (schema.properties !== undefined && typeof schema.properties !== "object") {
     throw new Error("schema.properties must be an object if present");
   }
 }
@@ -229,9 +229,7 @@ export function buildForgeToolTool(
         );
       }
 
-      // Validate schemas. `input_schema_json` and `output_schema_json` are
-      // typed `Record<string, unknown>` via z.record(z.unknown()), so no
-      // cast is needed (PR-4 type-safety).
+      // Validate schemas.
       try {
         validateJsonSchema(input.input_schema_json);
         validateJsonSchema(input.output_schema_json);
@@ -300,23 +298,19 @@ export function buildForgeToolTool(
         parentCode ?? undefined,
       );
 
-      const raw: unknown = await llm.completeJson({ system, user, role: forgedByRole });
+      const raw = await llm.completeJson({ system, user, role: forgedByRole });
+      const rawObj = raw as Record<string, unknown>;
 
-      // Narrow the LLM's JSON response to the shape we expect; throw a
-      // structured error if anything is missing/typed wrong (PR-4).
-      if (!raw || typeof raw !== "object") {
-        throw new Error(
-          "forge_tool: LLM did not return a JSON object in stage 2 (generate).",
-        );
-      }
-      const rawObj: Record<string, unknown> = raw as Record<string, unknown>;
-      const pythonCodeRaw = rawObj["python_code"];
-      if (typeof pythonCodeRaw !== "string" || !pythonCodeRaw.trim()) {
+      if (
+        !rawObj ||
+        typeof rawObj.python_code !== "string" ||
+        !rawObj.python_code.trim()
+      ) {
         throw new Error(
           "forge_tool: LLM did not return a valid python_code field in stage 2 (generate).",
         );
       }
-      const pythonCode: string = pythonCodeRaw;
+      const pythonCode: string = rawObj.python_code;
 
       // ---- Stage 3: Execute + Stage 4: Evaluate ----------------------------
 
@@ -329,7 +323,9 @@ export function buildForgeToolTool(
       }> = [];
 
       for (let i = 0; i < input.test_cases.length; i++) {
-        const tc = input.test_cases[i]!;
+        const tc = input.test_cases[i];
+        // Loop bound guarantees this is defined; satisfy strict null checks.
+        if (!tc) continue;
         const expectedOutputKeys = Object.keys(tc.expected_output);
 
         const handle = await sandboxClient.createSandbox();
@@ -401,8 +397,8 @@ export function buildForgeToolTool(
         const schemaJson = {
           type: "object",
           description: input.description,
-          properties: input.input_schema_json["properties"] ?? {},
-          required: input.input_schema_json["required"] ?? [],
+          properties: (input.input_schema_json).properties ?? {},
+          required: (input.input_schema_json).required ?? [],
         };
 
         // Insert skill_library row (Phase D.5: includes scope, forged_by_model/role, parent_tool_id, version).

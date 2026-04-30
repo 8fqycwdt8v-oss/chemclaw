@@ -114,15 +114,27 @@ def ingest_file(path: Path, *, settings: IngesterSettings | None = None) -> dict
                 }
             document_id = row["id"]
 
-            # Insert chunks in one executemany for efficiency.
+            # Insert chunks in one executemany for efficiency. byte_start /
+            # byte_end pin each chunk to its location in `documents.parsed_markdown`
+            # so the contextual_chunker projector can map PDF chunks back to
+            # source pages (db/init/12_security_hardening.sql:40-41).
             cur.executemany(
                 """
                 INSERT INTO document_chunks
-                  (document_id, chunk_index, heading_path, text, token_count)
-                VALUES (%s::uuid, %s, %s, %s, %s)
+                  (document_id, chunk_index, heading_path, text, token_count,
+                   byte_start, byte_end)
+                VALUES (%s::uuid, %s, %s, %s, %s, %s, %s)
                 """,
                 [
-                    (document_id, c.index, c.heading_path, c.text, _token_estimate(c.text))
+                    (
+                        document_id,
+                        c.index,
+                        c.heading_path,
+                        c.text,
+                        _token_estimate(c.text),
+                        c.byte_start,
+                        c.byte_end,
+                    )
                     for c in chunks
                 ],
             )

@@ -49,9 +49,9 @@ describe("makeSseSink — onAwaitingUserInput redaction", () => {
     const events = parseEvents(writes);
     expect(events).toHaveLength(1);
     const ev = events[0];
-    expect(ev["type"]).toBe("awaiting_user_input");
-    expect(ev["session_id"]).toBe("sess-abc");
-    const question = ev["question"] as string;
+    expect(ev.type).toBe("awaiting_user_input");
+    expect(ev.session_id).toBe("sess-abc");
+    const question = ev.question as string;
     expect(question).toContain("[REDACTED]");
     expect(question).not.toContain("NCE-001234");
     // Replacements accumulated for post_turn observability.
@@ -68,7 +68,7 @@ describe("makeSseSink — onAwaitingUserInput redaction", () => {
     );
 
     const events = parseEvents(writes);
-    const question = events[0]?.["question"] as string;
+    const question = events[0]?.question as string;
     expect(question).not.toContain("CMP-12345678");
     expect(question).not.toContain("chemist@example.com");
     expect(question).toContain("[REDACTED]");
@@ -82,7 +82,7 @@ describe("makeSseSink — onAwaitingUserInput redaction", () => {
     sink.onAwaitingUserInput?.("plain question");
 
     const events = parseEvents(writes);
-    expect(events[0]?.["session_id"]).toBe("");
-    expect(events[0]?.["question"]).toBe("plain question");
+    expect(events[0]?.session_id).toBe("");
+    expect(events[0]?.question).toBe("plain question");
   });
 });

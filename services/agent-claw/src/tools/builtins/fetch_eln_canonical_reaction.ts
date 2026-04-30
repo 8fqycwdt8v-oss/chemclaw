@@ -18,7 +18,7 @@ export const FetchElnCanonicalReactionIn = z.object({
     .min(1)
     .max(128)
     .regex(
-      /^[A-Za-z0-9_\-\.:]+$/,
+      /^[A-Za-z0-9_.:-]+$/,
       "reaction_id must match [A-Za-z0-9_-.:]+",
     ),
   top_n_ofat: z.number().int().min(0).max(200).default(10),

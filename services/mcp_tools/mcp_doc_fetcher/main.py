@@ -39,7 +39,7 @@ import os
 import socket
 import urllib.parse
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Any
 
 import httpx
 from fastapi import Body
@@ -115,18 +115,62 @@ _BLOCKED_NETWORKS = (
     ipaddress.ip_network("172.16.0.0/12"),      # RFC1918
     ipaddress.ip_network("192.168.0.0/16"),     # RFC1918
     ipaddress.ip_network("0.0.0.0/8"),          # "this network"
+    ipaddress.ip_network("100.64.0.0/10"),      # CGNAT (RFC 6598)
     ipaddress.ip_network("::1/128"),            # IPv6 loopback
     ipaddress.ip_network("fe80::/10"),          # IPv6 link-local
     ipaddress.ip_network("fc00::/7"),           # IPv6 unique local
+    ipaddress.ip_network("::ffff:0:0/96"),      # IPv4-mapped IPv6 (any) — see _ip_is_blocked
+    ipaddress.ip_network("64:ff9b::/96"),       # IPv4/IPv6 translation (RFC 6052)
+    ipaddress.ip_network("2002::/16"),          # 6to4 — extracted to IPv4 below
 )
 
 
 def _ip_is_blocked(ip_str: str) -> bool:
+    """Return True iff `ip_str` falls in a blocked range.
+
+    Normalises three IPv6 transition forms back to their carried IPv4 address
+    before checking, otherwise an attacker can reach 127.0.0.1 / 169.254.169.254
+    via ``::ffff:127.0.0.1`` (IPv4-mapped), ``2002:7f00:0001::`` (6to4) or
+    a Teredo wrapper. Without this, the audit found that the doc-fetcher
+    resolves IPv4-mapped IPv6 to a plain ``IPv6Address`` that misses the
+    ``127.0.0.0/8`` / ``169.254.0.0/16`` checks above.
+    """
     try:
         addr = ipaddress.ip_address(ip_str)
     except ValueError:
         return True  # not a valid IP — fail closed
-    return any(addr in net for net in _BLOCKED_NETWORKS)
+
+    if any(addr in net for net in _BLOCKED_NETWORKS):
+        return True
+
+    if isinstance(addr, ipaddress.IPv6Address):
+        # IPv4-mapped IPv6, e.g. ::ffff:127.0.0.1
+        if addr.ipv4_mapped is not None:
+            mapped = addr.ipv4_mapped
+            if any(
+                mapped in net
+                for net in _BLOCKED_NETWORKS
+                if isinstance(net, ipaddress.IPv4Network)
+            ):
+                return True
+        # 6to4 tunnelling — 2002::/16 carries an IPv4 address in the next 32 bits.
+        if addr.sixtofour is not None and any(
+            addr.sixtofour in net
+            for net in _BLOCKED_NETWORKS
+            if isinstance(net, ipaddress.IPv4Network)
+        ):
+            return True
+        # Teredo tunnelling — 2001::/32 wraps a client IPv4.
+        if addr.teredo is not None:
+            client_ipv4 = addr.teredo[1]
+            if any(
+                client_ipv4 in net
+                for net in _BLOCKED_NETWORKS
+                if isinstance(net, ipaddress.IPv4Network)
+            ):
+                return True
+
+    return False
 
 
 def _validate_network_host(host: str) -> None:
@@ -163,7 +207,7 @@ def _validate_network_host(host: str) -> None:
         raise ValueError(f"host {host!r} did not resolve: {exc}") from exc
 
     for info in infos:
-        addr = info[4][0]
+        addr = str(info[4][0])
         if _ip_is_blocked(addr):
             if not _ALLOW_HOSTS or h not in _ALLOW_HOSTS:
                 raise ValueError(
@@ -343,8 +387,8 @@ class FetchOut(BaseModel):
     byte_count: int
 
 
-@app.post("/fetch", response_model=FetchOut, tags=["fetch"])
-async def fetch(req: Annotated[FetchIn, Body(...)]) -> FetchOut:
+@app.post("/fetch", response_model=None, tags=["fetch"])
+async def fetch(req: Annotated[FetchIn, Body(...)]) -> FetchOut | JSONResponse:
     """Fetch the raw bytes of a document by URI.
 
     Supports: file://, http://, https://
@@ -432,8 +476,8 @@ def _get_pdf_bytes(uri: str, parsed: urllib.parse.ParseResult) -> bytes:
     return raw
 
 
-@app.post("/pdf_pages", response_model=PdfPagesOut, tags=["pdf"])
-async def pdf_pages(req: Annotated[PdfPagesIn, Body(...)]) -> PdfPagesOut:
+@app.post("/pdf_pages", response_model=None, tags=["pdf"])
+async def pdf_pages(req: Annotated[PdfPagesIn, Body(...)]) -> PdfPagesOut | JSONResponse:
     """Render specific pages of a PDF to base64 PNGs.
 
     Falls back to text extraction via pypdf if pdf2image/poppler is
@@ -487,8 +531,8 @@ async def pdf_pages(req: Annotated[PdfPagesIn, Body(...)]) -> PdfPagesOut:
 
     # Try pdf2image for PNG rendering; fall back to pypdf text extraction.
     try:
-        from pdf2image import convert_from_bytes  # type: ignore[import-untyped]
-        import PIL.Image  # type: ignore[import-untyped]
+        from pdf2image import convert_from_bytes
+        import PIL.Image
 
         images = convert_from_bytes(
             pdf_bytes,
@@ -616,15 +660,15 @@ def _build_page_offset_table(pdf_bytes: bytes) -> list[int]:
     # (pypdf >= 3.x) carries the object number we can look up in xref.
     try:
         page_starts: list[int] = []
-        xref = reader.xref  # type: ignore[attr-defined]
+        xref = reader.xref
         for page in reader.pages:
-            ref = page.indirect_reference  # type: ignore[attr-defined]
+            ref = page.indirect_reference
             if ref is None:
                 break
             obj_num = ref.idnum
             # Try various xref shapes (pypdf 3.x uses a list-of-lists internally).
             pos: int | None = None
-            for tbl in (xref if isinstance(xref, list) else []):
+            for tbl in (xref if isinstance(xref, list) else []):  # type: Any
                 if isinstance(tbl, list) and len(tbl) > obj_num and tbl[obj_num]:
                     entry = tbl[obj_num]
                     if isinstance(entry, int) and entry > 0:
@@ -663,10 +707,10 @@ def _offset_to_page(byte_offset: int, page_starts: list[int]) -> int:
     return result + 1  # 1-indexed
 
 
-@app.post("/byte_offset_to_page", response_model=ByteOffsetToPageOut, tags=["pdf"])
+@app.post("/byte_offset_to_page", response_model=None, tags=["pdf"])
 async def byte_offset_to_page(
     req: Annotated[ByteOffsetToPageIn, Body(...)],
-) -> ByteOffsetToPageOut:
+) -> ByteOffsetToPageOut | JSONResponse:
     """Map PDF byte offsets to 1-indexed page numbers.
 
     Fetches the PDF from the given URI, builds a page-start offset table,

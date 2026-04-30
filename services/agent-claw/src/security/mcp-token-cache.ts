@@ -66,7 +66,7 @@ export function getMcpToken(opts: {
   signingKey?: string;
   now?: number;
 }): string | undefined {
-  const key = opts.signingKey ?? process.env["MCP_AUTH_SIGNING_KEY"] ?? "";
+  const key = opts.signingKey ?? process.env.MCP_AUTH_SIGNING_KEY ?? "";
   if (!key) return undefined;
 
   const cacheKey = `${opts.userEntraId}|${opts.service}|${opts.sandboxId ?? "agent"}`;

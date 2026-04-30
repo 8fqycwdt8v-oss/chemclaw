@@ -1,7 +1,7 @@
 // Tests for the analyze_csv builtin tool.
 // Uses csv_text path only (no DB / mcp-doc-fetcher needed).
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { buildAnalyzeCsvTool } from "../../../src/tools/builtins/analyze_csv.js";
 import type { ToolContext } from "../../../src/core/types.js";
 import type { Pool } from "pg";
@@ -106,7 +106,7 @@ describe("analyze_csv — size cap", () => {
 describe("analyze_csv — validation", () => {
   it("throws when neither document_id nor csv_text is supplied", async () => {
     await expect(
-      tool.execute(ctx, { query: "count" } as never),
+      tool.execute(ctx, { query: "count" }),
     ).rejects.toThrow(/document_id or csv_text/);
   });
 

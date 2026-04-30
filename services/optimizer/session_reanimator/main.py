@@ -20,10 +20,10 @@ session_budget_exceeded, awaiting_user_input), we just log + skip on the
 next poll.
 
 Auth:
-  Connects to the agent as the configured CHEMCLAW_DEV_USER_EMAIL header
-  (dev) or X-Internal-Service-Token (production — TODO: ADR 006 Layer 2
-  to mint a JWT instead of a header). Until then, this daemon must run
-  on the same private network as the agent.
+  Mints an HS256 JWT scoped to `agent:resume` (per ADR 006 Layer 2,
+  see services/mcp_tools/common/auth.py) and POSTs to the agent's
+  /api/internal/sessions/:id/resume endpoint, which trusts only the
+  signed `claims.user`. No `x-user-entra-id` forgery surface.
 """
 
 from __future__ import annotations

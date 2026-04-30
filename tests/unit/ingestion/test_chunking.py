@@ -71,6 +71,6 @@ def test_rejects_invalid_params() -> None:
 
 
 def test_chunk_type_is_frozen() -> None:
-    c = Chunk(index=0, heading_path="A", text="x")
+    c = Chunk(index=0, heading_path="A", text="x", byte_start=0, byte_end=1)
     with pytest.raises(Exception):
         c.index = 1  # type: ignore[misc]

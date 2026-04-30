@@ -22,7 +22,7 @@ export interface SkillsRouteDeps {
 const EnableDisableSchema = z.object({ id: z.string().min(1) });
 
 async function requireAdmin(pool: Pool, userEntraId: string): Promise<boolean> {
-  return withUserContext(pool, userEntraId, async (client) => {
+  return await withUserContext(pool, userEntraId, async (client) => {
     const r = await client.query<{ has_admin: boolean }>(
       `SELECT EXISTS (
          SELECT 1 FROM user_project_access
@@ -48,46 +48,46 @@ export function registerSkillsRoutes(app: FastifyInstance, deps: SkillsRouteDeps
       max_steps_override: s.max_steps_override,
       active: s.active,
     }));
-    return reply.send({ skills });
+    return await reply.send({ skills });
   });
 
   // POST /api/skills/enable — admin-only (mutates process-global state).
   app.post("/api/skills/enable", async (req, reply) => {
     const user = deps.getUser(req);
     if (!(await requireAdmin(deps.pool, user))) {
-      return reply.code(403).send({
+      return await reply.code(403).send({
         error: "forbidden",
         detail: "skill enable/disable requires admin role",
       });
     }
     const parsed = EnableDisableSchema.safeParse(req.body);
     if (!parsed.success) {
-      return reply.code(400).send({ error: "invalid_input", detail: parsed.error.issues });
+      return await reply.code(400).send({ error: "invalid_input", detail: parsed.error.issues });
     }
     const result = deps.loader.enable(parsed.data.id);
     if (!result.ok) {
-      return reply.code(400).send({ error: result.reason });
+      return await reply.code(400).send({ error: result.reason });
     }
-    return reply.send({ ok: true, active: [...deps.loader.activeIds] });
+    return await reply.send({ ok: true, active: [...deps.loader.activeIds] });
   });
 
   // POST /api/skills/disable — admin-only.
   app.post("/api/skills/disable", async (req, reply) => {
     const user = deps.getUser(req);
     if (!(await requireAdmin(deps.pool, user))) {
-      return reply.code(403).send({
+      return await reply.code(403).send({
         error: "forbidden",
         detail: "skill enable/disable requires admin role",
       });
     }
     const parsed = EnableDisableSchema.safeParse(req.body);
     if (!parsed.success) {
-      return reply.code(400).send({ error: "invalid_input", detail: parsed.error.issues });
+      return await reply.code(400).send({ error: "invalid_input", detail: parsed.error.issues });
     }
     const result = deps.loader.disable(parsed.data.id);
     if (!result.ok) {
-      return reply.code(400).send({ error: result.reason });
+      return await reply.code(400).send({ error: result.reason });
     }
-    return reply.send({ ok: true, active: [...deps.loader.activeIds] });
+    return await reply.send({ ok: true, active: [...deps.loader.activeIds] });
   });
 }

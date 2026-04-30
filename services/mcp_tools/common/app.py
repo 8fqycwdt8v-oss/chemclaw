@@ -13,11 +13,11 @@ from __future__ import annotations
 
 import logging
 import uuid
-from collections.abc import AsyncIterator, Callable
-from contextlib import AbstractAsyncContextManager, asynccontextmanager
+from collections.abc import Awaitable, Callable
+from contextlib import asynccontextmanager
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Request, status
+from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 
 from services.mcp_tools.common.logging import configure_logging
@@ -40,7 +40,7 @@ def create_app(
     version: str,
     log_level: str = "INFO",
     ready_check: Callable[[], bool] | Callable[[], Any] | None = None,
-    lifespan: Callable[[FastAPI], AbstractAsyncContextManager[Any]] | None = None,
+    lifespan: Callable[[FastAPI], Any] | None = None,
     required_scope: str | None = None,
 ) -> FastAPI:
     """Build a FastAPI app with the standard shape for an MCP tool service.
@@ -124,7 +124,7 @@ def create_app(
         )
 
     @asynccontextmanager
-    async def _default_lifespan(app: FastAPI) -> AsyncIterator[None]:
+    async def _default_lifespan(app: FastAPI) -> Any:
         log.info("starting %s@%s", name, version)
         if lifespan is not None:
             async with lifespan(app):
@@ -152,7 +152,10 @@ def create_app(
     )
 
     @app.middleware("http")
-    async def mcp_auth_middleware(request: Request, call_next: Callable):
+    async def mcp_auth_middleware(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
         # Probes always pass. ONLY the explicit allowlist below is
         # exempted; an earlier blanket `/internal/*` prefix bypass was
         # removed because no MCP service registers `/internal/*` today,
@@ -241,7 +244,10 @@ def create_app(
         return await call_next(request)
 
     @app.middleware("http")
-    async def add_request_id(request: Request, call_next: Callable):
+    async def add_request_id(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
         rid = request.headers.get("x-request-id") or str(uuid.uuid4())
         request.state.request_id = rid
         response = await call_next(request)
@@ -287,8 +293,8 @@ def create_app(
     async def healthz() -> dict[str, str]:
         return {"status": "ok", "service": name, "version": version}
 
-    @app.get("/readyz", tags=["internal"])
-    async def readyz() -> dict[str, Any]:
+    @app.get("/readyz", tags=["internal"], response_model=None)
+    async def readyz() -> dict[str, Any] | JSONResponse:
         if ready_check is None:
             return {"status": "ok", "service": name}
         try:

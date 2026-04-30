@@ -35,7 +35,7 @@ export async function withToolSpan<T>(
   attrs: ToolSpanAttributes,
   fn: () => Promise<T>,
 ): Promise<T> {
-  return tracer.startActiveSpan(`tool.${attrs.toolId}`, async (span) => {
+  return await tracer.startActiveSpan(`tool.${attrs.toolId}`, async (span) => {
     span.setAttributes({
       "tool.id": attrs.toolId,
       "tool.read_only": attrs.readOnly ?? false,
