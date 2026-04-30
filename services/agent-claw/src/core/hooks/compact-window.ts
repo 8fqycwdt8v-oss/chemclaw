@@ -48,18 +48,27 @@ export function registerCompactWindowHook(
   lifecycle: Lifecycle,
   deps: CompactWindowHookDeps,
 ): void {
-  lifecycle.on("pre_compact", "compact-window", async (payload: PreCompactPayload) => {
-    const { messages } = payload;
-    const compacted = await compact(messages, {
-      tokenBudget: deps.tokenBudget,
-      triggerFraction: deps.triggerFraction ?? 0.60,
-      recentKeep: deps.keepRecent ?? 3,
-      llm: deps.llm,
-      summaryInstructions: payload.custom_instructions ?? undefined,
-    });
+  lifecycle.on(
+    "pre_compact",
+    "compact-window",
+    async (payload: PreCompactPayload, _toolUseID, options) => {
+      const { messages } = payload;
+      // Forward the per-dispatch AbortSignal so a hook timeout (or a
+      // route-level cancellation) actually aborts the in-flight summarizer
+      // call instead of letting it hang to the LiteLLM 60s timeout. M11
+      // in the 2026-04-29 audit.
+      const compacted = await compact(messages, {
+        tokenBudget: deps.tokenBudget,
+        triggerFraction: deps.triggerFraction ?? 0.60,
+        recentKeep: deps.keepRecent ?? 3,
+        llm: deps.llm,
+        summaryInstructions: payload.custom_instructions ?? undefined,
+        signal: options.signal,
+      });
 
-    // Mutate the messages array in-place so the harness sees the change.
-    messages.splice(0, messages.length, ...compacted);
-    return {};
-  });
+      // Mutate the messages array in-place so the harness sees the change.
+      messages.splice(0, messages.length, ...compacted);
+      return {};
+    },
+  );
 }

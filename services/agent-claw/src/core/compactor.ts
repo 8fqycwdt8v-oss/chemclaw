@@ -46,6 +46,14 @@ export interface CompactorOptions {
   /** LLM provider for the synopsis call (Haiku-class). */
   llm: LlmProvider;
   /**
+   * Per-call AbortSignal forwarded to the summarizer's `completeJson`
+   * call. When the caller (the compact-window hook) is woken by a per-
+   * dispatch hook controller, this is what cancels the LLM call so the
+   * 60s hook timeout actually stops in-flight work instead of letting the
+   * fetch hang to its own timeout. See ADR-007 §6 (hook timeout).
+   */
+  signal?: AbortSignal;
+  /**
    * Optional user-supplied steering for the summarizer. Forwarded from the
    * /compact slash command's argument string, appended to the system prompt
    * so the user can request e.g. "focus on the synthesis decisions only".
@@ -126,6 +134,7 @@ export async function compact(
     const result = (await opts.llm.completeJson({
       system: systemPrompt,
       user: `Conversation transcript to summarize:\n\n${transcript}`,
+      signal: opts.signal,
     })) as Partial<SynopsisResult>;
 
     synopsis =
