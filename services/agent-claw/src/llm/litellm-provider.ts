@@ -127,7 +127,7 @@ export class LiteLLMProvider implements LlmProvider {
   /** Resolve a model ID from an optional role. Defaults to AGENT_MODEL. */
   private _resolveModel(role?: ModelRole): string {
     if (!role) return this._defaultModelId;
-    return this._roleMap[role] ?? this._defaultModelId;
+    return this._roleMap[role];
   }
 
   async call(
@@ -158,7 +158,7 @@ export class LiteLLMProvider implements LlmProvider {
 
     // Check for tool calls first (finishReason may be 'tool-calls' or the
     // model may stop with both tool calls and text in some provider variants).
-    if (result.toolCalls && result.toolCalls.length > 0) {
+    if (result.toolCalls.length > 0) {
       // Phase 5: when the model emits 2+ tool calls in one assistant
       // message, return the multi-call shape so step.ts can run them as a
       // batch (read-only batches go through Promise.all). Single calls keep
@@ -242,7 +242,7 @@ export class LiteLLMProvider implements LlmProvider {
     ]);
 
     // Emit tool_call if the model switched to tool use during streaming.
-    if (toolCalls && toolCalls.length > 0) {
+    if (toolCalls.length > 0) {
       const first = toolCalls[0];
       if (first) {
         yield {
@@ -255,7 +255,7 @@ export class LiteLLMProvider implements LlmProvider {
 
     yield {
       type: "finish",
-      finishReason: finishReason ?? "stop",
+      finishReason: finishReason,
       usage: {
         promptTokens: usage.inputTokens ?? 0,
         completionTokens: usage.outputTokens ?? 0,

@@ -226,7 +226,7 @@ export class ToolRegistry {
    * Non-forged tools retain their original order after the forged ones.
    */
   toolsForRole(callerRole: ModelRole): Tool[] {
-    const callerTier = ROLE_TIER[callerRole] ?? 0;
+    const callerTier = ROLE_TIER[callerRole];
     const all = [...this._tools.values()];
 
     // Partition: forged-by-stronger vs everything else.
@@ -235,7 +235,7 @@ export class ToolRegistry {
 
     for (const tool of all) {
       const meta = this._meta.get(tool.id);
-      const authorTier = meta?.forgedByRole ? (ROLE_TIER[meta.forgedByRole] ?? 0) : 0;
+      const authorTier = meta?.forgedByRole ? ROLE_TIER[meta.forgedByRole] : 0;
       if (meta?.forgedByRole && authorTier > callerTier) {
         // Surface with a hint in the description.
         const hintedTool: Tool = {
@@ -254,8 +254,8 @@ export class ToolRegistry {
     strongerForged.sort((a, b) => {
       const metaA = this._meta.get(a.id);
       const metaB = this._meta.get(b.id);
-      const tierA = metaA?.forgedByRole ? (ROLE_TIER[metaA.forgedByRole] ?? 0) : 0;
-      const tierB = metaB?.forgedByRole ? (ROLE_TIER[metaB.forgedByRole] ?? 0) : 0;
+      const tierA = metaA?.forgedByRole ? ROLE_TIER[metaA.forgedByRole] : 0;
+      const tierB = metaB?.forgedByRole ? ROLE_TIER[metaB.forgedByRole] : 0;
       return tierB - tierA; // descending
     });
 
