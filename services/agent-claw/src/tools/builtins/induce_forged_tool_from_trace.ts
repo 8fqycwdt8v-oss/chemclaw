@@ -181,8 +181,8 @@ Generalize this sequence into a single reusable Python tool.`;
       }
 
       try {
-        validateJsonSchema(raw.input_schema_json as Record<string, unknown>);
-        validateJsonSchema(raw.output_schema_json as Record<string, unknown>);
+        validateJsonSchema(raw.input_schema_json);
+        validateJsonSchema(raw.output_schema_json);
       } catch (err) {
         throw new Error(
           `induce_forged_tool_from_trace: schema validation failed: ${(err as Error).message}`,
@@ -210,8 +210,8 @@ Generalize this sequence into a single reusable Python tool.`;
       const forgeResult = await forgeTool.execute(ctx, {
         name: input.name,
         description: input.description,
-        input_schema_json: raw.input_schema_json as Record<string, unknown>,
-        output_schema_json: raw.output_schema_json as Record<string, unknown>,
+        input_schema_json: raw.input_schema_json,
+        output_schema_json: raw.output_schema_json,
         test_cases: testCases.slice(0, 10), // max 10 per forge_tool schema
         implementation_hint: typeof raw.implementation_hint === "string"
           ? raw.implementation_hint

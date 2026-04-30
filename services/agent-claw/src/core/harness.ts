@@ -112,7 +112,7 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
   // Main loop.
   // -------------------------------------------------------------------------
   try {
-    loop: while (true) {
+    loop: for (;;) {
       // Cancellation check between iterations — caught by the catch arm
       // below so the route sees a "cancelled" finishReason after post_turn
       // runs. Done before the step cap check because cancellation is the

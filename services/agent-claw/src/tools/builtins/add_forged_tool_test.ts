@@ -18,12 +18,10 @@ import { defineTool } from "../tool.js";
 
 export const AddForgedToolTestIn = z.object({
   forged_tool_id: z.string().uuid("forged_tool_id must be a valid UUID"),
-  input_json: z
-    .record(z.unknown())
-    .refine((v) => v !== null, "input_json must be a non-null object"),
-  expected_output_json: z
-    .record(z.unknown())
-    .refine((v) => v !== null, "expected_output_json must be a non-null object"),
+  // z.record() already rejects null at parse time with a clear error;
+  // an additional .refine(v !== null) was redundant and tripped no-unnecessary-condition.
+  input_json: z.record(z.unknown()),
+  expected_output_json: z.record(z.unknown()),
   tolerance_json: z.record(z.number().nonnegative()).optional(),
   kind: z.enum(["functional", "contract", "property"]).optional().default("functional"),
 });

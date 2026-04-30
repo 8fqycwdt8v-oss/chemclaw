@@ -82,7 +82,7 @@ export class OptimisticLockError extends Error {
 interface SessionRow {
   id: string;
   user_entra_id: string;
-  scratchpad: Record<string, unknown>;
+  scratchpad: Record<string, unknown> | null;
   last_finish_reason: SessionFinishReason | null;
   awaiting_question: string | null;
   message_count: number;

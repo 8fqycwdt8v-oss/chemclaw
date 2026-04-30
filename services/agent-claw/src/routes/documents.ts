@@ -71,7 +71,7 @@ export function registerDocumentsRoute(app: FastifyInstance, deps: DocumentsRout
     }
 
     // Fetch raw bytes from mcp-doc-fetcher.
-    const base = deps.config.MCP_DOC_FETCHER_URL?.replace(/\/$/, "") ?? "";
+    const base = deps.config.MCP_DOC_FETCHER_URL.replace(/\/$/, "");
     if (!base) {
       return await reply.code(503).send({ error: "mcp_doc_fetcher_not_configured" });
     }

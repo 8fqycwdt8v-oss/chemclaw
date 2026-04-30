@@ -100,7 +100,7 @@ export class PaperclipClient {
 
     if (resp.status === 429) {
       const body = (await resp.json().catch(() => ({}))) as Record<string, unknown>;
-      const reason = (body.reason as string) ?? "budget_exceeded";
+      const reason = (body.reason as string | undefined) ?? "budget_exceeded";
       const retryAfter = Number(resp.headers.get("Retry-After") ?? 30);
       throw new PaperclipBudgetError(reason, retryAfter);
     }

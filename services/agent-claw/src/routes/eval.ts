@@ -137,7 +137,7 @@ export function registerEvalRoute(
       // Group by class.
       const classBuckets: Record<string, GoldenExample[]> = {};
       for (const ex of fixtureExamples) {
-        const cls = ex.expected_classes?.[0] ?? "unknown";
+        const cls = ex.expected_classes[0] ?? "unknown";
         (classBuckets[cls] ??= []).push(ex);
       }
 
@@ -215,9 +215,11 @@ export function registerEvalRoute(
     }
 
     // -----------------------------------------------------------------------
-    // /eval shadow <prompt_name> — summary from shadow_run_scores
+    // /eval shadow <prompt_name> — summary from shadow_run_scores.
+    // After the unknown/golden returns above, "shadow" is the only remaining
+    // EvalSubCommand variant; TS narrows accordingly so no explicit guard.
     // -----------------------------------------------------------------------
-    if (parsed.subVerb === "shadow") {
+    {
       const { promptName } = parsed;
 
       const r = await withSystemContext(pool, (client) =>
@@ -253,8 +255,5 @@ export function registerEvalRoute(
 
       return await reply.code(200).send({ promptName, versions });
     }
-
-    // Unreachable — all branches handled above.
-    return await reply.code(400).send({ error: "Unknown eval sub-command" });
   });
 }
