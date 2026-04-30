@@ -13,6 +13,9 @@ import { defineTool } from "../tool.js";
 import type { LlmProvider } from "../../llm/provider.js";
 import type { PromptRegistry } from "../../prompts/registry.js";
 import { buildExpandReactionContextTool, ExpandReactionContextIn } from "./expand_reaction_context.js";
+import { getLogger } from "../../observability/logger.js";
+
+const log = getLogger("synthesize_insights");
 
 // ---------- Schemas ----------------------------------------------------------
 
@@ -138,10 +141,10 @@ export function buildSynthesizeInsightsTool(
           (r) => !reactionSet.has(r),
         );
         if (hasUnseen || hasUnknownRxn) {
-          // Soft-drop with no throw — log to console so it appears in traces.
-          console.warn(
-            "[synthesize_insights] dropping insight with unseen evidence:",
-            insight.claim.slice(0, 80),
+          // Soft-drop with no throw — log so it appears in trace shippers.
+          log.warn(
+            { claim: insight.claim.slice(0, 80) },
+            "dropping insight with unseen evidence",
           );
           return false;
         }
