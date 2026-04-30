@@ -71,7 +71,7 @@ export default tseslint.config(
         { allowNumber: true, allowBoolean: true, allowNullish: false },
       ],
       '@typescript-eslint/no-misused-promises': 'error',
-      '@typescript-eslint/require-await': 'warn',
+      '@typescript-eslint/require-await': 'error',
       '@typescript-eslint/no-floating-promises': 'error',
       '@typescript-eslint/no-confusing-void-expression': 'error',
       '@typescript-eslint/no-redundant-type-constituents': 'error',
@@ -121,6 +121,27 @@ export default tseslint.config(
       'no-prototype-builtins': 'error',
       'prefer-const': 'error',
       'no-undef': 'off', // typescript handles this
+    },
+  },
+  {
+    // Async-contract conformance — these files implement interfaces
+    // (HookCallback, LlmProvider, Tool.execute) whose signature
+    // requires a Promise<X> return. Several implementations don't
+    // happen to await anything but must stay `async` to satisfy the
+    // contract. require-await would force every site to use
+    // Promise.resolve() boilerplate or to be re-shaped against the
+    // contract — neither change is worth the noise.
+    files: [
+      'src/core/hooks/**/*.ts',
+      'src/llm/provider.ts',
+      'src/tools/builtins/ask_user.ts',
+      'src/tools/builtins/draft_section.ts',
+      'src/tools/builtins/manage_todos.ts',
+      'src/routes/forged-tools.ts',
+      'src/routes/healthz.ts',
+    ],
+    rules: {
+      '@typescript-eslint/require-await': 'off',
     },
   },
   {
