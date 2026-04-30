@@ -51,6 +51,15 @@ from services.mcp_tools.mcp_synthegy_mech.xtb_validator import (
 # so tests can monkey-patch it via os.environ before TestClient construction.
 _DEFAULT_MCP_XTB_URL = os.environ.get("MCP_XTB_BASE_URL", "http://mcp-xtb:8010")
 
+# Cycle-3 cost cap. The agent-side timeout is 300 s
+# (TIMEOUT_SYNTHEGY_MECH_MS in elucidate_mechanism.ts). Without a matching
+# server-side wall-clock cap, a slow LiteLLM upstream lets the search loop
+# keep issuing LLM calls — and accumulating cost — long after the agent
+# gave up. We cap server-side at 270 s (30 s under the client) so the
+# search is cancelled cleanly before the client disconnects, freeing
+# LiteLLM resources and stopping the spending.
+_SERVER_SEARCH_TIMEOUT_S = 270.0
+
 log = logging.getLogger("mcp-synthegy-mech")
 settings = ToolSettings()
 
@@ -265,7 +274,42 @@ async def elucidate_mechanism(
     )
 
     search = MechanismSearch(policy=policy, max_nodes=req.max_nodes)
-    result = await search.search(reactants_canonical, products_canonical)
+    try:
+        result = await asyncio.wait_for(
+            search.search(reactants_canonical, products_canonical),
+            timeout=_SERVER_SEARCH_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        # Server wall-clock cap fired. The asyncio cancellation we triggered
+        # propagates through llm_policy and xtb_validator (both re-raise
+        # CancelledError) so outstanding LLM calls and httpx tasks are
+        # cancelled, freeing upstream resources. Return a graceful
+        # truncated response — the agent's TIMEOUT_SYNTHEGY_MECH_MS
+        # would otherwise abort the connection in 30 s anyway.
+        log.warning(
+            "Server-side search timeout fired after %.0fs (max_nodes=%d, model=%s)",
+            _SERVER_SEARCH_TIMEOUT_S,
+            req.max_nodes,
+            req.model,
+        )
+        warnings.append(
+            f"Server-side search timeout ({_SERVER_SEARCH_TIMEOUT_S:.0f}s) "
+            f"fired before completion. LLM cost is bounded; the moves list "
+            f"is empty. Reduce max_nodes or refine the guidance_prompt."
+        )
+        return ElucidateMechanismOut(
+            moves=[],
+            reactants_smiles=reactants_canonical,
+            products_smiles=products_canonical,
+            total_llm_calls=policy.stats.total_calls,
+            total_nodes_explored=0,
+            prompt_tokens=policy.stats.prompt_tokens,
+            completion_tokens=policy.stats.completion_tokens,
+            parse_failures=policy.stats.parse_failures,
+            upstream_errors=policy.stats.upstream_errors,
+            warnings=warnings,
+            truncated=True,
+        )
 
     # The path is [src, intermediate1, intermediate2, ..., dest]. Convert to
     # consecutive (from, to) moves with their scores.
@@ -312,8 +356,9 @@ async def elucidate_mechanism(
     if result.truncated:
         warnings.append(
             f"Search budget exhausted after {result.nodes_explored} nodes "
-            f"without reaching the product. Returned the search root only; "
-            f"increase max_nodes (currently {req.max_nodes}, max 400) or "
+            f"without reaching the product. The moves list is empty — "
+            f"the response carries no mechanism. "
+            f"Increase max_nodes (currently {req.max_nodes}, max 400) or "
             f"refine the guidance_prompt."
         )
 

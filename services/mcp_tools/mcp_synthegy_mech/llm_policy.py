@@ -109,6 +109,17 @@ class LiteLLMScoringPolicy:
             return []
         coros = [self._score_one(rxn, history, m) for m in moves]
         scores = await asyncio.gather(*coros, return_exceptions=False)
+        # Cycle-3 fix: defensively pin the gather contract. Today _score_one
+        # catches all non-CancelledError exceptions and returns 0.0, so
+        # `scores` is always the same length as `moves`. If a future change
+        # lets a non-CancelledError exception escape `_score_one`, gather's
+        # return_exceptions=False would silently produce a short list, and
+        # the search loop's positional zip(moves, scores) would silently
+        # misalign scores to wrong moves — corrupting the heuristic.
+        assert len(scores) == len(moves), (
+            f"policy.gather contract violated: {len(scores)} scores "
+            f"for {len(moves)} moves"
+        )
         return scores
 
     # ------------------------------------------------------------------

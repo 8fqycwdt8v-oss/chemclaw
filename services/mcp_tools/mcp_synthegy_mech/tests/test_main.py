@@ -537,6 +537,49 @@ def test_xtb_validator_dedupes_by_canonical_form(client):
     )
 
 
+def test_server_wall_clock_timeout_caps_runaway_search(client):
+    """Cycle-3 fix: a slow upstream must not let the search keep spending
+    after the agent gives up. We force the search to hang via an infinite
+    sleep, then assert the route returns truncated=True with a timeout
+    warning rather than blocking until the test runner times out.
+    """
+    import asyncio as _asyncio
+
+    async def hanging_search(self, src, dest):  # noqa: ARG001
+        # Sleep longer than the wall-clock cap (270s); the wait_for
+        # cancellation should fire first.
+        await _asyncio.sleep(600)
+        raise AssertionError("search should have been cancelled by wait_for")
+
+    # Stub the wall-clock cap to a sub-second value so the test runs fast.
+    with mock.patch(
+        "services.mcp_tools.mcp_synthegy_mech.main._SERVER_SEARCH_TIMEOUT_S",
+        0.05,
+    ), mock.patch(
+        "services.mcp_tools.mcp_synthegy_mech.mechanism_search.MechanismSearch.search",
+        new=hanging_search,
+    ), mock.patch(
+        "services.mcp_tools.mcp_synthegy_mech.llm_policy.LiteLLMScoringPolicy._acompletion",
+        return_value=_fake_response(),
+    ):
+        r = client.post(
+            "/elucidate_mechanism",
+            json={
+                "reactants_smiles": "CC=O",
+                "products_smiles": "CCO",
+                "max_nodes": 200,
+            },
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["truncated"] is True
+    assert data["moves"] == []
+    assert any(
+        "timeout" in w.lower() and "search" in w.lower()
+        for w in data["warnings"]
+    ), data["warnings"]
+
+
 def test_token_counters_aggregate_across_llm_calls(client):
     """prompt_tokens / completion_tokens must aggregate, not just echo last call."""
     # Each fake call returns 100 + 40 tokens. With 1-node budget the LLM is
