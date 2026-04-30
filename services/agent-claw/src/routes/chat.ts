@@ -62,6 +62,7 @@ import {
 import { handleSlashShortCircuit } from "./chat-slash.js";
 import { dispatchManualCompact } from "./chat-compact.js";
 import { reserveTurnBudget } from "./chat-paperclip.js";
+import { handleNonStreamingTurn } from "./chat-non-streaming.js";
 
 // Re-exported so existing imports `import type { StreamEvent } from "./chat.js"`
 // keep compiling — the canonical home is now ../streaming/sse.ts.
@@ -271,78 +272,27 @@ async function handleChat(
     sessionId: sessionId ?? undefined,
   });
 
-  // Helper: release Paperclip + close root span. Called from the non-streaming
-  // path's success / error returns; the streaming path has its own finally
-  // block that does the same work plus session persistence + post_turn.
-  const closeNonStreamingTurn = async (
-    promptTokens: number,
-    completionTokens: number,
-  ) => {
-    try {
-      recordLlmUsage(rootSpan, {
-        promptTokens,
-        completionTokens,
-        model: deps.config.AGENT_MODEL,
-      });
-    } catch (spanErr) {
-      try { recordSpanError(rootSpan, spanErr); } catch { /* ignore */ }
-    }
-    try { rootSpan.end(); } catch { /* ignore */ }
-
-    if (paperclipHandle) {
-      try {
-        const totalTokens = promptTokens + completionTokens;
-        const actualUsd = totalTokens * USD_PER_TOKEN_ESTIMATE;
-        await paperclipHandle.release(totalTokens, actualUsd);
-      } catch (relErr) {
-        req.log.warn({ err: relErr }, "paperclip /release failed (non-fatal)");
-      }
-    }
-  };
-
   if (!doStream) {
-    // Non-streaming path. Mirrors the streaming path's Paperclip + rootSpan
-    // wiring so daily-USD caps and Langfuse trace tagging apply uniformly.
-    try {
-      if (isPlanMode) {
-        // Plan mode: ask LLM to produce a JSON plan; no tool execution.
-        // Run the completeJson call inside the rootSpan's OTel context so
-        // LiteLLM's auto-instrumentation parents its trace under the
-        // root and inherits the prompt:agent.system tag (deep-review #6).
-        const planJson = await otelContext.with(
-          trace.setSpan(otelContext.active(), rootSpan),
-          () =>
-            deps.llm.completeJson({
-              system: systemPrompt,
-              user: lastUserMessage?.content ?? "",
-              signal: req.signal,
-            }),
-        );
-        const steps = parsePlanSteps(planJson);
-        const plan = createPlan(steps, messages, user);
-        planStore.save(plan);
-        cleanupSkillForTurn?.();
-        await closeNonStreamingTurn(0, 0);
-        return void reply.send({
-          plan_id: plan.plan_id,
-          steps: plan.steps,
-          created_at: plan.created_at,
-        });
-      }
-      const result = await otelContext.with(
-        trace.setSpan(otelContext.active(), rootSpan),
-        () => agent.run({ messages, ctx, signal: req.signal }),
-      );
-      cleanupSkillForTurn?.();
-      await closeNonStreamingTurn(result.usage.promptTokens, result.usage.completionTokens);
-      return void reply.send({ text: result.text, finishReason: result.finishReason, usage: result.usage });
-    } catch (err) {
-      req.log.error({ err }, "chat generate failed");
-      cleanupSkillForTurn?.();
-      try { recordSpanError(rootSpan, err); } catch { /* ignore */ }
-      await closeNonStreamingTurn(0, 0);
-      return void reply.code(500).send({ error: "internal" });
-    }
+    // Non-streaming path. Owns its own try/finally lifetime — no
+    // post_turn dispatch, no session persistence — and shares the
+    // rootSpan + paperclipHandle teardown with the streaming path's
+    // finally via the closeTurn helper inside chat-non-streaming.ts.
+    await handleNonStreamingTurn(req, reply, {
+      isPlanMode,
+      systemPrompt,
+      lastUserContent: lastUserMessage?.content ?? "",
+      messages,
+      ctx,
+      agent,
+      llm: deps.llm,
+      user,
+      model: deps.config.AGENT_MODEL,
+      rootSpan,
+      paperclipHandle,
+      cleanupSkillForTurn,
+      signal: req.signal,
+    });
+    return;
   }
 
   // ------- SSE streaming path -------
