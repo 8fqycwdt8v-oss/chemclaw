@@ -5,10 +5,21 @@
 // flat config keeps us on the supported track and matches typescript-eslint
 // v8's first-class flat-config exports.
 //
-// Strict-type-checked is the recommended preset; we soften the noisiest
-// rules to `warn` for PR-1 so the gate stays practical. PR-4
-// (refactor/typesafety) tightens these back to `error` after the explicit
-// `any` casts in `sandbox.ts`, `step.ts`, etc. are paid down.
+// Status (post PR-1 paydown campaign):
+//   - 40 rules from the strict-type-checked preset are now flipped to
+//     `error` and locked in via CI. New violations on those rules fail
+//     the build.
+//   - 8 rules remain on `warn` — all high-volume rules that need
+//     genuine per-site code work to pay down:
+//       * no-explicit-any            (top-level any reduction)
+//       * no-unsafe-assignment       (~26 sites; mostly pg row types)
+//       * no-unsafe-member-access    (~28 sites; mostly pg row types)
+//       * no-unsafe-return           (~10 sites; pg row types)
+//       * restrict-template-expressions (~98 sites; needs typed locals)
+//       * no-unnecessary-condition   (~65 sites; needs guard rewrites)
+//       * require-await              (~15 intentional async-contract conformance)
+//       * no-useless-escape          (~16 cosmetic, inside char classes)
+//   - Tests get extra latitude via the test-file override block below.
 
 import tseslint from 'typescript-eslint';
 import js from '@eslint/js';
@@ -36,10 +47,9 @@ export default tseslint.config(
       },
     },
     rules: {
-      // PR-1 baseline: keep these noisy rules as warnings so CI stays
-      // green. PR-4 (refactor/typesafety) flips them back to error after
-      // the documented `any`-cast paydown.
-      // TODO(PR-4): cap any-casts; flip these back to 'error'.
+      // High-volume rules still on warn — see the file-header status block.
+      // Each remaining warn rule has a clear paydown path; flip to 'error'
+      // once the surfaced sites are addressed.
       '@typescript-eslint/no-explicit-any': 'warn',
       '@typescript-eslint/no-unsafe-assignment': 'warn',
       '@typescript-eslint/no-unsafe-call': 'error',
@@ -82,8 +92,6 @@ export default tseslint.config(
       '@typescript-eslint/no-invalid-void-type': 'error',
       '@typescript-eslint/no-unnecessary-type-parameters': 'error',
       '@typescript-eslint/no-unnecessary-type-conversion': 'error',
-      // PR-1 paydown: prefer-promise-reject-errors flipped to error after
-      // wrapping signal.reason narrowing in lifecycle.ts.
 
       '@typescript-eslint/no-unused-vars': [
         'error',
