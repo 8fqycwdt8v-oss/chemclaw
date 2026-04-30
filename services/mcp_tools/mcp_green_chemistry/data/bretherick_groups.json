@@ -1,0 +1,11 @@
+[
+  {"smarts": "[N-]=[N+]=N", "group_name": "Azide", "hazard_class": "Explosive", "notes": "Energetic; avoid > 1 mol scale"},
+  {"smarts": "[N+](=O)[O-]", "group_name": "Nitro", "hazard_class": "Energetic", "notes": "Decomposition risk above 100°C"},
+  {"smarts": "OO", "group_name": "Peroxide", "hazard_class": "Explosive", "notes": "Shock-sensitive"},
+  {"smarts": "[Li,Na,K]C", "group_name": "Organolithium/Na/K", "hazard_class": "Pyrophoric", "notes": "Ignites in air"},
+  {"smarts": "ClC#N", "group_name": "Cyanogen halide", "hazard_class": "Toxic", "notes": "Acutely toxic"},
+  {"smarts": "[Cl,Br,I]C(=O)Cl", "group_name": "Acyl halide", "hazard_class": "Lachrymator", "notes": "Severe eye irritant; HCl on hydrolysis"},
+  {"smarts": "C=COO", "group_name": "Vinyl peroxide", "hazard_class": "Explosive", "notes": "Highly shock-sensitive"},
+  {"smarts": "S(=O)(=O)Cl", "group_name": "Sulfonyl chloride", "hazard_class": "Lachrymator", "notes": "Severe eye/lung irritant"},
+  {"smarts": "[B,Al]([Cl,F,H])([Cl,F,H])[Cl,F,H]", "group_name": "Group-13 halide/hydride", "hazard_class": "Pyrophoric", "notes": "Reacts violently with water"}
+]
