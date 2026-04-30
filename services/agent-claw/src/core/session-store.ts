@@ -40,6 +40,8 @@ export type SessionFinishReason =
   | "session_budget_exceeded"
   | "awaiting_user_input"
   | "concurrent_modification"
+  | "cancelled"
+  | "plan_ready"
   | "error";
 
 export interface SessionState {

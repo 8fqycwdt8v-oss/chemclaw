@@ -48,14 +48,15 @@ export type StreamFinishReason =
   | "budget_exceeded"
   | "concurrent_modification"
   | "awaiting_user_input"
-  | "cancelled";
+  | "cancelled"
+  | "error";
 
 export interface ClassifiedStreamError {
-  /** finishReason the outer-scope `let` should be assigned to. When
-   *  undefined the caller leaves its default (`"stop"`) — that's the
-   *  generic-error case where an "internal" error event was already
-   *  emitted but the outer finally still fires session_end. */
-  finishReason: StreamFinishReason | undefined;
+  /** finishReason the outer-scope `let` MUST be assigned to. Always
+   *  defined post-fix — the generic-error case maps to "error" so the
+   *  failure is observable in last_finish_reason and not silently
+   *  conflated with clean "stop" terminations. */
+  finishReason: StreamFinishReason;
 }
 
 /**
@@ -120,14 +121,20 @@ export function classifyStreamError(
     );
     return { finishReason: "cancelled" };
   }
-  // Generic — log loudly, emit a typed `internal` event, leave the
-  // caller's outer finishReason at its default ("stop"). The finally
-  // block's session_end gate fires on stop, which is the existing
-  // contract; widening that decision to "treat unknown errors as a
-  // distinct finishReason" is a separate change.
+  // Generic — log loudly, emit a typed `internal` event, return
+  // finishReason="error" so the finally block:
+  //   1. Persists last_finish_reason='error' to agent_sessions (the DB
+  //      CHECK in init/18 allows it), making the failure visible in
+  //      session listings and the reanimator's stalled-session query.
+  //   2. Skips the session_end dispatch (gates on "stop" only), since
+  //      a generic exception is not a clean stop.
+  // Pre-fix this returned `undefined`, leaving the caller's outer
+  // default of "stop" — that masked actual failures as clean stops in
+  // both the DB and the session_end telemetry. Cycle-2 review caught
+  // it.
   req.log.error({ err }, "chat stream failed");
   if (!conn.closed) {
     writeEvent(reply, { type: "error", error: "internal" });
   }
-  return { finishReason: undefined };
+  return { finishReason: "error" };
 }
