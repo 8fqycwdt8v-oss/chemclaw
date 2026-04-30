@@ -5,23 +5,15 @@
 // flat config keeps us on the supported track and matches typescript-eslint
 // v8's first-class flat-config exports.
 //
-// Status (post PR-1 paydown campaign):
-//   - 45 rules from the strict-type-checked preset are flipped to
+// Status (post PR-1 paydown campaign + PR #38..#43 lint paydown):
+//   - 46 rules from the strict-type-checked preset are flipped to
 //     `error` and locked in via CI. The complete `no-unsafe-*` family
 //     plus the capstone `no-explicit-any` are strictly enforced —
 //     every implicit `any` that flows through agent-claw now fails CI.
-//   - 4 rules remain on `warn` — each is genuine high-volume per-site
-//     code work that warrants its own focused PR rather than the
-//     rolling-paydown approach used for the other 45:
-//       * restrict-template-expressions (~98 sites; needs typed locals
-//         around every `\${val}` interpolation of non-string values)
-//       * no-unnecessary-condition      (~65 sites; needs guard
-//         rewrites where TS proves the check is always true/false)
-//       * require-await                 (~15 sites; intentional
-//         async-contract conformance for hooks/tools/provider methods
-//         that don't happen to await but must return Promises)
-//       * no-useless-escape             (~16 cosmetic; regex escapes
-//         inside character classes that are legal-but-redundant)
+//   - `no-unnecessary-condition` was the final high-volume warn-gated
+//     rule. PRs #38–#43 swept it from 59 surfaced sites to zero, and
+//     this config now error-gates it so future regressions break CI.
+//     The campaign log is in the PR-43 description.
 //   - Tests get extra latitude via the test-file override block below.
 
 import tseslint from 'typescript-eslint';
@@ -84,7 +76,7 @@ export default tseslint.config(
       '@typescript-eslint/no-empty-object-type': 'error',
       '@typescript-eslint/no-unnecessary-type-assertion': 'error',
       '@typescript-eslint/return-await': ['error', 'always'],
-      '@typescript-eslint/no-unnecessary-condition': 'warn',
+      '@typescript-eslint/no-unnecessary-condition': 'error',
       '@typescript-eslint/no-unnecessary-type-arguments': 'error',
       '@typescript-eslint/prefer-nullish-coalescing': 'error',
       '@typescript-eslint/prefer-reduce-type-parameter': 'error',
