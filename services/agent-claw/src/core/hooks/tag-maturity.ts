@@ -65,10 +65,17 @@ export function resolveMaturity(output: unknown): "EXPLORATORY" | "WORKING" | "F
  * post_tool handler: stamps maturity on payload.output in-place.
  * Phase C: also persists artifact rows (if pool provided) and updates
  * ctx.scratchpad.artifactMaturity for downstream guard hooks.
+ *
+ * Audit M11: when called via Lifecycle.dispatch the third argument
+ * carries the per-call AbortSignal. We honour it for the DB-write
+ * detour — if the request was already cancelled (route-level disconnect
+ * or hook timeout) we skip the artifact insert so we don't burn pool
+ * time persisting work the caller no longer cares about.
  */
 export async function tagMaturityHook(
   payload: PostToolPayload,
   pool?: Pool,
+  signal?: AbortSignal,
 ): Promise<HookJSONOutput> {
   (payload as { output: unknown }).output = stampMaturity(payload.output);
 
@@ -89,7 +96,10 @@ export async function tagMaturityHook(
   }
 
   // If this is a tool whose output should be persisted as an artifact, do so.
-  if (pool && ARTIFACT_TOOL_IDS.has(payload.toolId)) {
+  // Skip the DB roundtrip when the dispatch has already been cancelled —
+  // mirrors the pattern in compact-window (M11). The maturity-stamping above
+  // already happened in-memory and is preserved.
+  if (pool && ARTIFACT_TOOL_IDS.has(payload.toolId) && !signal?.aborted) {
     try {
       const { withUserContext } = await import("../../db/with-user-context.js");
       await withUserContext(pool, payload.ctx.userEntraId, async (client) => {
@@ -135,5 +145,9 @@ export async function tagMaturityHook(
  *              structured tool outputs (ARTIFACT_TOOL_IDS).
  */
 export function registerTagMaturityHook(lifecycle: Lifecycle, pool?: Pool): void {
-  lifecycle.on("post_tool", "tag-maturity", async (payload) => await tagMaturityHook(payload, pool));
+  lifecycle.on(
+    "post_tool",
+    "tag-maturity",
+    async (payload, _toolUseID, options) => await tagMaturityHook(payload, pool, options.signal),
+  );
 }
