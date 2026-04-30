@@ -77,15 +77,23 @@ export function setupAuthAndErrorHandler(
     }
     req.log.error({ err }, "unhandled error");
     // err is typed as FastifyError | Error | unknown across Fastify versions;
-    // narrow defensively before reading statusCode/message.
-    const e = err as { statusCode?: number; message?: string };
+    // narrow defensively before reading statusCode.
+    //
+    // Why we DO NOT echo `e.message` (or `e.detail`) into the response
+    // body even in dev mode: Postgres / MCP / OS errors regularly carry
+    // SMILES, compound codes, or NCE project ids embedded in their
+    // message strings. The Pino redact path scrubs them in the LOG, but
+    // a 500 response body shipped to the client would leak them
+    // verbatim. The trace_id + request_id are sufficient to look up the
+    // full err.message in the structured server log.
+    const e = err as { statusCode?: number };
     const env = envelopeFor(
       ERROR_CODES.AGENT_INTERNAL,
-      cfg.CHEMCLAW_DEV_MODE ? (e.message ?? "internal error") : "internal error",
+      "internal error — check server logs for trace_id",
     );
     return reply.code(e.statusCode ?? 500).send({
       error: "internal",
-      detail: cfg.CHEMCLAW_DEV_MODE ? e.message : undefined,
+      detail: "internal error — see server logs",
       message: env.message,
       request_id: env.request_id,
       trace_id: env.trace_id,

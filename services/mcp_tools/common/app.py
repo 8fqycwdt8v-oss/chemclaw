@@ -266,17 +266,24 @@ def create_app(
                     headers={"x-request-id": getattr(request.state, "request_id", "")},
                 )
 
-        # Bind the hashed user onto the log context for the rest of the
-        # request lifetime so every record (handler logs, tool spans,
-        # error logs) carries it. Token reset happens on the way back
-        # through the middleware stack.
+        # Bind the hashed user onto the log context. Crucially we do
+        # NOT reset the user token here in a finally — the OUTER
+        # `add_request_id` middleware's reset on its `request_id` token
+        # restores the contextvar to the empty state that existed
+        # before either middleware ran, clearing both bindings in one
+        # shot.
+        #
+        # Why this matters: the access log emit inside `add_request_id`
+        # runs AFTER `call_next` returns and AFTER any inner-middleware
+        # `finally` clauses have fired. If we reset the user token
+        # here, the access-log line for every authenticated request
+        # would have no `user` field — silently breaking per-user
+        # operational queries in Loki. Letting the outer reset handle
+        # cleanup keeps `user` bound through the entire request,
+        # including the access log emission.
         user_hash = hash_user(getattr(claims, "user", "") or "")
         if user_hash:
-            user_token = bind_log_context(user=user_hash)
-            try:
-                return await call_next(request)
-            finally:
-                reset_log_context(user_token)
+            bind_log_context(user=user_hash)
         return await call_next(request)
 
     @app.middleware("http")

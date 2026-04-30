@@ -6,7 +6,15 @@
 #
 # Cardinality discipline:
 #   - LABELS (indexed, must stay low-cardinality):
-#       * service       — agent-claw | paperclip | mcp-<name> | projector-<name>
+#       * service       — agent-claw | paperclip | mcp-<name> |
+#                         kg-experiments | kg-hypotheses | kg-source-cache |
+#                         chunk-embedder | reaction-vectorizer |
+#                         contextual-chunker | session-reanimator |
+#                         session-purger | gepa-runner | skill-promoter |
+#                         forged-tool-validator
+#                         (the docker-compose service name with the
+#                         `chemclaw-` prefix stripped — see the relabel
+#                         block below).
 #       * level         — debug | info | warn | error | fatal
 #       * compose_proj  — the docker-compose project name (default `chemclaw`)
 #   - PARSED FIELDS (NOT indexed; searchable via LogQL filters):

@@ -59,14 +59,16 @@ const ROOT_REDACT_PATHS = [
   "messages[*].content",
   "prompt",
   "raw_user",
-  // Error message channels — Postgres / MCP / OS errors regularly carry
-  // SMILES or compound codes embedded in their `.message` / `.stack`.
-  "err.message",
-  "err.stack",
+  // Error-detail channels — Postgres errors carry "Failing row contains
+  // (...)" with column values literally embedded; UpstreamError.detail
+  // wraps the raw upstream response body. Both are reliable carriers of
+  // chemistry-sensitive content. We deliberately do NOT redact `err.message`
+  // / `err.stack` — those are diagnostic and an operator triaging a
+  // production incident needs them. The TS-side has no full LiteLLM
+  // redactor (H1 in the first audit, follow-up); content-aware redaction
+  // for free-form prose is a deferred follow-up. For now: scrub the
+  // known-risky fields by name and let messages through.
   "err.detail",
-  "*.err_msg",
-  "*.err_message",
-  "*.err_stack",
   "*.detail",
 ];
 

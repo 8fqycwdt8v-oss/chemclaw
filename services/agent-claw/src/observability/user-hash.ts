@@ -21,14 +21,19 @@ const DEFAULT_DEV_SALT = "chemclaw-dev-salt-not-secret";
 let _salt: string | null = null;
 
 /**
- * Resolve the salt with fail-closed semantics in production. When
- * LOG_USER_SALT is unset:
- *   - dev mode (CHEMCLAW_DEV_MODE=true OR NODE_ENV !== "production"):
- *     fall back to the public dev salt with a one-time warn-level log.
- *   - production: THROW on first use. Without this, the hash is
- *     cryptographically useless (an attacker with log access can
- *     pre-compute sha256("chemclaw-dev-salt-not-secret:" + email) for
- *     any email and de-anonymise users in seconds).
+ * Resolve the salt with fail-closed-by-default semantics. The contract
+ * is symmetrical with the Python side and with `MCP_AUTH_DEV_MODE`:
+ *
+ *   - LOG_USER_SALT set     → use it.
+ *   - LOG_USER_SALT unset, CHEMCLAW_DEV_MODE=true → use the public dev
+ *     salt (correlations work in local dev; not safe for prod).
+ *   - LOG_USER_SALT unset, no dev marker          → throw.
+ *
+ * Earlier versions gated on `NODE_ENV !== "production"`, but nothing in
+ * this codebase sets NODE_ENV, so the throw never fired in any
+ * deployment — defeating the whole purpose. Inverting the default
+ * (production-by-default) closes that gap. Operators running locally
+ * already set CHEMCLAW_DEV_MODE=true via .env.example.
  */
 function salt(): string {
   if (_salt !== null) return _salt;
@@ -37,15 +42,13 @@ function salt(): string {
     _salt = fromEnv;
     return _salt;
   }
-  const isDev =
-    process.env.CHEMCLAW_DEV_MODE === "true" ||
-    (process.env.NODE_ENV ?? "development") !== "production";
+  const isDev = process.env.CHEMCLAW_DEV_MODE === "true";
   if (!isDev) {
     throw new Error(
-      "LOG_USER_SALT is required outside dev mode (set NODE_ENV=production " +
-        "or CHEMCLAW_DEV_MODE=false to enforce). The default salt is public — " +
-        "without a real salt the hash trivially de-anonymises users via " +
-        "rainbow-table lookup.",
+      "LOG_USER_SALT is required when CHEMCLAW_DEV_MODE != true. " +
+        "The default salt is public — without a real salt the 16-hex-char " +
+        "hash trivially de-anonymises users via rainbow-table lookup against " +
+        "any email or entra-id list.",
     );
   }
   _salt = DEFAULT_DEV_SALT;

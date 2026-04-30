@@ -42,6 +42,19 @@
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
+-- The salt used by `audit_row_change` to hash actor user-ids. Must
+-- match the `LOG_USER_SALT` env var the TS / Python sides use, so
+-- `audit_log.actor_user_hash` and the `user` field in Loki log lines
+-- agree for the same person. Operators set this once per cluster:
+--
+--   ALTER DATABASE chemclaw SET app.log_user_salt = '<same-as-LOG_USER_SALT>';
+--
+-- The trigger reads it via `current_setting('app.log_user_salt', true)`,
+-- which returns NULL when unset rather than raising. We treat the
+-- empty / NULL salt the same way the TS / Python sides treat a missing
+-- LOG_USER_SALT in dev mode: fall back to the public dev salt. A real
+-- production deploy is expected to set the database parameter.
+
 -- ---------------------------------------------------------------------------
 -- 1. `error_events` — durable error envelope storage.
 -- ---------------------------------------------------------------------------
@@ -83,7 +96,12 @@ CREATE POLICY error_events_select ON error_events
 DROP POLICY IF EXISTS error_events_insert_system ON error_events;
 CREATE POLICY error_events_insert_system ON error_events
     FOR INSERT
-    WITH CHECK (current_setting('app.current_user_entra_id', true) IS NOT NULL);
+    -- Match the SELECT policy: NULL OR empty user-context fails the
+    -- check. An asymmetric policy let any role with an empty
+    -- app.current_user_entra_id INSERT but never SEE the row, which
+    -- is a useful primitive for an attacker covering tracks.
+    WITH CHECK (current_setting('app.current_user_entra_id', true) IS NOT NULL
+                AND current_setting('app.current_user_entra_id', true) <> '');
 
 -- NOTIFY trigger so a future projector (or a Loki tailer) can subscribe
 -- and forward error_events rows in real time. Channel name distinct from
@@ -265,9 +283,25 @@ BEGIN
     IF v_actor_raw IS NULL OR v_actor_raw = '' THEN
         v_actor_hash := NULL;
     ELSE
-        -- sha256 hex prefix; same shape as TS hashUser / Python hash_user.
+        -- sha256(salt || ':' || user)[:16] — matches the TS hashUser /
+        -- Python hash_user algorithm exactly so audit_log rows and
+        -- Loki log lines for the same user agree on the hash. The
+        -- salt is read from `app.log_user_salt` (set via `ALTER
+        -- DATABASE chemclaw SET app.log_user_salt = '...'`); falls
+        -- back to the public dev salt when unset, which means audit
+        -- hashes are reversible in dev — the same property the TS /
+        -- Python sides hold in dev mode.
         v_actor_hash := substr(
-            encode(digest(v_actor_raw, 'sha256'), 'hex'),
+            encode(
+                digest(
+                    coalesce(
+                        nullif(current_setting('app.log_user_salt', true), ''),
+                        'chemclaw-dev-salt-not-secret'
+                    ) || ':' || v_actor_raw,
+                    'sha256'
+                ),
+                'hex'
+            ),
             1, 16
         );
     END IF;
@@ -423,10 +457,23 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION enforce_user_context(TEXT) TO PUBLIC;
+-- Restrict execute on enforce_user_context — same DoS-amplifier
+-- argument as record_error_event above. PUBLIC would let any DB role
+-- in a tight loop with arbitrary table strings each emit one
+-- error_events row.
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'chemclaw_app') THEN
+        EXECUTE 'GRANT EXECUTE ON FUNCTION enforce_user_context(TEXT) TO chemclaw_app';
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'chemclaw_service') THEN
+        EXECUTE 'GRANT EXECUTE ON FUNCTION enforce_user_context(TEXT) TO chemclaw_service';
+    END IF;
+END;
+$$;
+REVOKE EXECUTE ON FUNCTION enforce_user_context(TEXT) FROM PUBLIC;
 
--- Schema_version stamp (the make db.init loop populates this; explicit
--- INSERT here for environments that bypass make and run psql directly).
-INSERT INTO schema_version (filename, applied_at)
-VALUES ('19_observability.sql', now())
-ON CONFLICT (filename) DO NOTHING;
+-- schema_version is populated by the `make db.init` loop using the
+-- full relative path key (`db/init/19_observability.sql`). No embedded
+-- INSERT here — duplicating it produced a second row keyed by the
+-- basename and confused `SELECT * FROM schema_version` audits.

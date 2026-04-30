@@ -140,6 +140,17 @@ export async function withRetry<T>(
         "operation failed; retrying",
       );
       await new Promise<void>((resolve) => {
+        // Re-check the signal at executor entry: an abort fired
+        // between the catch handler and the executor running won't
+        // re-deliver via addEventListener (events don't replay), so
+        // without this check we'd burn the full backoff before the
+        // top-of-loop check catches the abort. Verified by debug
+        // pass: prevents up-to-maxMs (5s default) tail-latency on
+        // cancellation.
+        if (signal?.aborted) {
+          resolve();
+          return;
+        }
         const t = setTimeout(resolve, sleep);
         // Honour abort during sleep so we don't burn time on a cancelled call.
         signal?.addEventListener(

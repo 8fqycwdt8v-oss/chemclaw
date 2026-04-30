@@ -77,22 +77,39 @@ def _build_json_handler(stream: Any) -> logging.Handler:
     JsonFormatter = _load_json_formatter()
     handler = logging.StreamHandler(stream)
 
+    # Use orjson for the actual serialization when available — it's
+    # ~2x faster than stdlib json on the hot per-projector / per-tool
+    # log path. orjson.dumps returns bytes, so wrap to decode.
+    json_serializer: Any | None = None
+    try:
+        import orjson  # type: ignore
+
+        def json_serializer(obj: Any, *args: Any, **kwargs: Any) -> str:  # noqa: ARG001
+            # orjson rejects unknown types; default=str preserves
+            # Decimal / datetime / custom objects without raising —
+            # the redaction filter scrubs string content separately.
+            return orjson.dumps(obj, default=str).decode("utf-8")
+    except ImportError:
+        json_serializer = None
+
     # python-json-logger renames the OUTPUT dict keys, not the LogRecord
     # attributes — so the format string here uses the original stdlib field
     # names (asctime / levelname / name) and `rename_fields` rewrites them
     # to (timestamp / level / logger) in the JSON object that ships.
+    formatter_kwargs: dict[str, Any] = {
+        "rename_fields": {
+            "asctime": "timestamp",
+            "levelname": "level",
+            "name": "logger",
+        },
+        "timestamp": True,  # populates record.timestamp as ISO-8601 UTC
+        "json_indent": None,
+        "json_ensure_ascii": False,
+    }
+    if json_serializer is not None:
+        formatter_kwargs["json_serializer"] = json_serializer
     handler.setFormatter(
-        JsonFormatter(
-            "%(asctime)s %(levelname)s %(name)s %(message)s",
-            rename_fields={
-                "asctime": "timestamp",
-                "levelname": "level",
-                "name": "logger",
-            },
-            timestamp=True,  # populates record.timestamp as ISO-8601 UTC
-            json_indent=None,
-            json_ensure_ascii=False,
-        )
+        JsonFormatter("%(asctime)s %(levelname)s %(name)s %(message)s", **formatter_kwargs)
     )
     return handler
 

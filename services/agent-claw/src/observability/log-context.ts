@@ -42,7 +42,11 @@ export function logContextFields(): LogContextFields {
   if (ctx) {
     if (ctx.requestId) out.request_id = ctx.requestId;
     if (ctx.sessionId) out.session_id = ctx.sessionId;
-    const userHash = hashUser(ctx.userEntraId);
+    // Prefer the precomputed hash on RequestContext (cached at the
+    // route wrapper) — falls back to live-hashing when the route
+    // didn't supply one (test paths, background helpers). Avoids a
+    // sha256 computation on every log emission.
+    const userHash = ctx.userHash ?? hashUser(ctx.userEntraId);
     if (userHash) out.user = userHash;
   }
 

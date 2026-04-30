@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -175,7 +176,14 @@ async def resume_session(
         proxy where header forgery isn't a concern).
     """
     base = settings.agent_base_url.rstrip("/")
-    headers: dict[str, str] = {}
+    # Mint a fresh request_id per resume so the agent-claw log line, the
+    # plan/run inner harness, the projector handlers, and the
+    # error_events row (if anything fails) can all be tied back to this
+    # specific tick + session. Without this, every reanimator-triggered
+    # resume on the agent side gets a randomly-generated UUID and the
+    # tick summary loses any link to the per-session work it caused.
+    request_id = str(uuid.uuid4())
+    headers: dict[str, str] = {"x-request-id": request_id}
     url: str
 
     if settings.mcp_auth_signing_key:

@@ -33,6 +33,15 @@ export interface RequestContext {
    */
   requestId?: string;
   /**
+   * Pre-computed sha256 hash of `userEntraId` (16 hex chars). Filled
+   * once at the route wrapper so the Pino mixin doesn't recompute it
+   * on every log emission — a per-turn agent loop can emit dozens of
+   * log lines, and per-call sha256 was wasted CPU. The hash function
+   * is the same as `observability/user-hash.ts:hashUser` so the value
+   * is exactly what would have been produced inline.
+   */
+  userHash?: string;
+  /**
    * Upstream AbortSignal threaded through from the route's FastifyRequest.
    * postJson / getJson in `mcp/postJson.ts` read this to cancel in-flight
    * MCP calls when the originating client disconnects mid-stream. Optional

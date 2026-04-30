@@ -30,6 +30,7 @@ import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 import { hydrateScratchpad, persistTurnState } from "./session-state.js";
 import { lifecycle } from "./runtime.js";
 import { runWithRequestContext } from "./request-context.js";
+import { hashUser } from "../observability/user-hash.js";
 import {
   PaperclipClient,
   PaperclipBudgetError,
@@ -95,6 +96,7 @@ export async function runChainedHarness(
       sessionId: opts.sessionId,
       signal: opts.signal,
       requestId: opts.requestId,
+      userHash: hashUser(opts.user),
     },
     () => _runChainedHarnessInner(opts),
   );
