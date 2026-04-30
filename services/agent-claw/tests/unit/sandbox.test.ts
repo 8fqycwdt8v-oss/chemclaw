@@ -6,7 +6,6 @@ import {
   buildSandboxClient,
   SandboxError,
   SANDBOX_MAX_CPU_S,
-  SANDBOX_MAX_MEM_MB,
 } from "../../src/core/sandbox.js";
 
 // ---------------------------------------------------------------------------
@@ -195,9 +194,5 @@ describe("buildSandboxClient — closeSandbox", () => {
 describe("module-level constants", () => {
   it("exports SANDBOX_MAX_CPU_S as a positive number", () => {
     expect(SANDBOX_MAX_CPU_S).toBeGreaterThan(0);
-  });
-
-  it("exports SANDBOX_MAX_MEM_MB as a positive number", () => {
-    expect(SANDBOX_MAX_MEM_MB).toBeGreaterThan(0);
   });
 });

@@ -7,10 +7,6 @@
 // ingestion_events with event_type='source_fact_observed'. The kg_source_cache
 // projector converts these into :Fact nodes with temporal provenance.
 //
-// Pre-turn stale-fact warning: checks ingestion_events for any
-// source_fact_observed payloads where valid_until < now() and injects
-// a warning into ctx.scratchpad so the harness can surface it.
-//
 // Wire shapes recognised (typed contracts from `services/agent-claw/src/tools/builtins/`):
 //
 //   ELN — `_eln_shared.ts:ElnEntrySchema`
@@ -382,34 +378,6 @@ async function insertSourceFacts(
       );
     }
   });
-}
-
-// ---------- Stale-fact warning -----------------------------------------------
-
-export async function checkStaleFacts(
-  pool: Pool,
-  scratchpad: Map<string, unknown>,
-): Promise<void> {
-  try {
-    const result = await pool.query<{ count: string }>(
-      `SELECT count(*) AS count
-       FROM ingestion_events
-       WHERE event_type = 'source_fact_observed'
-         AND (payload->>'valid_until')::timestamptz < now()
-         AND created_at > now() - interval '30 days'`,
-    );
-    const staleCount = parseInt(result.rows[0]?.count ?? "0", 10);
-    if (staleCount > 0) {
-      const existingWarnings = (scratchpad.get("staleFactWarnings") as string[]) ?? [];
-      existingWarnings.push(
-        `[source-cache] ${staleCount} cached source fact(s) have expired (valid_until < now). ` +
-        `Consider re-querying the source system if freshness matters for this question.`,
-      );
-      scratchpad.set("staleFactWarnings", existingWarnings);
-    }
-  } catch {
-    // Non-fatal — stale-fact check is best-effort.
-  }
 }
 
 // ---------- Main hook export -------------------------------------------------

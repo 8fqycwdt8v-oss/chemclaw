@@ -157,7 +157,8 @@ async function _runOneTool(opts: {
     return { toolId, output: denyOutput };
   }
   // "ask" / "defer" require route-level handling; for now treat as allow.
-  // TODO(phase-6-permissions): wire ask/defer to a route-level prompt.
+  // Phase 6 permissions: see docs/adr/009-permission-and-decision-contract.md
+  // and docs/adr/010-deferred-phases.md.
   if (preResult.decision === "ask" || preResult.decision === "defer") {
     // No logger is in scope at this layer (stepOnce is called from the
     // harness loop, which is reached from many routes / sub-agent flows).

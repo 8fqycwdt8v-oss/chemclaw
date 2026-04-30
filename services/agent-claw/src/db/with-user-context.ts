@@ -9,8 +9,13 @@
 //     return client.query("SELECT * FROM documents");
 //   });
 //
-// Projectors and system workers pass '' (empty string) as userEntraId.
-// RLS policies are written to treat empty-string context permissively.
+// System workers connect as chemclaw_service (BYPASSRLS, see
+// db/init/12_security_hardening.sql) and never set
+// app.current_user_entra_id. App-side code paths that need to read
+// globally-scoped catalogs (prompt_registry, skill_library, mcp_tools)
+// from the chemclaw_app role must use withSystemContext, which sets the
+// '__system__' sentinel — empty-string is no longer a permissive value
+// under FORCE ROW LEVEL SECURITY.
 
 import { type Pool, type PoolClient } from "pg";
 

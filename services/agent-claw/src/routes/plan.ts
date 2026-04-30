@@ -64,10 +64,14 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
       null,
       deps.config.AGENT_TOKEN_BUDGET,
     );
+    // Pass `lifecycle` explicitly so tools that fire fine-grained events
+    // (e.g. manage_todos → task_created / task_completed) work even before
+    // the harness's own backfill at harness.ts:57-59 runs.
     const ctx: ToolContext = {
       userEntraId: user,
       seenFactIds,
       scratchpad,
+      lifecycle,
     };
 
     const budget = new Budget({
