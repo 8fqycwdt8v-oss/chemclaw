@@ -52,6 +52,8 @@ import { reserveTurnBudget } from "./chat-paperclip.js";
 import { handleNonStreamingTurn } from "./chat-non-streaming.js";
 import { runPlanModeStreaming } from "./chat-plan-mode.js";
 import { classifyStreamError } from "./chat-streaming-error.js";
+import { maybeFireShadowEval } from "./chat-shadow-eval.js";
+import { emitTerminalEvents } from "./chat-streaming-sse.js";
 
 // Re-exported so existing imports `import type { StreamEvent } from "./chat.js"`
 // keep compiling — the canonical home is now ../streaming/sse.ts.
@@ -497,36 +499,15 @@ async function handleChat(
       }
     }
 
-    // Emit the `cancelled` event BEFORE the terminal `finish` so a
-    // disconnecting client (or any future SSE proxy that buffers the last
-    // few frames) sees both signals: the cancellation marker and the
-    // standard terminal frame. Best-effort — if the socket is already
-    // gone the writes silently fail and the route falls through to
-    // reply.raw.end(). When a peer truly drops there is nothing for the
-    // event to land on; the cancellation is recorded in the DB
-    // (last_finish_reason='cancelled') for the next session load.
-    if (finishReason === "cancelled" && !conn.closed) {
-      try {
-        writeEvent(reply, {
-          type: "cancelled",
-          ...(sessionId ? { session_id: sessionId } : {}),
-        });
-      } catch {
-        // socket already gone
-      }
-    }
-
-    if (!conn.closed) {
-      try {
-        writeEvent(reply, {
-          type: "finish",
-          finishReason,
-          usage: budget?.summary() ?? { promptTokens: 0, completionTokens: 0 },
-        });
-      } catch {
-        // socket already gone
-      }
-    }
+    // Emit the inseparable cancelled-then-finish terminal pair. See
+    // routes/chat-streaming-sse.ts for the ordering contract.
+    emitTerminalEvents({
+      reply,
+      conn,
+      finishReason,
+      budget,
+      sessionId,
+    });
 
     // Record final LLM usage on the root span and close it.
     try {
@@ -552,18 +533,14 @@ async function handleChat(
       }
     }
 
-    if (deps.shadowEvaluator && finishReason === "stop") {
-      void deps.shadowEvaluator
-        .evaluateAsync({
-          promptName: "agent.system",
-          messages,
-          traceId: body.agent_trace_id ?? null,
-          userEntraId: user,
-        })
-        .catch((shadowErr: unknown) => {
-          req.log.debug({ err: shadowErr }, "shadow eval failed (non-fatal)");
-        });
-    }
+    maybeFireShadowEval({
+      shadowEvaluator: deps.shadowEvaluator,
+      finishReason,
+      messages,
+      traceId: body.agent_trace_id ?? null,
+      userEntraId: user,
+      log: req.log,
+    });
 
     cleanupSkillForTurn?.();
     try {
