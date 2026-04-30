@@ -27,7 +27,6 @@ import {
   Budget,
   BudgetExceededError,
   SessionBudgetExceededError,
-  estimateTokenCount,
 } from "../core/budget.js";
 import { buildAgent, runHarness } from "../core/harness.js";
 import { parseSlash } from "../core/slash.js";
@@ -41,8 +40,6 @@ import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 import { runWithRequestContext } from "../core/request-context.js";
 import type {
   Message,
-  PostCompactPayload,
-  PreCompactPayload,
   ToolContext,
 } from "../core/types.js";
 import {
@@ -55,11 +52,7 @@ import { writeEvent, setupSse } from "../streaming/sse.js";
 import { makeSseSink } from "../streaming/sse-sink.js";
 import { startRootTurnSpan, recordLlmUsage, recordSpanError } from "../observability/spans.js";
 import { context as otelContext, trace } from "@opentelemetry/api";
-import {
-  PaperclipBudgetError,
-  USD_PER_TOKEN_ESTIMATE,
-  type ReservationHandle,
-} from "../core/paperclip-client.js";
+import { USD_PER_TOKEN_ESTIMATE } from "../core/paperclip-client.js";
 import {
   ChatRequestSchema,
   enforceBounds,
@@ -67,6 +60,8 @@ import {
   type ChatRouteDeps,
 } from "./chat-helpers.js";
 import { handleSlashShortCircuit } from "./chat-slash.js";
+import { dispatchManualCompact } from "./chat-compact.js";
+import { reserveTurnBudget } from "./chat-paperclip.js";
 
 // Re-exported so existing imports `import type { StreamEvent } from "./chat.js"`
 // keep compiling — the canonical home is now ../streaming/sse.ts.
@@ -216,36 +211,17 @@ async function handleChat(
   }
 
   // ── Manual /compact slash branch ────────────────────────────────────────
-  // Fires pre_compact (with trigger="manual" and any user-supplied
-  // summarization steering) BEFORE the normal harness turn. The
-  // compact-window hook mutates `messages` in place; the harness then runs
-  // against the compacted window. This is the user-driven counterpart to
-  // the auto path inside runHarness's loop.
+  // Fires pre_compact + post_compact with trigger="manual" so the
+  // compact-window hook mutates `messages` in place before the harness
+  // runs against the compacted window. See routes/chat-compact.ts.
   if (slashResult.verb === "compact") {
-    const customInstructions = slashResult.args.trim() || null;
-    const preTokens = estimateTokenCount(messages);
-    const prePayload: PreCompactPayload = {
+    await dispatchManualCompact(
+      lifecycle,
       ctx,
       messages,
-      trigger: "manual",
-      pre_tokens: preTokens,
-      custom_instructions: customInstructions,
-    };
-    try {
-      await lifecycle.dispatch("pre_compact", prePayload);
-      const postTokens = estimateTokenCount(messages);
-      const postPayload: PostCompactPayload = {
-        ctx,
-        trigger: "manual",
-        pre_tokens: preTokens,
-        post_tokens: postTokens,
-      };
-      await lifecycle.dispatch("post_compact", postPayload);
-    } catch (err) {
-      // Compaction itself shouldn't abort the turn — log and proceed with
-      // the original message window.
-      req.log.warn({ err }, "manual /compact dispatch failed; proceeding uncompacted");
-    }
+      slashResult.args.trim() || null,
+      req.log,
+    );
   }
 
   // Filter tools by active skills (if any skills are active).
@@ -265,32 +241,21 @@ async function handleChat(
   });
 
   // ------- Paperclip reservation (Phase D) — applies to BOTH streaming and
-  // non-streaming paths so daily-USD enforcement is uniform. A budget refusal
-  // surfaces as HTTP 429 with Retry-After before any response body opens.
-  let paperclipHandle: ReservationHandle | null = null;
-  if (deps.paperclip) {
-    try {
-      paperclipHandle = await deps.paperclip.reserve({
-        userEntraId: user,
-        sessionId: sessionId ?? "stateless",
-        estTokens: 12_000,
-        estUsd: 0.05,
-      });
-    } catch (err: unknown) {
-      if (err instanceof PaperclipBudgetError) {
-        cleanupSkillForTurn?.();
-        return void reply
-          .code(429)
-          .header("Retry-After", String(err.retryAfterSeconds))
-          .send({
-            error: "budget_exceeded",
-            reason: err.reason,
-            retry_after_seconds: err.retryAfterSeconds,
-          });
-      }
-      req.log.warn({ err }, "paperclip /reserve failed (non-fatal)");
-    }
+  // non-streaming paths so daily-USD enforcement is uniform. A budget
+  // refusal surfaces as HTTP 429 with Retry-After before any response
+  // body opens. See routes/chat-paperclip.ts.
+  const reservation = await reserveTurnBudget(
+    deps.paperclip,
+    reply,
+    user,
+    sessionId,
+    req.log,
+    () => cleanupSkillForTurn?.(),
+  );
+  if (!reservation.ok) {
+    return; // 429 already sent by the helper
   }
+  const paperclipHandle = reservation.handle;
 
   // Open the OTel root span for the turn — emits the Langfuse `prompt:<name>`
   // tag so the GEPA runner's tag-filtered fetch returns this trace. Opened
