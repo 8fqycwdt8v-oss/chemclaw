@@ -204,12 +204,16 @@ export function buildExpandReactionContextTool(pool: Pool, mcpKgUrl: string) {
             TIMEOUT_KG_MS,
             "mcp-kg",
           );
-          out.outcomes = kgOut.facts.map((f) => ({
-            metric_name: (f.edge_properties?.metric_name as string) ?? "unknown",
-            value: (f.edge_properties?.value as number) ?? null,
-            unit: (f.edge_properties?.unit as string) ?? null,
-            source_fact_id: f.fact_id,
-          }));
+          out.outcomes = kgOut.facts.map((f) => {
+            const props = f.edge_properties as Record<string, unknown>;
+            return {
+              metric_name:
+                typeof props.metric_name === "string" ? props.metric_name : "unknown",
+              value: typeof props.value === "number" ? props.value : null,
+              unit: typeof props.unit === "string" ? props.unit : null,
+              source_fact_id: f.fact_id,
+            };
+          });
           out.surfaced_fact_ids.push(...kgOut.facts.map((f) => f.fact_id));
         } catch {
           out.outcomes = [];
@@ -232,11 +236,16 @@ export function buildExpandReactionContextTool(pool: Pool, mcpKgUrl: string) {
             TIMEOUT_KG_MS,
             "mcp-kg",
           );
-          out.failures = kgOut.facts.map((f) => ({
-            failure_mode: (f.edge_properties?.failure_mode as string) ?? "unspecified",
-            evidence_text: (f.edge_properties?.evidence_text as string) ?? "",
-            source_fact_id: f.fact_id,
-          }));
+          out.failures = kgOut.facts.map((f) => {
+            const props = f.edge_properties as Record<string, unknown>;
+            return {
+              failure_mode:
+                typeof props.failure_mode === "string" ? props.failure_mode : "unspecified",
+              evidence_text:
+                typeof props.evidence_text === "string" ? props.evidence_text : "",
+              source_fact_id: f.fact_id,
+            };
+          });
           out.surfaced_fact_ids.push(...kgOut.facts.map((f) => f.fact_id));
         } catch {
           out.failures = [];
