@@ -90,6 +90,7 @@ const ConfigSchema = z.object({
   MCP_AIZYNTH_URL: z.string().url().default("http://localhost:8008"),
   MCP_CHEMPROP_URL: z.string().url().default("http://localhost:8009"),
   MCP_XTB_URL: z.string().url().default("http://localhost:8010"),
+  MCP_SYNTHEGY_MECH_URL: z.string().url().default("http://localhost:8011"),
   MCP_SIRIUS_URL: z.string().url().default("http://localhost:8012"),
 
   // Source-system MCPs (Postgres-backed mock ELN, Phase F.2 reboot).

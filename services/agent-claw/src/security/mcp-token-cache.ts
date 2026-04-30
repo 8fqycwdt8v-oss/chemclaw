@@ -37,6 +37,7 @@ export const SERVICE_SCOPES: Record<string, string> = {
   "mcp-sirius": "mcp_sirius:invoke",
   "mcp-eln-local": "mcp_eln:read",
   "mcp-logs-sciy": "mcp_instrument:read",
+  "mcp-synthegy-mech": "mcp_synthegy_mech:invoke",
 };
 
 const DEFAULT_TTL_SECONDS = 300; // 5 min — matches the verifier's expiry check
