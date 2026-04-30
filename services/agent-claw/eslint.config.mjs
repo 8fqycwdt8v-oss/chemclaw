@@ -95,11 +95,11 @@ export default tseslint.config(
       ],
 
       // Plain ESLint rules that strict-type-checked also enables.
-      'no-empty': 'warn',
-      'no-control-regex': 'warn',
+      'no-empty': 'error',
+      'no-control-regex': 'error',
       'no-useless-escape': 'warn',
-      'no-prototype-builtins': 'warn',
-      'prefer-const': 'warn',
+      'no-prototype-builtins': 'error',
+      'prefer-const': 'error',
       'no-undef': 'off', // typescript handles this
     },
   },

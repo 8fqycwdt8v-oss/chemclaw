@@ -301,8 +301,6 @@ export function buildForgeToolTool(
       const raw = await llm.completeJson({ system, user, role: forgedByRole });
       const rawObj = raw as Record<string, unknown>;
 
-      let pythonCode: string;
-
       if (
         !rawObj ||
         typeof rawObj.python_code !== "string" ||
@@ -312,7 +310,7 @@ export function buildForgeToolTool(
           "forge_tool: LLM did not return a valid python_code field in stage 2 (generate).",
         );
       }
-      pythonCode = rawObj.python_code;
+      const pythonCode: string = rawObj.python_code;
 
       // ---- Stage 3: Execute + Stage 4: Evaluate ----------------------------
 
