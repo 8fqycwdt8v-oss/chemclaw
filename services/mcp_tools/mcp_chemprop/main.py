@@ -55,9 +55,9 @@ app = create_app(
 def _chemprop_predict(smiles_list: list[str], model_path: Path) -> list[tuple[float, float]]:
     """Return (mean, std) per SMILES."""
     try:
-        from chemprop import data as cp_data  # type: ignore[import]  # noqa: PLC0415
-        from chemprop.models import MPNN  # type: ignore[import]  # noqa: PLC0415
-        import torch  # type: ignore[import]  # noqa: PLC0415
+        from chemprop import data as cp_data  # noqa: PLC0415
+        from chemprop.models import MPNN  # noqa: PLC0415
+        import torch  # noqa: PLC0415
     except ImportError as exc:
         raise ImportError(
             "chemprop package not installed; install it inside the Docker image"

@@ -1,6 +1,6 @@
 // Tests for /api/eval route — Phase E.
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { parseEvalArgs } from "../../../src/core/slash.js";
 
 // ---------------------------------------------------------------------------
@@ -69,7 +69,7 @@ describe("/eval route — unit logic", () => {
         const obj = JSON.parse(line) as Record<string, unknown>;
         expect(obj).toHaveProperty("question");
         expect(obj).toHaveProperty("answer");
-        expect(Array.isArray(obj["expected_classes"])).toBe(true);
+        expect(Array.isArray(obj.expected_classes)).toBe(true);
       }
     });
   });

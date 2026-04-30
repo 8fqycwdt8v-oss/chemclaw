@@ -69,5 +69,5 @@ export async function withSystemContext<T>(
   pool: Pool,
   fn: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
-  return withUserContext(pool, SYSTEM_USER_ENTRA_ID, fn);
+  return await withUserContext(pool, SYSTEM_USER_ENTRA_ID, fn);
 }

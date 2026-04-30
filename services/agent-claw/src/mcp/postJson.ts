@@ -54,16 +54,16 @@ export interface RequestOptions {
   userEntraId?: string;
 }
 
-export async function postJson<TReq, TRes>(
+export async function postJson<TRes>(
   url: string,
-  body: TReq,
+  body: unknown,
   respSchema: z.ZodType<TRes>,
   timeoutMs: number,
   service: string,
   opts: RequestOptions = {},
 ): Promise<TRes> {
   const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), timeoutMs);
+  const t = setTimeout(() => { ctl.abort(); }, timeoutMs);
   try {
     const r = await fetch(url, {
       method: "POST",
@@ -107,7 +107,7 @@ export async function getJson<TRes>(
   opts: RequestOptions = {},
 ): Promise<TRes> {
   const ctl = new AbortController();
-  const t = setTimeout(() => ctl.abort(), timeoutMs);
+  const t = setTimeout(() => { ctl.abort(); }, timeoutMs);
   try {
     const r = await fetch(url, {
       method: "GET",

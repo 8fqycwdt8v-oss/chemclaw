@@ -109,7 +109,7 @@ export class ShadowEvaluator {
     private readonly promptRegistry: PromptRegistry,
     private readonly llm: LlmProvider,
     private readonly pool: Pool,
-    sampleRate: number = parseFloat(process.env["AGENT_SHADOW_SAMPLE"] ?? "0.1"),
+    sampleRate: number = parseFloat(process.env.AGENT_SHADOW_SAMPLE ?? "0.1"),
   ) {
     this.sampleRate = Math.max(0, Math.min(1, sampleRate));
   }
@@ -138,8 +138,10 @@ export class ShadowEvaluator {
     shadow: { template: string; version: number; shadowUntil: Date },
     ctx: ShadowEvalContext,
   ): Promise<void> {
-    const systemMsg: Message = { role: "system" as const, content: shadow.template };
-    const allMessages: Message[] = [systemMsg, ...ctx.messages];
+    // _systemMsg / _allMessages are kept here as a placeholder for the
+    // post-streaming variant (PR-1 paydown noted them as unused locals).
+    const _systemMsg: Message = { role: "system" as const, content: shadow.template };
+    const _allMessages: Message[] = [_systemMsg, ...ctx.messages];
 
     // Non-streaming call via completeJson (structured, no tools needed).
     // We just want the text — use completeJson with a minimal schema.
@@ -158,8 +160,8 @@ export class ShadowEvaluator {
     const responseText: string =
       typeof responseObj === "string"
         ? responseObj
-        : (responseObj as { text?: string; answer?: string } | null)?.text ??
-          (responseObj as { text?: string; answer?: string } | null)?.answer ??
+        : (responseObj)?.text ??
+          (responseObj)?.answer ??
           "";
 
     // Shadow runs without tool execution (see completeJson contract above —

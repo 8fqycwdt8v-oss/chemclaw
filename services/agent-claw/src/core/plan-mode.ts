@@ -47,7 +47,7 @@ export interface Plan {
 const PLAN_TTL_MS = 5 * 60 * 1_000;
 
 class PlanStore {
-  private readonly _plans: Map<string, Plan> = new Map();
+  private readonly _plans = new Map<string, Plan>();
 
   save(plan: Plan): void {
     this._plans.set(plan.plan_id, plan);
@@ -96,20 +96,20 @@ export function createPlan(
 // SSE event types for plan mode.
 // ---------------------------------------------------------------------------
 
-export type PlanStepEvent = {
+export interface PlanStepEvent {
   type: "plan_step";
   step_number: number;
   tool: string;
   args: unknown;
   rationale: string;
-};
+}
 
-export type PlanReadyEvent = {
+export interface PlanReadyEvent {
   type: "plan_ready";
   plan_id: string;
   steps: PlanStep[];
   created_at: number;
-};
+}
 
 // ---------------------------------------------------------------------------
 // Plan parser — extract tool calls from the LLM's plan text.

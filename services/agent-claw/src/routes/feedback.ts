@@ -92,7 +92,7 @@ export function registerFeedbackRoute(
     const parsed = FeedbackBodySchema.safeParse(req.body);
 
     if (!parsed.success) {
-      return reply.code(400).send({
+      return await reply.code(400).send({
         error: "invalid_input",
         detail: parsed.error.issues.map((i) => ({ path: i.path, msg: i.message })),
       });
@@ -116,7 +116,7 @@ export function registerFeedbackRoute(
       await insertFeedback(deps.pool, user, body, promptName, promptVersion);
     } catch (err) {
       req.log.error({ err }, "feedback: DB write failed");
-      return reply.code(500).send({ error: "db_write_failed" });
+      return await reply.code(500).send({ error: "db_write_failed" });
     }
 
     // Best-effort Langfuse score emission.
@@ -135,7 +135,7 @@ export function registerFeedbackRoute(
       }
     }
 
-    return reply.code(200).send({ status: "ok", signal: body.signal });
+    return await reply.code(200).send({ status: "ok", signal: body.signal });
   });
 }
 
@@ -157,7 +157,7 @@ async function emitLangfuseScore(opts: {
     "Content-Type": "application/json",
   };
   if (publicKey && secretKey) {
-    headers["Authorization"] =
+    headers.Authorization =
       `Basic ${Buffer.from(`${publicKey}:${secretKey}`).toString("base64")}`;
   }
 

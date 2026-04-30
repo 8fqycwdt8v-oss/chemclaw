@@ -27,9 +27,6 @@ import type { StreamSink, TodoSnapshot } from "./streaming-sink.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 import { resolveDecision } from "./permissions/resolver.js";
 import { withToolSpan } from "../observability/tool-spans.js";
-import { getLogger } from "../observability/logger.js";
-
-const log = getLogger("step");
 
 export interface StepOnceOptions {
   llm: LlmProvider;
@@ -162,19 +159,19 @@ async function _runOneTool(opts: {
   // "ask" / "defer" require route-level handling; for now treat as allow.
   // TODO(phase-6-permissions): wire ask/defer to a route-level prompt.
   if (preResult.decision === "ask" || preResult.decision === "defer") {
-    log.warn(
-      {
-        decision: preResult.decision,
-        toolId,
-        reason: preResult.reason ?? null,
-      },
-      "decision treated as allow (Phase 6 will implement the route-level resolver)",
+    // No logger is in scope at this layer (stepOnce is called from the
+    // harness loop, which is reached from many routes / sub-agent flows).
+    // Use console.warn so the gap is observable in dev + production.
+     
+    console.warn(
+      `[step] decision=${preResult.decision} treated as allow ` +
+        `(Phase 6 will implement the route-level resolver) ` +
+        `toolId=${toolId} reason=${preResult.reason ?? "(none)"}`,
     );
   }
 
   // updatedInput from a hook supersedes any in-place mutation.
-  const effectiveInput =
-    preResult.updatedInput !== undefined ? preResult.updatedInput : prePayload.input;
+  const effectiveInput = preResult.updatedInput ?? prePayload.input;
 
   // Validate input.
   const parsedInput = tool.inputSchema.parse(effectiveInput);
@@ -237,7 +234,7 @@ async function _runOneTool(opts: {
     effectiveOutput &&
     typeof effectiveOutput === "object" &&
     "todos" in effectiveOutput &&
-    Array.isArray((effectiveOutput as { todos: unknown }).todos)
+    Array.isArray((effectiveOutput).todos)
   ) {
     streamSink.onTodoUpdate(
       (effectiveOutput as { todos: TodoSnapshot[] }).todos,
@@ -369,11 +366,19 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
   // size (1 for single-tool turns, N for multi-tool turns).
   await lifecycle.dispatch("post_tool_batch", {
     ctx,
-    batch: toolOutputs.map((o, i) => ({
-      toolId: o.toolId,
-      input: calls[i]!.input,
-      output: o.output,
-    })),
+    batch: toolOutputs.map((o, i) => {
+      const call = calls[i];
+      // Invariant: toolOutputs comes from the same calls[] indexing path,
+      // so calls[i] is always present here.
+      if (!call) {
+        throw new Error(`step: calls[${i}] missing for toolOutput ${o.toolId}`);
+      }
+      return {
+        toolId: o.toolId,
+        input: call.input,
+        output: o.output,
+      };
+    }),
   });
 
   return {

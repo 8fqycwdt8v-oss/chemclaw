@@ -69,7 +69,7 @@ export async function savePlanForSession(
   steps: PlanStep[],
   initialMessages: Message[],
 ): Promise<string> {
-  return withUserContext(pool, userEntraId, async (client) => {
+  return await withUserContext(pool, userEntraId, async (client) => {
     const r = await client.query<{ id: string }>(
       `INSERT INTO agent_plans (session_id, steps, initial_messages, status)
        VALUES ($1::uuid, $2::jsonb, $3::jsonb, 'proposed')
@@ -92,7 +92,7 @@ export async function loadActivePlanForSession(
   userEntraId: string,
   sessionId: string,
 ): Promise<DbPlan | null> {
-  return withUserContext(pool, userEntraId, async (client) => {
+  return await withUserContext(pool, userEntraId, async (client) => {
     const r = await client.query<PlanRow>(
       `SELECT id::text AS id,
               session_id::text AS session_id,

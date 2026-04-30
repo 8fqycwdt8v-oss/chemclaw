@@ -13,7 +13,7 @@ import uuid
 from typing import Any
 
 import psycopg
-from neo4j import AsyncGraphDatabase  # type: ignore[import-untyped]
+from neo4j import AsyncGraphDatabase
 
 from services.projectors.common.base import (
     BaseProjector,

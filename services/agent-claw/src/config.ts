@@ -3,8 +3,6 @@
 
 import { z } from "zod";
 
-import { getLogger } from "./observability/logger.js";
-
 const ConfigSchema = z.object({
   AGENT_HOST: z.string().default("0.0.0.0"),
   // Port 3101 — legacy agent stays on 3100 during parallel deployment.
@@ -178,11 +176,10 @@ export type Config = z.infer<typeof ConfigSchema>;
 export function loadConfig(): Config {
   const parsed = ConfigSchema.safeParse(process.env);
   if (!parsed.success) {
-    // Use the centralised Pino logger at fatal level so the failure is
-    // structured + redacted. The process exits immediately afterwards.
-    getLogger("config").fatal(
-      { fieldErrors: parsed.error.flatten().fieldErrors },
-      "Invalid configuration — refusing to start",
+     
+    console.error(
+      "Invalid configuration:",
+      parsed.error.flatten().fieldErrors,
     );
     process.exit(1);
   }

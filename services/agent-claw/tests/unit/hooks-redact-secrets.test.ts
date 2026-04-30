@@ -144,3 +144,43 @@ describe("registerRedactSecretsHook", () => {
     expect(payload.finalText).not.toContain("NCE-9001");
   });
 });
+
+// ---------------------------------------------------------------------------
+// CPU-DoS regression — audit P1
+// ---------------------------------------------------------------------------
+
+describe("redactString — CPU bound", () => {
+  it("completes quickly on 200KB arrow-heavy non-SMILES prose", () => {
+    // The audit found the RXN_SMILES regex took 3.5s on input of this shape
+    // before the >=2 '>' pre-gate. With the gate the regex still runs on a
+    // text that happens to contain '>' chars, but the bounded quantifiers
+    // keep it well under 1s.
+    const block = "> quoted line\n";
+    const payload = block.repeat(Math.ceil((200 * 1024) / block.length));
+    const replacements: Array<{ pattern: string; original: string }> = [];
+    const start = Date.now();
+    redactString(payload, replacements);
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeLessThan(1500);
+  });
+
+  it("returns input unmodified when over the 5MB cap", () => {
+    const huge = "alice@example.com ".repeat(Math.ceil((6 * 1024 * 1024) / 18));
+    expect(huge.length).toBeGreaterThan(5 * 1024 * 1024);
+    const replacements: Array<{ pattern: string; original: string }> = [];
+    const result = redactString(huge, replacements);
+    expect(result).toBe(huge);
+    expect(replacements).toHaveLength(0);
+  });
+
+  it("skips RXN_SMILES regex entirely when the input has fewer than 2 arrows", () => {
+    // Sanity: 1MB of arrow-free prose should finish in milliseconds.
+    const payload = "ChemClaw is great. ".repeat(Math.ceil((1024 * 1024) / 19));
+    const replacements: Array<{ pattern: string; original: string }> = [];
+    const start = Date.now();
+    redactString(payload, replacements);
+    const elapsed = Date.now() - start;
+    expect(elapsed).toBeLessThan(500);
+    expect(replacements.filter((r) => r.pattern === "RXN_SMILES")).toHaveLength(0);
+  });
+});

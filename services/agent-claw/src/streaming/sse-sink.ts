@@ -41,17 +41,17 @@ export function makeSseSink(
 ): StreamSink {
   return {
     onSession: (id: string) =>
-      writeEvent(reply, { type: "session", session_id: id }),
+      { writeEvent(reply, { type: "session", session_id: id }); },
     onTextDelta: (delta: string) => {
       const safe = redactString(delta, redactionLog);
       writeEvent(reply, { type: "text_delta", delta: safe });
     },
     onToolCall: (toolId: string, input: unknown) =>
-      writeEvent(reply, { type: "tool_call", toolId, input }),
+      { writeEvent(reply, { type: "tool_call", toolId, input }); },
     onToolResult: (toolId: string, output: unknown) =>
-      writeEvent(reply, { type: "tool_result", toolId, output }),
+      { writeEvent(reply, { type: "tool_result", toolId, output }); },
     onTodoUpdate: (todos: TodoSnapshot[]) =>
-      writeEvent(reply, { type: "todo_update", todos }),
+      { writeEvent(reply, { type: "todo_update", todos }); },
     onAwaitingUserInput: (question: string) => {
       // The SSE schema requires a session id on awaiting_user_input. If the
       // route didn't supply one (stateless turn), fall back to an empty
@@ -74,6 +74,6 @@ export function makeSseSink(
     onFinish: (
       reason: string,
       usage: { promptTokens: number; completionTokens: number },
-    ) => writeEvent(reply, { type: "finish", finishReason: reason, usage }),
+    ) => { writeEvent(reply, { type: "finish", finishReason: reason, usage }); },
   };
 }

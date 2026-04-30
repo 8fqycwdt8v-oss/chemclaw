@@ -136,7 +136,7 @@ export async function startTestPostgres(
       try {
         await _pool.query(sql);
       } catch (err) {
-        // eslint-disable-next-line no-console
+         
         console.warn(
           `[testcontainer] ${file} failed: ${(err as Error).message.slice(0, 240)}`,
         );

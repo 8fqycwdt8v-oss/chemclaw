@@ -39,7 +39,7 @@ function mockFetchKg(body: unknown) {
   return vi.fn().mockResolvedValue({
     ok: true,
     text: async () => JSON.stringify(body),
-  } as Response);
+  });
 }
 
 describe("buildExpandReactionContextTool", () => {

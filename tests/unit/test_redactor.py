@@ -59,6 +59,51 @@ def test_email_regex_is_bounded() -> None:
     assert "before " in out.text and " after" in out.text
 
 
+def test_redact_completes_quickly_on_arrow_heavy_input() -> None:
+    """Audit P1: RXN_SMILES regex used to take ~3.5s on 200KB adversarial
+    input because the bounded-quantifier scan ran on every starting position.
+    The pre-gate on '>' count + the 5MB input cap together hold the worst
+    case to well under a second."""
+    import time
+
+    # 200KB of arrow-heavy non-SMILES prose (Markdown blockquotes are the
+    # benign trigger we actually see in the wild).
+    payload = ("> quoted line\n" * (200 * 1024 // 14))
+    start = time.monotonic()
+    out = redact(payload)
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 1.0, f"redact() took {elapsed:.2f}s on 200KB arrow-heavy input"
+    # No real reaction SMILES is present; counts must be zero or trivially low.
+    assert out.counts.get("RXN_SMILES", 0) == 0
+
+
+def test_redact_skips_oversized_input() -> None:
+    """Inputs larger than the 5MB cap return unmodified — bounding worst
+    case CPU regardless of pattern shape."""
+    huge = "alice@example.com " * (6 * 1024 * 1024 // 18)
+    assert len(huge) > 5 * 1024 * 1024
+    out = redact(huge)
+    # Refusal: exact same string back, no replacements recorded.
+    assert out.text == huge
+    assert out.counts == {}
+
+
+def test_redact_skips_rxn_regex_when_arrows_absent() -> None:
+    """Sanity: prose without two '>' chars must not invoke the RXN_SMILES
+    regex. We can't observe the skip directly, but we can assert that the
+    redactor finishes instantly on a 1MB string of pure prose."""
+    import time
+
+    payload = "ChemClaw is great. " * (1024 * 1024 // 19)
+    start = time.monotonic()
+    out = redact(payload)
+    elapsed = time.monotonic() - start
+
+    assert elapsed < 0.5, f"redact() took {elapsed:.2f}s on 1MB arrow-free prose"
+    assert out.counts.get("RXN_SMILES", 0) == 0
+
+
 def test_redact_messages_handles_string_and_list_content() -> None:
     msgs = [
         {"role": "user", "content": "Analyse CMP-99999 please."},

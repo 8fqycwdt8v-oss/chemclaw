@@ -8,9 +8,6 @@
 //   - All methods throw SandboxError on failure.
 
 import type { Config } from "../config.js";
-import { getLogger } from "../observability/logger.js";
-
-const log = getLogger("SandboxClient");
 
 // ---------------------------------------------------------------------------
 // Types
@@ -50,24 +47,24 @@ export class SandboxError extends Error {
 // Per-execution cap constants (read from env, with defaults).
 // ---------------------------------------------------------------------------
 
-export const SANDBOX_MAX_CPU_S = Number(process.env["SANDBOX_MAX_CPU_S"] ?? 30);
-export const SANDBOX_MAX_MEM_MB = Number(process.env["SANDBOX_MAX_MEM_MB"] ?? 2048);
+export const SANDBOX_MAX_CPU_S = Number(process.env.SANDBOX_MAX_CPU_S ?? 30);
+export const SANDBOX_MAX_MEM_MB = Number(process.env.SANDBOX_MAX_MEM_MB ?? 2048);
 // Set to "true" to allow forged code to make outbound HTTP. Off by default.
 // SANDBOX_ALLOW_NET_EGRESS is the canonical name. SANDBOX_MAX_NET_EGRESS was
 // the original (misleading — sounded like a byte cap) and is read as a
 // migration fallback so existing deployments don't silently change behavior.
 export const SANDBOX_ALLOW_NET_EGRESS =
-  process.env["SANDBOX_ALLOW_NET_EGRESS"] === "true" ||
-  process.env["SANDBOX_MAX_NET_EGRESS"] === "true";
+  process.env.SANDBOX_ALLOW_NET_EGRESS === "true" ||
+  process.env.SANDBOX_MAX_NET_EGRESS === "true";
 
 // ---------------------------------------------------------------------------
 // Lazy E2B SDK loader — avoids hard import at module level so tests can mock
 // the `e2b` module without hitting its SDK constructor.
 // ---------------------------------------------------------------------------
 
-type E2BSdkSandbox = {
+interface E2BSdkSandbox {
   create(opts: { apiKey: string; template: string; timeoutMs?: number }): Promise<E2BSandboxInstance>;
-};
+}
 
 interface E2BSandboxInstance {
   sandboxId: string;
@@ -87,22 +84,37 @@ interface E2BSandboxInstance {
 
 let _sdkCache: E2BSdkSandbox | null = null;
 
+interface E2BModuleShape {
+  Sandbox?: E2BSdkSandbox;
+  default?: E2BSdkSandbox | { Sandbox?: E2BSdkSandbox };
+}
+
+function isE2BSdkSandbox(x: unknown): x is E2BSdkSandbox {
+  if (typeof x !== "object" || x === null) return false;
+  if (!("create" in x)) return false;
+  return typeof x.create === "function";
+}
+
 async function loadSdk(): Promise<E2BSdkSandbox> {
   if (_sdkCache) return _sdkCache;
   try {
     // Dynamic import — keeps the test bundle lightweight and avoids a hard
     // dependency on the e2b package at typecheck time. The real package is
     // installed in production; tests inject a vi.mock("e2b").
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const _importer: (spec: string) => Promise<any> = (s) => import(/* @vite-ignore */ s);
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any
-    const mod: any = await _importer("e2b");
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any
-    const sdk: any = mod.Sandbox ?? mod.default;
-    if (!sdk || typeof sdk.create !== "function") {
+    const importer: (spec: string) => Promise<unknown> = (s) =>
+      import(/* @vite-ignore */ s);
+    const mod = (await importer("e2b")) as E2BModuleShape;
+    let sdk: unknown = mod.Sandbox;
+    if (!isE2BSdkSandbox(sdk)) {
+      sdk = mod.default;
+      if (typeof sdk === "object" && sdk !== null && "Sandbox" in sdk) {
+        sdk = sdk.Sandbox;
+      }
+    }
+    if (!isE2BSdkSandbox(sdk)) {
       throw new Error("e2b module does not export a Sandbox.create function");
     }
-    _sdkCache = sdk as E2BSdkSandbox;
+    _sdkCache = sdk;
     return _sdkCache;
   } catch (err) {
     throw new SandboxError("create", `e2b SDK import failed: ${(err as Error).message}`);
@@ -174,7 +186,7 @@ export function buildSandboxClient(cfg: Pick<Config, "E2B_API_KEY" | "E2B_TEMPLA
       const envs: Record<string, string> = { ...env };
       if (!SANDBOX_ALLOW_NET_EGRESS) {
         // These vars are advisory — actual blocking is enforced at E2B template level.
-        envs["CHEMCLAW_NO_NET"] = "1";
+        envs.CHEMCLAW_NO_NET = "1";
       }
 
       let result: { exitCode: number; stdout: string; stderr: string };
@@ -242,10 +254,8 @@ export function buildSandboxClient(cfg: Pick<Config, "E2B_API_KEY" | "E2B_TEMPLA
         await instance.kill();
       } catch (err) {
         // Non-fatal — log but don't throw.
-        log.warn(
-          { sandboxId: handle.id, err: (err as Error).message },
-          "kill() failed for sandbox",
-        );
+         
+        console.warn(`SandboxClient: kill() failed for sandbox ${handle.id}: ${(err as Error).message}`);
       }
     },
   };

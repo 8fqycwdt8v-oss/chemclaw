@@ -75,7 +75,7 @@ export function signMcpToken(opts: {
   // .trim() prevents a misconfigured deploy with MCP_AUTH_SIGNING_KEY=" "
   // from minting tokens whose effective entropy is zero. The length
   // check below uses the trimmed value so "32 spaces" is rejected.
-  const key = (opts.signingKey ?? process.env["MCP_AUTH_SIGNING_KEY"] ?? "").trim();
+  const key = (opts.signingKey ?? process.env.MCP_AUTH_SIGNING_KEY ?? "").trim();
   if (!key) {
     throw new McpAuthError(
       "MCP_AUTH_SIGNING_KEY is empty; refusing to mint an unsigned token",
@@ -142,7 +142,7 @@ export function verifyMcpToken(
   opts: { signingKey?: string; now?: number; expectedAudience?: string } = {},
 ): McpTokenClaims {
   // .trim() mirrors signMcpToken: a whitespace-only key cannot verify either.
-  const key = (opts.signingKey ?? process.env["MCP_AUTH_SIGNING_KEY"] ?? "").trim();
+  const key = (opts.signingKey ?? process.env.MCP_AUTH_SIGNING_KEY ?? "").trim();
   if (!key) {
     throw new McpAuthError("MCP_AUTH_SIGNING_KEY is empty; cannot verify token");
   }
@@ -170,13 +170,17 @@ export function verifyMcpToken(
   let header: { alg?: string };
   let payload: Partial<McpTokenClaims>;
   try {
-    header = JSON.parse(Buffer.from(b64UrlDecode(h)).toString("utf-8"));
-    payload = JSON.parse(Buffer.from(b64UrlDecode(p)).toString("utf-8"));
+    // JSON.parse returns `any` — narrow at the boundary by casting through
+    // `unknown` to the expected partial shapes. Both fields are validated
+    // by the field-level checks immediately below, so an unexpected shape
+    // only manifests as a checked McpAuthError, not as a downstream crash.
+    header = JSON.parse(Buffer.from(b64UrlDecode(h)).toString("utf-8")) as { alg?: string };
+    payload = JSON.parse(Buffer.from(b64UrlDecode(p)).toString("utf-8")) as Partial<McpTokenClaims>;
   } catch (err) {
     throw new McpAuthError(`malformed JSON: ${(err as Error).message}`);
   }
   if (header.alg !== "HS256") {
-    throw new McpAuthError(`unexpected alg: ${header.alg}`);
+    throw new McpAuthError(`unexpected alg: ${header.alg ?? "(missing)"}`);
   }
   if (typeof payload.exp !== "number") {
     throw new McpAuthError("missing or non-integer exp");
