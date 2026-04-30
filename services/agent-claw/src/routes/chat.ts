@@ -35,18 +35,12 @@ import { hydrateScratchpad, persistTurnState } from "../core/session-state.js";
 import { lifecycle } from "../core/runtime.js";
 import { OptimisticLockError } from "../core/session-store.js";
 import { buildSystemPromptForTurn, resolveSession } from "./chat-setup.js";
-import { savePlanForSession } from "../core/plan-store-db.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 import { runWithRequestContext } from "../core/request-context.js";
 import type {
   Message,
   ToolContext,
 } from "../core/types.js";
-import {
-  planStore,
-  createPlan,
-  parsePlanSteps,
-} from "../core/plan-mode.js";
 import { VERB_TO_SKILL } from "../core/skills.js";
 import { writeEvent, setupSse } from "../streaming/sse.js";
 import { makeSseSink } from "../streaming/sse-sink.js";
@@ -63,6 +57,7 @@ import { handleSlashShortCircuit } from "./chat-slash.js";
 import { dispatchManualCompact } from "./chat-compact.js";
 import { reserveTurnBudget } from "./chat-paperclip.js";
 import { handleNonStreamingTurn } from "./chat-non-streaming.js";
+import { runPlanModeStreaming } from "./chat-plan-mode.js";
 
 // Re-exported so existing imports `import type { StreamEvent } from "./chat.js"`
 // keep compiling — the canonical home is now ../streaming/sse.ts.
@@ -334,72 +329,23 @@ async function handleChat(
   // registered in observability/otel.ts propagates this across awaits.
   const turnCtx = trace.setSpan(otelContext.active(), rootSpan);
   try {
-    // Plan mode: ask LLM for a JSON plan; emit plan_step + plan_ready; no tool execution.
+    // Plan mode: ask LLM for a JSON plan; emit plan_step + plan_ready; no
+    // tool execution. See routes/chat-plan-mode.ts for the SSE flow.
     if (isPlanMode) {
-      try {
-        const planJson = await otelContext.with(turnCtx, () =>
-          deps.llm.completeJson({
-            system: systemPrompt,
-            user: lastUserMessage?.content ?? "",
-            signal: req.signal,
-          }),
-        );
-        const steps = parsePlanSteps(planJson);
-
-        // Emit plan_step events.
-        for (const step of steps) {
-          if (conn.closed) break;
-          writeEvent(reply, {
-            type: "plan_step",
-            step_number: step.step_number,
-            tool: step.tool,
-            args: step.args,
-            rationale: step.rationale,
-          });
-        }
-
-        // Save the plan to:
-        //   1. The legacy in-memory planStore — kept for backward-compat with
-        //      /api/chat/plan/approve and existing tests.
-        //   2. The DB-backed agent_plans table — used by Phase E chained
-        //      execution via /api/sessions/:id/plan/run.
-        const plan = createPlan(steps, messages, user);
-        planStore.save(plan);
-
-        // DB persistence requires a session id. If we couldn't create one
-        // earlier, the plan is in-memory only and the chained-run endpoint
-        // won't find it — fine, the legacy approve path still works.
-        if (sessionId) {
-          try {
-            await savePlanForSession(deps.pool, user, sessionId, steps, messages);
-          } catch (err) {
-            req.log.warn({ err }, "savePlanForSession failed; falling back to in-memory");
-          }
-        }
-
-        if (!conn.closed) {
-          writeEvent(reply, {
-            type: "plan_ready",
-            plan_id: plan.plan_id,
-            steps: plan.steps,
-            created_at: plan.created_at,
-          });
-          writeEvent(reply, {
-            type: "finish",
-            finishReason: "plan_ready",
-            usage: { promptTokens: 0, completionTokens: 0 },
-          });
-        }
-        // Reflect plan-ready into the local var so the outer finally's
-        // saveSession + shadow-eval gate see the correct terminal state.
-        finishReason = "plan_ready";
-      } catch (err) {
-        req.log.error({ err }, "plan-mode failed");
-        if (!conn.closed) writeEvent(reply, { type: "error", error: "plan_mode_failed" });
-      } finally {
-        cleanupSkillForTurn?.();
-        try { reply.raw.end(); } catch { /* already closed */ }
-      }
+      const planFinish = await runPlanModeStreaming(req, reply, {
+        llm: deps.llm,
+        pool: deps.pool,
+        systemPrompt,
+        lastUserContent: lastUserMessage?.content ?? "",
+        messages,
+        user,
+        sessionId,
+        conn,
+        turnCtx,
+        signal: req.signal,
+        cleanupSkillForTurn,
+      });
+      if (planFinish) finishReason = planFinish;
       return;
     }
 
