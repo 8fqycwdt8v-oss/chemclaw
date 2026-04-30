@@ -150,7 +150,7 @@ export async function registerForgedToolsRoutes(
       );
       if (toolRows.length === 0) return null;
 
-      const { rows } = await client.query(
+      const { rows } = await client.query<Record<string, unknown>>(
         `SELECT id::text, forged_tool_id::text, input_json, expected_output_json,
                 tolerance_json, kind, created_at
          FROM forged_tool_tests

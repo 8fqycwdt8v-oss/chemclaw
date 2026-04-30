@@ -44,7 +44,7 @@ export function buildFetchFullDocumentTool(pool: Pool) {
 
     execute: async (ctx, input) => {
       const row = await withUserContext(pool, ctx.userEntraId, async (client) => {
-        const r = await client.query(
+        const r = await client.query<Record<string, unknown>>(
           `
           SELECT d.id::text AS document_id,
                  d.sha256,

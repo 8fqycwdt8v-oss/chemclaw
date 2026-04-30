@@ -241,11 +241,11 @@ export async function saveSession(
 ): Promise<{ etag: string }> {
   return await withUserContext(pool, userEntraId, async (client) => {
     // JSON-safe serialization: Sets and Maps don't serialize natively.
-    const safeScratch = patch.scratchpad
+    const safeScratch: unknown = patch.scratchpad
       ? JSON.parse(
-          JSON.stringify(patch.scratchpad, (_k, v) => {
-            if (v instanceof Set) return Array.from(v);
-            if (v instanceof Map) return Object.fromEntries(v);
+          JSON.stringify(patch.scratchpad, (_k, v: unknown) => {
+            if (v instanceof Set) return Array.from(v as Set<unknown>);
+            if (v instanceof Map) return Object.fromEntries(v as Map<string, unknown>);
             return v;
           }),
         )

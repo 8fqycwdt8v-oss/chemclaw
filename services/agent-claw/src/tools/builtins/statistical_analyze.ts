@@ -153,7 +153,7 @@ export function buildStatisticalAnalyzeTool(pool: Pool, mcpTabiclUrl: string) {
       // ── compare_conditions: pure SQL, no ML ────────────────────────────────
       if (input.question === "compare_conditions") {
         const rows = await withUserContext(pool, ctx.userEntraId, async (client) => {
-          const q = await client.query(
+          const q = await client.query<Record<string, unknown>>(
             `SELECT CONCAT(COALESCE(e.solvent,'?'), '·',
                           width_bucket(COALESCE(e.temperature_c,0), 0, 200, 10)::text) AS bucket_label,
                     COUNT(*)::int AS n,
