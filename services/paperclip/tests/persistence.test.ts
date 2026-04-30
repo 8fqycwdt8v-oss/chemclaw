@@ -66,7 +66,7 @@ describe("PaperclipState", () => {
     expect(map.size).toBeGreaterThanOrEqual(1);
     const todayKey = [...map.keys()][0];
     expect(todayKey).toMatch(/^u1:\d{4}-\d{2}-\d{2}$/);
-    expect(map.get(todayKey!)).toBeCloseTo(12.5);
+    expect(map.get(todayKey)).toBeCloseTo(12.5);
   });
 
   it("recordReserved swallows DB errors so a Postgres outage doesn't break /reserve", async () => {
