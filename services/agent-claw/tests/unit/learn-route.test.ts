@@ -65,8 +65,8 @@ async function buildApp(llm?: StubLlmProvider) {
             return { rows: [], rowCount: 0, command: "COMMIT", oid: 0, fields: [] };
           }
           if (sql.includes("INSERT INTO skill_library")) {
-            const name = (params?.[0] as string) ?? "unnamed";
-            const promptMd = (params?.[1] as string) ?? "";
+            const name = (params?.[0] as string | undefined) ?? "unnamed";
+            const promptMd = (params?.[1] as string | undefined) ?? "";
             insertedRows.push({ name, prompt_md: promptMd });
             return {
               rows: [{ id: "test-uuid-1", name }] as unknown as T[],

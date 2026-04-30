@@ -64,9 +64,11 @@ const VALID_HOOK_POINTS = new Set<string>([
 ]);
 
 interface HookYaml {
-  name: string;
-  lifecycle: string;
-  enabled: boolean;
+  name?: string;
+  lifecycle?: string;
+  // `enabled` is optional in YAML — undefined and true both mean "enabled";
+  // only an explicit `enabled: false` disables the hook (see registration loop).
+  enabled?: boolean;
   script?: string;
   definition?: Record<string, unknown>;
 }
@@ -190,12 +192,11 @@ export async function loadHooks(
       continue;
     }
 
-    const hook = parsed as HookYaml;
-
-    if (!hook || typeof hook !== "object") {
+    if (parsed === null || typeof parsed !== "object") {
       result.skipped.push(`${file}: not an object`);
       continue;
     }
+    const hook = parsed as HookYaml;
 
     if (!hook.name || typeof hook.name !== "string") {
       result.skipped.push(`${file}: missing name`);
@@ -203,7 +204,7 @@ export async function loadHooks(
     }
 
     if (!hook.lifecycle || !VALID_HOOK_POINTS.has(hook.lifecycle)) {
-      result.skipped.push(`${file}: invalid lifecycle "${hook.lifecycle}"`);
+      result.skipped.push(`${file}: invalid lifecycle "${hook.lifecycle ?? ""}"`);
       continue;
     }
 
