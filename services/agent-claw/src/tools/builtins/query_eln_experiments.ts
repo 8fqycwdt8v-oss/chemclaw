@@ -17,7 +17,7 @@ export const QueryElnExperimentsIn = z.object({
     .string()
     .min(1)
     .max(64)
-    .regex(/^[A-Za-z0-9_\-\.]+$/, "project_code must be alphanumeric/.-/_"),
+    .regex(/^[A-Za-z0-9_.-]+$/, "project_code must be alphanumeric/.-/_"),
   schema_kind: z.string().max(64).optional(),
   reaction_id: z.string().max(128).optional(),
   since: z

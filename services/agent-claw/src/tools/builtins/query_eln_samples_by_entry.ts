@@ -23,7 +23,7 @@ export const QueryElnSamplesByEntryIn = z.object({
     .min(1)
     .max(128)
     .regex(
-      /^[A-Za-z0-9_\-\.:]+$/,
+      /^[A-Za-z0-9_.:-]+$/,
       "entry_id must match [A-Za-z0-9_-.:]+",
     ),
 });

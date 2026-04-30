@@ -28,9 +28,9 @@ import type { HookJSONOutput } from "../hook-output.js";
 
 const RXN_SMILES = /\S{1,400}>\S{0,400}>\S{1,400}/g;
 
-const SMILES_TOKEN = /(?<![A-Za-z0-9])[A-Za-z0-9@+\-\[\]\(\)=#/\\\.]{6,200}(?![A-Za-z0-9])/g;
+const SMILES_TOKEN = /(?<![A-Za-z0-9])[A-Za-z0-9@+\-[\]()=#/\\.]{6,200}(?![A-Za-z0-9])/g;
 
-const EMAIL = /[a-zA-Z0-9_.+\-]{1,64}@[a-zA-Z0-9\-]{1,253}\.[a-zA-Z0-9\-.]{2,63}/g;
+const EMAIL = /[a-zA-Z0-9_.+-]{1,64}@[a-zA-Z0-9-]{1,253}\.[a-zA-Z0-9.-]{2,63}/g;
 
 const NCE_PROJECT = /\bNCE-\d{1,6}\b/gi;
 

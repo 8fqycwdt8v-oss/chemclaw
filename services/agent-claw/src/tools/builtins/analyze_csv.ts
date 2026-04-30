@@ -61,7 +61,7 @@ function detectType(values: string[]): "number" | "string" | "date" {
   if (nonEmpty.length === 0) return "string";
 
   // Date detection: ISO 8601 or common date patterns.
-  const dateRe = /^\d{4}-\d{2}-\d{2}(T[\d:Z.+\-]+)?$|^\d{1,2}\/\d{1,2}\/\d{4}$/;
+  const dateRe = /^\d{4}-\d{2}-\d{2}(T[\d:Z.+-]+)?$|^\d{1,2}\/\d{1,2}\/\d{4}$/;
   if (nonEmpty.every((v) => dateRe.test(v.trim()))) return "date";
 
   // Number detection.
