@@ -60,7 +60,16 @@ export default tseslint.config(
       '@typescript-eslint/no-unsafe-argument': 'error',
       '@typescript-eslint/no-unsafe-return': 'error',
       '@typescript-eslint/no-unsafe-enum-comparison': 'error',
-      '@typescript-eslint/restrict-template-expressions': 'warn',
+      // Allow number/boolean interpolation in template literals; both
+      // produce unambiguous output and are idiomatic in error/log messages.
+      // Disallow object/null/undefined interpolation since those produce
+      // "[object Object]" / "null" / "undefined" — the no-base-to-string
+      // rule (already 'error') catches the same class for objects,
+      // restrict-template-expressions catches it for primitives.
+      '@typescript-eslint/restrict-template-expressions': [
+        'error',
+        { allowNumber: true, allowBoolean: true, allowNullish: false },
+      ],
       '@typescript-eslint/no-misused-promises': 'error',
       '@typescript-eslint/require-await': 'warn',
       '@typescript-eslint/no-floating-promises': 'error',

@@ -175,8 +175,8 @@ function answerQuery(
       }
       if (/summar|stat/i.test(query)) {
         return (
-          `${col.name}: min=${col.min}, max=${col.max}, ` +
-          `mean=${col.mean?.toFixed(4)}, missing=${col.n_missing}.`
+          `${col.name}: min=${col.min ?? "n/a"}, max=${col.max ?? "n/a"}, ` +
+          `mean=${col.mean?.toFixed(4) ?? "n/a"}, missing=${col.n_missing}.`
         );
       }
     }
@@ -258,12 +258,12 @@ export function buildAnalyzeCsvTool(pool: Pool, docFetcherUrl: string) {
 
         if (!row) {
           throw new Error(
-            `analyze_csv: document ${input.document_id} not found or not accessible.`,
+            `analyze_csv: document ${input.document_id ?? "(unknown)"} not found or not accessible.`,
           );
         }
         if (!row.original_uri) {
           throw new Error(
-            `analyze_csv: document ${input.document_id} has no original_uri. ` +
+            `analyze_csv: document ${input.document_id ?? "(unknown)"} has no original_uri. ` +
               "Use csv_text to pass the CSV content directly.",
           );
         }

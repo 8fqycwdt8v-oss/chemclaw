@@ -180,7 +180,7 @@ export function verifyMcpToken(
     throw new McpAuthError(`malformed JSON: ${(err as Error).message}`);
   }
   if (header.alg !== "HS256") {
-    throw new McpAuthError(`unexpected alg: ${header.alg}`);
+    throw new McpAuthError(`unexpected alg: ${header.alg ?? "(missing)"}`);
   }
   if (typeof payload.exp !== "number") {
     throw new McpAuthError("missing or non-integer exp");
