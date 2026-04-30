@@ -51,7 +51,7 @@ export function buildPredictMolecularPropertyTool(mcpChempropUrl: string) {
     annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
-      return postJson(
+      return await postJson(
         `${base}/predict_property`,
         { smiles_list: input.smiles_list, property: input.property },
         PredictMolecularPropertyOut,

@@ -44,7 +44,7 @@ async function buildApp(llm: StubLlmProvider) {
 
   registerPlanRoutes(app, deps);
   await app.ready();
-  return app;
+  return await app;
 }
 
 describe("POST /api/chat/plan/reject", () => {

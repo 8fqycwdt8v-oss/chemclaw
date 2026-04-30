@@ -75,7 +75,7 @@ async function buildApp(opts: {
     pool,
     getUser: () => "test@example.com",
   });
-  return app;
+  return await app;
 }
 
 // ---------------------------------------------------------------------------

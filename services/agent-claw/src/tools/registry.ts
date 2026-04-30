@@ -375,7 +375,7 @@ export class ToolRegistry {
         inputSchema,
         outputSchema,
         execute: async (_ctx, input) => {
-          return postJson(url, input, outputSchema, 15_000, name);
+          return await postJson(url, input, outputSchema, 15_000, name);
         },
       };
     }

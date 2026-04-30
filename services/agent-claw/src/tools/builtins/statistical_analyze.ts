@@ -100,7 +100,7 @@ async function loadReactionRows(
   userEntraId: string,
   ids: string[],
 ): Promise<ReactionRow[]> {
-  return withUserContext(pool, userEntraId, async (client) => {
+  return await withUserContext(pool, userEntraId, async (client) => {
     const q = await client.query(
       `SELECT r.id::text               AS reaction_id,
               r.rxn_smiles, r.rxno_class,

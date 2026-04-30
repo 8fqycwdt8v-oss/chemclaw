@@ -79,7 +79,7 @@ export function buildComputeConfidenceEnsembleTool(pool: Pool) {
     inputSchema: ComputeConfidenceEnsembleIn,
     outputSchema: ComputeConfidenceEnsembleOut,
     execute: async (ctx, input) => {
-      return withUserContext(pool, ctx.userEntraId, async (client) => {
+      return await withUserContext(pool, ctx.userEntraId, async (client) => {
         // Fetch the artifact payload.
         const { rows } = await client.query<{ id: string; payload: unknown }>(
           "SELECT id::text AS id, payload FROM artifacts WHERE id = $1::uuid",

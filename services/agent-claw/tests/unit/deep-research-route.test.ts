@@ -198,7 +198,7 @@ describe("POST /api/deep_research — DR mode marker", () => {
     let capturedMessages: Array<{ role: string; content: string }> = [];
     vi.spyOn(llm, "call").mockImplementation(async (msgs, tools) => {
       capturedMessages = msgs;
-      return originalCall(msgs, tools);
+      return await originalCall(msgs, tools);
     });
 
     registerDeepResearchRoute(app, {

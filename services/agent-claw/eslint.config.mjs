@@ -62,7 +62,7 @@ export default tseslint.config(
       // Empty-object-type triggers on common Fastify type widening; warn for now.
       '@typescript-eslint/no-empty-object-type': 'warn',
       '@typescript-eslint/no-unnecessary-type-assertion': 'warn',
-      '@typescript-eslint/return-await': 'warn',
+      '@typescript-eslint/return-await': ['error', 'always'],
       '@typescript-eslint/no-unnecessary-condition': 'warn',
       '@typescript-eslint/no-unnecessary-type-arguments': 'error',
       '@typescript-eslint/prefer-nullish-coalescing': 'error',

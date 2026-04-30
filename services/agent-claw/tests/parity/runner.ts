@@ -101,7 +101,7 @@ export async function runScenario(
     const entry: TraceEvent = { type: "hook", point };
     if (opts?.matcherTarget) entry.toolId = opts.matcherTarget;
     trace.push(entry);
-    return origDispatch(point, payload, opts);
+    return await origDispatch(point, payload, opts);
   };
 
   // Build the stubbed LLM with the scenario's responses. Per-step usage

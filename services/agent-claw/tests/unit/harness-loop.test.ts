@@ -125,7 +125,7 @@ describe("runHarness — loop semantics", () => {
     const realCall = spyProvider.call.bind(spyProvider);
     spyProvider.call = async (messages, tools) => {
       capturedMessages.push([...messages]);
-      return realCall(messages, tools);
+      return await realCall(messages, tools);
     };
 
     spyProvider

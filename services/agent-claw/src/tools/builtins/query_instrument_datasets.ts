@@ -41,7 +41,7 @@ export function buildQueryInstrumentDatasetsTool(mcpLogsSciyUrl: string) {
     annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
-      return postJson(
+      return await postJson(
         `${base}/datasets/by_sample`,
         { sample_id: input.sample_id },
         QueryInstrumentDatasetsOut,

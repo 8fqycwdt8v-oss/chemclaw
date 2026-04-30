@@ -39,7 +39,7 @@ export async function withHookSpan<T>(
   attrs: HookSpanAttributes,
   fn: () => Promise<T>,
 ): Promise<T> {
-  return tracer.startActiveSpan(
+  return await tracer.startActiveSpan(
     `hook.${attrs.point}.${attrs.hookName}`,
     async (span) => {
       span.setAttributes({

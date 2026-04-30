@@ -135,5 +135,5 @@ export async function tagMaturityHook(
  *              structured tool outputs (ARTIFACT_TOOL_IDS).
  */
 export function registerTagMaturityHook(lifecycle: Lifecycle, pool?: Pool): void {
-  lifecycle.on("post_tool", "tag-maturity", async (payload) => tagMaturityHook(payload, pool));
+  lifecycle.on("post_tool", "tag-maturity", async (payload) => await tagMaturityHook(payload, pool));
 }

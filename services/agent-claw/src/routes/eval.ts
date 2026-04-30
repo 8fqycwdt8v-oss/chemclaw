@@ -73,7 +73,7 @@ const EvalBodySchema = z.object({
 });
 
 async function requireAdminEval(pool: Pool, userEntraId: string): Promise<boolean> {
-  return withSystemContext(pool, async (client) => {
+  return await withSystemContext(pool, async (client) => {
     // Cross-project admin check: a user is admin if they have role='admin'
     // on any project (consistent with optimizer.ts gateAdmin behavior).
     // Done in withSystemContext so we don't depend on the calling user's
@@ -101,7 +101,7 @@ export function registerEvalRoute(
     // derived from real chats. Mirror the optimizer-route admin gate.
     const user = getUser(req);
     if (!(await requireAdminEval(pool, user))) {
-      return reply.code(403).send({
+      return await reply.code(403).send({
         error: "forbidden",
         detail: "/api/eval requires admin role on any project",
       });
@@ -109,13 +109,13 @@ export function registerEvalRoute(
 
     const body = EvalBodySchema.safeParse(req.body);
     if (!body.success) {
-      return reply.code(400).send({ error: "invalid_input", detail: "missing or empty `args`" });
+      return await reply.code(400).send({ error: "invalid_input", detail: "missing or empty `args`" });
     }
 
     const parsed = parseEvalArgs(body.data.args);
 
     if (parsed.subVerb === "unknown") {
-      return reply.code(400).send({
+      return await reply.code(400).send({
         error: "unknown_subcommand",
         detail: `Unknown /eval sub-command: "${(parsed as { raw: string }).raw}". Use "golden" or "shadow <prompt_name>".`,
       });
@@ -127,7 +127,7 @@ export function registerEvalRoute(
     if (parsed.subVerb === "golden") {
       const fixtureExamples = loadFixture(config.AGENT_HOLDOUT_FIXTURE);
       if (fixtureExamples.length === 0) {
-        return reply.code(200).send({
+        return await reply.code(200).send({
           markdown: "No held-out fixture found at `" + config.AGENT_HOLDOUT_FIXTURE + "`.",
           perClass: {},
           overall: 0,
@@ -211,7 +211,7 @@ export function registerEvalRoute(
         rows,
       ].join("\n");
 
-      return reply.code(200).send({ markdown, perClass, overall, delta });
+      return await reply.code(200).send({ markdown, perClass, overall, delta });
     }
 
     // -----------------------------------------------------------------------
@@ -237,7 +237,7 @@ export function registerEvalRoute(
       );
 
       if (r.rows.length === 0) {
-        return reply.code(200).send({
+        return await reply.code(200).send({
           promptName,
           message: "No shadow runs recorded yet.",
           versions: [],
@@ -251,10 +251,10 @@ export function registerEvalRoute(
         latestRunAt: row.latest_run_at,
       }));
 
-      return reply.code(200).send({ promptName, versions });
+      return await reply.code(200).send({ promptName, versions });
     }
 
     // Unreachable — all branches handled above.
-    return reply.code(400).send({ error: "Unknown eval sub-command" });
+    return await reply.code(400).send({ error: "Unknown eval sub-command" });
   });
 }

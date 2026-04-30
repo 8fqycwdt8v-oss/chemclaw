@@ -39,7 +39,7 @@ export function buildFetchInstrumentRunTool(mcpLogsSciyUrl: string) {
     annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
-      return postJson(
+      return await postJson(
         `${base}/datasets/fetch`,
         { uid: input.uid },
         FetchInstrumentRunOut,

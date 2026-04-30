@@ -373,7 +373,7 @@ app.get("/readyz", async (_req, reply) => {
     await pool.query("SELECT 1");
   } catch (err) {
     app.log.warn({ err }, "readyz: Postgres not reachable");
-    return reply.code(503).send({ status: "not_ready", reason: "postgres_unreachable" });
+    return await reply.code(503).send({ status: "not_ready", reason: "postgres_unreachable" });
   }
 
   // 2. At least one mcp_tools row must be healthy.
@@ -382,13 +382,13 @@ app.get("/readyz", async (_req, reply) => {
       "SELECT 1 FROM mcp_tools WHERE health_status = 'healthy' AND enabled = true LIMIT 1",
     );
     if (!rowCount || rowCount === 0) {
-      return reply
+      return await reply
         .code(503)
         .send({ status: "not_ready", reason: "no_healthy_mcp_tools" });
     }
   } catch (err) {
     app.log.warn({ err }, "readyz: mcp_tools query failed");
-    return reply
+    return await reply
       .code(503)
       .send({ status: "not_ready", reason: "mcp_tools_query_failed" });
   }
