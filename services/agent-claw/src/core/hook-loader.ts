@@ -225,12 +225,12 @@ export async function loadHooks(
         const module = await import(scriptPath);
         // Convention: the module must export a default async function.
         // eslint-disable-next-line @typescript-eslint/no-unsafe-member-access
-        if (typeof module.default !== "function") {
+        const def: unknown = (module as { default?: unknown }).default;
+        if (typeof def !== "function") {
           result.skipped.push(`${file}: script does not export a default function`);
           continue;
         }
-        // eslint-disable-next-line @typescript-eslint/no-unsafe-argument
-        lifecycle.on(hookPoint, hook.name, module.default);
+        lifecycle.on(hookPoint, hook.name, def as Parameters<typeof lifecycle.on>[2]);
         result.registered++;
       } catch (err) {
         result.skipped.push(`${file}: script import failed — ${String(err)}`);

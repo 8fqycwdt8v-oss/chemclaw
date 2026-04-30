@@ -84,22 +84,37 @@ interface E2BSandboxInstance {
 
 let _sdkCache: E2BSdkSandbox | null = null;
 
+interface E2BModuleShape {
+  Sandbox?: E2BSdkSandbox;
+  default?: E2BSdkSandbox | { Sandbox?: E2BSdkSandbox };
+}
+
+function isE2BSdkSandbox(x: unknown): x is E2BSdkSandbox {
+  if (typeof x !== "object" || x === null) return false;
+  if (!("create" in x)) return false;
+  return typeof x.create === "function";
+}
+
 async function loadSdk(): Promise<E2BSdkSandbox> {
   if (_sdkCache) return _sdkCache;
   try {
     // Dynamic import — keeps the test bundle lightweight and avoids a hard
     // dependency on the e2b package at typecheck time. The real package is
     // installed in production; tests inject a vi.mock("e2b").
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const _importer: (spec: string) => Promise<any> = (s) => import(/* @vite-ignore */ s);
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any
-    const mod: any = await _importer("e2b");
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-assignment, @typescript-eslint/no-explicit-any
-    const sdk: any = mod.Sandbox ?? mod.default;
-    if (!sdk || typeof sdk.create !== "function") {
+    const importer: (spec: string) => Promise<unknown> = (s) =>
+      import(/* @vite-ignore */ s);
+    const mod = (await importer("e2b")) as E2BModuleShape;
+    let sdk: unknown = mod.Sandbox;
+    if (!isE2BSdkSandbox(sdk)) {
+      sdk = mod.default;
+      if (typeof sdk === "object" && sdk !== null && "Sandbox" in sdk) {
+        sdk = sdk.Sandbox;
+      }
+    }
+    if (!isE2BSdkSandbox(sdk)) {
       throw new Error("e2b module does not export a Sandbox.create function");
     }
-    _sdkCache = sdk as E2BSdkSandbox;
+    _sdkCache = sdk;
     return _sdkCache;
   } catch (err) {
     throw new SandboxError("create", `e2b SDK import failed: ${(err as Error).message}`);

@@ -85,9 +85,7 @@ export function buildProposeHypothesisTool(pool: Pool, agentTraceId?: string) {
         const tier: "low" | "medium" | "high" = insertedRow.confidence_tier;
         const rawCreatedAt: Date | string = insertedRow.created_at;
         const createdAt: string =
-          rawCreatedAt instanceof Date
-            ? rawCreatedAt.toISOString()
-            : String(rawCreatedAt);
+          rawCreatedAt instanceof Date ? rawCreatedAt.toISOString() : rawCreatedAt;
 
         for (const fid of input.cited_fact_ids) {
           const note = input.citation_notes?.[fid] ?? null;
