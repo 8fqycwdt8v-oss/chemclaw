@@ -115,18 +115,62 @@ _BLOCKED_NETWORKS = (
     ipaddress.ip_network("172.16.0.0/12"),      # RFC1918
     ipaddress.ip_network("192.168.0.0/16"),     # RFC1918
     ipaddress.ip_network("0.0.0.0/8"),          # "this network"
+    ipaddress.ip_network("100.64.0.0/10"),      # CGNAT (RFC 6598)
     ipaddress.ip_network("::1/128"),            # IPv6 loopback
     ipaddress.ip_network("fe80::/10"),          # IPv6 link-local
     ipaddress.ip_network("fc00::/7"),           # IPv6 unique local
+    ipaddress.ip_network("::ffff:0:0/96"),      # IPv4-mapped IPv6 (any) — see _ip_is_blocked
+    ipaddress.ip_network("64:ff9b::/96"),       # IPv4/IPv6 translation (RFC 6052)
+    ipaddress.ip_network("2002::/16"),          # 6to4 — extracted to IPv4 below
 )
 
 
 def _ip_is_blocked(ip_str: str) -> bool:
+    """Return True iff `ip_str` falls in a blocked range.
+
+    Normalises three IPv6 transition forms back to their carried IPv4 address
+    before checking, otherwise an attacker can reach 127.0.0.1 / 169.254.169.254
+    via ``::ffff:127.0.0.1`` (IPv4-mapped), ``2002:7f00:0001::`` (6to4) or
+    a Teredo wrapper. Without this, the audit found that the doc-fetcher
+    resolves IPv4-mapped IPv6 to a plain ``IPv6Address`` that misses the
+    ``127.0.0.0/8`` / ``169.254.0.0/16`` checks above.
+    """
     try:
         addr = ipaddress.ip_address(ip_str)
     except ValueError:
         return True  # not a valid IP — fail closed
-    return any(addr in net for net in _BLOCKED_NETWORKS)
+
+    if any(addr in net for net in _BLOCKED_NETWORKS):
+        return True
+
+    if isinstance(addr, ipaddress.IPv6Address):
+        # IPv4-mapped IPv6, e.g. ::ffff:127.0.0.1
+        if addr.ipv4_mapped is not None:
+            mapped = addr.ipv4_mapped
+            if any(
+                mapped in net
+                for net in _BLOCKED_NETWORKS
+                if isinstance(net, ipaddress.IPv4Network)
+            ):
+                return True
+        # 6to4 tunnelling — 2002::/16 carries an IPv4 address in the next 32 bits.
+        if addr.sixtofour is not None and any(
+            addr.sixtofour in net
+            for net in _BLOCKED_NETWORKS
+            if isinstance(net, ipaddress.IPv4Network)
+        ):
+            return True
+        # Teredo tunnelling — 2001::/32 wraps a client IPv4.
+        if addr.teredo is not None:
+            client_ipv4 = addr.teredo[1]
+            if any(
+                client_ipv4 in net
+                for net in _BLOCKED_NETWORKS
+                if isinstance(net, ipaddress.IPv4Network)
+            ):
+                return True
+
+    return False
 
 
 def _validate_network_host(host: str) -> None:

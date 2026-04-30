@@ -321,3 +321,64 @@ def test_fake_logs_project_code_matches_sample_id_project(
         f"with the project encoded in sample_id — cross-link bug regressed"
     )
     assert matched == with_sample
+
+
+# ---------------------------------------------------------------------------
+# Audit P1 — write_seed_sql must reject unsafe relpaths
+#
+# `fixtures_relpath` is interpolated into a `\copy ... FROM PROGRAM 'gunzip
+# -c <relpath>/<table>.copy.gz'` SQL line. Anything that breaks out of the
+# single-quoted shell string would smuggle arbitrary commands into the
+# Postgres host. Validate the gate at the entry point.
+# ---------------------------------------------------------------------------
+
+
+def test_write_seed_sql_rejects_shell_metacharacter(tmp_path: Path) -> None:
+    out = tmp_path / "seed.sql"
+    with pytest.raises(ValueError, match="unsafe characters"):
+        gen.write_seed_sql(out, "fixtures'; rm -rf /; --")
+
+
+def test_write_seed_sql_rejects_command_substitution(tmp_path: Path) -> None:
+    out = tmp_path / "seed.sql"
+    with pytest.raises(ValueError, match="unsafe characters"):
+        gen.write_seed_sql(out, "fixtures$(whoami)")
+
+
+def test_write_seed_sql_rejects_backtick(tmp_path: Path) -> None:
+    out = tmp_path / "seed.sql"
+    with pytest.raises(ValueError, match="unsafe characters"):
+        gen.write_seed_sql(out, "fixtures`id`")
+
+
+def test_write_seed_sql_rejects_parent_traversal(tmp_path: Path) -> None:
+    out = tmp_path / "seed.sql"
+    with pytest.raises(ValueError, match="parent-traversal"):
+        gen.write_seed_sql(out, "fixtures/../etc")
+
+
+def test_write_seed_sql_rejects_empty_relpath(tmp_path: Path) -> None:
+    out = tmp_path / "seed.sql"
+    with pytest.raises(ValueError, match="unsafe characters"):
+        gen.write_seed_sql(out, "")
+
+
+def test_write_seed_sql_accepts_normal_relpath(tmp_path: Path) -> None:
+    """The happy path: a sensible relpath generates the SQL without raising."""
+    out = tmp_path / "seed.sql"
+    # Should not raise.
+    gen.write_seed_sql(out, "fixtures/mock_eln")
+    body = out.read_text(encoding="utf-8")
+    assert "FROM PROGRAM" in body
+    assert "fixtures/mock_eln" in body
+
+
+def test_write_seed_sql_accepts_absolute_path(tmp_path: Path) -> None:
+    """Test fixtures live outside REPO_ROOT and so end up as absolute paths
+    (str(fdir)) when relative_to fails. Verify those still validate."""
+    out = tmp_path / "seed.sql"
+    abs_path = str(tmp_path / "fixtures")
+    # Should not raise — absolute paths use only allowed chars.
+    gen.write_seed_sql(out, abs_path)
+    body = out.read_text(encoding="utf-8")
+    assert abs_path in body

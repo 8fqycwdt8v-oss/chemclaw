@@ -42,6 +42,7 @@ import io
 import json
 import os
 import random
+import re
 import uuid
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -1017,7 +1018,23 @@ def generate(world: dict[str, Any], seed: int) -> GenState:
 # --------------------------------------------------------------------------
 
 
+_SAFE_RELPATH_PATTERN = re.compile(r"^[A-Za-z0-9_./\-]+$")
+
+
 def write_seed_sql(out_path: Path, fixtures_relpath: str) -> None:
+    # The relpath is interpolated into a `\copy ... FROM PROGRAM 'gunzip -c …'`
+    # SQL command — i.e. it lands inside a shell-evaluated single-quoted string.
+    # Reject anything that could break out of the quote or smuggle a metacharacter.
+    # Real fixture paths are always alphanumeric / underscore / hyphen / dot / slash.
+    if not fixtures_relpath or not _SAFE_RELPATH_PATTERN.match(fixtures_relpath):
+        raise ValueError(
+            f"fixtures_relpath contains unsafe characters: {fixtures_relpath!r}"
+        )
+    if ".." in fixtures_relpath.split("/"):
+        raise ValueError(
+            f"fixtures_relpath must not contain parent-traversal segments: "
+            f"{fixtures_relpath!r}"
+        )
     """Write db/seed/20_mock_eln_data.sql.
 
     The loader is gated by `current_setting('app.mock_eln_enabled', true) = 'on'`.
