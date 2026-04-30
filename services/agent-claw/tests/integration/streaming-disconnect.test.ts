@@ -217,6 +217,7 @@ describe("streaming disconnect — AbortSignal propagation", () => {
 
     // Wait for the tool to start, then abort.
     const startMs = Date.now();
+    // eslint-disable-next-line @typescript-eslint/no-unnecessary-condition -- toolStarted is mutated by a concurrent async tool closure; TS narrows it as always-false in this synchronous frame.
     while (!toolStarted && Date.now() - startMs < 1500) {
       await new Promise((r) => setTimeout(r, 5));
     }

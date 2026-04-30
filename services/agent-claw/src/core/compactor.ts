@@ -93,7 +93,7 @@ export async function compact(
   // The system prompt (if any) is always at index 0.
   const first = messages[0];
   const hasSystem = first?.role === "system";
-  const systemMessages = hasSystem && first ? [first] : [];
+  const systemMessages = hasSystem ? [first] : [];
   const nonSystem = hasSystem ? messages.slice(1) : [...messages];
 
   // If there are not enough messages to compact (all fit within recentKeep),
@@ -129,7 +129,7 @@ export async function compact(
     })) as Partial<SynopsisResult>;
 
     synopsis =
-      typeof result?.synopsis === "string" && result.synopsis.trim().length > 0
+      typeof result.synopsis === "string" && result.synopsis.trim().length > 0
         ? result.synopsis.trim()
         : transcript.slice(0, 800); // safe fallback: truncate raw
   } catch {

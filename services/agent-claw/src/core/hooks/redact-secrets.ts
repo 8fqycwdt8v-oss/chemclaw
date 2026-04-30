@@ -130,7 +130,7 @@ export async function redactSecretsHook(
 ): Promise<HookJSONOutput> {
   const replacements: RedactReplacement[] = [];
 
-  const original = payload.finalText ?? "";
+  const original = payload.finalText;
   const redacted = redactString(original, replacements);
 
   if (redacted !== original) {
@@ -139,11 +139,13 @@ export async function redactSecretsHook(
 
   if (replacements.length > 0) {
     const existing =
-      (payload.ctx.scratchpad.get("redact_log") as Array<{
-        scope: string;
-        replacements: RedactReplacement[];
-        timestamp: string;
-      }>) ?? [];
+      (payload.ctx.scratchpad.get("redact_log") as
+        | Array<{
+            scope: string;
+            replacements: RedactReplacement[];
+            timestamp: string;
+          }>
+        | undefined) ?? [];
     payload.ctx.scratchpad.set("redact_log", [
       ...existing,
       {
