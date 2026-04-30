@@ -193,3 +193,33 @@ observability:
   contextualChunker:
     image: chemclaw/contextual-chunker:latest
     replicas: 1
+
+# ── Profile: backups (Phase 4 of the configuration concept) ──────────────────
+# Daily encrypted backups of Postgres + Neo4j to S3-compatible storage.
+# Run `make backup.test-restore` locally to validate a restore against
+# a transient compose stack. See docs/runbooks/backup-and-restore.md.
+
+backups:
+  enabled: false
+  # `age` recipient public key — same key restores both jobs.
+  # Generate the key pair with `age-keygen`; keep the private key in a
+  # vault, NOT a Kubernetes secret (cluster ops should not be able to
+  # decrypt dumps without separate authorisation).
+  ageRecipient: ""
+  retentionDays: 30
+  s3:
+    endpoint: ""             # e.g. https://s3.us-east-1.amazonaws.com
+    bucket: ""
+    prefix: ""               # optional sub-path inside the bucket
+    credentialsSecret: chemclaw-backup-s3-credentials
+  postgres:
+    image: chemclaw/postgres-backup:latest
+    schedule: "0 1 * * *"    # nightly at 01:00 — comfortably before optimizer
+    tmpSize: 10Gi
+  neo4j:
+    image: chemclaw/neo4j-backup:latest
+    schedule: "30 1 * * *"   # nightly at 01:30
+    uri: bolt://neo4j:7687
+    user: neo4j
+    passwordSecret: chemclaw-neo4j-password
+    tmpSize: 20Gi

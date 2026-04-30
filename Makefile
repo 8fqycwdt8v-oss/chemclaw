@@ -224,3 +224,10 @@ diff-cover: coverage ## Enforce changed-line coverage thresholds against main
 .PHONY: smoke
 smoke: ## End-to-end smoke: up → init → seed → import → health-check
 	@./scripts/smoke.sh
+
+# --------------------------------------------------------------------------
+# Backup verification (Phase 4 of the configuration concept)
+# --------------------------------------------------------------------------
+.PHONY: backup.test-restore
+backup.test-restore: ## Restore the latest backup into a transient compose stack and run smoke against it.
+	@./scripts/backup_test_restore.sh
