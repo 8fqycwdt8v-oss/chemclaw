@@ -81,8 +81,10 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
 
     // SSE streaming resume.
     setupSse(reply);
-    let closed = false;
-    req.raw.on("close", () => { closed = true; });
+    // Boxed so the value can be mutated by the close-handler closure without
+    // TS narrowing every subsequent read to the literal `false` initializer.
+    const conn: { closed: boolean } = { closed: false };
+    req.raw.on("close", () => { conn.closed = true; });
 
     try {
       writeEvent(reply, { type: "text_delta", delta: "Plan approved — executing…\n\n" });
@@ -104,7 +106,7 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
           }),
       );
 
-      if (!closed) {
+      if (!conn.closed) {
         writeEvent(reply, { type: "text_delta", delta: result.text });
         writeEvent(reply, {
           type: "finish",
@@ -114,7 +116,7 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
       }
     } catch (err) {
       req.log.error({ err }, "plan/approve: harness failed");
-      if (!closed) {
+      if (!conn.closed) {
         writeEvent(reply, { type: "error", error: "internal" });
       }
     } finally {

@@ -38,7 +38,7 @@ interface PlanRow {
   steps: PlanStep[];
   current_step_index: number;
   status: PlanStatus;
-  initial_messages: Message[];
+  initial_messages: Message[] | null;
   created_at: Date;
   updated_at: Date;
 }

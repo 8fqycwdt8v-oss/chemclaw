@@ -65,10 +65,11 @@ function parseFrontmatter(raw: string): { frontmatter: SkillFrontmatter; body: s
   const yamlText = parts[1] ?? "";
   const body = parts.slice(2).join("---").trim();
 
-  const raw_fm = yaml.load(yamlText) as Partial<SkillFrontmatter>;
-  if (!raw_fm || typeof raw_fm !== "object") {
+  const parsed: unknown = yaml.load(yamlText);
+  if (parsed === null || typeof parsed !== "object") {
     throw new Error("SKILL.md frontmatter must be a YAML object");
   }
+  const raw_fm = parsed as Partial<SkillFrontmatter>;
 
   // Validate required fields.
   if (typeof raw_fm.id !== "string" || raw_fm.id.trim() === "") {

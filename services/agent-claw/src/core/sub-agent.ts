@@ -142,7 +142,7 @@ export async function spawnSubAgent(
     `Cite every fact, reaction, and document chunk you use. ` +
     `Do not fabricate IDs.`;
 
-  const userContent = taskSpec.inputs && Object.keys(taskSpec.inputs).length > 0
+  const userContent = Object.keys(taskSpec.inputs).length > 0
     ? `${taskSpec.goal}\n\nInputs:\n${inputsText}`
     : taskSpec.goal;
 

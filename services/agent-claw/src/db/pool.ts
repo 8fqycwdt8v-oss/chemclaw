@@ -13,8 +13,11 @@ import { Pool } from "pg";
 import type { Config } from "../config.js";
 
 export function createPool(cfg: Config): Pool {
-  // Prefer the dedicated app role; fall back to the legacy single-role config.
-  const user = cfg.CHEMCLAW_APP_USER ?? cfg.POSTGRES_USER;
+  // Prefer the dedicated app role; fall back to the legacy POSTGRES_PASSWORD
+  // when CHEMCLAW_APP_PASSWORD is not set. CHEMCLAW_APP_USER has a default
+  // ("chemclaw_app"), so its fallback to POSTGRES_USER is unreachable and
+  // was removed.
+  const user = cfg.CHEMCLAW_APP_USER;
   const password = cfg.CHEMCLAW_APP_PASSWORD ?? cfg.POSTGRES_PASSWORD;
   return new Pool({
     host: cfg.POSTGRES_HOST,

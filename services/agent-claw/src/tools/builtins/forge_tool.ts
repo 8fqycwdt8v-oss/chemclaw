@@ -87,14 +87,15 @@ export const PROTECTED_TOOL_NAMES = new Set(["forge_tool", "run_program"]);
 // Zod-schema validation helper (re-validate as JSON schema).
 // ---------------------------------------------------------------------------
 
-export function validateJsonSchema(schema: Record<string, unknown>): void {
-  if (!schema || typeof schema !== "object") {
+export function validateJsonSchema(schema: unknown): asserts schema is Record<string, unknown> {
+  if (schema === null || typeof schema !== "object") {
     throw new Error("schema must be a non-null object");
   }
-  if (schema.type !== "object") {
+  const s = schema as Record<string, unknown>;
+  if (s.type !== "object") {
     throw new Error("top-level schema type must be 'object'");
   }
-  if (schema.properties !== undefined && typeof schema.properties !== "object") {
+  if (s.properties !== undefined && typeof s.properties !== "object") {
     throw new Error("schema.properties must be an object if present");
   }
 }
@@ -298,11 +299,15 @@ export function buildForgeToolTool(
         parentCode ?? undefined,
       );
 
-      const raw = await llm.completeJson({ system, user, role: forgedByRole });
+      const raw: unknown = await llm.completeJson({ system, user, role: forgedByRole });
+      if (raw === null || typeof raw !== "object") {
+        throw new Error(
+          "forge_tool: LLM did not return a JSON object in stage 2 (generate).",
+        );
+      }
       const rawObj = raw as Record<string, unknown>;
 
       if (
-        !rawObj ||
         typeof rawObj.python_code !== "string" ||
         !rawObj.python_code.trim()
       ) {

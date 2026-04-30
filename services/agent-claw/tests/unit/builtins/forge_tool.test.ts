@@ -108,7 +108,7 @@ describe("validateJsonSchema", () => {
   });
 
   it("rejects null schema", () => {
-    expect(() => validateJsonSchema(null as unknown as Record<string, unknown>)).toThrow();
+    expect(() => validateJsonSchema(null)).toThrow();
   });
 
   it("rejects schema where properties is not an object", () => {
