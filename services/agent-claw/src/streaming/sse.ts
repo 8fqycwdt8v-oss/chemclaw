@@ -45,6 +45,14 @@ export type StreamEvent =
   | { type: "error"; error: string };
 
 export function writeEvent(reply: FastifyReply, payload: StreamEvent): void {
+  // Guard against post-end writes: Node's OutgoingMessage.write() after
+  // end() does NOT throw synchronously — it returns false and emits an
+  // async `error` event for ERR_STREAM_WRITE_AFTER_END. Callers that wrap
+  // writeEvent in try/catch (chat-streaming-sse.ts, chat-plan-mode.ts)
+  // cannot catch that async event. Cycle-2 review caught this on the
+  // plan-mode path where the helper's inner finally calls reply.raw.end()
+  // and the route's outer finally still runs emitTerminalEvents.
+  if (reply.raw.writableEnded) return;
   const json = JSON.stringify(payload).replace(/\r?\n/g, "\\n");
   // Note: an ECONNRESET on a closed socket throws synchronously here.
   // Surface a structured warning so an intermittent client disconnect is
