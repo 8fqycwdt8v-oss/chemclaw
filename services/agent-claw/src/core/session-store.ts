@@ -40,6 +40,8 @@ export type SessionFinishReason =
   | "session_budget_exceeded"
   | "awaiting_user_input"
   | "concurrent_modification"
+  | "cancelled"
+  | "plan_ready"
   | "error";
 
 export interface SessionState {
@@ -318,7 +320,20 @@ export async function saveSession(
 // Todo CRUD — used by the manage_todos builtin tool.
 // ---------------------------------------------------------------------------
 
-/** Insert a batch of new todos. Ordering is auto-assigned starting from MAX+1. */
+/**
+ * Insert a batch of new todos. Ordering is auto-assigned MAX+1, MAX+2, ...
+ *
+ * Atomicity: prior versions did SELECT MAX(ordering) then a per-row INSERT
+ * loop, leaving the read-then-write pair vulnerable to a race under READ
+ * COMMITTED — two parallel turns on the same session_id could compute the
+ * same nextOrdering and both succeed, producing duplicate rows. The unique
+ * index added in init/19 catches that case at write time, but to avoid the
+ * retry burden on every caller we now do the whole batch as one CTE that
+ * reads MAX once and INSERTs all rows in a single statement. The CTE still
+ * sees a consistent snapshot for a single batch; concurrent batches that
+ * interleave at the row level will still hit the unique-index error,
+ * which manage_todos surfaces as a tool failure the agent can retry.
+ */
 export async function createTodos(
   pool: Pool,
   userEntraId: string,
@@ -327,26 +342,26 @@ export async function createTodos(
 ): Promise<Todo[]> {
   if (contents.length === 0) return [];
   return await withUserContext(pool, userEntraId, async (client) => {
-    const maxR = await client.query<{ max: number | null }>(
-      `SELECT COALESCE(MAX(ordering), 0) AS max
-         FROM agent_todos WHERE session_id = $1::uuid`,
-      [sessionId],
+    const r = await client.query<TodoRow>(
+      `WITH max_ord AS (
+         SELECT COALESCE(MAX(ordering), 0) AS m
+         FROM agent_todos
+         WHERE session_id = $1::uuid
+       ),
+       new_todos AS (
+         SELECT
+           $1::uuid AS session_id,
+           (SELECT m FROM max_ord) + ord.idx AS ordering,
+           ord.content
+         FROM unnest($2::text[]) WITH ORDINALITY AS ord(content, idx)
+       )
+       INSERT INTO agent_todos (session_id, ordering, content)
+       SELECT session_id, ordering, content FROM new_todos
+       ORDER BY ordering
+       RETURNING id::text AS id, ordering, content, status, created_at, updated_at`,
+      [sessionId, contents],
     );
-    let nextOrdering = (maxR.rows[0]?.max ?? 0) + 1;
-
-    const rows: TodoRow[] = [];
-    for (const content of contents) {
-      const r = await client.query<TodoRow>(
-        `INSERT INTO agent_todos (session_id, ordering, content)
-         VALUES ($1::uuid, $2, $3)
-         RETURNING id::text AS id, ordering, content, status, created_at, updated_at`,
-        [sessionId, nextOrdering, content],
-      );
-      const inserted = r.rows[0];
-      if (inserted) rows.push(inserted);
-      nextOrdering++;
-    }
-    return rowsToTodos(rows);
+    return rowsToTodos(r.rows);
   });
 }
 

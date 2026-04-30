@@ -45,21 +45,22 @@ export interface PlanModeStreamingInput {
 
 /**
  * Run the streaming plan-mode branch end-to-end. On success, returns
- * the string "plan_ready" so the caller can update its outer-scope
- * finishReason (which the outer finally's session_end gate inspects).
- * On error, returns undefined — the caller leaves finishReason
- * untouched, preserving the prior behaviour where a failed plan stays
- * at the "stop" default.
+ * either "plan_ready" (success) or "error" (LLM/parse failure) so the
+ * caller can update its outer-scope finishReason. Both values are in
+ * the DB CHECK on agent_sessions.last_finish_reason (init/18) and the
+ * SessionFinishReason TS union, so the outer finally's
+ * persistTurnState write succeeds and the session_end gate (which
+ * fires on "stop" only) correctly skips both paths.
  *
- * Always closes the SSE response (success or failure) and runs the
- * cleanupSkillForTurn callback exactly once.
+ * Always closes the SSE response (success or failure). Does NOT call
+ * cleanupSkillForTurn — the caller's outer finally owns that.
  */
 export async function runPlanModeStreaming(
   req: FastifyRequest,
   reply: FastifyReply,
   input: PlanModeStreamingInput,
-): Promise<"plan_ready" | undefined> {
-  let finishReason: "plan_ready" | undefined;
+): Promise<"plan_ready" | "error"> {
+  let finishReason: "plan_ready" | "error";
   try {
     const planJson = await otelContext.with(input.turnCtx, () =>
       input.llm.completeJson({
@@ -121,13 +122,26 @@ export async function runPlanModeStreaming(
   } catch (err) {
     req.log.error({ err }, "plan-mode failed");
     if (!input.conn.closed) writeEvent(reply, { type: "error", error: "plan_mode_failed" });
-    // Note: leave finishReason undefined so the caller's outer-scope
-    // finishReason stays at its default ("stop"). Mirrors the prior
-    // inline behaviour exactly — this does mean a failed plan still
-    // triggers the outer finally's session_end gate, which is a
-    // pre-existing footgun unrelated to this extraction.
+    // Map plan-mode failures to "error" so:
+    //   1. agent_sessions.last_finish_reason records 'error' (the DB
+    //      CHECK widened in init/18 allows it).
+    //   2. The outer finally's session_end gate (which fires on "stop")
+    //      does NOT mis-fire for a plan-mode failure.
+    // Pre-PR #61 / pre-cycle-2-review this returned undefined which
+    // left the caller's outer finishReason at "stop" — the same
+    // generic-error-as-clean-stop bug PR #61 fixed for classify-stream-error.
+    // Cycle-1 of review-v2 caught the parallel hole here.
+    finishReason = "error";
   } finally {
-    input.cleanupSkillForTurn?.();
+    // Note: cleanupSkillForTurn is intentionally NOT called here — the
+    // caller's outer finally in chat.ts owns it. The pre-PR-56 inline
+    // version called it in both places (relying on
+    // SkillLoader.enableForTurn being idempotent at the second
+    // decrement); the post-session review (debug-investigator agent)
+    // flagged this as a redundant double-call worth tightening up.
+    // reply.raw.end() stays here because the outer finally writes
+    // terminal-events that would double-emit `finish` on the wire if
+    // the response weren't already closed.
     try { reply.raw.end(); } catch { /* already closed */ }
   }
   return finishReason;

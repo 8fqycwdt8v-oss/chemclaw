@@ -341,7 +341,7 @@ async function handleChat(
         signal: req.signal,
         cleanupSkillForTurn,
       });
-      if (planFinish) finishReason = planFinish;
+      finishReason = planFinish;
       return;
     }
 
@@ -411,9 +411,7 @@ async function handleChat(
     // full classification contract; the helper emits the typed `error`
     // event and returns the finishReason for our outer-scope `let`.
     const classified = classifyStreamError(err, conn, reply, req);
-    if (classified.finishReason !== undefined) {
-      finishReason = classified.finishReason;
-    }
+    finishReason = classified.finishReason;
   } finally {
     // Persist in-flight stream redactions to scratchpad for observability.
     // post_turn already ran inside runHarness; we append the stream_delta
