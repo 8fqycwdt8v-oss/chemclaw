@@ -191,8 +191,8 @@ def test_radical_input_surfaces_warning(client):
         assert r.status_code == 400
 
 
-def test_validate_energies_flag_surfaces_phase3_stub_warning(client):
-    """Phase 3 is not implemented; the flag must produce an explicit warning."""
+def test_validate_energies_no_op_on_identity_input(client):
+    """Identity case: no moves → no xTB calls, no warnings, no crash."""
     with mock.patch(
         "services.mcp_tools.mcp_synthegy_mech.llm_policy.LiteLLMScoringPolicy._acompletion",
         return_value=_fake_response(),
@@ -201,14 +201,129 @@ def test_validate_energies_flag_surfaces_phase3_stub_warning(client):
             "/elucidate_mechanism",
             json={
                 "reactants_smiles": "CC=O",
-                "products_smiles": "CC=O",  # identity → no moves but flag still echoed
+                "products_smiles": "CC=O",
                 "max_nodes": 1,
                 "validate_energies": True,
             },
         )
     assert r.status_code == 200
-    warnings = r.json()["warnings"]
-    assert any("Phase 3" in w or "stub" in w.lower() for w in warnings), warnings
+    data = r.json()
+    assert data["moves"] == []
+    # No xtb-related warnings — the flag is a no-op with no moves to validate.
+    assert not any("xtb" in w.lower() or "Phase 3" in w for w in data["warnings"])
+
+
+def test_validate_energies_unreachable_xtb_surfaces_graceful_warning(client):
+    """If mcp-xtb is unreachable, the response must still come back successfully
+    with a warning rather than a 5xx. Energy validation is a secondary signal —
+    losing it must not lose the whole mechanism elucidation."""
+
+    import httpx
+
+    # Force the search to find a 1-step "mechanism" so there is at least one
+    # move whose endpoints would be sent to mcp-xtb. We cheat by patching the
+    # search to return a fixed path of 2 SMILES.
+    fake_path = ["CC=O", "C[C+][O-]"]
+
+    class FakeSearchResult:
+        path = fake_path
+        scores = [0.0, 7.0]
+        nodes_explored = 2
+        truncated = False
+
+    async def fake_search(self, src, dest):  # noqa: ARG001
+        return FakeSearchResult()
+
+    with mock.patch(
+        "services.mcp_tools.mcp_synthegy_mech.mechanism_search.MechanismSearch.search",
+        new=fake_search,
+    ), mock.patch(
+        "services.mcp_tools.mcp_synthegy_mech.llm_policy.LiteLLMScoringPolicy._acompletion",
+        return_value=_fake_response(),
+    ), mock.patch(
+        "httpx.AsyncClient.post",
+        side_effect=httpx.ConnectError("connection refused"),
+    ):
+        r = client.post(
+            "/elucidate_mechanism",
+            json={
+                "reactants_smiles": "CC=O",
+                "products_smiles": "C[C+][O-]",
+                "max_nodes": 5,
+                "validate_energies": True,
+            },
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data["moves"]) == 1
+    # Energy is None when mcp-xtb is unreachable.
+    assert data["moves"][0]["energy_delta_hartree"] is None
+    # And we surface a warning rather than crashing. The validator catches
+    # httpx errors inside _optimize_one and reports them as "no energy"
+    # warnings (with full exception detail in the service logs).
+    assert any(
+        "no energy" in w.lower() or "xtb" in w.lower()
+        for w in data["warnings"]
+    ), data["warnings"]
+
+
+def test_validate_energies_populates_delta_when_xtb_responds(client):
+    """When mcp-xtb returns successfully, energy_delta_hartree must be populated."""
+
+    fake_path = ["CC=O", "C[C+][O-]"]
+    energies = {"CC=O": -154.123, "C[C+][O-]": -154.050}
+
+    class FakeSearchResult:
+        path = fake_path
+        scores = [0.0, 7.5]
+        nodes_explored = 2
+        truncated = False
+
+    async def fake_search(self, src, dest):  # noqa: ARG001
+        return FakeSearchResult()
+
+    def fake_post_response(smiles: str):
+        m = mock.MagicMock()
+        m.status_code = 200
+        m.json.return_value = {
+            "optimized_xyz": "stub",
+            "energy_hartree": energies[smiles],
+            "gnorm": 0.001,
+            "converged": True,
+        }
+        return m
+
+    async def fake_post(self, url, json, headers=None, **_kwargs):  # noqa: ARG001
+        return fake_post_response(json["smiles"])
+
+    with mock.patch(
+        "services.mcp_tools.mcp_synthegy_mech.mechanism_search.MechanismSearch.search",
+        new=fake_search,
+    ), mock.patch(
+        "services.mcp_tools.mcp_synthegy_mech.llm_policy.LiteLLMScoringPolicy._acompletion",
+        return_value=_fake_response(),
+    ), mock.patch(
+        "httpx.AsyncClient.post",
+        new=fake_post,
+    ):
+        r = client.post(
+            "/elucidate_mechanism",
+            json={
+                "reactants_smiles": "CC=O",
+                "products_smiles": "C[C+][O-]",
+                "max_nodes": 5,
+                "validate_energies": True,
+            },
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert len(data["moves"]) == 1
+    delta = data["moves"][0]["energy_delta_hartree"]
+    assert delta is not None
+    # to (-154.050) - from (-154.123) = +0.073 Ha
+    assert abs(delta - 0.073) < 1e-6
+    # No xtb-related warnings on the happy path.
+    assert not any("xTB validation failed" in w for w in data["warnings"])
 
 
 # ---------------------------------------------------------------------------

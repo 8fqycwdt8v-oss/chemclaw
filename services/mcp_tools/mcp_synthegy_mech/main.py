@@ -27,6 +27,7 @@ Limitations (from the paper):
 from __future__ import annotations
 
 import logging
+import os
 import re
 from typing import Annotated, Literal
 
@@ -40,6 +41,14 @@ from services.mcp_tools.mcp_synthegy_mech.llm_policy import LiteLLMScoringPolicy
 from services.mcp_tools.mcp_synthegy_mech.mechanism_search import MechanismSearch
 from services.mcp_tools.mcp_synthegy_mech.move_diff import derive_move
 from services.mcp_tools.mcp_synthegy_mech.vendored import prompt_canonical
+from services.mcp_tools.mcp_synthegy_mech.xtb_validator import (
+    XtbValidator,
+    compute_energy_deltas,
+)
+
+# mcp-xtb URL for Phase 3 energy validation. Reads from env at module import
+# so tests can monkey-patch it via os.environ before TestClient construction.
+_DEFAULT_MCP_XTB_URL = os.environ.get("MCP_XTB_BASE_URL", "http://mcp-xtb:8010")
 
 log = logging.getLogger("mcp-synthegy-mech")
 settings = ToolSettings()
@@ -113,9 +122,9 @@ class ElucidateMechanismIn(BaseModel):
     validate_energies: bool = Field(
         default=False,
         description=(
-            "Phase 3: validate intermediates via mcp-xtb single-point energy. "
-            "Currently a stub — emits a warning and leaves "
-            "`energy_delta_hartree=None` per move."
+            "Validate intermediates via mcp-xtb GFN2-xTB single-point energy. "
+            "Populates `energy_delta_hartree` per move. Adds ~10-30 s per "
+            "unique intermediate; off by default for speed."
         ),
     )
     model: ALLOWED_MODELS = "executor"
@@ -223,27 +232,36 @@ async def elucidate_mechanism(
 
     # The path is [src, intermediate1, intermediate2, ..., dest]. Convert to
     # consecutive (from, to) moves with their scores.
-    moves: list[Move] = []
+    move_endpoints: list[tuple[str, str]] = []
     for i in range(1, len(result.path)):
-        from_smi = result.path[i - 1]
-        to_smi = result.path[i]
+        move_endpoints.append((result.path[i - 1], result.path[i]))
+
+    # Optional Phase 3 energy validation via mcp-xtb. Run *after* the search
+    # so a misconfigured xtb URL never aborts a successful mechanism return.
+    energy_deltas: list[float | None] = [None] * len(move_endpoints)
+    if req.validate_energies and move_endpoints:
+        validator = XtbValidator(xtb_base_url=_DEFAULT_MCP_XTB_URL)
+        # Validate every unique state along the path (both endpoints).
+        unique_states = list({s for endpoints in move_endpoints for s in endpoints})
+        v_result = await validator.validate(unique_states)
+        warnings.extend(v_result.warnings)
+        energy_deltas = compute_energy_deltas(move_endpoints, v_result.energy_per_smiles)
+
+    moves: list[Move] = []
+    for (from_smi, to_smi), delta, score in zip(
+        move_endpoints, energy_deltas, result.scores[1:]
+    ):
         derived = derive_move(from_smi, to_smi)
         moves.append(
             Move(
                 from_smiles=from_smi,
                 to_smiles=to_smi,
-                score=float(result.scores[i]),
+                score=float(score),
                 derived_kind=derived.kind if derived else None,
                 derived_atom_x=derived.atom_x if derived else None,
                 derived_atom_y=derived.atom_y if derived else None,
-                energy_delta_hartree=None,  # Phase 3 stub.
+                energy_delta_hartree=delta,
             )
-        )
-
-    if req.validate_energies:
-        warnings.append(
-            "validate_energies=True received but xTB validation is a Phase 3 "
-            "stub — energy_delta_hartree fields are None."
         )
 
     if result.truncated:

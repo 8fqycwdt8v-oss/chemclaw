@@ -59,7 +59,7 @@ export const ElucidateMechanismIn = z.object({
     .boolean()
     .default(false)
     .describe(
-      "Phase 3 stub — when true, the response includes a warning that xTB validation is not yet wired.",
+      "When true, validate intermediates via mcp-xtb (GFN2-xTB single-point energies) and populate energy_delta_hartree per move. Adds 10-30 s per unique intermediate; off by default for speed.",
     ),
   model: z
     .enum([
