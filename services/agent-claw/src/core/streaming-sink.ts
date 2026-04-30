@@ -13,12 +13,16 @@
  * Snapshot of one todo as surfaced through onTodoUpdate. Mirrors the
  * `TodoOut` Zod schema in tools/builtins/manage_todos.ts but redeclared
  * here so this module has no dependency on tool-side types.
+ *
+ * Status union covers all four manage_todos states, including "cancelled"
+ * which the prior 3-state declaration omitted (PR-4 type-safety: caught
+ * by the tightened isManageTodosOutput predicate).
  */
 export interface TodoSnapshot {
   id: string;
   ordering: number;
   content: string;
-  status: "pending" | "in_progress" | "completed";
+  status: "pending" | "in_progress" | "completed" | "cancelled";
 }
 
 export interface StreamSink {

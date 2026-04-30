@@ -65,6 +65,22 @@ export const ManageTodosOut = z.object({
 });
 export type ManageTodosOutput = z.infer<typeof ManageTodosOut>;
 
+/**
+ * Runtime predicate used by step.ts to narrow a heterogeneous tool output
+ * to the manage_todos shape before forwarding it to the streaming sink's
+ * onTodoUpdate callback. Replaces the prior `as { todos: unknown }` /
+ * `as { todos: TodoSnapshot[] }` cast pair (PR-4 type-safety hardening).
+ *
+ * Note: this is a structural shape check, not a full Zod parse — the
+ * caller has already run `tool.outputSchema.parse(rawOutput)` upstream so
+ * we only need to confirm the shape is the manage_todos output.
+ */
+export function isManageTodosOutput(x: unknown): x is ManageTodosOutput {
+  if (!x || typeof x !== "object") return false;
+  const todos = (x as { todos?: unknown }).todos;
+  return Array.isArray(todos);
+}
+
 // ---------- Factory ----------------------------------------------------------
 
 const DESCRIPTION = [
