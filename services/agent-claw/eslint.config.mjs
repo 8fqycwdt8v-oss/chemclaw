@@ -50,7 +50,7 @@ export default tseslint.config(
       // High-volume rules still on warn — see the file-header status block.
       // Each remaining warn rule has a clear paydown path; flip to 'error'
       // once the surfaced sites are addressed.
-      '@typescript-eslint/no-explicit-any': 'warn',
+      '@typescript-eslint/no-explicit-any': 'error',
       '@typescript-eslint/no-unsafe-assignment': 'error',
       '@typescript-eslint/no-unsafe-call': 'error',
       '@typescript-eslint/no-unsafe-member-access': 'error',
