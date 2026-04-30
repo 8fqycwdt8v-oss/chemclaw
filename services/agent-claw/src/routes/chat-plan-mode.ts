@@ -127,7 +127,15 @@ export async function runPlanModeStreaming(
     // triggers the outer finally's session_end gate, which is a
     // pre-existing footgun unrelated to this extraction.
   } finally {
-    input.cleanupSkillForTurn?.();
+    // Note: cleanupSkillForTurn is intentionally NOT called here — the
+    // caller's outer finally in chat.ts owns it. The pre-PR-56 inline
+    // version called it in both places (relying on
+    // SkillLoader.enableForTurn being idempotent at the second
+    // decrement); the post-session review (debug-investigator agent)
+    // flagged this as a redundant double-call worth tightening up.
+    // reply.raw.end() stays here because the outer finally writes
+    // terminal-events that would double-emit `finish` on the wire if
+    // the response weren't already closed.
     try { reply.raw.end(); } catch { /* already closed */ }
   }
   return finishReason;
