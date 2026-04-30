@@ -991,4 +991,45 @@ ON CONFLICT (name) DO UPDATE SET
   source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
   description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
 
+-- ── Reaction condition prediction (Phase Z0) ──────────────────────────────
+-- recommend_conditions: top-k condition sets for a target reaction. Backed
+-- by mcp-askcos /recommend_conditions (ASKCOS condition recommender).
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'recommend_conditions',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "reactants_smiles": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 10000,
+        "description": "Dot-separated SMILES of the reactants."
+      },
+      "product_smiles": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 10000,
+        "description": "SMILES of the desired product."
+      },
+      "top_k": {
+        "type": "integer",
+        "minimum": 1,
+        "maximum": 20,
+        "default": 5,
+        "description": "Number of condition sets to return (1-20, default 5)."
+      }
+    },
+    "required": ["reactants_smiles", "product_smiles"]
+  }',
+  'Propose top-k reaction condition sets {catalysts, reagents, solvents, temperature_c, score} for a target transformation given reactants + product SMILES. Backed by the ASKCOS condition recommender (USPTO-trained, top-10 includes ground truth ~70%, T MAE ~20°C). Output should be applicability-domain-checked before reporting.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
 COMMIT;
