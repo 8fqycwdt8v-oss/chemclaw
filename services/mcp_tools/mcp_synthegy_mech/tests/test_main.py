@@ -574,10 +574,135 @@ def test_server_wall_clock_timeout_caps_runaway_search(client):
     data = r.json()
     assert data["truncated"] is True
     assert data["moves"] == []
-    assert any(
-        "timeout" in w.lower() and "search" in w.lower()
-        for w in data["warnings"]
-    ), data["warnings"]
+    # Cycle-4 tightening: the warning surfaces both the "timeout" trigger
+    # AND the numeric bound — that's part of the user-facing contract so
+    # callers know the limit. Don't let a future text edit drop the
+    # numeric figure.
+    timeout_warning = next(
+        (w for w in data["warnings"] if "timeout" in w.lower() and "search" in w.lower()),
+        None,
+    )
+    assert timeout_warning is not None, data["warnings"]
+    # The cap is patched to 0.05s in this test; the warning string formats
+    # via "%.0fs" so 0.05 renders as "0s". Just check we surface a numeric
+    # value plus the unit (matches "270s", "0s", "0 s", or "270.0s").
+    import re as _re
+    assert _re.search(r"\d+(?:\.\d+)?\s*s", timeout_warning), timeout_warning
+
+
+def test_acompletion_failure_increments_upstream_errors(client):
+    """Cycle-4 fix: previously upstream_errors was only exercised via the
+    _build_messages failure path. The _acompletion failure path (the actual
+    intended use of the counter — network failures, LiteLLM upstream 5xx)
+    was not directly tested. A regression that swallowed the upstream
+    failure into a different counter would silently degrade observability.
+    """
+    async def fake_acompletion_raises(self, messages):  # noqa: ARG001
+        raise RuntimeError("simulated LiteLLM 503")
+
+    with mock.patch(
+        "services.mcp_tools.mcp_synthegy_mech.llm_policy.LiteLLMScoringPolicy._acompletion",
+        new=fake_acompletion_raises,
+    ):
+        r = client.post(
+            "/elucidate_mechanism",
+            json={
+                "reactants_smiles": "CC=O",
+                "products_smiles": "CCO",
+                "max_nodes": 1,
+            },
+        )
+    assert r.status_code == 200
+    data = r.json()
+    # Every score-one call hit the failure path; counter should be > 0.
+    assert data["upstream_errors"] >= 1
+    # total_llm_calls counts SUCCESSFUL calls only — failures don't bump it.
+    assert data["total_llm_calls"] == 0
+
+
+def test_parse_failure_increments_parse_failures_counter(client):
+    """Cycle-4 fix: parse_failures is the only signal that the scoring
+    prompt is drifting from the expected `<score>X</score>` format.
+    Without this test, a regression that silently routed parse failures
+    through a different counter would degrade observability undetected.
+    """
+    no_score_response = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(
+            content="I cannot determine a meaningful score for this move.",
+        ))],
+        usage=SimpleNamespace(prompt_tokens=80, completion_tokens=15),
+    )
+
+    with mock.patch(
+        "services.mcp_tools.mcp_synthegy_mech.llm_policy.LiteLLMScoringPolicy._acompletion",
+        return_value=no_score_response,
+    ):
+        r = client.post(
+            "/elucidate_mechanism",
+            json={
+                "reactants_smiles": "CC=O",
+                "products_smiles": "CCO",
+                "max_nodes": 1,
+            },
+        )
+    assert r.status_code == 200
+    data = r.json()
+    assert data["parse_failures"] >= 1
+    # Successful round-trip to LiteLLM still counts as a call — only the
+    # parse failed, not the upstream call.
+    assert data["total_llm_calls"] >= 1
+
+
+def test_guidance_prompt_empty_string_treated_as_no_guidance(client):
+    """Cycle-4 fix: the falsy-guard `if req.guidance_prompt:` treats both
+    None and "" as no-guidance. Pin this contract so a future change to
+    add `min_length=1` (which would 422 on "") doesn't silently break
+    callers passing "".
+    """
+    captured = {"with_guidance": None, "without_guidance": None}
+
+    async def capture_acompletion_with(self, messages):  # noqa: ARG001
+        captured["with_guidance"] = messages[0]["content"]
+        return _fake_response(score=5.0)
+
+    async def capture_acompletion_without(self, messages):  # noqa: ARG001
+        captured["without_guidance"] = messages[0]["content"]
+        return _fake_response(score=5.0)
+
+    # Run with guidance_prompt="" first.
+    with mock.patch(
+        "services.mcp_tools.mcp_synthegy_mech.llm_policy.LiteLLMScoringPolicy._acompletion",
+        new=capture_acompletion_with,
+    ):
+        r1 = client.post(
+            "/elucidate_mechanism",
+            json={
+                "reactants_smiles": "CC=O",
+                "products_smiles": "CCO",
+                "max_nodes": 1,
+                "guidance_prompt": "",
+            },
+        )
+    assert r1.status_code == 200
+
+    # Run without the field set at all.
+    with mock.patch(
+        "services.mcp_tools.mcp_synthegy_mech.llm_policy.LiteLLMScoringPolicy._acompletion",
+        new=capture_acompletion_without,
+    ):
+        r2 = client.post(
+            "/elucidate_mechanism",
+            json={
+                "reactants_smiles": "CC=O",
+                "products_smiles": "CCO",
+                "max_nodes": 1,
+            },
+        )
+    assert r2.status_code == 200
+
+    # Both prompts must be byte-identical: the empty-string guidance must
+    # NOT inject a "## Guidance from caller\n\n\n\n" block.
+    assert captured["with_guidance"] == captured["without_guidance"]
 
 
 def test_token_counters_aggregate_across_llm_calls(client):

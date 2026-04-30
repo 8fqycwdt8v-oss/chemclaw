@@ -14,10 +14,13 @@ Architecture notes:
 - The LLM scoring policy in `llm_policy.py` calls ChemClaw's central LiteLLM
   proxy via `litellm.acompletion(api_base=$LITELLM_BASE_URL)` so every prompt
   traverses the redactor callback (`services/litellm_redactor/callback.py`).
-- xTB-based energy validation is wired in for Phase 3 but is a stub here:
-  when `validate_energies=True`, the response surfaces a warning and leaves
-  `energy_delta_hartree=None` per move. Phase 3 will implement the call to
-  mcp-xtb.
+- xTB-based energy validation is live via `XtbValidator` → `mcp-xtb`.
+  Populates `energy_delta_hartree` per move when `validate_energies=True`.
+  Failures surface as `warnings` entries; the mechanism itself still
+  returns successfully.
+- A server-side wall-clock timeout (270 s) caps runaway LLM spending if
+  the upstream is slow; cancellation propagates cleanly through both the
+  scoring policy and the xtb validator.
 
 Limitations (from the paper):
 - Ionic chemistry only — radicals and pericyclic mechanisms are upstream

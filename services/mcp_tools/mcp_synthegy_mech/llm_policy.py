@@ -21,28 +21,18 @@ misbehaving move never crashes the whole search.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import os
 import re
 from dataclasses import dataclass
 from typing import Any
 
+from services.mcp_tools.mcp_synthegy_mech._utils import smiles_tag as _smiles_tag
+
 log = logging.getLogger("mcp-synthegy-mech.policy")
 
 # Compile once. Score is the integer between <score>...</score>.
 _SCORE_RE = re.compile(r"<score>\s*(-?\d+(?:\.\d+)?)\s*</score>", re.IGNORECASE)
-
-
-def _smiles_tag(smiles: str) -> str:
-    """Stable, non-reversible identifier for a SMILES, safe to log.
-
-    Proprietary compound structures must not appear in production logs even
-    truncated — 80 chars is enough to identify most NCEs by structure search.
-    A short blake2s digest is sufficient to correlate log lines for the same
-    intermediate without revealing the structure itself.
-    """
-    return hashlib.blake2s(smiles.encode("utf-8"), digest_size=8).hexdigest()
 
 
 @dataclass

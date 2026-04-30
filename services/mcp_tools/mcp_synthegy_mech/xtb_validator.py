@@ -22,7 +22,6 @@ mechanism elucidation entirely.
 from __future__ import annotations
 
 import asyncio
-import hashlib
 import logging
 import os
 import uuid
@@ -31,18 +30,9 @@ from dataclasses import dataclass
 import httpx
 
 from services.mcp_tools.common.auth import McpAuthError, sign_mcp_token
+from services.mcp_tools.mcp_synthegy_mech._utils import smiles_tag as _smiles_tag
 
 log = logging.getLogger("mcp-synthegy-mech.xtb_validator")
-
-
-def _smiles_tag(smiles: str) -> str:
-    """Stable, non-reversible identifier for a SMILES, safe to log.
-
-    Same convention as llm_policy._smiles_tag — keeps log aggregation free
-    of proprietary structural data while still allowing correlation across
-    log lines for the same intermediate.
-    """
-    return hashlib.blake2s(smiles.encode("utf-8"), digest_size=8).hexdigest()
 
 
 def _canonicalize_batch(smiles_list: list[str]) -> list[str]:

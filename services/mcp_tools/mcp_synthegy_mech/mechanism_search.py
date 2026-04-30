@@ -26,6 +26,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from rdkit import Chem, RDLogger
 
+from services.mcp_tools.mcp_synthegy_mech._utils import smiles_tag as _hash_for_log
 from services.mcp_tools.mcp_synthegy_mech.vendored.molecule_set import (
     legal_moves_from_smiles,
 )
@@ -255,11 +256,3 @@ def _batch_canonical(smiles_list: list[str]) -> list[str]:
     return [_canonical(s) for s in smiles_list]
 
 
-def _hash_for_log(smiles: str) -> str:
-    """Stable, non-reversible identifier for log lines.
-
-    Mirrors the convention in llm_policy._smiles_tag and
-    xtb_validator._smiles_tag — keep proprietary structures out of logs.
-    """
-    import hashlib  # noqa: PLC0415 — only on the warn path
-    return hashlib.blake2s(smiles.encode("utf-8"), digest_size=8).hexdigest()
