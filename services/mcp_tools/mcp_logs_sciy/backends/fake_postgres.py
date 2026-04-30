@@ -107,7 +107,7 @@ class FakePostgresBackend:
     def __init__(self, dsn: str) -> None:
         self._dsn = dsn
 
-    async def _connect(self) -> psycopg.AsyncConnection:
+    async def _connect(self) -> psycopg.AsyncConnection[dict[str, Any]]:
         return await psycopg.AsyncConnection.connect(
             self._dsn, autocommit=True, row_factory=dict_row
         )
@@ -124,7 +124,7 @@ class FakePostgresBackend:
             return False
 
     async def _fetch_tracks_for(
-        self, conn: psycopg.AsyncConnection, uids: list[str]
+        self, conn: psycopg.AsyncConnection[dict[str, Any]], uids: list[str]
     ) -> dict[str, list[dict[str, Any]]]:
         if not uids:
             return {}

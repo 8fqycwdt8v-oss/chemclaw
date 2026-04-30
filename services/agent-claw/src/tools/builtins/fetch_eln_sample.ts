@@ -16,7 +16,7 @@ export const FetchElnSampleIn = z.object({
     .min(1)
     .max(128)
     .regex(
-      /^[A-Za-z0-9_\-\.:]+$/,
+      /^[A-Za-z0-9_.:-]+$/,
       "sample_id must match [A-Za-z0-9_-.:]+",
     ),
 });

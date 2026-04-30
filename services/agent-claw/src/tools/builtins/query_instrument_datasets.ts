@@ -14,7 +14,7 @@ export const QueryInstrumentDatasetsIn = z.object({
     .string()
     .min(1)
     .max(128)
-    .regex(/^[A-Za-z0-9_.\-]+$/)
+    .regex(/^[A-Za-z0-9_.-]+$/)
     .describe("Sample identifier — matches mock_eln.samples.sample_code."),
 });
 export type QueryInstrumentDatasetsInput = z.infer<typeof QueryInstrumentDatasetsIn>;
@@ -41,7 +41,7 @@ export function buildQueryInstrumentDatasetsTool(mcpLogsSciyUrl: string) {
     annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
-      return postJson(
+      return await postJson(
         `${base}/datasets/by_sample`,
         { sample_id: input.sample_id },
         QueryInstrumentDatasetsOut,

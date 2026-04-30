@@ -1,6 +1,6 @@
 // Tests for the PromptRegistry (ported from legacy + cache TTL coverage).
 
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import { PromptRegistry } from "../../src/prompts/registry.js";
 import type { Pool, QueryResult } from "pg";
 
@@ -22,7 +22,7 @@ function makeMockPool(rows: { template: string; version: number }[]): Pool {
   };
   const queryDispatch = async (sql: unknown, ...args: unknown[]) => {
     if (isTxControl(sql)) return { rows: [], rowCount: 0 } as QueryResult;
-    return dataSpy(sql as never, ...(args as never[]));
+    return await dataSpy(sql as never, ...(args as never[]));
   };
   const client = { query: queryDispatch, release: vi.fn() };
   return {

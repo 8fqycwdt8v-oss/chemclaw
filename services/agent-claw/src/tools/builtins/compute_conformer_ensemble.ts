@@ -55,7 +55,7 @@ export function buildComputeConformerEnsembleTool(mcpXtbUrl: string) {
     annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
-      return postJson(
+      return await postJson(
         `${base}/conformer_ensemble`,
         { smiles: input.smiles, n_conformers: input.n_conformers },
         ComputeConformerEnsembleOut,

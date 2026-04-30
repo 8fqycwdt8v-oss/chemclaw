@@ -19,7 +19,7 @@ export function mockFetchOk(body: unknown) {
   return vi.fn().mockResolvedValue({
     ok: true,
     text: async () => JSON.stringify(body),
-  } as Response);
+  });
 }
 
 export function mockFetchStatus(status: number, body: string = "") {
@@ -27,7 +27,7 @@ export function mockFetchStatus(status: number, body: string = "") {
     ok: false,
     status,
     text: async () => body,
-  } as unknown as Response);
+  });
 }
 
 const ENTRY_ID_A = "00000000-0000-0000-0000-000000000a01";

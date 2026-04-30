@@ -26,7 +26,7 @@ function mockFetchOk(body: unknown) {
   return vi.fn().mockResolvedValue({
     ok: true,
     text: async () => JSON.stringify(body),
-  } as Response);
+  });
 }
 
 describe("buildQueryKgTool", () => {
@@ -67,7 +67,7 @@ describe("buildQueryKgTool", () => {
         ok: false,
         status: 503,
         text: async () => "service unavailable",
-      } as unknown as Response),
+      }),
     );
     const tool = buildQueryKgTool(MCP_KG_URL);
     await expect(

@@ -57,8 +57,8 @@ describe("POST /api/feedback", () => {
     });
     expect(resp.statusCode).toBe(200);
     const body = JSON.parse(resp.body) as Record<string, unknown>;
-    expect(body["status"]).toBe("ok");
-    expect(body["signal"]).toBe("up");
+    expect(body.status).toBe("ok");
+    expect(body.signal).toBe("up");
   });
 
   it("returns 200 for a valid 'down' signal with trace_id", async () => {

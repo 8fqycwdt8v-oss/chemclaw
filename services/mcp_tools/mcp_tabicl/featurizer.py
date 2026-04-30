@@ -79,7 +79,7 @@ def _patch_drfp_for_numpy2() -> None:
     the subsequent fold step only uses modulo arithmetic.
     """
     try:
-        from drfp import DrfpEncoder  # type: ignore[import-untyped]
+        from drfp import DrfpEncoder
         from hashlib import blake2b as _blake2b
 
         # Guard: only patch when the original dtype would overflow.
@@ -106,7 +106,7 @@ _patch_drfp_for_numpy2()
 
 def _compute_drfp_bits(rxn_smiles: str) -> np.ndarray | None:
     try:
-        from drfp import DrfpEncoder  # type: ignore[import-untyped]
+        from drfp import DrfpEncoder
 
         result = DrfpEncoder.encode(rxn_smiles, n_folded_length=2048, radius=3)
         # encode() returns a list of fingerprints (one per reaction SMILES).

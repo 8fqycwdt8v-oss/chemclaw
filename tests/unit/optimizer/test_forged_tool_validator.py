@@ -10,6 +10,7 @@ import json
 import pytest
 
 from services.optimizer.forged_tool_validator.sandbox_client import (
+    LocalSubprocessSandbox,
     SandboxResult,
     StubSandboxClient,
 )
@@ -286,3 +287,29 @@ def test_validate_passing_status_all_pass(tmp_path):
     result = validator.validate_tool(tool)
 
     assert result.status == "passing"
+
+
+# ---------------------------------------------------------------------------
+# Audit P1 — LocalSubprocessSandbox must fail-closed in production
+# ---------------------------------------------------------------------------
+
+
+def test_local_sandbox_refuses_to_start_without_dev_optin(monkeypatch):
+    """Production safety: instantiating LocalSubprocessSandbox without
+    CHEMCLAW_ALLOW_LOCAL_SANDBOX=1 must raise. The audit found that the
+    optimizer cron's run_validation() defaulted to this sandbox if no
+    explicit client was injected, silently running LLM-authored code in
+    the optimizer pod's process namespace."""
+    monkeypatch.delenv("CHEMCLAW_ALLOW_LOCAL_SANDBOX", raising=False)
+    with pytest.raises(RuntimeError, match="refuses to start"):
+        LocalSubprocessSandbox()
+
+
+def test_local_sandbox_starts_with_explicit_dev_optin(monkeypatch):
+    """The dev/CI escape hatch — operator opts in explicitly."""
+    monkeypatch.setenv("CHEMCLAW_ALLOW_LOCAL_SANDBOX", "1")
+    sandbox = LocalSubprocessSandbox()
+    # Smoke test: trivial Python runs and returns its stdout.
+    result = sandbox.run_python("print('hello')")
+    assert result.exit_code == 0
+    assert "hello" in result.stdout

@@ -8,6 +8,7 @@
 import { describe, it, expect, vi } from "vitest";
 import {
   sourceCachePostToolHook,
+  checkStaleFacts,
   type SourceFactPayload,
 } from "../../src/core/hooks/source-cache.js";
 import {
@@ -54,7 +55,7 @@ async function captureFacts(
   await sourceCachePostToolHook(
     toolId,
     output,
-    mockPool() as import("pg").Pool,
+    mockPool(),
     "u@t.com",
   );
   return captured;
@@ -69,7 +70,7 @@ describe("sourceCachePostToolHook — tool ID gating", () => {
     await sourceCachePostToolHook(
       "canonicalize_smiles",
       { foo: "bar" },
-      mockPool() as import("pg").Pool,
+      mockPool(),
       "u@t.com",
     );
     expect(ucModule.withUserContext).not.toHaveBeenCalled();
@@ -313,3 +314,31 @@ describe("sourceCachePostToolHook — legacy ELN shape (entries + fields[].value
   });
 });
 
+// ---------- Stale-fact warning ----------------------------------------------
+
+describe("checkStaleFacts", () => {
+  it("injects warning into scratchpad when stale facts exist", async () => {
+    const pool = mockPool({ rows: [{ count: "3" }] });
+    const scratchpad = new Map<string, unknown>();
+    await checkStaleFacts(pool, scratchpad);
+    const warnings = scratchpad.get("staleFactWarnings") as string[];
+    expect(warnings).toHaveLength(1);
+    expect(warnings[0]).toContain("3");
+    expect(warnings[0]).toContain("expired");
+  });
+
+  it("does not modify scratchpad when no stale facts", async () => {
+    const pool = mockPool({ rows: [{ count: "0" }] });
+    const scratchpad = new Map<string, unknown>();
+    await checkStaleFacts(pool, scratchpad);
+    expect(scratchpad.has("staleFactWarnings")).toBe(false);
+  });
+
+  it("handles DB errors gracefully (non-fatal)", async () => {
+    const pool = {
+      query: vi.fn().mockRejectedValue(new Error("DB down")),
+    } as unknown as import("pg").Pool;
+    const scratchpad = new Map<string, unknown>();
+    await expect(checkStaleFacts(pool, scratchpad)).resolves.toBeUndefined();
+  });
+});

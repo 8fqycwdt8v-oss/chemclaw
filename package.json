@@ -13,7 +13,11 @@
     "dev:agent": "npm run dev --workspace services/agent-claw",
     "lint": "npm run lint --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present"
+    "test": "npm run test --workspaces --if-present",
+    "coverage": "npm run coverage --workspaces --if-present"
+  },
+  "overrides": {
+    "uuid": "^14.0.0"
   },
   "engines": {
     "node": ">=22"

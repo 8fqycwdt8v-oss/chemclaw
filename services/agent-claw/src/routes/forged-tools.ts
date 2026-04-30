@@ -18,7 +18,7 @@ import { promises as fsp } from "fs";
 // ---------------------------------------------------------------------------
 
 function isAdmin(userEntraId: string): boolean {
-  const raw = process.env["AGENT_ADMIN_USERS"] ?? "";
+  const raw = process.env.AGENT_ADMIN_USERS ?? "";
   if (!raw.trim()) return false;
   const admins = raw
     .split(",")
@@ -103,7 +103,7 @@ export async function registerForgedToolsRoutes(
       `);
       return rows;
     });
-    return reply.send({ tools: rows });
+    return await reply.send({ tools: rows });
   });
 
   // GET /api/forged-tools/:id/code — return the Python source code.
@@ -121,20 +121,20 @@ export async function registerForgedToolsRoutes(
     });
 
     if (!row) {
-      return reply.status(404).send({ error: "Forged tool not found." });
+      return await reply.status(404).send({ error: "Forged tool not found." });
     }
     if (!row.scripts_path) {
-      return reply.status(404).send({ error: "No script path recorded for this tool." });
+      return await reply.status(404).send({ error: "No script path recorded for this tool." });
     }
 
     let code: string;
     try {
       code = await fsp.readFile(row.scripts_path, "utf-8");
     } catch {
-      return reply.status(404).send({ error: "Script file not found on disk." });
+      return await reply.status(404).send({ error: "Script file not found on disk." });
     }
 
-    return reply.send({ name: row.name, code });
+    return await reply.send({ name: row.name, code });
   });
 
   // GET /api/forged-tools/:id/tests — return persistent test cases.
@@ -150,7 +150,7 @@ export async function registerForgedToolsRoutes(
       );
       if (toolRows.length === 0) return null;
 
-      const { rows } = await client.query(
+      const { rows } = await client.query<Record<string, unknown>>(
         `SELECT id::text, forged_tool_id::text, input_json, expected_output_json,
                 tolerance_json, kind, created_at
          FROM forged_tool_tests
@@ -162,10 +162,10 @@ export async function registerForgedToolsRoutes(
     });
 
     if (tests === null) {
-      return reply.status(404).send({ error: "Forged tool not found." });
+      return await reply.status(404).send({ error: "Forged tool not found." });
     }
 
-    return reply.send({ tests });
+    return await reply.send({ tests });
   });
 
   // POST /api/forged-tools/:id/scope — promote to project|org.
@@ -175,7 +175,7 @@ export async function registerForgedToolsRoutes(
 
     const bodyParsed = ScopeBody.safeParse(req.body);
     if (!bodyParsed.success) {
-      return reply.status(400).send({
+      return await reply.status(400).send({
         error: "Invalid body.",
         issues: bodyParsed.error.issues,
       });
@@ -193,12 +193,12 @@ export async function registerForgedToolsRoutes(
     });
 
     if (!row) {
-      return reply.status(404).send({ error: "Forged tool not found." });
+      return await reply.status(404).send({ error: "Forged tool not found." });
     }
 
     const isOwner = row.proposed_by_user_entra_id === userEntraId;
     if (!isOwner && !isAdmin(userEntraId)) {
-      return reply
+      return await reply
         .status(403)
         .send({ error: "Permission denied. Only the tool owner or an admin can promote scope." });
     }
@@ -212,7 +212,7 @@ export async function registerForgedToolsRoutes(
       );
     });
 
-    return reply.send({ ok: true, scope });
+    return await reply.send({ ok: true, scope });
   });
 
   // POST /api/forged-tools/:id/disable — set active=false.
@@ -222,7 +222,7 @@ export async function registerForgedToolsRoutes(
 
     const bodyParsed = DisableBody.safeParse(req.body);
     if (!bodyParsed.success) {
-      return reply.status(400).send({
+      return await reply.status(400).send({
         error: "Invalid body. Provide { reason: string }.",
         issues: bodyParsed.error.issues,
       });
@@ -238,12 +238,12 @@ export async function registerForgedToolsRoutes(
     });
 
     if (!row) {
-      return reply.status(404).send({ error: "Forged tool not found." });
+      return await reply.status(404).send({ error: "Forged tool not found." });
     }
 
     const isOwner = row.proposed_by_user_entra_id === userEntraId;
     if (!isOwner && !isAdmin(userEntraId)) {
-      return reply
+      return await reply
         .status(403)
         .send({ error: "Permission denied. Only the tool owner or an admin can disable." });
     }
@@ -255,6 +255,6 @@ export async function registerForgedToolsRoutes(
       );
     });
 
-    return reply.send({ ok: true, disabled: true });
+    return await reply.send({ ok: true, disabled: true });
   });
 }

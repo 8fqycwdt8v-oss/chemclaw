@@ -14,7 +14,7 @@ function makeOkFetch(body: unknown): typeof fetch {
     status: 200,
     headers: { get: () => null },
     json: async () => body,
-  }) as unknown as typeof fetch;
+  });
 }
 
 function make429Fetch(reason: string, retryAfter: number): typeof fetch {
@@ -23,7 +23,7 @@ function make429Fetch(reason: string, retryAfter: number): typeof fetch {
     status: 429,
     headers: { get: (k: string) => (k === "Retry-After" ? String(retryAfter) : null) },
     json: async () => ({ reason }),
-  }) as unknown as typeof fetch;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -127,7 +127,7 @@ describe("PaperclipClient — enabled", () => {
   it("release POSTs to /release with actual usage", async () => {
     const calls: Array<[string, unknown]> = [];
     const mockFetch = vi.fn().mockImplementation(async (url: string, opts: { body?: string }) => {
-      calls.push([url as string, opts.body ? JSON.parse(opts.body as string) : null]);
+      calls.push([url, opts.body ? JSON.parse(opts.body) : null]);
       return {
         ok: true,
         status: 200,
@@ -154,7 +154,7 @@ describe("PaperclipClient — enabled", () => {
 
     const relCall = calls.find(([url]) => url.includes("/release"));
     expect(relCall).toBeDefined();
-    expect((relCall![1] as Record<string, unknown>)["reservation_id"]).toBe("r-rel");
-    expect((relCall![1] as Record<string, unknown>)["actual_usd"]).toBe(0.0048);
+    expect((relCall![1] as Record<string, unknown>).reservation_id).toBe("r-rel");
+    expect((relCall![1] as Record<string, unknown>).actual_usd).toBe(0.0048);
   });
 });

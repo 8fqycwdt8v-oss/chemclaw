@@ -29,11 +29,33 @@ class SandboxClient(Protocol):
         ...
 
 
-class LocalSubprocessSandbox:
-    """Runs Python in a local subprocess (for dev / CI).
+_DEV_OPT_IN_ENV = "CHEMCLAW_ALLOW_LOCAL_SANDBOX"
 
-    NOTE: This is NOT isolated.  Use E2B in production.
+
+class LocalSubprocessSandbox:
+    """Runs Python in a local subprocess (for dev / CI ONLY).
+
+    SECURITY: This sandbox provides NO isolation from the host process.
+    LLM-authored code (forged-tool implementations) runs with the same
+    permissions as the validator. In production this means the optimizer
+    pod's service account, the database connection, and any mounted
+    secrets are all reachable by the LLM-authored code.
+
+    Production MUST use the E2B sandbox client. To use this class outside
+    of unit tests, set the environment variable
+    ``CHEMCLAW_ALLOW_LOCAL_SANDBOX=1`` to acknowledge the risk explicitly.
+    The default refusal is fail-closed so a misconfigured deployment
+    cannot silently fall back to running tool code locally.
     """
+
+    def __init__(self) -> None:
+        if os.environ.get(_DEV_OPT_IN_ENV) != "1":
+            raise RuntimeError(
+                "LocalSubprocessSandbox refuses to start: this sandbox "
+                "provides no isolation from the host. "
+                "Use E2BSandboxClient in production. "
+                f"To use locally for development, set {_DEV_OPT_IN_ENV}=1."
+            )
 
     def run_python(self, code: str, timeout_s: int = 20) -> SandboxResult:
         with tempfile.NamedTemporaryFile(suffix=".py", delete=False, mode="w") as f:

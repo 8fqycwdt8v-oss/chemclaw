@@ -69,7 +69,7 @@ export function buildQueryInstrumentRunsTool(mcpLogsSciyUrl: string) {
     annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
-      return postJson(
+      return await postJson(
         `${base}/datasets/query`,
         input,
         QueryInstrumentRunsOut,

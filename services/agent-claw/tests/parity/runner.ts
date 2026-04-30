@@ -101,7 +101,7 @@ export async function runScenario(
     const entry: TraceEvent = { type: "hook", point };
     if (opts?.matcherTarget) entry.toolId = opts.matcherTarget;
     trace.push(entry);
-    return origDispatch(point, payload, opts);
+    return await origDispatch(point, payload, opts);
   };
 
   // Build the stubbed LLM with the scenario's responses. Per-step usage
@@ -193,7 +193,7 @@ export async function runScenario(
         if (id === "ask_user") {
           const q =
             input && typeof input === "object" && "question" in input
-              ? String((input as { question: unknown }).question)
+              ? String((input).question)
               : "(scenario ask_user)";
           throw new AwaitingUserInputError(q);
         }
@@ -276,9 +276,9 @@ export function assertEventsMatch(
       const traceTypes = trace
         .map((t) => {
           const extras: string[] = [];
-          if (t.point) extras.push(`point=${String(t.point)}`);
-          if (t.toolId) extras.push(`toolId=${String(t.toolId)}`);
-          if (t.finishReason) extras.push(`finishReason=${String(t.finishReason)}`);
+          if (typeof t.point === "string") extras.push(`point=${t.point}`);
+          if (typeof t.toolId === "string") extras.push(`toolId=${t.toolId}`);
+          if (typeof t.finishReason === "string") extras.push(`finishReason=${t.finishReason}`);
           return extras.length ? `${t.type}{${extras.join(",")}}` : t.type;
         })
         .join(" -> ");

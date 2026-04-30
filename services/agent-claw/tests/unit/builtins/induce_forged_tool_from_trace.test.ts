@@ -19,7 +19,7 @@ import type { SandboxClient, SandboxHandle } from "../../../src/core/sandbox.js"
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makeMockPool(existsOk = true): Pool {
+function makeMockPool(_existsOk = true): Pool {
   return {
     query: vi.fn().mockImplementation((sql: string) => {
       if (sql.includes("EXISTS") && sql.includes("tools")) {

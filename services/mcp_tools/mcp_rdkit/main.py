@@ -14,13 +14,34 @@ with a specific reason; this lets callers distinguish "malformed input" from
 from __future__ import annotations
 
 import logging
-from typing import Annotated, Literal
+from collections.abc import Callable
+from typing import Annotated, Any, Literal
 
 from fastapi import Body
 from pydantic import BaseModel, Field
-from rdkit import Chem, RDLogger
-from rdkit.Chem import AllChem, Crippen, Descriptors, Lipinski, rdMolDescriptors
-from rdkit.Chem.inchi import MolToInchiKey
+
+# rdkit ships no type stubs. Import each module as a private name and
+# re-bind to a name typed as Any so the rest of the file is duck-typed
+# rather than fighting attr-defined / no-untyped-call errors on every
+# call into rdkit. (Same idiom as mcp_xtb at function scope.)
+from rdkit import Chem as _Chem, RDLogger as _RDLogger
+from rdkit.Chem import (
+    AllChem as _AllChem,
+    Crippen as _Crippen,
+    Descriptors as _Descriptors,
+    Lipinski as _Lipinski,
+    rdMolDescriptors as _rdMolDescriptors,
+)
+from rdkit.Chem.inchi import MolToInchiKey as _MolToInchiKey
+
+Chem: Any = _Chem
+RDLogger: Any = _RDLogger
+AllChem: Any = _AllChem
+Crippen: Any = _Crippen
+Descriptors: Any = _Descriptors
+Lipinski: Any = _Lipinski
+rdMolDescriptors: Any = _rdMolDescriptors
+MolToInchiKey: Any = _MolToInchiKey
 
 from services.mcp_tools.common.app import create_app
 from services.mcp_tools.common.limits import MAX_SMILES_LEN
@@ -123,23 +144,23 @@ async def morgan_fingerprint(req: Annotated[MorganIn, Body(...)]) -> MorganOut:
 # --------------------------------------------------------------------------
 # compute_descriptors
 # --------------------------------------------------------------------------
+DescriptorKey = Literal[
+    "mw", "logp", "tpsa", "hbd", "hba", "rotatable_bonds",
+    "heavy_atom_count", "aromatic_ring_count", "ring_count",
+    "fsp3", "qed", "formal_charge",
+]
+
+
 class DescriptorsIn(BaseModel):
     smiles: str = Field(min_length=1, max_length=MAX_SMILES_LEN)
-    which: (
-        list[Literal[
-            "mw", "logp", "tpsa", "hbd", "hba", "rotatable_bonds",
-            "heavy_atom_count", "aromatic_ring_count", "ring_count",
-            "fsp3", "qed", "formal_charge",
-        ]]
-        | None
-    ) = None  # None → all
+    which: list[DescriptorKey] | None = None  # None → all
 
 
 class DescriptorsOut(BaseModel):
     values: dict[str, float]
 
 
-_DESCRIPTORS: dict[str, callable] = {
+_DESCRIPTORS: dict[DescriptorKey, Callable[[Any], Any]] = {
     "mw":                   lambda m: Descriptors.MolWt(m),
     "logp":                 lambda m: Crippen.MolLogP(m),
     "tpsa":                 lambda m: Descriptors.TPSA(m),

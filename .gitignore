@@ -42,9 +42,14 @@ htmlcov/
 .cache
 nosetests.xml
 coverage.xml
+coverage.lcov
 *.cover
 .hypothesis/
 .pytest_cache/
+
+# TypeScript / vitest coverage output (per-workspace)
+services/*/coverage/
+coverage/
 
 # Jupyter
 .ipynb_checkpoints
@@ -53,6 +58,7 @@ coverage.xml
 .env
 .env.*
 !.env.example
+.venv
 .venv/
 venv/
 env/
