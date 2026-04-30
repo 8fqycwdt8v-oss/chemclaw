@@ -131,6 +131,21 @@ def redact(text: str) -> RedactionResult:
     _sub(_NCE_PROJECT, "NCE")
     _sub(_COMPOUND_CODE, "CMP")
 
+    # Phase 3 of the configuration concept: also apply DB-loaded patterns
+    # (scope='global' rows for now; org-scoped rows are loaded but not
+    # consumed yet — the LiteLLM gateway lacks per-call org context).
+    # Hardcoded patterns above stay as the safety baseline so a DB outage
+    # never silently drops protection.
+    try:
+        from .dynamic_patterns import get_loader
+
+        for dp in get_loader().get_patterns():
+            if dp.scope != "global":
+                continue
+            _sub(dp.pattern, dp.category)
+    except Exception:  # noqa: BLE001 — never let dynamic patterns break the redactor
+        pass
+
     return result
 
 

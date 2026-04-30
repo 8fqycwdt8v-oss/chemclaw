@@ -90,7 +90,7 @@ export class FeatureFlagRegistry {
     const rows = new Map<string, FlagRow>();
     try {
       const result = await withUserContext(this.pool, "__system__", async (client) => {
-        return client.query<FlagRow>(
+        return await client.query<FlagRow>(
           `SELECT key, enabled, scope_rule, description, updated_at::text
              FROM feature_flags`,
         );
@@ -99,7 +99,7 @@ export class FeatureFlagRegistry {
     } catch {
       // DB unavailable; keep the prior cache if any so transient errors
       // don't yank flags out from under live requests.
-      if (!this.cache) this.cache = { fetchedAt: now, rows: new Map() };
+      this.cache ??= { fetchedAt: now, rows: new Map() };
       return;
     }
 
@@ -130,5 +130,5 @@ export function getFeatureFlagRegistry(): FeatureFlagRegistry {
 
 /** Convenience helper used at call sites; reads the singleton. */
 export async function isFeatureEnabled(key: string, ctx: FlagContext = {}): Promise<boolean> {
-  return getFeatureFlagRegistry().isEnabled(key, ctx);
+  return await getFeatureFlagRegistry().isEnabled(key, ctx);
 }

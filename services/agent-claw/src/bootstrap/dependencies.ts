@@ -19,6 +19,10 @@ import { ShadowEvaluator } from "../prompts/shadow-evaluator.js";
 import type { Tool } from "../tools/tool.js";
 import { ConfigRegistry, setConfigRegistry } from "../config/registry.js";
 import { FeatureFlagRegistry, setFeatureFlagRegistry } from "../config/flags.js";
+import {
+  PermissionPolicyLoader,
+  setPermissionPolicyLoader,
+} from "../core/permissions/policy-loader.js";
 
 // Chemistry / KG (URL-only).
 import { buildCanonicalizeSmilesTool } from "../tools/builtins/canonicalize_smiles.js";
@@ -67,6 +71,7 @@ export interface Deps {
   shadowEvaluator: ShadowEvaluator;
   configRegistry: ConfigRegistry;
   featureFlags: FeatureFlagRegistry;
+  permissionPolicyLoader: PermissionPolicyLoader;
 }
 
 export function buildDependencies(cfg: Config): Deps {
@@ -103,6 +108,12 @@ export function buildDependencies(cfg: Config): Deps {
   const featureFlags = new FeatureFlagRegistry(pool);
   setFeatureFlagRegistry(featureFlags);
 
+  // Phase 3 of the configuration concept — DB-backed permission_policies
+  // loader. Wired as a singleton so the permission_request hook can match
+  // policies on every pre_tool dispatch without per-request setup.
+  const permissionPolicyLoader = new PermissionPolicyLoader(pool);
+  setPermissionPolicyLoader(permissionPolicyLoader);
+
   return {
     pool,
     llmProvider,
@@ -113,6 +124,7 @@ export function buildDependencies(cfg: Config): Deps {
     shadowEvaluator,
     configRegistry,
     featureFlags,
+    permissionPolicyLoader,
   };
 }
 

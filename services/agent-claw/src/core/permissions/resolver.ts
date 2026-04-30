@@ -112,6 +112,20 @@ export async function resolveDecision(
     };
   }
 
+  if (mode === "enforce") {
+    // Phase 3 of the configuration concept: consult the permission_request
+    // hook (DB-backed policies). Allow when no policy matches.
+    const enforceResult = await input.lifecycle.dispatch("permission_request", {
+      ctx: input.ctx,
+      toolId: tool.id,
+      input: input.input,
+    });
+    if (enforceResult.decision) {
+      return { decision: enforceResult.decision, reason: enforceResult.reason };
+    }
+    return { decision: "allow", reason: "enforce mode: no matching policy" };
+  }
+
   // default mode — try the permission_request hook chain first.
   const hookResult = await input.lifecycle.dispatch("permission_request", {
     ctx: input.ctx,

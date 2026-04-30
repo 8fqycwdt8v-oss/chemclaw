@@ -58,17 +58,20 @@ function makePool(state: MockState): Pool {
         if (sql.includes("FROM config_settings") && (sql.includes("SELECT scope") || sql.includes("SELECT value"))) {
           if (sql.includes("SELECT value")) {
             // Single-row before-value lookup
-            return { rows: [{ value: state.configRows.find(r => r.scope === params?.[0] && r.scope_id === params?.[1] && r.key === params?.[2])?.value ?? null }] as unknown as T[], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
+            const p = params ?? [];
+            return { rows: [{ value: state.configRows.find(r => r.scope === p[0] && r.scope_id === p[1] && r.key === p[2])?.value ?? null }] as unknown as T[], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
           }
           return { rows: state.configRows as unknown as T[], rowCount: state.configRows.length, command: "SELECT", oid: 0, fields: [] };
         }
         if (sql.includes("INSERT INTO config_settings")) {
-          state.configUpserts.push({ scope: params?.[0] as string, scope_id: params?.[1] as string, key: params?.[2] as string, value: params?.[3] as string });
+          const p = params ?? [];
+          state.configUpserts.push({ scope: p[0] as string, scope_id: p[1] as string, key: p[2] as string, value: p[3] as string });
           return { rows: [] as T[], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
         }
         if (sql.includes("DELETE FROM config_settings")) {
-          const found = state.configRows.find(r => r.scope === params?.[0] && r.scope_id === params?.[1] && r.key === params?.[2]);
-          state.configDeletes.push({ scope: params?.[0] as string, scope_id: params?.[1] as string, key: params?.[2] as string });
+          const p = params ?? [];
+          const found = state.configRows.find(r => r.scope === p[0] && r.scope_id === p[1] && r.key === p[2]);
+          state.configDeletes.push({ scope: p[0] as string, scope_id: p[1] as string, key: p[2] as string });
           if (found) {
             return { rows: [{ value: found.value }] as unknown as T[], rowCount: 1, command: "DELETE", oid: 0, fields: [] };
           }
@@ -125,7 +128,7 @@ async function buildApp(state: MockState, callerId = "admin@example.com") {
   setConfigRegistry(new ConfigRegistry(pool, 60_000));
   setFeatureFlagRegistry(new FeatureFlagRegistry(pool, 60_000));
   registerAdminRoutes(app, pool, () => callerId);
-  return app;
+  return await app;
 }
 
 beforeEach(() => {
