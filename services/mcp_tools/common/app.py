@@ -266,21 +266,19 @@ def create_app(
                     headers={"x-request-id": getattr(request.state, "request_id", "")},
                 )
 
-        # Bind the hashed user onto the log context. Crucially we do
-        # NOT reset the user token here in a finally — the OUTER
-        # `add_request_id` middleware's reset on its `request_id` token
-        # restores the contextvar to the empty state that existed
-        # before either middleware ran, clearing both bindings in one
-        # shot.
+        # Bind the hashed user onto the log context for the duration of
+        # `call_next`. The handler (and any sub-middleware) sees `user`
+        # on every log record it emits. We deliberately don't manage
+        # the lifetime with try/finally because Starlette's
+        # BaseHTTPMiddleware wraps `call_next` in an anyio task — the
+        # binding is local to THIS middleware's task context and
+        # vanishes automatically when control returns to
+        # `add_request_id`.
         #
-        # Why this matters: the access log emit inside `add_request_id`
-        # runs AFTER `call_next` returns and AFTER any inner-middleware
-        # `finally` clauses have fired. If we reset the user token
-        # here, the access-log line for every authenticated request
-        # would have no `user` field — silently breaking per-user
-        # operational queries in Loki. Letting the outer reset handle
-        # cleanup keeps `user` bound through the entire request,
-        # including the access log emission.
+        # The access-log emission in `add_request_id` runs in its own
+        # (parent) task context, which never saw this binding, so that
+        # middleware re-binds `user` from `request.state.mcp_claims`
+        # before emitting — see the comment there for details.
         user_hash = hash_user(getattr(claims, "user", "") or "")
         if user_hash:
             bind_log_context(user=user_hash)
@@ -334,6 +332,26 @@ def create_app(
             reset_log_context(token)
             raise
         duration_ms = int((time.monotonic() - started) * 1000)
+
+        # Re-bind the user hash for the access-log emit. The auth
+        # middleware's binding does NOT propagate back here because
+        # Starlette's BaseHTTPMiddleware wraps `call_next` in a fresh
+        # contextvars context (see https://www.starlette.io/middleware/),
+        # so any inner-middleware ContextVar.set is local to that nested
+        # context and disappears when call_next returns. By reading
+        # `request.state.mcp_claims` (which IS shared via the request
+        # object) we can re-bind here just for the access log emit.
+        # Without this, every authenticated request emits an access log
+        # with no `user` field — silently breaking per-user Loki queries.
+        user_token = None
+        claims = getattr(request.state, "mcp_claims", None)
+        if claims is not None:
+            user_raw = getattr(claims, "user", "") or ""
+            if user_raw:
+                user_hash = hash_user(user_raw)
+                if user_hash:
+                    user_token = bind_log_context(user=user_hash)
+
         # Skip access logs for probe endpoints — they fire every few
         # seconds from k8s liveness/readiness and would dominate the log
         # volume. Operators can re-enable by setting LOG_ACCESS_PROBES=true
@@ -342,6 +360,8 @@ def create_app(
             os.getenv("LOG_ACCESS_PROBES", "").lower() != "true"
         ):
             response.headers["x-request-id"] = rid
+            if user_token is not None:
+                reset_log_context(user_token)
             reset_log_context(token)
             return response
         log.info(
@@ -355,6 +375,8 @@ def create_app(
             },
         )
         response.headers["x-request-id"] = rid
+        if user_token is not None:
+            reset_log_context(user_token)
         reset_log_context(token)
         return response
 
