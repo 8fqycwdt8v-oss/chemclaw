@@ -52,18 +52,59 @@ export interface RequestOptions {
    * route handler set at turn start. Use this to send a call as a
    * different user (admin → end-user impersonation, etc.). */
   userEntraId?: string;
+  /** Override the upstream AbortSignal for this single call. Normally not
+   * needed — postJson reads from `getRequestContext().signal` which the
+   * route's `runWithRequestContext` set at turn start. Use this to attach
+   * a different signal (e.g. a long-running job that should ignore the
+   * upstream HTTP lifetime). */
+  signal?: AbortSignal;
 }
 
-export async function postJson<TRes>(
+/**
+ * Combine an external (route-scoped) AbortSignal with the per-call timeout
+ * AbortController so that whichever fires first cancels the fetch. We avoid
+ * `AbortSignal.any()` for compatibility with Node 18 (Node 20 ships it
+ * natively, but the package targets 18+). The wrapper returned controls a
+ * dedicated AbortController whose signal is what fetch() observes.
+ */
+function combineSignals(
+  external: AbortSignal | undefined,
+  timeoutMs: number,
+): { signal: AbortSignal; cleanup: () => void } {
+  const ctl = new AbortController();
+  const timer = setTimeout(() => ctl.abort(new Error("mcp request timeout")), timeoutMs);
+  let externalListener: (() => void) | undefined;
+  if (external) {
+    if (external.aborted) {
+      ctl.abort(external.reason ?? new Error("aborted"));
+    } else {
+      externalListener = () => {
+        ctl.abort(external.reason ?? new Error("aborted"));
+      };
+      external.addEventListener("abort", externalListener, { once: true });
+    }
+  }
+  return {
+    signal: ctl.signal,
+    cleanup: () => {
+      clearTimeout(timer);
+      if (external && externalListener) {
+        external.removeEventListener("abort", externalListener);
+      }
+    },
+  };
+}
+
+export async function postJson<TReq, TRes>(
   url: string,
-  body: unknown,
+  body: TReq,
   respSchema: z.ZodType<TRes>,
   timeoutMs: number,
   service: string,
   opts: RequestOptions = {},
 ): Promise<TRes> {
-  const ctl = new AbortController();
-  const t = setTimeout(() => { ctl.abort(); }, timeoutMs);
+  const externalSignal = opts.signal ?? getRequestContext()?.signal;
+  const { signal, cleanup } = combineSignals(externalSignal, timeoutMs);
   try {
     const r = await fetch(url, {
       method: "POST",
@@ -72,7 +113,7 @@ export async function postJson<TRes>(
         ...authHeaders(service, opts.userEntraId),
       },
       body: JSON.stringify(body),
-      signal: ctl.signal,
+      signal,
     });
     const text = await r.text();
     if (!r.ok) {
@@ -88,7 +129,7 @@ export async function postJson<TRes>(
     }
     return parsed.data;
   } finally {
-    clearTimeout(t);
+    cleanup();
   }
 }
 
@@ -106,8 +147,8 @@ export async function getJson<TRes>(
   service: string,
   opts: RequestOptions = {},
 ): Promise<TRes> {
-  const ctl = new AbortController();
-  const t = setTimeout(() => { ctl.abort(); }, timeoutMs);
+  const externalSignal = opts.signal ?? getRequestContext()?.signal;
+  const { signal, cleanup } = combineSignals(externalSignal, timeoutMs);
   try {
     const r = await fetch(url, {
       method: "GET",
@@ -115,7 +156,7 @@ export async function getJson<TRes>(
         "content-type": "application/json",
         ...authHeaders(service, opts.userEntraId),
       },
-      signal: ctl.signal,
+      signal,
     });
     const text = await r.text();
     if (!r.ok) {
@@ -131,6 +172,6 @@ export async function getJson<TRes>(
     }
     return parsed.data;
   } finally {
-    clearTimeout(t);
+    cleanup();
   }
 }

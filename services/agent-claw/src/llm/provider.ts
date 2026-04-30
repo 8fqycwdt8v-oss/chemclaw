@@ -29,6 +29,18 @@ export type StreamChunk =
   | { type: "finish"; finishReason: string; usage: { promptTokens: number; completionTokens: number } };
 
 // ---------------------------------------------------------------------------
+// Per-call options shared across LLM provider methods.
+// `signal` carries the upstream request lifetime so the SDK can abort the
+// HTTP call when a client disconnects mid-stream. `role` selects an alias
+// from the multi-model map (planner/executor/compactor/judge); falls back
+// to the default AGENT_MODEL when unset.
+// ---------------------------------------------------------------------------
+export interface LlmCallOptions {
+  role?: ModelRole;
+  signal?: AbortSignal;
+}
+
+// ---------------------------------------------------------------------------
 // The interface every provider must implement.
 // LiteLLMProvider (litellm-provider.ts) is the real implementation.
 // StubLlmProvider below is for deterministic tests.
@@ -38,10 +50,12 @@ export interface LlmProvider {
    * Execute one step: send messages + tool schemas to the model and return
    * a parsed result (text or tool_call) plus token usage.
    *
-   * @param role - Optional role for multi-model routing (planner/executor/compactor/judge).
-   *               Falls back to the default AGENT_MODEL when unset.
+   * @param opts - Optional call options:
+   *   - role: planner/executor/compactor/judge for multi-model routing.
+   *   - signal: AbortSignal to cancel the underlying HTTP request when
+   *             the upstream client disconnects.
    */
-  call(messages: Message[], tools: Tool[], role?: ModelRole): Promise<LlmResponse>;
+  call(messages: Message[], tools: Tool[], opts?: LlmCallOptions): Promise<LlmResponse>;
 
   /**
    * Token-by-token streaming variant. Yields StreamChunk objects as they
@@ -50,19 +64,24 @@ export interface LlmProvider {
    * The harness calls this when the caller requested stream: true and no
    * tool execution is needed for the current step (text-only path). For
    * tool-call steps the harness falls back to call().
-   *
-   * @param role - Optional role for multi-model routing.
    */
-  streamCompletion(messages: Message[], tools: Tool[], role?: ModelRole): AsyncIterable<StreamChunk>;
+  streamCompletion(
+    messages: Message[],
+    tools: Tool[],
+    opts?: LlmCallOptions,
+  ): AsyncIterable<StreamChunk>;
 
   /**
    * Single-turn JSON completion helper.
    * Sends system + user content and JSON.parses the response text.
    * Used for structured output: plan previews, hypothesis drafts, etc.
-   *
-   * @param opts.role - Optional role for multi-model routing.
    */
-  completeJson(opts: { system: string; user: string; role?: ModelRole }): Promise<unknown>;
+  completeJson(opts: {
+    system: string;
+    user: string;
+    role?: ModelRole;
+    signal?: AbortSignal;
+  }): Promise<unknown>;
 }
 
 // ---------------------------------------------------------------------------
@@ -151,7 +170,14 @@ export class StubLlmProvider implements LlmProvider {
     return this._queue.length;
   }
 
-  async call(_messages: Message[], _tools: Tool[], _role?: ModelRole): Promise<LlmResponse> {
+  async call(
+    _messages: Message[],
+    _tools: Tool[],
+    _opts?: LlmCallOptions,
+  ): Promise<LlmResponse> {
+    if (_opts?.signal?.aborted) {
+      throw _opts.signal.reason ?? new Error("aborted");
+    }
     const next = this._queue.shift();
     if (!next) {
       throw new Error(
@@ -165,15 +191,23 @@ export class StubLlmProvider implements LlmProvider {
   /**
    * Streaming stub: dequeues from _streamQueue.
    * If the queue is empty, emits a single text_delta "stub response" + finish.
+   * Aborts cleanly between chunks if `opts.signal` fires.
    */
   async *streamCompletion(
     _messages: Message[],
     _tools: Tool[],
-    _role?: ModelRole,
+    _opts?: LlmCallOptions,
   ): AsyncIterable<StreamChunk> {
+    const checkAbort = () => {
+      if (_opts?.signal?.aborted) {
+        throw _opts.signal.reason ?? new Error("aborted");
+      }
+    };
+    checkAbort();
     const batch = this._streamQueue.shift();
     if (batch) {
       for (const chunk of batch) {
+        checkAbort();
         yield chunk;
       }
       return;
@@ -195,7 +229,15 @@ export class StubLlmProvider implements LlmProvider {
     return this;
   }
 
-  async completeJson(_opts: { system: string; user: string; role?: ModelRole }): Promise<unknown> {
+  async completeJson(_opts: {
+    system: string;
+    user: string;
+    role?: ModelRole;
+    signal?: AbortSignal;
+  }): Promise<unknown> {
+    if (_opts.signal?.aborted) {
+      throw _opts.signal.reason ?? new Error("aborted");
+    }
     const next = this._jsonQueue.shift();
     if (next !== undefined) return next;
     // Default: return an empty object so tests that don't care about structured output

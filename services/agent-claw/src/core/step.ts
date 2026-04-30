@@ -262,9 +262,14 @@ async function _runOneTool(opts: {
  */
 export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
   const { llm, tools, messages, lifecycle, ctx, streamSink, permissions } = opts;
+  // Propagate the upstream AbortSignal (set by runHarness from
+  // HarnessOptions.signal) into every LLM call so a client disconnect
+  // cancels the underlying fetch instead of running the model to
+  // completion. Tool dispatch reads the same signal off ctx.
+  const signal = ctx.signal;
 
   // 1. LLM call.
-  const { result, usage } = await llm.call(messages, tools);
+  const { result, usage } = await llm.call(messages, tools, { signal });
 
   if (result.kind === "text") {
     // Text path with streaming sink — re-run the call as a stream so tokens
@@ -274,7 +279,7 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
     // the more complex stream-first approach.
     if (streamSink) {
       let streamed = "";
-      for await (const chunk of llm.streamCompletion(messages, tools)) {
+      for await (const chunk of llm.streamCompletion(messages, tools, { signal })) {
         if (chunk.type === "text_delta") {
           streamSink.onTextDelta?.(chunk.delta);
           streamed += chunk.delta;

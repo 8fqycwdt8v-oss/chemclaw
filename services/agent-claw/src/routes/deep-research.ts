@@ -172,6 +172,7 @@ async function handleDeepResearch(
         budget,
         lifecycle,
         ctx,
+        signal: req.signal,
       });
       return void reply.send({
         text: result.text,
@@ -197,9 +198,12 @@ async function handleDeepResearch(
   // post_turn `redact-secrets` hook's audit trail via scratchpad — there's
   // no saveSession step.
   //
-  // TODO(disconnect-mid-stream): runHarness doesn't accept an AbortSignal,
-  // so a client close mid-stream cannot abort the harness loop. See
-  // routes/chat.ts for the same caveat.
+  // AbortSignal propagation: see runHarness({ signal }). DR forwards the
+  // upstream client's signal so a mid-stream disconnect cancels LLM calls
+  // and any in-flight MCP postJson / getJson fetches transparently. The
+  // route is single-turn so there's no scratchpad to persist — the
+  // cancellation surfaces only as the SSE `cancelled` event (best-effort)
+  // and a log entry.
   const _streamRedactions: RedactReplacement[] = [];
 
   try {
@@ -218,12 +222,25 @@ async function handleDeepResearch(
       lifecycle,
       ctx,
       streamSink: sink,
+      signal: req.signal,
     });
   } catch (err) {
     if (err instanceof AwaitingUserInputError) {
       // ask_user fired; runHarness already notified the sink, so the
       // awaiting_user_input event has been written to the wire. Treat
       // as a normal exit.
+    } else if (_isAbortLikeError(err) || req.signal?.aborted) {
+      // Client disconnected mid-stream. Emit `cancelled` (best-effort) so
+      // any SSE consumer that's still listening sees the typed terminal
+      // frame instead of an abrupt socket close.
+      req.log.info({ err: err instanceof Error ? err.message : err }, "deep_research stream cancelled by client");
+      if (!closed) {
+        try {
+          writeEvent(reply, { type: "cancelled" });
+        } catch {
+          // socket already gone
+        }
+      }
     } else {
       req.log.error({ err }, "deep_research stream failed");
       if (!closed) {
@@ -241,6 +258,20 @@ async function handleDeepResearch(
       // already closed
     }
   }
+}
+
+/**
+ * Recognise a thrown AbortError regardless of its concrete constructor.
+ * Mirrors the helper in routes/chat.ts — kept local so both routes stay
+ * import-isolated.
+ */
+function _isAbortLikeError(err: unknown): boolean {
+  return (
+    typeof err === "object" &&
+    err !== null &&
+    "name" in err &&
+    (err as { name?: unknown }).name === "AbortError"
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -265,12 +296,12 @@ export function registerDeepResearchRoute(
       },
     },
     // Wrap in AsyncLocalStorage so outbound MCP calls inherit the user's
-    // identity (mirrors /api/chat). Without this, the JWT minted for
-    // outbound calls would have no user, and MCP services in production
-    // would 401 every DR call.
+    // identity (mirrors /api/chat) and the upstream AbortSignal so a
+    // mid-stream disconnect cancels in-flight postJson / getJson calls.
     (req, reply) =>
-      runWithRequestContext({ userEntraId: deps.getUser(req) }, () =>
-        handleDeepResearch(req, reply, deps),
+      runWithRequestContext(
+        { userEntraId: deps.getUser(req), signal: req.signal },
+        () => handleDeepResearch(req, reply, deps),
       ),
   );
 }

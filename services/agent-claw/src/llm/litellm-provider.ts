@@ -24,7 +24,7 @@
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { generateText, streamText, tool } from "ai";
 import type { Config } from "../config.js";
-import type { LlmProvider, LlmResponse, ModelRole, StreamChunk } from "./provider.js";
+import type { LlmCallOptions, LlmProvider, LlmResponse, ModelRole, StreamChunk } from "./provider.js";
 import type { Message } from "../core/types.js";
 import type { Tool } from "../tools/tool.js";
 import type { ModelMessage, ToolSet } from "ai";
@@ -130,15 +130,24 @@ export class LiteLLMProvider implements LlmProvider {
     return this._roleMap[role] ?? this._defaultModelId;
   }
 
-  async call(messages: Message[], tools: Tool[], role?: ModelRole): Promise<LlmResponse> {
+  async call(
+    messages: Message[],
+    tools: Tool[],
+    opts?: LlmCallOptions,
+  ): Promise<LlmResponse> {
     const sdkMessages = toAiSdkMessages(messages);
     const sdkTools = tools.length > 0 ? toAiSdkTools(tools) : undefined;
 
     const result = await generateText({
-      model: this._factory(this._resolveModel(role)),
+      model: this._factory(this._resolveModel(opts?.role)),
       messages: sdkMessages,
       tools: sdkTools,
       maxOutputTokens: 4_096,
+      // Forward the upstream signal to the AI SDK so a client disconnect
+      // mid-call propagates to the underlying fetch and we stop burning
+      // LLM tokens. The SDK rejects with an AbortError that bubbles out
+      // of runHarness so the route's catch can record `cancelled`.
+      ...(opts?.signal !== undefined ? { abortSignal: opts.signal } : {}),
     });
 
     // v5 usage shape: inputTokens / outputTokens (was promptTokens/completionTokens).
@@ -203,16 +212,19 @@ export class LiteLLMProvider implements LlmProvider {
   async *streamCompletion(
     messages: Message[],
     tools: Tool[],
-    role?: ModelRole,
+    opts?: LlmCallOptions,
   ): AsyncIterable<StreamChunk> {
     const sdkMessages = toAiSdkMessages(messages);
     const sdkTools = tools.length > 0 ? toAiSdkTools(tools) : undefined;
 
     const result = streamText({
-      model: this._factory(this._resolveModel(role)),
+      model: this._factory(this._resolveModel(opts?.role)),
       messages: sdkMessages,
       tools: sdkTools,
       maxOutputTokens: 4_096,
+      // Forwarded so a client disconnect mid-stream cancels the underlying
+      // fetch — the AI SDK propagates the signal into the HTTP layer.
+      ...(opts?.signal !== undefined ? { abortSignal: opts.signal } : {}),
     });
 
     // Stream text deltas token-by-token.
@@ -255,12 +267,18 @@ export class LiteLLMProvider implements LlmProvider {
    * Single-turn JSON completion.
    * Sends system + user messages and JSON.parses the response text.
    */
-  async completeJson(opts: { system: string; user: string; role?: ModelRole }): Promise<unknown> {
+  async completeJson(opts: {
+    system: string;
+    user: string;
+    role?: ModelRole;
+    signal?: AbortSignal;
+  }): Promise<unknown> {
     const result = await generateText({
       model: this._factory(this._resolveModel(opts.role)),
       system: opts.system,
       messages: [{ role: "user", content: opts.user }],
       maxOutputTokens: 4_000,
+      ...(opts.signal !== undefined ? { abortSignal: opts.signal } : {}),
     });
     return JSON.parse(result.text);
   }
