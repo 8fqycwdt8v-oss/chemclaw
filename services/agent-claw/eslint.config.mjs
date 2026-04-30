@@ -57,7 +57,7 @@ export default tseslint.config(
       '@typescript-eslint/restrict-plus-operands': 'warn',
       '@typescript-eslint/prefer-promise-reject-errors': 'error',
       '@typescript-eslint/only-throw-error': 'warn',
-      '@typescript-eslint/no-base-to-string': 'warn',
+      '@typescript-eslint/no-base-to-string': 'error',
       '@typescript-eslint/no-deprecated': 'warn',
       // Empty-object-type triggers on common Fastify type widening; warn for now.
       '@typescript-eslint/no-empty-object-type': 'warn',

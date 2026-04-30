@@ -276,9 +276,9 @@ export function assertEventsMatch(
       const traceTypes = trace
         .map((t) => {
           const extras: string[] = [];
-          if (t.point) extras.push(`point=${String(t.point)}`);
-          if (t.toolId) extras.push(`toolId=${String(t.toolId)}`);
-          if (t.finishReason) extras.push(`finishReason=${String(t.finishReason)}`);
+          if (typeof t.point === "string") extras.push(`point=${t.point}`);
+          if (typeof t.toolId === "string") extras.push(`toolId=${t.toolId}`);
+          if (typeof t.finishReason === "string") extras.push(`finishReason=${t.finishReason}`);
           return extras.length ? `${t.type}{${extras.join(",")}}` : t.type;
         })
         .join(" -> ");

@@ -74,6 +74,15 @@ function nowIso(): string {
   return new Date().toISOString();
 }
 
+// Safe stringification for IDs sourced from `unknown`/`Record<string, unknown>`
+// payloads. Returns "" for objects/arrays so we don't emit "[object Object]"
+// as a fact's subject_id.
+function safeStringId(v: unknown): string {
+  if (typeof v === "string") return v;
+  if (typeof v === "number" || typeof v === "boolean") return String(v);
+  return "";
+}
+
 function validUntilIso(daysFromNow: number = DEFAULT_TTL_DAYS): string {
   const d = new Date();
   d.setDate(d.getDate() + daysFromNow);
@@ -111,7 +120,7 @@ function extractElnEntryFacts(entry: Record<string, unknown>): SourceFactPayload
     (entry.modified_at as string | undefined) ??
     (entry.created_at as string | undefined) ??
     now;
-  const subjectId = String(entry.id ?? "");
+  const subjectId = safeStringId(entry.id);
   if (!subjectId) return facts;
 
   // New typed shape: fields_jsonb is a flat Record<string, unknown>.
@@ -172,7 +181,7 @@ function extractCanonicalReactionFacts(rxn: Record<string, unknown>): SourceFact
     typeof rxn.valid_until === "string" ? (rxn.valid_until) : validUntilIso();
   const sourceTs =
     (rxn.last_activity_at as string | undefined) ?? now;
-  const subjectId = String(rxn.reaction_id ?? "");
+  const subjectId = safeStringId(rxn.reaction_id);
   if (!subjectId) return facts;
 
   const meanYield = toObjectValue(rxn.mean_yield);
@@ -219,7 +228,7 @@ function extractSampleFacts(sample: Record<string, unknown>): SourceFactPayload[
       : validUntilIso();
   const sourceTs =
     (sample.created_at as string | undefined) ?? now;
-  const subjectId = String(sample.id ?? "");
+  const subjectId = safeStringId(sample.id);
   if (!subjectId) return facts;
 
   const purity = toObjectValue(sample.purity_pct);
@@ -264,7 +273,7 @@ function extractSampleFacts(sample: Record<string, unknown>): SourceFactPayload[
         fetched_at: now,
         valid_until: validUntil,
         predicate,
-        subject_id: `${subjectId}:${String(r.id ?? metric)}`,
+        subject_id: `${subjectId}:${safeStringId(r.id) || metric}`,
         object_value: value,
       });
     }
@@ -285,7 +294,7 @@ function extractInstrumentFacts(dataset: Record<string, unknown>): SourceFactPay
   const validUntil = validUntilIso();
   const sourceTs =
     (dataset.measured_at as string | undefined) ?? now;
-  const subjectId = String(dataset.uid ?? dataset.id ?? "");
+  const subjectId = safeStringId(dataset.uid) || safeStringId(dataset.id);
   if (!subjectId) return facts;
 
   // Cross-link fact: dataset → sample.
