@@ -20,6 +20,7 @@ import { registerEvalRoute } from "../routes/eval.js";
 import { registerOptimizerRoutes } from "../routes/optimizer.js";
 import { registerSessionsRoute } from "../routes/sessions.js";
 import { registerForgedToolsRoutes } from "../routes/forged-tools.js";
+import { registerAdminRoutes } from "../routes/admin/index.js";
 
 export function registerAllRoutes(
   app: FastifyInstance,
@@ -86,4 +87,9 @@ export function registerAllRoutes(
   // Phase D.5 — admin-gated forged-tool scope promotion + read-only listing.
   // Audit H4: file existed and was tested but never wired here in production.
   registerForgedToolsRoutes(app, deps.pool, getUser);
+
+  // Phase 1 of the configuration concept (Initiatives 2 + 10):
+  // /api/admin/users/:entra_id/admin-role[s] + /api/admin/audit.
+  // Future config-concept phases extend the same router.
+  registerAdminRoutes(app, deps.pool, getUser);
 }
