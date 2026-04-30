@@ -302,7 +302,7 @@ export function registerDeepResearchRoute(
     // mid-stream disconnect cancels in-flight postJson / getJson calls.
     (req, reply) =>
       runWithRequestContext(
-        { userEntraId: deps.getUser(req), signal: req.signal },
+        { userEntraId: deps.getUser(req), signal: req.signal, requestId: req.id },
         () => handleDeepResearch(req, reply, deps),
       ),
   );

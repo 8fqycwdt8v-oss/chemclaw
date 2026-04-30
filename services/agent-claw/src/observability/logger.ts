@@ -22,11 +22,29 @@
 
 import { pino, type Logger } from "pino";
 
+import { logContextFields } from "./log-context.js";
+
+// Defense-in-depth redaction. Pino's `redact` paths apply BEFORE the JSON
+// formatter, so secrets in known-shape fields are scrubbed even if a caller
+// accidentally logs a raw header object or tool input. The list expands the
+// original (Authorization / Cookie) with fields that frequently carry
+// chemistry-sensitive content (raw SMILES, prompts, tool input/output) so
+// they're at least filtered when they pass through the logger; the
+// LiteLLM-redactor backed log filter catches free-form prose.
 const ROOT_REDACT_PATHS = [
   "req.headers.authorization",
   "req.headers.cookie",
   "*.authorization",
   "*.cookie",
+  "*.password",
+  "*.token",
+  "*.api_key",
+  "*.apiKey",
+  "tool_input.smiles",
+  "tool_output.smiles",
+  "messages[*].content",
+  "prompt",
+  "raw_user",
 ];
 
 let _root: Logger | null = null;
@@ -38,6 +56,11 @@ function buildRoot(): Logger {
     base: { service: "agent-claw" },
     redact: { paths: ROOT_REDACT_PATHS, censor: "***" },
     timestamp: pino.stdTimeFunctions.isoTime,
+    // Auto-enrich every record with correlation fields when an HTTP request
+    // / OTel span is active. Returning {} when nothing is available is a
+    // no-op for Pino. The mixin is called per-call, not per-instance, so
+    // child loggers inherit it automatically.
+    mixin: () => logContextFields(),
   });
 }
 

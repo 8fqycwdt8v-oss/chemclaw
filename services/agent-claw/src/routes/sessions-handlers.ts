@@ -177,6 +177,7 @@ export async function handlePlanRun(
     paperclip: deps.paperclip,
     log: req.log,
     signal: req.signal,
+    requestId: req.id,
     // Phase F4: pass the plan so the runner can advance current_step_index
     // as tool calls match planned steps.
     planForProgress: {
@@ -285,6 +286,7 @@ async function executeResume(
     paperclip,
     log: req.log,
     signal: req.signal,
+    requestId: req.id,
     maxAutoTurns: 1, // resume is one turn at a time; cron can call again
   });
 

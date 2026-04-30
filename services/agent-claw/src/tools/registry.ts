@@ -17,6 +17,7 @@ import type { ModelRole } from "../llm/provider.js";
 import { postJson } from "../mcp/postJson.js";
 import type { SandboxClient } from "../core/sandbox.js";
 import { wrapCode, parseOutputs, buildStubLibrary } from "./builtins/run_program.js";
+import { getLogger } from "../observability/logger.js";
 
 // ---------------------------------------------------------------------------
 // Role tier ordering (planner > executor > compactor > judge).
@@ -318,10 +319,13 @@ export class ToolRegistry {
       const isProgrammaticBuiltin =
         existing !== undefined && row.source !== "builtin";
       if (isProgrammaticBuiltin) {
-         
-        console.warn(
-          `[ToolRegistry] DB row source="${row.source}" for "${row.name}" ` +
-            `would overwrite a programmatically-registered tool — skipping.`,
+        getLogger("agent-claw.tools.registry").warn(
+          {
+            event: "tool_db_row_overrides_builtin",
+            tool_name: row.name,
+            db_source: row.source,
+          },
+          "DB row would overwrite a programmatically-registered builtin — skipping",
         );
         continue;
       }
@@ -390,10 +394,12 @@ export class ToolRegistry {
         return null;
       }
       if (!this._sandboxClient) {
-        // SandboxClient not injected — log and skip.
-         
-        console.warn(
-          `ToolRegistry: skipping forged tool '${row.name}' — setSandboxClient() was not called.`,
+        getLogger("agent-claw.tools.registry").warn(
+          {
+            event: "forged_tool_skipped_no_sandbox",
+            tool_name: row.name,
+          },
+          "skipping forged tool — setSandboxClient() was not called",
         );
         return null;
       }
@@ -439,9 +445,12 @@ export class ToolRegistry {
             }
           } else if (!codeCache.has(name)) {
             // First call for a legacy tool with no stored hash. Log once.
-             
-            console.warn(
-              `ToolRegistry: forged tool '${name}' has no code_sha256 (legacy row). Re-forge to enable integrity checking.`,
+            getLogger("agent-claw.tools.registry").warn(
+              {
+                event: "forged_tool_legacy_no_sha",
+                tool_name: name,
+              },
+              "forged tool has no code_sha256 (legacy row); re-forge to enable integrity checking",
             );
           }
           codeCache.set(name, code);

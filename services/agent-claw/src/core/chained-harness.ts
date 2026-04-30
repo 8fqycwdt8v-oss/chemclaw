@@ -66,6 +66,11 @@ export interface ChainedHarnessOptions {
    * both the LLM call and any in-flight MCP postJson / getJson fetches.
    * Background callers (the reanimator daemon) leave this undefined. */
   signal?: AbortSignal;
+  /** Per-request correlation id. Plan/run + resume routes pass `req.id`;
+   * the reanimator daemon synthesizes its own UUID per resume so that
+   * background work still correlates across MCP services + projector
+   * logs even though there's no incoming HTTP request. */
+  requestId?: string;
 }
 
 export interface ChainedHarnessResult {
@@ -85,7 +90,12 @@ export async function runChainedHarness(
   // postJson / getJson fired across all of them to share the same
   // cancellation semantics.
   return await runWithRequestContext(
-    { userEntraId: opts.user, sessionId: opts.sessionId, signal: opts.signal },
+    {
+      userEntraId: opts.user,
+      sessionId: opts.sessionId,
+      signal: opts.signal,
+      requestId: opts.requestId,
+    },
     () => _runChainedHarnessInner(opts),
   );
 }

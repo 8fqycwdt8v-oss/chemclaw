@@ -1,0 +1,68 @@
+{
+  "uid": "chemclaw-projectors",
+  "title": "ChemClaw — Projectors",
+  "tags": ["chemclaw", "projectors"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Acks per minute (by projector)",
+      "type": "timeseries",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (projector) (count_over_time({service=~\"projector-.+\"} | json | event = \"projector_ack\" [1m]))",
+          "refId": "A",
+          "legendFormat": "{{projector}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Handler failures (transient + permanent)",
+      "type": "timeseries",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (projector, error_code) (count_over_time({service=~\"projector-.+\"} | json | event = \"projector_handler_failed\" [1m]))",
+          "refId": "A",
+          "legendFormat": "{{projector}} / {{error_code}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Reanimator + Purger ticks",
+      "type": "timeseries",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 8, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (event) (count_over_time({service=~\"session-.+\"} | json | event =~ \"reanimator_tick|session_purger_tick\" [5m]))",
+          "refId": "A",
+          "legendFormat": "{{event}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Recent projector failures",
+      "type": "logs",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 16, "w": 24, "h": 10 },
+      "targets": [
+        {
+          "expr": "{service=~\"projector-.+\"} | json | event = \"projector_handler_failed\"",
+          "refId": "A"
+        }
+      ],
+      "options": { "showTime": true, "wrapLogMessage": true }
+    }
+  ]
+}

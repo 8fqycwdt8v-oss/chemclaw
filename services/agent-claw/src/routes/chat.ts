@@ -573,7 +573,7 @@ export function registerChatRoute(app: FastifyInstance, deps: ChatRouteDeps): vo
     // their fetches when the client disconnects mid-stream.
     (req, reply) =>
       runWithRequestContext(
-        { userEntraId: deps.getUser(req), signal: req.signal },
+        { userEntraId: deps.getUser(req), signal: req.signal, requestId: req.id },
         () => handleChat(req, reply, deps),
       ),
   );

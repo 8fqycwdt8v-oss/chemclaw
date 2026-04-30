@@ -1,0 +1,68 @@
+{
+  "uid": "chemclaw-sessions",
+  "title": "ChemClaw — Sessions",
+  "tags": ["chemclaw", "sessions"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-24h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Sessions resumed (per 5min)",
+      "type": "timeseries",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum (count_over_time({service=\"session-reanimator\"} | json | event = \"reanimator_tick\" | unwrap sessions_resumed [5m]))",
+          "refId": "A",
+          "legendFormat": "resumed"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Sessions purged (per tick)",
+      "type": "timeseries",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum (count_over_time({service=\"session-purger\"} | json | event = \"session_purger_tick\" | unwrap sessions_purged [5m]))",
+          "refId": "A",
+          "legendFormat": "purged"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Awaiting-user-input events",
+      "type": "timeseries",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 8, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum (count_over_time({service=\"agent-claw\"} | json | error_code = \"AGENT_AWAITING_USER_INPUT\" [5m]))",
+          "refId": "A",
+          "legendFormat": "awaiting input"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Recent reanimator activity (live)",
+      "type": "logs",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 16, "w": 24, "h": 10 },
+      "targets": [
+        {
+          "expr": "{service=\"session-reanimator\"}",
+          "refId": "A"
+        }
+      ],
+      "options": { "showTime": true, "wrapLogMessage": true }
+    }
+  ]
+}

@@ -36,3 +36,10 @@ psycopg>=3.2,<4
 # Chemistry
 rdkit>=2024.9
 drfp>=0.3.5,<1
+
+# Structured logging (PR-logging). python-json-logger 3.x supports the
+# `orjson` serializer for ~2x faster encoding on hot paths (per-projector
+# ack, per-tool span). Both are kept in lockstep across services so the
+# JSON shape and timestamp format are identical wherever a log line lands.
+python-json-logger>=3.2,<4
+orjson>=3.10,<4

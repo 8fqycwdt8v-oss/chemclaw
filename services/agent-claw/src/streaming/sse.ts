@@ -29,6 +29,8 @@
 import type { FastifyReply } from "fastify";
 import type { PlanStep } from "../core/plan-mode.js";
 
+import { getLogger } from "../observability/logger.js";
+
 export type StreamEvent =
   | { type: "text_delta"; delta: string }
   | { type: "tool_call"; toolId: string; input: unknown }
@@ -44,7 +46,22 @@ export type StreamEvent =
 
 export function writeEvent(reply: FastifyReply, payload: StreamEvent): void {
   const json = JSON.stringify(payload).replace(/\r?\n/g, "\\n");
-  reply.raw.write(`data: ${json}\n\n`);
+  // Note: an ECONNRESET on a closed socket throws synchronously here.
+  // Surface a structured warning so an intermittent client disconnect is
+  // observable but doesn't bubble up and crash the route.
+  try {
+    reply.raw.write(`data: ${json}\n\n`);
+  } catch (err) {
+    getLogger("agent-claw.sse").warn(
+      {
+        event: "sse_write_failed",
+        sse_event_type: payload.type,
+        err_name: (err as Error)?.name,
+        err_msg: (err as Error)?.message,
+      },
+      "SSE writeEvent threw — client likely disconnected",
+    );
+  }
 }
 
 export function setupSse(reply: FastifyReply): void {

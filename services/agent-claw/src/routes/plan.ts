@@ -93,7 +93,7 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
       // and the upstream client's AbortSignal — a mid-stream disconnect
       // here cancels both LLM calls and any in-flight MCP fetches.
       const result = await runWithRequestContext(
-        { userEntraId: user, signal: req.signal },
+        { userEntraId: user, signal: req.signal, requestId: req.id },
         () =>
           runHarness({
             messages: plan.messages,

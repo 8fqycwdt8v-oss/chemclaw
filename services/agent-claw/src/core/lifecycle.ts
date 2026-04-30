@@ -26,6 +26,7 @@ import type {
 import { mostRestrictive } from "./hook-output.js";
 import type { HookPayloadMap, HookPoint } from "./types.js";
 import { withHookSpan } from "../observability/hook-spans.js";
+import { getLogger } from "../observability/logger.js";
 
 // Internal: store each handler with a name + matcher + per-hook timeout.
 interface RegisteredHook<P> {
@@ -252,15 +253,19 @@ export class Lifecycle {
           // the tool call by throwing.
           throw err;
         }
-        // TODO(observability): replace with a centralised pino logger when
-        // one is introduced (Phase 9 self-review: no shared logger module
-        // exists yet; the per-hook OTel span emits ERROR status with
-        // recordException so the failure is observable in Langfuse — this
-        // console.error remains as a developer-facing fallback).
-         
-        console.error(
-          `[lifecycle] non-pre_tool hook "${hook.name}" at "${point}" threw — continuing with remaining hooks`,
-          err,
+        // Non-pre_tool hook failures are logged with full structure +
+        // re-asserted on the OTel span. The hook chain continues so a
+        // single buggy hook doesn't take down the harness.
+        getLogger("agent-claw.harness.lifecycle").warn(
+          {
+            event: "hook_failed",
+            error_code: "AGENT_HOOK_FAILED",
+            point,
+            hook_name: hook.name,
+            err_name: (err as Error)?.name,
+            err_msg: (err as Error)?.message,
+          },
+          "non-pre_tool hook threw — continuing with remaining hooks",
         );
       } finally {
         clearTimeout(timer);

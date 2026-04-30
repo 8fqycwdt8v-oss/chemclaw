@@ -112,6 +112,23 @@ export function buildApp() {
       const retryAfter = check.retryAfterMs !== undefined
         ? Math.ceil(check.retryAfterMs / 1000)
         : 30;
+      // Structured denial log so operators can spot a user who keeps
+      // hitting the daily-USD cap (or, more interesting, a runaway loop
+      // hitting the concurrency cap repeatedly within seconds). Doesn't
+      // include the raw user id — the auth proxy upstream is responsible
+      // for rate-limiting per IP, this log is the audit trail.
+      req.log.warn(
+        {
+          event: "budget_denied",
+          error_code: "PAPERCLIP_BUDGET_DENIED",
+          reason: check.reason,
+          retry_after_seconds: retryAfter,
+          est_tokens,
+          est_usd,
+          session_id,
+        },
+        "paperclip /reserve denied",
+      );
       return await reply
         .code(429)
         .header("Retry-After", String(retryAfter))

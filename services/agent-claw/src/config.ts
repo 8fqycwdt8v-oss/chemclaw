@@ -3,6 +3,8 @@
 
 import { z } from "zod";
 
+import { getLogger } from "./observability/logger.js";
+
 const ConfigSchema = z.object({
   AGENT_HOST: z.string().default("0.0.0.0"),
   // Port 3101 — legacy agent stays on 3100 during parallel deployment.
@@ -176,10 +178,13 @@ export type Config = z.infer<typeof ConfigSchema>;
 export function loadConfig(): Config {
   const parsed = ConfigSchema.safeParse(process.env);
   if (!parsed.success) {
-     
-    console.error(
-      "Invalid configuration:",
-      parsed.error.flatten().fieldErrors,
+    getLogger("agent-claw.config").fatal(
+      {
+        event: "config_invalid",
+        error_code: "AGENT_CONFIG_INVALID",
+        field_errors: parsed.error.flatten().fieldErrors,
+      },
+      "invalid agent configuration — process exiting",
     );
     process.exit(1);
   }

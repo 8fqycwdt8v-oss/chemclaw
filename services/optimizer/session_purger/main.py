@@ -121,19 +121,32 @@ async def amain() -> None:
 
     while True:
         tick_started = datetime.now(timezone.utc)
+        purged = 0
+        had_error = False
         try:
             evicted = await purge_once(settings)
+            purged = len(evicted)
             if evicted:
-                log.info("purged %d expired session(s)", len(evicted))
+                log.info("purged %d expired session(s)", purged)
                 # Sample a few IDs so operators can audit; log all if small batch.
                 sample = evicted if len(evicted) <= 5 else evicted[:5] + ["..."]
                 log.debug("purged ids: %s", sample)
             else:
                 log.debug("no expired sessions this tick")
         except Exception as exc:  # noqa: BLE001 — keep the loop alive
+            had_error = True
             log.exception("purge tick failed: %s", exc)
 
         elapsed = (datetime.now(timezone.utc) - tick_started).total_seconds()
+        log.info(
+            "session-purger tick complete",
+            extra={
+                "event": "session_purger_tick",
+                "tick_duration_ms": int(elapsed * 1000),
+                "sessions_purged": purged,
+                "errored": had_error,
+            },
+        )
         sleep_for = max(0, settings.poll_interval_seconds - int(elapsed))
         await asyncio.sleep(sleep_for)
 

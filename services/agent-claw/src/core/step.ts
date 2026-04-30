@@ -27,6 +27,7 @@ import type { StreamSink, TodoSnapshot } from "./streaming-sink.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 import { resolveDecision } from "./permissions/resolver.js";
 import { withToolSpan } from "../observability/tool-spans.js";
+import { getLogger } from "../observability/logger.js";
 
 export interface StepOnceOptions {
   llm: LlmProvider;
@@ -160,14 +161,14 @@ async function _runOneTool(opts: {
   // Phase 6 permissions: see docs/adr/009-permission-and-decision-contract.md
   // and docs/adr/010-deferred-phases.md.
   if (preResult.decision === "ask" || preResult.decision === "defer") {
-    // No logger is in scope at this layer (stepOnce is called from the
-    // harness loop, which is reached from many routes / sub-agent flows).
-    // Use console.warn so the gap is observable in dev + production.
-     
-    console.warn(
-      `[step] decision=${preResult.decision} treated as allow ` +
-        `(Phase 6 will implement the route-level resolver) ` +
-        `toolId=${toolId} reason=${preResult.reason ?? "(none)"}`,
+    getLogger("agent-claw.harness.step").warn(
+      {
+        event: "permission_decision_unhandled",
+        decision: preResult.decision,
+        tool_id: toolId,
+        reason: preResult.reason ?? "(none)",
+      },
+      "permission decision treated as allow (Phase 6 resolver pending)",
     );
   }
 
