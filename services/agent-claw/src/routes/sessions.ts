@@ -8,7 +8,7 @@
 // endpoints are the multi-hour-autonomy unlock — both run a harness turn
 // without requiring a fresh user message.
 
-import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
+import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Pool } from "pg";
 import type { Config } from "../config.js";
 import type { LlmProvider } from "../llm/provider.js";
@@ -16,10 +16,8 @@ import type { ToolRegistry } from "../tools/registry.js";
 import type { PromptRegistry } from "../prompts/registry.js";
 import {
   loadSession,
-  saveSession,
   tryIncrementAutoResumeCount,
   OptimisticLockError,
-  type SessionFinishReason,
 } from "../core/session-store.js";
 import {
   loadActivePlanForSession,
@@ -87,13 +85,13 @@ export function registerSessionsRoute(
     const user = getUser(req);
     const sessionId = req.params.id;
     if (!/^[0-9a-f-]{36}$/i.test(sessionId)) {
-      return reply.code(400).send({ error: "invalid_input", detail: "session id must be a UUID" });
+      return await reply.code(400).send({ error: "invalid_input", detail: "session id must be a UUID" });
     }
     const state = await loadSession(pool, user, sessionId);
     if (!state) {
-      return reply.code(404).send({ error: "not_found" });
+      return await reply.code(404).send({ error: "not_found" });
     }
-    return reply.code(200).send({
+    return await reply.code(200).send({
       session_id: state.id,
       todos: state.todos.map((t) => ({
         id: t.id,
@@ -142,7 +140,7 @@ export function registerSessionsRoute(
         .then((r) => r.rows),
     );
 
-    return reply.code(200).send({
+    return await reply.code(200).send({
       sessions: rows.map((r) => ({
         session_id: r.id,
         last_finish_reason: r.last_finish_reason,
@@ -164,7 +162,7 @@ export function registerSessionsRoute(
   // -----------------------------------------------------------------------
   app.post<{ Params: { id: string } }>("/api/sessions/:id/plan/run", sessionMutatingRateLimit, async (req, reply) => {
     if (!deps.config || !deps.llm || !deps.registry) {
-      return reply.code(500).send({ error: "harness_deps_missing" });
+      return await reply.code(500).send({ error: "harness_deps_missing" });
     }
     const cfg = deps.config;
     const llm = deps.llm;
@@ -173,11 +171,11 @@ export function registerSessionsRoute(
     const user = getUser(req);
     const sessionId = req.params.id;
     if (!/^[0-9a-f-]{36}$/i.test(sessionId)) {
-      return reply.code(400).send({ error: "invalid_input", detail: "session id must be a UUID" });
+      return await reply.code(400).send({ error: "invalid_input", detail: "session id must be a UUID" });
     }
     const plan = await loadActivePlanForSession(pool, user, sessionId);
     if (!plan) {
-      return reply.code(404).send({ error: "no_active_plan" });
+      return await reply.code(404).send({ error: "no_active_plan" });
     }
 
     await advancePlan(pool, user, plan.id, { status: "running" });
@@ -223,7 +221,7 @@ export function registerSessionsRoute(
       await advancePlan(pool, user, plan.id, { currentStepIndex: finalIndex });
     }
 
-    return reply.code(200).send({
+    return await reply.code(200).send({
       plan_id: plan.id,
       session_id: sessionId,
       auto_turns_used: result.autoTurns,
@@ -255,7 +253,7 @@ export function registerSessionsRoute(
   // -----------------------------------------------------------------------
   app.post<{ Params: { id: string } }>("/api/sessions/:id/resume", sessionMutatingRateLimit, async (req, reply) => {
     if (!deps.config || !deps.llm || !deps.registry) {
-      return reply.code(500).send({ error: "harness_deps_missing" });
+      return await reply.code(500).send({ error: "harness_deps_missing" });
     }
     const cfg = deps.config;
     const llm = deps.llm;
@@ -264,11 +262,11 @@ export function registerSessionsRoute(
     const user = getUser(req);
     const sessionId = req.params.id;
     if (!/^[0-9a-f-]{36}$/i.test(sessionId)) {
-      return reply.code(400).send({ error: "invalid_input", detail: "session id must be a UUID" });
+      return await reply.code(400).send({ error: "invalid_input", detail: "session id must be a UUID" });
     }
     const state = await loadSession(pool, user, sessionId);
     if (!state) {
-      return reply.code(404).send({ error: "not_found" });
+      return await reply.code(404).send({ error: "not_found" });
     }
     // Atomic counter increment + cap check + awaiting-user-input guard.
     // Doing this BEFORE the harness run means:
@@ -282,15 +280,15 @@ export function registerSessionsRoute(
       // the row again to give a precise reason to the caller.
       const after = await loadSession(pool, user, sessionId);
       if (!after) {
-        return reply.code(404).send({ error: "not_found" });
+        return await reply.code(404).send({ error: "not_found" });
       }
       if (after.lastFinishReason === "awaiting_user_input") {
-        return reply.code(409).send({
+        return await reply.code(409).send({
           error: "awaiting_user_input",
           detail: "session is paused on a clarifying question; needs a real user reply",
         });
       }
-      return reply.code(409).send({
+      return await reply.code(409).send({
         error: "auto_resume_cap_reached",
         cap: after.autoResumeCap,
       });
@@ -316,7 +314,7 @@ export function registerSessionsRoute(
       maxAutoTurns: 1, // resume is one turn at a time; cron can call again
     });
 
-    return reply.code(200).send({
+    return await reply.code(200).send({
       session_id: sessionId,
       final_finish_reason: result.finalFinishReason,
       total_steps_used: result.totalSteps,
@@ -339,21 +337,21 @@ export function registerSessionsRoute(
   // -----------------------------------------------------------------------
   app.post<{ Params: { id: string } }>("/api/internal/sessions/:id/resume", sessionMutatingRateLimit, async (req, reply) => {
     if (!deps.config || !deps.llm || !deps.registry) {
-      return reply.code(500).send({ error: "harness_deps_missing" });
+      return await reply.code(500).send({ error: "harness_deps_missing" });
     }
     const cfg = deps.config;
     const llm = deps.llm;
     const registry = deps.registry;
 
     // Verify the JWT.
-    const authz = req.headers["authorization"];
+    const authz = req.headers.authorization;
     let claimedUser: string;
     try {
       const claims = verifyBearerHeader(typeof authz === "string" ? authz : undefined, {
         requiredScope: "agent:resume",
       });
       if (!claims) {
-        return reply.code(401).send({
+        return await reply.code(401).send({
           error: "unauthenticated",
           detail: "Authorization: Bearer <jwt> required",
         });
@@ -361,7 +359,7 @@ export function registerSessionsRoute(
       claimedUser = claims.user;
     } catch (err) {
       if (err instanceof McpAuthError) {
-        return reply.code(401).send({
+        return await reply.code(401).send({
           error: "unauthenticated",
           detail: err.message,
         });
@@ -371,7 +369,7 @@ export function registerSessionsRoute(
 
     const sessionId = req.params.id;
     if (!/^[0-9a-f-]{36}$/i.test(sessionId)) {
-      return reply.code(400).send({ error: "invalid_input", detail: "session id must be a UUID" });
+      return await reply.code(400).send({ error: "invalid_input", detail: "session id must be a UUID" });
     }
     // Atomic counter + cap + awaiting check (same pattern as the public
     // route). The harness only runs if the increment succeeded.
@@ -379,15 +377,15 @@ export function registerSessionsRoute(
     if (newCount === null) {
       const after = await loadSession(pool, claimedUser, sessionId);
       if (!after) {
-        return reply.code(404).send({ error: "not_found" });
+        return await reply.code(404).send({ error: "not_found" });
       }
       if (after.lastFinishReason === "awaiting_user_input") {
-        return reply.code(409).send({
+        return await reply.code(409).send({
           error: "awaiting_user_input",
           detail: "session is paused on a clarifying question; needs a real user reply",
         });
       }
-      return reply.code(409).send({
+      return await reply.code(409).send({
         error: "auto_resume_cap_reached",
         cap: after.autoResumeCap,
       });
@@ -411,7 +409,7 @@ export function registerSessionsRoute(
       maxAutoTurns: 1,
     });
 
-    return reply.code(200).send({
+    return await reply.code(200).send({
       session_id: sessionId,
       final_finish_reason: result.finalFinishReason,
       total_steps_used: result.totalSteps,
@@ -477,7 +475,7 @@ export async function runChainedHarness(
   // the chained loop spans many runHarness calls, and we want every
   // postJson / getJson fired across all of them to share the same
   // cancellation semantics.
-  return runWithRequestContext(
+  return await runWithRequestContext(
     { userEntraId: opts.user, sessionId: opts.sessionId, signal: opts.signal },
     () => _runChainedHarnessInner(opts),
   );

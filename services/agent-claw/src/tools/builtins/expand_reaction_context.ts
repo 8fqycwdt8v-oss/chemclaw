@@ -205,7 +205,7 @@ export function buildExpandReactionContextTool(pool: Pool, mcpKgUrl: string) {
             "mcp-kg",
           );
           out.outcomes = kgOut.facts.map((f) => {
-            const props = f.edge_properties as Record<string, unknown>;
+            const props = f.edge_properties;
             return {
               metric_name:
                 typeof props.metric_name === "string" ? props.metric_name : "unknown",
@@ -237,7 +237,7 @@ export function buildExpandReactionContextTool(pool: Pool, mcpKgUrl: string) {
             "mcp-kg",
           );
           out.failures = kgOut.facts.map((f) => {
-            const props = f.edge_properties as Record<string, unknown>;
+            const props = f.edge_properties;
             return {
               failure_mode:
                 typeof props.failure_mode === "string" ? props.failure_mode : "unspecified",

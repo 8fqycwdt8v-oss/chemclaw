@@ -32,7 +32,7 @@ const ROOT_REDACT_PATHS = [
 let _root: Logger | null = null;
 
 function buildRoot(): Logger {
-  const level = process.env["AGENT_LOG_LEVEL"] ?? "info";
+  const level = process.env.AGENT_LOG_LEVEL ?? "info";
   return pino({
     level,
     base: { service: "agent-claw" },
@@ -47,7 +47,7 @@ function buildRoot(): Logger {
  * `component=ToolRegistry level>=warn` work in the log shipper.
  */
 export function getLogger(component?: string): Logger {
-  if (_root === null) _root = buildRoot();
+  _root ??= buildRoot();
   if (component === undefined) return _root;
   return _root.child({ component });
 }

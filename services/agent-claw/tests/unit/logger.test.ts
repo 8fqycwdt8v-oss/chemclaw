@@ -12,7 +12,7 @@ import {
 } from "../../src/observability/logger.js";
 
 describe("observability/logger", () => {
-  const originalLevel = process.env["AGENT_LOG_LEVEL"];
+  const originalLevel = process.env.AGENT_LOG_LEVEL;
 
   beforeEach(() => {
     __resetLoggerForTests();
@@ -20,9 +20,9 @@ describe("observability/logger", () => {
 
   afterEach(() => {
     if (originalLevel === undefined) {
-      delete process.env["AGENT_LOG_LEVEL"];
+      delete process.env.AGENT_LOG_LEVEL;
     } else {
-      process.env["AGENT_LOG_LEVEL"] = originalLevel;
+      process.env.AGENT_LOG_LEVEL = originalLevel;
     }
     __resetLoggerForTests();
   });
@@ -39,18 +39,18 @@ describe("observability/logger", () => {
     expect(child).not.toBe(root);
     // bindings expose the inherited fields when present.
     const bindings = (child as unknown as { bindings: () => Record<string, unknown> }).bindings();
-    expect(bindings["component"]).toBe("ToolRegistry");
+    expect(bindings.component).toBe("ToolRegistry");
   });
 
   it("respects AGENT_LOG_LEVEL on rebuild", () => {
-    process.env["AGENT_LOG_LEVEL"] = "debug";
+    process.env.AGENT_LOG_LEVEL = "debug";
     __resetLoggerForTests();
     const log = getLogger();
     expect(log.level).toBe("debug");
   });
 
   it("defaults to info when AGENT_LOG_LEVEL is unset", () => {
-    delete process.env["AGENT_LOG_LEVEL"];
+    delete process.env.AGENT_LOG_LEVEL;
     __resetLoggerForTests();
     const log = getLogger();
     expect(log.level).toBe("info");
@@ -63,7 +63,7 @@ describe("observability/logger", () => {
     // but the parent identity is preserved.
     const aBindings = (a as unknown as { bindings: () => Record<string, unknown> }).bindings();
     const bBindings = (b as unknown as { bindings: () => Record<string, unknown> }).bindings();
-    expect(aBindings["component"]).toBe("foo");
-    expect(bBindings["component"]).toBe("foo");
+    expect(aBindings.component).toBe("foo");
+    expect(bBindings.component).toBe("foo");
   });
 });

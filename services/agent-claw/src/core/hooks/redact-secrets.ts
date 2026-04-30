@@ -77,7 +77,7 @@ export function redactString(
   // Pre-gate: RXN_SMILES requires two '>' chars; short-circuit with two
   // O(1)-per-char indexOf calls before invoking the bounded-quantifier scan.
   const firstArrow = value.indexOf(">");
-  const hasTwoArrows = firstArrow !== -1 && value.indexOf(">", firstArrow + 1) !== -1;
+  const hasTwoArrows = firstArrow !== -1 && value.includes(">", firstArrow + 1);
   if (hasTwoArrows) {
     result = result.replace(RXN_SMILES, (match) => {
       if (match.split(">").length - 1 >= 2) {
