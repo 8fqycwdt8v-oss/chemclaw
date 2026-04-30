@@ -58,7 +58,11 @@ export function buildProposeHypothesisTool(pool: Pool, agentTraceId?: string) {
 
       // ── Transactional INSERT ───────────────────────────────────────────────
       const result = await withUserContext(pool, ctx.userEntraId, async (client) => {
-        const ins = await client.query(
+        const ins = await client.query<{
+          id: string;
+          confidence_tier: "low" | "medium" | "high";
+          created_at: Date | string;
+        }>(
           `INSERT INTO hypotheses (
              hypothesis_text, confidence, scope_nce_project_id,
              proposed_by_user_entra_id, agent_trace_id
@@ -73,11 +77,13 @@ export function buildProposeHypothesisTool(pool: Pool, agentTraceId?: string) {
           ],
         );
 
-        const hid: string = ins.rows[0].id;
-        const tier: "low" | "medium" | "high" = ins.rows[0].confidence_tier;
-        // Narrow the `any`-typed row column through a typed local so the
-        // .toISOString() call below is safe per @typescript-eslint/no-unsafe-call.
-        const rawCreatedAt: unknown = ins.rows[0].created_at;
+        const insertedRow = ins.rows[0];
+        if (!insertedRow) {
+          throw new Error("propose_hypothesis: INSERT did not RETURN a row");
+        }
+        const hid: string = insertedRow.id;
+        const tier: "low" | "medium" | "high" = insertedRow.confidence_tier;
+        const rawCreatedAt: Date | string = insertedRow.created_at;
         const createdAt: string =
           rawCreatedAt instanceof Date
             ? rawCreatedAt.toISOString()
