@@ -1,3 +1,4 @@
+import type { Logger } from "pino";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { withRetry } from "../../src/observability/with-retry.js";
@@ -32,8 +33,7 @@ describe("withRetry", () => {
     const log = makeMockLogger();
     const fn = vi.fn(async () => "ok");
     const promise = withRetry(fn, {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      logger: log as any,
+      logger: log as unknown as Logger,
       operation: "happy",
     });
     await vi.runAllTimersAsync();
@@ -52,8 +52,7 @@ describe("withRetry", () => {
       return "ok";
     });
     const promise = withRetry(fn, {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      logger: log as any,
+      logger: log as unknown as Logger,
       operation: "flaky",
       baseMs: 1,
       maxMs: 10,
@@ -82,8 +81,7 @@ describe("withRetry", () => {
     });
     await expect(
       withRetry(fn, {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        logger: log as any,
+        logger: log as unknown as Logger,
         operation: "doomed",
         attempts: 2,
         baseMs: 1,
@@ -107,8 +105,7 @@ describe("withRetry", () => {
     });
     await expect(
       withRetry(fn, {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        logger: log as any,
+        logger: log as unknown as Logger,
         operation: "non-retryable",
         shouldRetry: () => false,
         attempts: 5,
@@ -130,8 +127,7 @@ describe("withRetry", () => {
     const fn = vi.fn(async () => "ok");
     await expect(
       withRetry(fn, {
-        // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        logger: log as any,
+        logger: log as unknown as Logger,
         signal: ctrl.signal,
         attempts: 3,
         baseMs: 1,

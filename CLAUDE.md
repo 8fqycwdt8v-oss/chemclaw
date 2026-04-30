@@ -58,6 +58,14 @@ make up.full                    # all services including mcp-rdkit / mcp-drfp / 
 make ps                         # show running
 make down                       # stop (volumes preserved)
 make nuke                       # stop AND drop volumes (destructive)
+
+# Logs / traces stack — Loki + Grafana + Promtail join the existing
+# `observability` profile alongside Langfuse. Bound to 127.0.0.1 by
+# default (set LOKI_BIND / GRAFANA_BIND to expose). Grafana provisions
+# 5 dashboards (overview / tools / projectors / security / sessions)
+# from infra/grafana/provisioning/.
+docker compose --profile observability up -d   # Loki:3100 + Grafana:3001 + Langfuse:3000
+./scripts/check-logs-pipeline.sh               # smoke-check the JSON-log pipeline
 ```
 
 ### Data

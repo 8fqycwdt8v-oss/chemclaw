@@ -7,6 +7,12 @@ apiVersion: 1
 
 datasources:
   - name: Loki
+    # Explicit UID — the dashboards reference `uid: loki` in every
+    # panel's datasource. Without this line, Grafana auto-generates a
+    # UID from the lowercased name (which happens to be `loki` so
+    # things appear to work), and an operator who renames the
+    # datasource would silently break every dashboard.
+    uid: loki
     type: loki
     access: proxy
     url: http://loki:3100

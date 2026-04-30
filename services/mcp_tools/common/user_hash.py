@@ -22,11 +22,36 @@ _salt: str | None = None
 
 
 def _get_salt() -> str:
+    """Resolve the salt with fail-closed semantics in production.
+
+    When LOG_USER_SALT is unset:
+      - dev mode (CHEMCLAW_DEV_MODE=true OR no production indicator):
+        fall back to the public dev salt.
+      - production: raise. Without this, the hash is cryptographically
+        useless — an attacker with log access can pre-compute
+        sha256("chemclaw-dev-salt-not-secret:" + email) against any
+        public email list and de-anonymise users in seconds.
+    """
     global _salt
     if _salt is not None:
         return _salt
     from_env = (os.getenv("LOG_USER_SALT") or "").strip()
-    _salt = from_env if from_env else DEFAULT_DEV_SALT
+    if from_env:
+        _salt = from_env
+        return _salt
+    is_dev = (
+        os.getenv("CHEMCLAW_DEV_MODE", "").lower() == "true"
+        or os.getenv("MCP_AUTH_DEV_MODE", "").lower() == "true"
+        or os.getenv("PYTEST_CURRENT_TEST") is not None
+    )
+    if not is_dev:
+        raise RuntimeError(
+            "LOG_USER_SALT is required outside dev mode (set CHEMCLAW_DEV_MODE=true "
+            "for local dev, or supply a real salt in production). The default "
+            "salt is public — without a real salt the 16-hex-char hash "
+            "trivially de-anonymises users via rainbow-table lookup."
+        )
+    _salt = DEFAULT_DEV_SALT
     return _salt
 
 

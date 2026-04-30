@@ -24,7 +24,11 @@ import { getRequestContext } from "../core/request-context.js";
 import { ERROR_CODES, type ErrorCode } from "./codes.js";
 
 export interface ErrorEnvelope {
-  error: ErrorCode | string;
+  // ErrorCode values are strings, so the wider `string` type subsumes them
+  // — the type only documents the convention that consumers SHOULD use a
+  // known ErrorCode wherever possible. ESLint flags ErrorCode | string as
+  // redundant; the comment is enough to preserve the convention.
+  error: string;
   message: string;
   detail?: unknown;
   trace_id?: string;
@@ -32,12 +36,9 @@ export interface ErrorEnvelope {
   hint?: string;
 }
 
-/**
- * Type predicate for narrowing an unknown into something with `.message`.
- * Avoids the verbose `(err as Error)?.message` pattern at every call site.
- */
+/** Narrow an unknown into something with optional `.name` / `.message`. */
 function asError(err: unknown): { name?: string; message?: string; stack?: string } {
-  if (err && typeof err === "object") return err as { name?: string; message?: string; stack?: string };
+  if (err && typeof err === "object") return err;
   return {};
 }
 
@@ -70,7 +71,7 @@ export function toEnvelope(err: unknown, options: ToEnvelopeOptions = {}): Error
   const e = asError(err);
   const fallback = options.fallbackCode ?? ERROR_CODES.AGENT_INTERNAL;
   const mapped = e.name ? KNOWN_ERROR_CLASS_TO_CODE[e.name] : undefined;
-  const code: ErrorCode | string = mapped ?? fallback;
+  const code: string = mapped ?? fallback;
   const message = e.message ?? "internal error";
 
   const out: ErrorEnvelope = {

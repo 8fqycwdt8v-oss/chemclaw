@@ -23,25 +23,28 @@ import logging
 import os
 from io import StringIO
 
-import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from services.mcp_tools.common.app import create_app
 
 
-@pytest.fixture
-def captured_stdout() -> StringIO:
-    """Replace the root JSON handler's stream with a StringIO so the
-    test can assert on the exact bytes that would have hit stdout in
-    production."""
-    os.environ["LOG_FORMAT"] = "json"
-    os.environ["MCP_AUTH_DEV_MODE"] = "true"
-    yield_buf = StringIO()
-
-    # Build the app FIRST so configure_logging runs and installs its
-    # handler; THEN swap the handler's stream out for our buffer.
-    yield (yield_buf, "deferred")
+def _swap_handler_stream() -> StringIO:
+    """Swap the JSON handler's stream for a StringIO so the test asserts
+    on the captured bytes. Verifies a JSON formatter handler is actually
+    present — protects against a pytest capture handler being swapped
+    by accident."""
+    buf = StringIO()
+    root = logging.getLogger()
+    assert root.handlers, "configure_logging() didn't install a handler"
+    handler = root.handlers[0]
+    formatter_name = type(handler.formatter).__name__ if handler.formatter else ""
+    assert formatter_name in ("JsonFormatter", "Formatter"), (
+        f"unexpected handler formatter type {formatter_name!r}; "
+        "configure_logging() may have been overridden by a stray pytest fixture"
+    )
+    handler.stream = buf  # type: ignore[attr-defined]
+    return buf
 
 
 def test_request_id_flows_through_middleware_logs_and_envelope() -> None:
@@ -61,11 +64,7 @@ def test_request_id_flows_through_middleware_logs_and_envelope() -> None:
         logging.getLogger("test").info("about to 404")
         raise HTTPException(status_code=404, detail="resource gone")
 
-    # Swap the JSON handler's stream for a capture buffer.
-    buf = StringIO()
-    root = logging.getLogger()
-    assert root.handlers, "configure_logging() didn't install a handler"
-    root.handlers[0].stream = buf  # type: ignore[attr-defined]
+    buf = _swap_handler_stream()
 
     rid = "11111111-2222-3333-4444-555555555555"
     client = TestClient(app)
@@ -128,9 +127,7 @@ def test_request_id_is_generated_when_header_missing() -> None:
     async def no_rid() -> dict[str, str]:
         return {"ok": "yes"}
 
-    buf = StringIO()
-    root = logging.getLogger()
-    root.handlers[0].stream = buf  # type: ignore[attr-defined]
+    buf = _swap_handler_stream()
 
     client = TestClient(app)
     resp = client.get("/no-rid")

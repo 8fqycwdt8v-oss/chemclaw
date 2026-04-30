@@ -262,8 +262,8 @@ export class Lifecycle {
             error_code: "AGENT_HOOK_FAILED",
             point,
             hook_name: hook.name,
-            err_name: (err as Error)?.name,
-            err_msg: (err as Error)?.message,
+            err_name: (err as Error).name,
+            err_msg: (err as Error).message,
           },
           "non-pre_tool hook threw — continuing with remaining hooks",
         );

@@ -42,7 +42,11 @@ export type StreamEvent =
   | { type: "awaiting_user_input"; session_id: string; question: string }
   | { type: "cancelled"; session_id?: string }
   | { type: "finish"; finishReason: string; usage: { promptTokens: number; completionTokens: number } }
-  | { type: "error"; error: string };
+  // Error frame is additive: `error` remains the legacy code string so
+  // existing CLI / clients keep parsing it, with optional `trace_id`
+  // and `request_id` siblings so a streaming failure can be linked
+  // back to a Langfuse trace + Loki log line.
+  | { type: "error"; error: string; trace_id?: string; request_id?: string };
 
 export function writeEvent(reply: FastifyReply, payload: StreamEvent): void {
   // Guard against post-end writes: Node's OutgoingMessage.write() after
@@ -64,8 +68,8 @@ export function writeEvent(reply: FastifyReply, payload: StreamEvent): void {
       {
         event: "sse_write_failed",
         sse_event_type: payload.type,
-        err_name: (err as Error)?.name,
-        err_msg: (err as Error)?.message,
+        err_name: (err as Error).name,
+        err_msg: (err as Error).message,
       },
       "SSE writeEvent threw — client likely disconnected",
     );

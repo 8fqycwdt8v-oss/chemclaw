@@ -64,7 +64,7 @@ def test_default_dev_salt_used_without_env() -> None:
     import hashlib
 
     expected = (
-        hashlib.sha256(f"{DEFAULT_DEV_SALT}:user".encode("utf-8")).hexdigest()[:16]
+        hashlib.sha256(f"{DEFAULT_DEV_SALT}:user".encode()).hexdigest()[:16]
     )
     assert out_via_helper == expected
 

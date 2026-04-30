@@ -20,10 +20,35 @@ const DEFAULT_DEV_SALT = "chemclaw-dev-salt-not-secret";
 
 let _salt: string | null = null;
 
+/**
+ * Resolve the salt with fail-closed semantics in production. When
+ * LOG_USER_SALT is unset:
+ *   - dev mode (CHEMCLAW_DEV_MODE=true OR NODE_ENV !== "production"):
+ *     fall back to the public dev salt with a one-time warn-level log.
+ *   - production: THROW on first use. Without this, the hash is
+ *     cryptographically useless (an attacker with log access can
+ *     pre-compute sha256("chemclaw-dev-salt-not-secret:" + email) for
+ *     any email and de-anonymise users in seconds).
+ */
 function salt(): string {
   if (_salt !== null) return _salt;
   const fromEnv = process.env.LOG_USER_SALT?.trim();
-  _salt = fromEnv && fromEnv.length > 0 ? fromEnv : DEFAULT_DEV_SALT;
+  if (fromEnv && fromEnv.length > 0) {
+    _salt = fromEnv;
+    return _salt;
+  }
+  const isDev =
+    process.env.CHEMCLAW_DEV_MODE === "true" ||
+    (process.env.NODE_ENV ?? "development") !== "production";
+  if (!isDev) {
+    throw new Error(
+      "LOG_USER_SALT is required outside dev mode (set NODE_ENV=production " +
+        "or CHEMCLAW_DEV_MODE=false to enforce). The default salt is public — " +
+        "without a real salt the hash trivially de-anonymises users via " +
+        "rainbow-table lookup.",
+    );
+  }
+  _salt = DEFAULT_DEV_SALT;
   return _salt;
 }
 

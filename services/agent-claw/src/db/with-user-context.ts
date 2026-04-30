@@ -78,8 +78,8 @@ export async function withUserContext<T>(
         event: "db_txn_failed",
         duration_ms: duration,
         user: userHash,
-        err_name: (err as Error)?.name,
-        err_msg: (err as Error)?.message,
+        err_name: (err as Error).name,
+        err_msg: (err as Error).message,
       },
       "RLS-scoped DB transaction failed; rolled back",
     );

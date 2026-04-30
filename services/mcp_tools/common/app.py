@@ -290,9 +290,23 @@ def create_app(
         # binding scope is per-request only.
         rid = request.headers.get("x-request-id") or str(uuid.uuid4())
         request.state.request_id = rid
+        # Validate the session_id header before binding it to the log
+        # context: an attacker stuffing SMILES / a CMP code into the
+        # header would otherwise land it in Loki via the `session_id`
+        # passthrough field (which the redaction filter intentionally
+        # skips because real ids look benign). Accept only UUID-shaped
+        # values; silently drop anything else.
+        raw_session = request.headers.get("x-session-id") or ""
+        valid_session = ""
+        if raw_session:
+            try:
+                uuid.UUID(raw_session)
+                valid_session = raw_session
+            except (ValueError, AttributeError):
+                valid_session = ""
         token = bind_log_context(
             request_id=rid,
-            session_id=request.headers.get("x-session-id") or "",
+            session_id=valid_session,
         )
         started = time.monotonic()
         try:

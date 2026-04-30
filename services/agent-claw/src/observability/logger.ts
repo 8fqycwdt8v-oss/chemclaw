@@ -31,6 +31,20 @@ import { logContextFields } from "./log-context.js";
 // chemistry-sensitive content (raw SMILES, prompts, tool input/output) so
 // they're at least filtered when they pass through the logger; the
 // LiteLLM-redactor backed log filter catches free-form prose.
+// Pino's redact-path syntax — fields scrubbed with "***" before serialization.
+//
+// The list is conservative: it covers fields that frequently carry
+// chemistry-sensitive content (SMILES strings, prompts, tool I/O) AND
+// the error-message channels where Postgres / MCP errors otherwise
+// leak SMILES + compound codes embedded in driver error strings ("invalid
+// input for type … near 'CMP-…'"). Without these, Pino's auth-only
+// redaction catches headers but leaves error payloads exposed.
+//
+// NOTE: Pino redact does NOT run regexes over field values — it only
+// scrubs known field paths. A full content-aware redactor (matching the
+// Python-side LiteLLM redactor) is a separate egress filter, deferred
+// to a follow-up. For now, the path-based list catches the
+// known-risky fields by name.
 const ROOT_REDACT_PATHS = [
   "req.headers.authorization",
   "req.headers.cookie",
@@ -45,6 +59,15 @@ const ROOT_REDACT_PATHS = [
   "messages[*].content",
   "prompt",
   "raw_user",
+  // Error message channels — Postgres / MCP / OS errors regularly carry
+  // SMILES or compound codes embedded in their `.message` / `.stack`.
+  "err.message",
+  "err.stack",
+  "err.detail",
+  "*.err_msg",
+  "*.err_message",
+  "*.err_stack",
+  "*.detail",
 ];
 
 let _root: Logger | null = null;

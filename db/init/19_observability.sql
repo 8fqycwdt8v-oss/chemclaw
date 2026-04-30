@@ -1,7 +1,8 @@
 -- Observability migration (PR-logging).
 -- Re-applicable: every change guarded by IF NOT EXISTS / DROP ... IF EXISTS.
 --
--- Numbered 18 to land after 17_unified_confidence_and_temporal.sql.
+-- Numbered 19 to land after 18_finish_reason_widen.sql (which itself
+-- followed 17_unified_confidence_and_temporal.sql).
 --
 -- This migration adds three pieces of in-database observability to ChemClaw:
 --
@@ -159,8 +160,25 @@ BEGIN
 END;
 $$;
 
-GRANT EXECUTE ON FUNCTION record_error_event(TEXT, TEXT, TEXT, JSONB)
-    TO PUBLIC;
+-- Restrict EXECUTE: there's no legitimate caller outside the two app
+-- roles. Granting to PUBLIC would let anyone with a DB connection
+-- saturate the table by calling in a tight loop. The two GRANTs are
+-- guarded so re-application doesn't fail on a fresh schema where the
+-- roles haven't been created yet (12_security_hardening.sql owns role
+-- creation but might not have run in a partial test environment).
+DO $$
+BEGIN
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'chemclaw_app') THEN
+        EXECUTE 'GRANT EXECUTE ON FUNCTION record_error_event(TEXT, TEXT, TEXT, JSONB) TO chemclaw_app';
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'chemclaw_service') THEN
+        EXECUTE 'GRANT EXECUTE ON FUNCTION record_error_event(TEXT, TEXT, TEXT, JSONB) TO chemclaw_service';
+    END IF;
+END;
+$$;
+-- Defensive REVOKE in case an earlier (PUBLIC-granted) version of this
+-- migration ran. No-op when nothing was granted.
+REVOKE EXECUTE ON FUNCTION record_error_event(TEXT, TEXT, TEXT, JSONB) FROM PUBLIC;
 
 -- ---------------------------------------------------------------------------
 -- 2. `audit_log` — partitioned row-level audit trail.
@@ -271,14 +289,41 @@ BEGIN
         v_row_id := COALESCE((OLD).id::TEXT, '<unknown>');
     END IF;
 
-    INSERT INTO audit_log (
-        actor_user_hash, action, subject_table, subject_row_id,
-        before_data, after_data
-    )
-    VALUES (
-        v_actor_hash, v_action, TG_TABLE_NAME, v_row_id,
-        v_before, v_after
-    );
+    -- Best-effort audit insert. If the partition for `now()` doesn't
+    -- exist (e.g. the bootstrap window expired before
+    -- `audit_partition_maintainer` ran), the INSERT would otherwise
+    -- raise `no partition of relation "audit_log" found for row` and
+    -- take down every project-scoped write. The audit lives outside
+    -- the app's correctness contract — we'd rather lose a row than
+    -- the platform.
+    BEGIN
+        INSERT INTO audit_log (
+            actor_user_hash, action, subject_table, subject_row_id,
+            before_data, after_data
+        )
+        VALUES (
+            v_actor_hash, v_action, TG_TABLE_NAME, v_row_id,
+            v_before, v_after
+        );
+    EXCEPTION WHEN OTHERS THEN
+        -- Forward the failure to error_events so the gap is observable.
+        BEGIN
+            INSERT INTO error_events (service, error_code, severity, payload)
+            VALUES (
+                'postgres',
+                'AUDIT_LOG_INSERT_FAILED',
+                'warn',
+                jsonb_build_object(
+                    'subject_table', TG_TABLE_NAME,
+                    'note', 'audit_log INSERT failed; trigger returned without raising'
+                )
+            );
+        EXCEPTION WHEN OTHERS THEN
+            -- If even error_events is unwritable, swallow — the user's
+            -- transaction must succeed regardless.
+            NULL;
+        END;
+    END;
 
     -- Trigger return convention: AFTER triggers may return NULL.
     RETURN NULL;
@@ -383,5 +428,5 @@ GRANT EXECUTE ON FUNCTION enforce_user_context(TEXT) TO PUBLIC;
 -- Schema_version stamp (the make db.init loop populates this; explicit
 -- INSERT here for environments that bypass make and run psql directly).
 INSERT INTO schema_version (filename, applied_at)
-VALUES ('18_observability.sql', now())
+VALUES ('19_observability.sql', now())
 ON CONFLICT (filename) DO NOTHING;

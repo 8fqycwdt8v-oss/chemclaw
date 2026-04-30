@@ -566,8 +566,13 @@ services:
     restart: unless-stopped
     profiles: ["observability"]
     command: -config.file=/etc/loki/local-config.yaml
+    # Bind to loopback only — Loki ships with NO authentication. The
+    # observability profile is intended for local dev / single-host
+    # deployments; in production, fronting Loki with an auth proxy is
+    # the operator's responsibility (set LOKI_BIND=0.0.0.0 explicitly
+    # to expose, with eyes open).
     ports:
-      - "${LOKI_PORT:-3100}:3100"
+      - "${LOKI_BIND:-127.0.0.1}:${LOKI_PORT:-3100}:3100"
     volumes:
       - loki-data:/loki
     healthcheck:
@@ -612,8 +617,11 @@ services:
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_AUTH_ANONYMOUS_ENABLED: "false"
       GF_FEATURE_TOGGLES_ENABLE: "publicDashboards"
+    # Bind to loopback only — even with admin auth, exposing Grafana
+    # publicly without an SSO proxy is a footgun. Operators set
+    # GRAFANA_BIND=0.0.0.0 explicitly when they intend public access.
     ports:
-      - "${GRAFANA_PORT:-3001}:3000"
+      - "${GRAFANA_BIND:-127.0.0.1}:${GRAFANA_PORT:-3001}:3000"
     volumes:
       - grafana-data:/var/lib/grafana
       - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro

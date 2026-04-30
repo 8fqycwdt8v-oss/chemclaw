@@ -86,7 +86,7 @@ export async function withRetry<T>(
 
   for (let attempt = 1; attempt <= opts.attempts; attempt++) {
     if (signal?.aborted) {
-      throw signal.reason ?? new Error("aborted");
+      throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
     }
     try {
       const result = await fn(attempt);
@@ -107,8 +107,8 @@ export async function withRetry<T>(
             event: "retry_skipped",
             operation: opts.operation,
             attempt,
-            err_name: (err as Error)?.name,
-            err_msg: (err as Error)?.message,
+            err_name: (err as Error).name,
+            err_msg: (err as Error).message,
           },
           "operation failed; not retrying",
         );
@@ -120,8 +120,8 @@ export async function withRetry<T>(
             event: "retry_exhausted",
             operation: opts.operation,
             attempts: opts.attempts,
-            err_name: (err as Error)?.name,
-            err_msg: (err as Error)?.message,
+            err_name: (err as Error).name,
+            err_msg: (err as Error).message,
           },
           "operation failed after all retries",
         );
@@ -134,8 +134,8 @@ export async function withRetry<T>(
           operation: opts.operation,
           attempt,
           backoff_ms: sleep,
-          err_name: (err as Error)?.name,
-          err_msg: (err as Error)?.message,
+          err_name: (err as Error).name,
+          err_msg: (err as Error).message,
         },
         "operation failed; retrying",
       );
@@ -151,10 +151,26 @@ export async function withRetry<T>(
           { once: true },
         );
       });
-      if (signal?.aborted) throw signal.reason ?? new Error("aborted");
+      if (signal?.aborted) throw signal.reason instanceof Error ? signal.reason : new Error("aborted");
     }
   }
 
   // Unreachable — the loop either returns or throws — but TS wants a fallback.
-  throw lastErr ?? new Error("withRetry: no attempts ran");
+  // ESLint's `only-throw-error` rule wants an Error; wrap a non-Error
+  // `lastErr` so the rule is satisfied without losing context.
+  if (lastErr instanceof Error) throw lastErr;
+  throw new Error(`withRetry exhausted: ${describeUnknown(lastErr)}`);
+}
+
+/** Render any thrown value into a stable string for error message
+ * inclusion. Handles the JSON.stringify edge cases (cyclic, BigInt) so
+ * we never surface `[object Object]` to operators. */
+function describeUnknown(value: unknown): string {
+  if (value === undefined) return "no attempts ran";
+  try {
+    const stringified = JSON.stringify(value);
+    return stringified.length > 0 ? stringified : "<empty>";
+  } catch {
+    return "<unserializable>";
+  }
 }
