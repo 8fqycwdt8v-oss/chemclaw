@@ -27,6 +27,8 @@ import { buildPredictMolecularPropertyTool } from "../tools/builtins/predict_mol
 import { buildPredictReactionYieldTool } from "../tools/builtins/predict_reaction_yield.js";
 import { buildQueryKgTool } from "../tools/builtins/query_kg.js";
 import { buildProposeRetrosynthesisTool } from "../tools/builtins/propose_retrosynthesis.js";
+import { buildElucidateMechanismTool } from "../tools/builtins/elucidate_mechanism.js";
+import { buildRecommendConditionsTool } from "../tools/builtins/recommend_conditions.js";
 // Pool-backed tools.
 import { buildAnalyzeCsvTool } from "../tools/builtins/analyze_csv.js";
 import { buildExpandReactionContextTool } from "../tools/builtins/expand_reaction_context.js";
@@ -113,6 +115,12 @@ function registerBuiltinTools(
   registry.registerBuiltin("query_kg", () => asTool(buildQueryKgTool(cfg.MCP_KG_URL)));
   registry.registerBuiltin("propose_retrosynthesis", () =>
     asTool(buildProposeRetrosynthesisTool(cfg.MCP_ASKCOS_URL, cfg.MCP_AIZYNTH_URL)),
+  );
+  registry.registerBuiltin("elucidate_mechanism", () =>
+    asTool(buildElucidateMechanismTool(cfg.MCP_SYNTHEGY_MECH_URL)),
+  );
+  registry.registerBuiltin("recommend_conditions", () =>
+    asTool(buildRecommendConditionsTool(cfg.MCP_ASKCOS_URL)),
   );
 
   // Pool-backed (read-only or scoped via withUserContext at call time inside the factory).

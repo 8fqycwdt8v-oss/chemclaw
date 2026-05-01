@@ -342,7 +342,7 @@ async function handleChat(
         signal: req.signal,
         cleanupSkillForTurn,
       });
-      if (planFinish) finishReason = planFinish;
+      finishReason = planFinish;
       return;
     }
 

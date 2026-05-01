@@ -169,3 +169,166 @@ def test_healthz(client):
     r = client.get("/healthz")
     assert r.status_code == 200
     assert r.json()["service"] == "mcp-askcos"
+
+
+# ---------------------------------------------------------------------------
+# /recommend_conditions
+# ---------------------------------------------------------------------------
+
+FAKE_CONDITIONS = [
+    {
+        "catalyst": [{"smiles": "[Pd]", "name": "Pd(OAc)2"}],
+        "reagent": [{"smiles": "C(C)(C)(C)[O-]", "name": "tBuOK"}],
+        "solvent": ["O", "C1CCOC1"],  # mixed shape: bare strings here
+        "temperature": 80.0,
+        "score": 0.91,
+    },
+    {
+        "catalyst": [],
+        "reagent": [{"smiles": "[Cs+]", "name": "Cs2CO3"}],
+        "solvent": [{"smiles": "CCOCC", "name": "DEE"}],
+        "temperature": 25.0,
+        "score": 0.42,
+    },
+]
+
+
+def test_recommend_conditions_happy_path(client):
+    mock_client = mock.MagicMock()
+    mock_client.recommend_conditions.return_value = FAKE_CONDITIONS
+
+    with mock.patch(
+        "services.mcp_tools.mcp_askcos.main._get_askcos_client",
+        return_value=mock_client,
+    ):
+        r = client.post(
+            "/recommend_conditions",
+            json={
+                "reactants_smiles": "Brc1ccc(OC)cc1.C1COCCN1",
+                "product_smiles": "COc1ccc(N2CCOCC2)cc1",
+                "top_k": 5,
+            },
+        )
+
+    assert r.status_code == 200
+    body = r.json()
+    assert body["model_id"] == "askcos_condition_recommender@v2"
+    assert len(body["recommendations"]) == 2
+
+    first = body["recommendations"][0]
+    assert first["score"] == pytest.approx(0.91)
+    assert first["temperature_c"] == pytest.approx(80.0)
+    assert len(first["catalysts"]) == 1
+    assert first["catalysts"][0]["name"] == "Pd(OAc)2"
+    # Bare-string solvent shape gets normalized to {smiles, name}.
+    assert len(first["solvents"]) == 2
+    assert first["solvents"][0]["smiles"] == "O"
+    assert first["solvents"][0]["name"] == ""
+
+    second = body["recommendations"][1]
+    assert second["catalysts"] == []
+    assert second["solvents"][0]["name"] == "DEE"
+
+
+def test_recommend_conditions_passes_params_to_client(client):
+    mock_client = mock.MagicMock()
+    mock_client.recommend_conditions.return_value = []
+
+    with mock.patch(
+        "services.mcp_tools.mcp_askcos.main._get_askcos_client",
+        return_value=mock_client,
+    ):
+        client.post(
+            "/recommend_conditions",
+            json={
+                "reactants_smiles": "CCBr.NC",
+                "product_smiles": "CCNC",
+                "top_k": 3,
+            },
+        )
+
+    mock_client.recommend_conditions.assert_called_once_with(
+        reactants="CCBr.NC", product="CCNC", n=3
+    )
+
+
+def test_recommend_conditions_empty_reactants_returns_400(client):
+    with mock.patch(
+        "services.mcp_tools.mcp_askcos.main._get_askcos_client",
+        return_value=mock.MagicMock(),
+    ):
+        r = client.post(
+            "/recommend_conditions",
+            json={"reactants_smiles": "   ", "product_smiles": "C"},
+        )
+    assert r.status_code == 400
+
+
+def test_recommend_conditions_empty_product_returns_400(client):
+    with mock.patch(
+        "services.mcp_tools.mcp_askcos.main._get_askcos_client",
+        return_value=mock.MagicMock(),
+    ):
+        r = client.post(
+            "/recommend_conditions",
+            json={"reactants_smiles": "CC", "product_smiles": ""},
+        )
+    assert r.status_code in (400, 422)
+
+
+def test_recommend_conditions_top_k_clamped(client):
+    with mock.patch(
+        "services.mcp_tools.mcp_askcos.main._get_askcos_client",
+        return_value=mock.MagicMock(),
+    ):
+        r = client.post(
+            "/recommend_conditions",
+            json={
+                "reactants_smiles": "C",
+                "product_smiles": "C",
+                "top_k": 99,  # > 20
+            },
+        )
+    assert r.status_code == 422
+
+
+def test_recommend_conditions_temperature_can_be_null(client):
+    """Some recommender outputs omit temperature; the route must accept None."""
+    mock_client = mock.MagicMock()
+    mock_client.recommend_conditions.return_value = [
+        {
+            "catalyst": [],
+            "reagent": [],
+            "solvent": [],
+            "temperature": None,
+            "score": 0.5,
+        },
+    ]
+
+    with mock.patch(
+        "services.mcp_tools.mcp_askcos.main._get_askcos_client",
+        return_value=mock_client,
+    ):
+        r = client.post(
+            "/recommend_conditions",
+            json={"reactants_smiles": "C", "product_smiles": "C"},
+        )
+    assert r.status_code == 200
+    body = r.json()
+    assert body["recommendations"][0]["temperature_c"] is None
+
+
+def test_recommend_conditions_raises_on_non_list_client_output(client):
+    mock_client = mock.MagicMock()
+    mock_client.recommend_conditions.return_value = {"oops": "not a list"}
+
+    with mock.patch(
+        "services.mcp_tools.mcp_askcos.main._get_askcos_client",
+        return_value=mock_client,
+    ):
+        r = client.post(
+            "/recommend_conditions",
+            json={"reactants_smiles": "C", "product_smiles": "C"},
+        )
+    # ValueError → 400 via the create_app error handler.
+    assert r.status_code == 400

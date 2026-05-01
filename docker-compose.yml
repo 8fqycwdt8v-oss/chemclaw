@@ -891,6 +891,38 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # mcp-synthegy-mech — LLM-guided mechanism elucidation (port 8011)
+  # A* search over arrow-pushing primitives; LLM scores candidate next-states
+  # 0..10 at each node. Adapted from Bran et al., Matter 2026
+  # (DOI 10.1016/j.matt.2026.102812). Vendored from github.com/schwallergroup/steer (MIT).
+  # All LLM traffic routes through the central LiteLLM proxy.
+  # -------------------------------------------------------------
+  mcp-synthegy-mech:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_synthegy_mech/Dockerfile
+    container_name: chemclaw-mcp-synthegy-mech
+    restart: unless-stopped
+    profiles: ["chemistry"]
+    ports:
+      - "8011:8011"
+    environment:
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-}
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:-}
+      MCP_AUTH_REQUIRED: ${MCP_AUTH_REQUIRED:-}
+      MCP_AUTH_DEV_MODE: ${MCP_AUTH_DEV_MODE:-}
+      MCP_XTB_BASE_URL: ${MCP_XTB_URL:-http://mcp-xtb:8010}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8011/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # mcp-sirius — SIRIUS 6 + CSI:FingerID MS structure ID (port 8012)
   # Requires sirius binary installed in the image (JVM-based tool).
   # -------------------------------------------------------------
