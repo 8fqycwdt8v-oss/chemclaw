@@ -243,7 +243,7 @@ Reordering, conditioning, and tuning a hook now happens in YAML; only ADDING a n
 
 ### Logging
 
-Never use `console.log` / `print` in service code.
+Never use `console.log` / `print` in service code. Both layers structure-log; never concatenate user input into the message format string — pass values as fields/args. The output is shipped by Promtail → Loki → Grafana (`docker compose --profile observability up -d`; dashboards under `infra/grafana/provisioning/dashboards/`).
 
 - **TypeScript** — `getLogger` from `services/agent-claw/src/observability/logger.ts`:
   ```ts
@@ -251,7 +251,7 @@ Never use `console.log` / `print` in service code.
   const log = getLogger("ToolRegistry");           // child logger, structured
   log.warn({ toolId, reason }, "tool disabled");
   ```
-  Pino-based; level from `AGENT_LOG_LEVEL`; redacts `authorization` / `cookie` headers automatically. `Component` field lets log shippers query by subsystem.
+  Pino-based; level from `AGENT_LOG_LEVEL`; emits JSON; redacts `authorization` / `cookie` / `err.message` / `err.stack` / `detail` automatically (Postgres + MCP errors regularly carry SMILES + compound codes). `component` becomes a structured field log shippers can query.
 - **Python** — `configure_logging` from `services.mcp_tools.common.logging`:
   ```py
   import logging
@@ -260,9 +260,11 @@ Never use `console.log` / `print` in service code.
   log = logging.getLogger(__name__)
   log.warning("tool %s disabled: %s", tool_id, reason)
   ```
-  Single-line uncoloured format so the container runtime's stdout collector parses it; quiets `uvicorn.access` and `httpx`.
+  JSON formatter so Promtail keys parse cleanly; quiets `uvicorn.access` and `httpx`.
 
-Both layers structure-log; never concatenate user input into the message format string. Pass values as fields/args.
+`LOG_USER_SALT` MUST be set outside dev mode — the loggers throw on startup without it. The default salt is public; without a real per-deployment salt the 16-hex-char user hash is rainbow-table-reversible.
+
+Database-side audit lives in `error_events` (via `record_error_event(...)`, `chemclaw_app`/`chemclaw_service` only) and the row-change audit log written through `audit_row_change` triggers — both wrapped in `EXCEPTION WHEN OTHERS` so a missing partition can't take down audited writes (failures forward to `error_events`). Don't bypass these in new tables that need audit; attach the trigger.
 
 ### Runbooks for the patterns above
 
