@@ -172,11 +172,114 @@ Chained execution: `POST /api/sessions/:id/plan/run` runs the harness in a loop 
 
 Auto-resume: `services/optimizer/session_reanimator/` polls every 5 min for sessions with stalled `in_progress` todos and POSTs `/api/sessions/:id/resume` (synthetic "Continue" turn). Capped per-session via `agent_sessions.auto_resume_cap` (default 10).
 
+## Configuration and logging — required patterns for new code
+
+Every new feature MUST consume the existing configuration registries and the centralised loggers instead of inventing its own. Hardcoded constants, scattered `process.env.X === 'true'` gates, and `console.log` calls don't pass review.
+
+### Runtime configuration (`config_settings`)
+
+Tunable knobs live in the `config_settings` Postgres table (`db/init/19_config_settings.sql`). Resolution order is **user → project → org → global**; first hit wins. 60 s in-process cache; admin mutations bust it.
+
+- **TypeScript** — `getConfigRegistry()` from `services/agent-claw/src/config/registry.ts`:
+  ```ts
+  const cap = await getConfigRegistry().getNumber(
+    "agent.max_active_skills", { user, project, org }, /* default */ 8,
+  );
+  ```
+  Typed helpers: `getNumber`, `getBoolean`, `getString`, raw `get<T>`. Singleton wired in `bootstrap/dependencies.ts` — never construct a second one in a route.
+- **Python** — `from services.common.config_registry import ConfigRegistry, ConfigContext`:
+  ```py
+  reg = ConfigRegistry(dsn=os.environ["POSTGRES_DSN"])
+  rate = reg.get_float("optimizer.promotion_success_rate", default=0.55)
+  ```
+  Same TTL semantics; thread-safe; falls back to default on DB outage so workers stay up.
+- **Add the row** via `PATCH /api/admin/config/:scope/:scope_id?key=K` (admin-gated; audited). Direct SQL is the escape hatch, not the primary path.
+
+When a new constant is born hardcoded, file a follow-up PR to migrate it. The point of the registry is that admins shouldn't need a redeploy.
+
+### Feature flags
+
+`feature_flags` table (`db/init/22_feature_flags.sql`) is the single source of truth — env-var gates are bootstrap fallbacks only.
+
+```ts
+import { isFeatureEnabled } from "../config/flags.js";
+if (await isFeatureEnabled("agent.confidence_cross_model", { user, project, org })) { ... }
+```
+
+Adding a new flag: insert a row via `POST /api/admin/feature-flags/:key` with a real `description` (it becomes the catalog row). Naming convention: lowercase, dotted (`mock_eln.enabled`, `agent.x_y`). The env-var fallback derives `MOCK_ELN_ENABLED` from `mock_eln.enabled` automatically.
+
+### Permission policies
+
+`permission_policies` table + the `permission` hook is the only allowlist/denylist surface. Add policies via `POST /api/admin/permission-policies` (`scope`, `scope_id`, `decision`, `tool_pattern`, optional `argument_pattern`). The aggregator is **deny > ask > allow**; `tool_pattern` supports trailing wildcards (`mcp__github__*`).
+
+Routes that run user-driven tool calls MUST pass `{ permissions: { permissionMode: "enforce" } }` to `runHarness` so the policies fire. `/api/chat` is wired today; new routes follow the same pattern. There is no script-based fallback by design — DB rows or nothing.
+
+### Redaction patterns
+
+Hardcoded patterns in `services/litellm_redactor/redaction.py` are the SAFETY BASELINE — they always run. The DB-backed `redaction_patterns` table (`db/init/20_redaction_patterns.sql`) is MERGED in via `dynamic_patterns.py:get_loader()` so a tenant's compound-code prefix is one `POST /api/admin/redaction-patterns` away. Two safety rails enforce bounded regex: a DB CHECK on `length ≤ 200` AND `is_pattern_safe()` rejecting unbounded `.*` / `.+` / `\S+` constructs.
+
+Adding a fundamentally NEW category (not a tenant-specific variation) still extends the hardcoded baseline + `tests/unit/test_redactor.py`; the DB table is for tenant variation, not new categories.
+
+### Admin RBAC + audit log
+
+Every `/api/admin/*` mutation goes through `services/agent-claw/src/middleware/require-admin.ts` (`isAdmin` / `requireAdmin` / `guardAdmin`) and writes a row via `appendAudit` in `routes/admin/audit-log.ts`. Three role tiers in `admin_roles`: `global_admin`, `org_admin <scope_id>`, `project_admin <scope_id>`. The `current_user_is_admin()` SECURITY DEFINER function (in `db/init/18_admin_roles_and_audit.sql`) is what RLS policies call so they don't recurse on `admin_roles` itself.
+
+When adding a new admin endpoint:
+1. Mount it in `services/agent-claw/src/routes/admin/` and register in `routes/admin/index.ts`.
+2. Call `guardAdmin` (or `requireAdmin` if you want to throw) at the top.
+3. Call `appendAudit` for every state-mutating branch with a meaningful `action` (`<resource>.<verb>`) and `before_value` / `after_value`.
+4. If the resource is cached in a singleton (config, flags, permission policies, skill loader), call `.invalidate()` after the write so the next request sees the change.
+
+`AGENT_ADMIN_USERS` env var still works as a bootstrap fallback for `global_admin` only — used to seed the first admin on a fresh deployment, then everyone else is granted via DB rows.
+
+### Hook YAML extensions
+
+`hooks/*.yaml` accepts three optional fields beyond the original `name`/`lifecycle`/`enabled`/`script`/`definition`:
+- `order: <number>` — ascending sort within a lifecycle phase; default 100. File-name order is the tiebreaker.
+- `timeout_ms: <number>` — overrides the 60 s per-hook default (script hooks only; built-ins still use the lifecycle default).
+- `condition: { setting_key: <key>, env_var: <NAME>, default: <bool> }` — gate the registration on a config_settings boolean, an env var, or a static default. Resolution is `setting_key → env_var → default`.
+
+Reordering, conditioning, and tuning a hook now happens in YAML; only ADDING a new hook still requires a `BUILTIN_REGISTRARS` entry + bumping `MIN_EXPECTED_HOOKS`.
+
+### Logging
+
+Never use `console.log` / `print` in service code.
+
+- **TypeScript** — `getLogger` from `services/agent-claw/src/observability/logger.ts`:
+  ```ts
+  import { getLogger } from "../observability/logger.js";
+  const log = getLogger("ToolRegistry");           // child logger, structured
+  log.warn({ toolId, reason }, "tool disabled");
+  ```
+  Pino-based; level from `AGENT_LOG_LEVEL`; redacts `authorization` / `cookie` headers automatically. `Component` field lets log shippers query by subsystem.
+- **Python** — `configure_logging` from `services.mcp_tools.common.logging`:
+  ```py
+  import logging
+  from services.mcp_tools.common.logging import configure_logging
+  configure_logging(level=os.environ.get("LOG_LEVEL", "INFO"))
+  log = logging.getLogger(__name__)
+  log.warning("tool %s disabled: %s", tool_id, reason)
+  ```
+  Single-line uncoloured format so the container runtime's stdout collector parses it; quiets `uvicorn.access` and `httpx`.
+
+Both layers structure-log; never concatenate user input into the message format string. Pass values as fields/args.
+
+### Runbooks for the patterns above
+
+- `docs/runbooks/add-tenant.md`
+- `docs/runbooks/rotate-mcp-auth-key.md`
+- `docs/runbooks/change-llm-provider.md`
+- `docs/runbooks/disable-tool.md`
+- `docs/runbooks/redaction-pattern-management.md`
+- `docs/runbooks/backup-and-restore.md`
+
+Read the relevant runbook BEFORE filing a feature that asks an admin to do anything new — the pattern probably already exists.
+
 ## Secrets and egress
 
 - **All LLM calls route through LiteLLM** (`services/litellm/config.yaml`). Never import provider SDKs directly in application code; always go through `litellm`. The agent uses `@ai-sdk/openai-compatible` with `baseURL` pointing at LiteLLM's OpenAI-compatible endpoint — this is the single egress chokepoint.
-- **Every prompt is redacted pre-egress** by the callback at `services/litellm_redactor/callback.py`. When adding new sensitive categories (new project-ID patterns, new compound-code formats), extend `services/litellm_redactor/redaction.py` and add a unit test in `tests/unit/test_redactor.py`.
-- The regex patterns in the redactor are length-bounded by construction — if you add new patterns, bound every quantifier (no unbounded `.*`) to avoid catastrophic backtracking.
+- **Every prompt is redacted pre-egress** by the callback at `services/litellm_redactor/callback.py`. When adding new sensitive categories (new project-ID patterns, new compound-code formats), extend `services/litellm_redactor/redaction.py` and add a unit test in `tests/unit/test_redactor.py`. Tenant-specific variations of an existing category go in the `redaction_patterns` table — see "Configuration and logging — required patterns for new code" above.
+- The regex patterns in the redactor are length-bounded by construction — if you add new patterns, bound every quantifier (no unbounded `.*`) to avoid catastrophic backtracking. The DB-backed loader's `is_pattern_safe()` enforces the same bound on tenant-supplied regexes; bypassing it is not an option.
 - **System prompts come from `prompt_registry`, not from hardcoded strings.** When adding a new agent mode, insert a new row (see `db/seed/02_prompt_registry.sql` for the canonical pattern) and reference it by name in code. The `PromptRegistry` cache TTL is 60s; call `invalidate()` in long-running processes if you hot-edit a prompt in the DB.
 - **MCP service Bearer-token authentication (ADR 006 Layer 2)** — the agent
   mints HS256 JWTs via `services/agent-claw/src/security/mcp-tokens.ts`,
