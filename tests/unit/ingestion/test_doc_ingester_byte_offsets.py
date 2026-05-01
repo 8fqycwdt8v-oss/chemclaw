@@ -12,6 +12,8 @@ locks in the post-fix behaviour:
 
 from __future__ import annotations
 
+from itertools import pairwise
+
 from services.ingestion.doc_ingester.chunking import chunk_markdown
 
 
@@ -29,7 +31,7 @@ def test_byte_offsets_advance_monotonically() -> None:
     md = "# Big\n\n" + ("paragraph line " * 50 + "\n\n") * 20
     chunks = chunk_markdown(md, target_chars=800, overlap_chars=50)
     assert len(chunks) >= 2
-    for prev, curr in zip(chunks, chunks[1:]):
+    for prev, curr in pairwise(chunks):
         # Overlap may rewind by up to overlap_chars bytes, but the next
         # chunk must begin at or before the previous chunk's end.
         assert curr.byte_start <= prev.byte_end

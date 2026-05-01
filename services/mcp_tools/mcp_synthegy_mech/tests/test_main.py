@@ -161,7 +161,7 @@ def test_guidance_prompt_xml_tags_stripped_before_concatenation(client):
         for m in msgs:
             content = m.get("content", "")
             text = content if isinstance(content, str) else str(content)
-            for forbidden in (
+            for _forbidden in (
                 "</target_reaction>",
                 "<target_reaction>",
                 "</score>",
@@ -313,7 +313,7 @@ def test_validate_energies_unreachable_xtb_surfaces_graceful_warning(client):
 
     class FakeSearchResult:
         path = fake_path
-        scores = [0.0, 7.0]
+        scores = [0.0, 7.0]  # noqa: RUF012 — test fixture; ClassVar annotation noise here
         nodes_explored = 2
         truncated = False
 
@@ -361,7 +361,7 @@ def test_validate_energies_populates_delta_when_xtb_responds(client):
 
     class FakeSearchResult:
         path = fake_path
-        scores = [0.0, 7.5]
+        scores = [0.0, 7.5]  # noqa: RUF012 — test fixture; ClassVar annotation noise here
         nodes_explored = 2
         truncated = False
 
@@ -489,7 +489,7 @@ def test_xtb_validator_dedupes_by_canonical_form(client):
 
     class FakeSearchResult:
         path = fake_path
-        scores = [0.0, 7.5]
+        scores = [0.0, 7.5]  # noqa: RUF012 — test fixture; ClassVar annotation noise here
         nodes_explored = 1
         truncated = False
 
