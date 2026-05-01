@@ -9,10 +9,17 @@
 // the production startup path. The 11 built-in hooks register here; new hooks
 // require both a YAML file in hooks/ AND an entry in BUILTIN_REGISTRARS.
 //
-// YAML shape:
+// YAML shape (Phase 4 of the configuration concept extends with order /
+// condition / timeout_ms):
 //   name: <string>
-//   lifecycle: pre_turn | pre_tool | post_tool | pre_compact | post_turn
+//   lifecycle: pre_turn | pre_tool | post_tool | pre_compact | post_turn | …
 //   enabled: true | false
+//   order: <number — lower fires first within a lifecycle phase; default 100>
+//   timeout_ms: <number — overrides the 60s per-hook default>
+//   condition:
+//     setting_key: <config_settings key — falsy DB value disables the hook>
+//     env_var:     <env var name — alternative to setting_key>
+//     default:     <boolean — used when neither source has a value>
 //   script: <optional JS file path relative to this service>
 //   definition:
 //     <hook-type-specific fields>
@@ -63,15 +70,29 @@ const VALID_HOOK_POINTS = new Set<string>([
   "task_completed",
 ]);
 
+interface HookCondition {
+  setting_key?: string;
+  env_var?: string;
+  default?: boolean;
+}
+
 interface HookYaml {
   name?: string;
   lifecycle?: string;
   // `enabled` is optional in YAML — undefined and true both mean "enabled";
   // only an explicit `enabled: false` disables the hook (see registration loop).
   enabled?: boolean;
+  // Phase 4 of the configuration concept: optional ordering + condition +
+  // timeout. None of these is required; the loader falls back to current
+  // defaults (registration order, 60s timeout, always enabled).
+  order?: number;
+  timeout_ms?: number;
+  condition?: HookCondition;
   script?: string;
   definition?: Record<string, unknown>;
 }
+
+const DEFAULT_HOOK_ORDER = 100;
 
 // ---------------------------------------------------------------------------
 // Hook dependencies — passed to every registrar so source-cache can get a
@@ -174,6 +195,11 @@ export async function loadHooks(
   const yamlFiles = entries.filter((f) => f.endsWith(".yaml") || f.endsWith(".yml"));
   result.filesFound = yamlFiles.length;
 
+  // Phase 4 of the configuration concept: parse first, then sort by order
+  // so registration is deterministic regardless of filesystem readdir order.
+  interface ParsedHook { file: string; hook: HookYaml }
+  const parsed: ParsedHook[] = [];
+
   for (const file of yamlFiles) {
     const filePath = resolve(dir, file);
     let raw: string;
@@ -184,20 +210,31 @@ export async function loadHooks(
       continue;
     }
 
-    let parsed: unknown;
+    let yamlParsed: unknown;
     try {
-      parsed = parseYaml(raw);
+      yamlParsed = parseYaml(raw);
     } catch {
       result.skipped.push(`${file}: YAML parse error`);
       continue;
     }
 
-    if (parsed === null || typeof parsed !== "object") {
+    if (yamlParsed === null || typeof yamlParsed !== "object") {
       result.skipped.push(`${file}: not an object`);
       continue;
     }
-    const hook = parsed as HookYaml;
+    parsed.push({ file, hook: yamlParsed });
+  }
 
+  // Stable sort by order (ascending), then by file name as a tiebreaker so
+  // a forgotten `order:` field doesn't yield non-determinism.
+  parsed.sort((a, b) => {
+    const oa = a.hook.order ?? DEFAULT_HOOK_ORDER;
+    const ob = b.hook.order ?? DEFAULT_HOOK_ORDER;
+    if (oa !== ob) return oa - ob;
+    return a.file.localeCompare(b.file);
+  });
+
+  for (const { file, hook } of parsed) {
     if (!hook.name || typeof hook.name !== "string") {
       result.skipped.push(`${file}: missing name`);
       continue;
@@ -216,7 +253,14 @@ export async function loadHooks(
       continue;
     }
 
+    // Phase 4 of the configuration concept — runtime condition gate.
+    if (hook.condition && !(await evaluateCondition(hook.condition))) {
+      result.skipped.push(`${file}: condition false`);
+      continue;
+    }
+
     const hookPoint = hook.lifecycle as HookPoint;
+    const lifecycleOpts = hook.timeout_ms ? { timeout: hook.timeout_ms } : undefined;
 
     if (hook.script) {
       // Dynamic import for script-based hooks.
@@ -230,7 +274,12 @@ export async function loadHooks(
           result.skipped.push(`${file}: script does not export a default function`);
           continue;
         }
-        lifecycle.on(hookPoint, hook.name, def as Parameters<typeof lifecycle.on>[2]);
+        lifecycle.on(
+          hookPoint,
+          hook.name,
+          def as Parameters<typeof lifecycle.on>[2],
+          lifecycleOpts,
+        );
         result.registered++;
       } catch (err) {
         result.skipped.push(`${file}: script import failed — ${String(err)}`);
@@ -245,9 +294,46 @@ export async function loadHooks(
       continue;
     }
 
+    // Built-in registrars don't currently expose a per-hook timeout knob;
+    // if a YAML sets timeout_ms for a built-in, we log it as advisory until
+    // the registrars are reworked to accept it (out of scope for Phase 4).
+    if (lifecycleOpts) {
+      result.skipped.push(
+        `${file}: timeout_ms ignored for built-in (advisory; track separately)`,
+      );
+    }
     registrar(lifecycle, deps);
     result.registered++;
   }
 
   return result;
+}
+
+/**
+ * Phase 4 of the configuration concept: evaluate a YAML `condition` block.
+ * Resolution order:
+ *   1. condition.setting_key — query ConfigRegistry singleton (60s cache).
+ *   2. condition.env_var     — read process.env, "true"/"1" → true.
+ *   3. condition.default     — use as the final fallback.
+ * Any thrown error in the singleton lookup falls through to env_var.
+ */
+async function evaluateCondition(condition: HookCondition): Promise<boolean> {
+  if (condition.setting_key) {
+    try {
+      const { getConfigRegistry } = await import("../config/registry.js");
+      const v = await getConfigRegistry().getBoolean(
+        condition.setting_key,
+        {},
+        condition.default ?? true,
+      );
+      return v;
+    } catch {
+      // singleton not initialised in unit tests — fall through
+    }
+  }
+  if (condition.env_var) {
+    const raw = process.env[condition.env_var];
+    if (raw !== undefined) return raw === "true" || raw === "1";
+  }
+  return condition.default ?? true;
 }

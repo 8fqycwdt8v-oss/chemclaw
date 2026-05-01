@@ -396,6 +396,12 @@ async function handleChat(
       // (network drop, browser tab closed, curl --max-time) cancels LLM
       // calls + MCP fetches instead of running them to completion.
       signal: req.signal,
+      // Phase 3 of the configuration concept (Initiative 5):
+      // engage the permission resolver in 'enforce' mode so DB-backed
+      // permission_policies actually fire. Permissive default (allow when
+      // no policy matches) preserves current behaviour until an admin
+      // adds a deny rule via /api/admin/permission-policies.
+      permissions: { permissionMode: "enforce" },
     });
 
     // v1.2 collapse: the hand-rolled call()→streamCompletion()→pre_tool /

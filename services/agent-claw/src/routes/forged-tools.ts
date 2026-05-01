@@ -4,28 +4,17 @@
 // GET  /api/forged-tools/:id/code     — return tool Python source
 // GET  /api/forged-tools/:id/tests    — return persistent test cases
 //
-// Admin gate: env var AGENT_ADMIN_USERS (comma-separated Entra IDs / emails).
-// Phase F will replace with proper RBAC.
+// Admin gate: shared isAdmin from middleware/require-admin.ts. Source of
+// truth is the admin_roles DB table (Phase 1 of the configuration concept,
+// db/init/18_admin_roles_and_audit.sql); AGENT_ADMIN_USERS env var is kept
+// as a bootstrap fallback for global_admin grants only.
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import { z } from "zod";
 import type { Pool } from "pg";
 import { withUserContext } from "../db/with-user-context.js";
+import { isAdmin } from "../middleware/require-admin.js";
 import { promises as fsp } from "fs";
-
-// ---------------------------------------------------------------------------
-// Admin check
-// ---------------------------------------------------------------------------
-
-function isAdmin(userEntraId: string): boolean {
-  const raw = process.env.AGENT_ADMIN_USERS ?? "";
-  if (!raw.trim()) return false;
-  const admins = raw
-    .split(",")
-    .map((s) => s.trim().toLowerCase())
-    .filter(Boolean);
-  return admins.includes(userEntraId.toLowerCase());
-}
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -197,7 +186,7 @@ export function registerForgedToolsRoutes(
     }
 
     const isOwner = row.proposed_by_user_entra_id === userEntraId;
-    if (!isOwner && !isAdmin(userEntraId)) {
+    if (!isOwner && !(await isAdmin(pool, userEntraId))) {
       return await reply
         .status(403)
         .send({ error: "Permission denied. Only the tool owner or an admin can promote scope." });
@@ -242,7 +231,7 @@ export function registerForgedToolsRoutes(
     }
 
     const isOwner = row.proposed_by_user_entra_id === userEntraId;
-    if (!isOwner && !isAdmin(userEntraId)) {
+    if (!isOwner && !(await isAdmin(pool, userEntraId))) {
       return await reply
         .status(403)
         .send({ error: "Permission denied. Only the tool owner or an admin can disable." });

@@ -1,0 +1,165 @@
+# Phase 4 of the configuration concept (Initiative 8) — backup automation.
+#
+# Daily Postgres pg_dump and Neo4j export to S3-compatible storage,
+# encrypted with `age` (https://age-encryption.org/), 30-day retention.
+# The same recipient public key is used for both jobs so a single age
+# private key restores either source.
+#
+# Enable via backups.enabled=true in prod-values.yaml; configure the
+# remote target via backups.s3.* and the recipient key via
+# backups.ageRecipient. See docs/runbooks/backup-and-restore.md for the
+# full operational procedure.
+{{- if .Values.backups.enabled }}
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: postgres-backup
+  labels:
+    app: postgres-backup
+    profile: backups
+spec:
+  schedule: {{ .Values.backups.postgres.schedule | quote }}
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 7
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+          containers:
+            - name: postgres-backup
+              image: {{ .Values.backups.postgres.image }}
+              imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              env:
+                - name: PGHOST
+                  value: {{ .Values.global.postgres.host | quote }}
+                - name: PGPORT
+                  value: {{ .Values.global.postgres.port | quote }}
+                - name: PGDATABASE
+                  value: {{ .Values.global.postgres.db | quote }}
+                - name: PGUSER
+                  value: {{ .Values.global.postgres.user | quote }}
+                - name: PGPASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.global.postgres.passwordSecret }}
+                      key: {{ .Values.global.postgres.passwordKey }}
+                - name: AGE_RECIPIENT
+                  value: {{ .Values.backups.ageRecipient | quote }}
+                - name: S3_ENDPOINT
+                  value: {{ .Values.backups.s3.endpoint | quote }}
+                - name: S3_BUCKET
+                  value: {{ .Values.backups.s3.bucket | quote }}
+                - name: S3_PREFIX
+                  value: {{ .Values.backups.s3.prefix | default "postgres" | quote }}
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.backups.s3.credentialsSecret }}
+                      key: access_key_id
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.backups.s3.credentialsSecret }}
+                      key: secret_access_key
+                - name: RETENTION_DAYS
+                  value: {{ .Values.backups.retentionDays | default 30 | quote }}
+              # The image entrypoint is expected to:
+              #   1. pg_dump -Fc                     → /tmp/dump.pgc
+              #   2. age -e -r $AGE_RECIPIENT        → /tmp/dump.pgc.age
+              #   3. aws s3 cp ... s3://$S3_BUCKET/$S3_PREFIX/<date>.pgc.age
+              #   4. aws s3 ls + delete objects older than RETENTION_DAYS
+              # Image: chemclaw/postgres-backup:latest
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: { sizeLimit: {{ .Values.backups.postgres.tmpSize | default "10Gi" }} }
+
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: neo4j-backup
+  labels:
+    app: neo4j-backup
+    profile: backups
+spec:
+  schedule: {{ .Values.backups.neo4j.schedule | quote }}
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 7
+  concurrencyPolicy: Forbid
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: OnFailure
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+          containers:
+            - name: neo4j-backup
+              image: {{ .Values.backups.neo4j.image }}
+              imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              env:
+                - name: NEO4J_URI
+                  value: {{ .Values.backups.neo4j.uri | default "bolt://neo4j:7687" | quote }}
+                - name: NEO4J_USER
+                  value: {{ .Values.backups.neo4j.user | default "neo4j" | quote }}
+                - name: NEO4J_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.backups.neo4j.passwordSecret }}
+                      key: password
+                - name: AGE_RECIPIENT
+                  value: {{ .Values.backups.ageRecipient | quote }}
+                - name: S3_ENDPOINT
+                  value: {{ .Values.backups.s3.endpoint | quote }}
+                - name: S3_BUCKET
+                  value: {{ .Values.backups.s3.bucket | quote }}
+                - name: S3_PREFIX
+                  value: {{ .Values.backups.s3.prefix | default "neo4j" | quote }}
+                - name: AWS_ACCESS_KEY_ID
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.backups.s3.credentialsSecret }}
+                      key: access_key_id
+                - name: AWS_SECRET_ACCESS_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: {{ .Values.backups.s3.credentialsSecret }}
+                      key: secret_access_key
+                - name: RETENTION_DAYS
+                  value: {{ .Values.backups.retentionDays | default 30 | quote }}
+              # Image entrypoint expected to:
+              #   1. neo4j-admin database backup --to-path=/tmp \
+              #      --compress neo4j
+              #   2. age -e -r $AGE_RECIPIENT /tmp/neo4j.backup
+              #   3. aws s3 cp ... s3://$S3_BUCKET/$S3_PREFIX/<date>.backup.age
+              #   4. retention sweep
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir: { sizeLimit: {{ .Values.backups.neo4j.tmpSize | default "20Gi" }} }
+{{- end }}

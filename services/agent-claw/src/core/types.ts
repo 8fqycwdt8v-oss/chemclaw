@@ -78,6 +78,12 @@ export type PermissionMode =
   // Tools not covered by allow/deny rules → fire permission_request hook;
   // if no resolution, deny.
   | "default"
+  // Phase 3 of the configuration concept (Initiative 5):
+  // Consult permission_request hook (DB-backed permission_policies);
+  // ALLOW when no policy matches. The "no opinion → permissive" inversion
+  // of `default` mode lets production routes opt into policy enforcement
+  // without flipping every tool call to deny on day one.
+  | "enforce"
   // Auto-approve filesystem-touching tools; other rules apply.
   | "acceptEdits"
   // No tool execution; route should emit a plan instead. Resolver returns
