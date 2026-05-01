@@ -31,7 +31,7 @@ def _active_trace_id() -> str | None:
     Imports otel lazily so common-only test runs (which don't install the
     OTel SDK in the parent venv) don't fail at import."""
     try:
-        from opentelemetry.trace import get_current_span  # type: ignore
+        from opentelemetry.trace import get_current_span
     except ImportError:
         return None
     span = get_current_span()

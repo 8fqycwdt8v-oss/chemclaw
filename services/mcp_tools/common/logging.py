@@ -82,7 +82,7 @@ def _build_json_handler(stream: Any) -> logging.Handler:
     # log path. orjson.dumps returns bytes, so wrap to decode.
     json_serializer: Any | None = None
     try:
-        import orjson  # type: ignore
+        import orjson
 
         def json_serializer(obj: Any, *args: Any, **kwargs: Any) -> str:  # noqa: ARG001
             # orjson rejects unknown types; default=str preserves
@@ -156,7 +156,7 @@ def configure_logging(level: str = "INFO", *, service: str | None = None) -> Non
         class _ServiceFilter(logging.Filter):
             def filter(self, record: logging.LogRecord) -> bool:
                 if not getattr(record, "service", None):
-                    record.service = service  # type: ignore[attr-defined]
+                    record.service = service
                 return True
 
         handler.addFilter(_ServiceFilter())

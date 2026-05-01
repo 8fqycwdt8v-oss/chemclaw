@@ -47,7 +47,7 @@ def bind_log_context(**fields: str) -> Token[LogContext]:
     current = dict(_ctx.get())
     for k, v in fields.items():
         if v:
-            current[k] = v  # type: ignore[literal-required]
+            current[k] = v
     return _ctx.set(current)  # type: ignore[arg-type]
 
 
