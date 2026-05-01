@@ -12,6 +12,8 @@ sprint 3. For now, this is plain JSON REST.
 from __future__ import annotations
 
 import logging
+import os
+import time
 import uuid
 from collections.abc import Awaitable, Callable
 from contextlib import asynccontextmanager
@@ -20,7 +22,9 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 
+from services.mcp_tools.common.log_context import bind_log_context, reset_log_context
 from services.mcp_tools.common.logging import configure_logging
+from services.mcp_tools.common.user_hash import hash_user
 
 
 # Standard error codes used in the {error, detail} envelope. Services should
@@ -72,7 +76,7 @@ def create_app(
     Probe paths (/healthz, /readyz, /internal/*) are always exempt; the
     `/internal/` exemption rejects path-traversal segments (`..`).
     """
-    configure_logging(log_level)
+    configure_logging(log_level, service=name)
     # Imported lazily so unit tests of `auth.py` don't drag in FastAPI.
     from services.mcp_tools.common.auth import _require_or_skip
     from services.mcp_tools.common.scopes import SERVICE_SCOPES
@@ -204,6 +208,22 @@ def create_app(
             claims = verify_mcp_token(parts[1].strip(), expected_audience=name)
             request.state.mcp_claims = claims
         except McpAuthError as exc:
+            # Always log MCP auth failures — in dev mode the request is
+            # still allowed through (ADR 006), but the failure remains an
+            # operationally interesting signal. Hash the user before logging
+            # (claims has been verified-failed so we don't have a real user
+            # here, but if the token's claim subset is recoverable we'd
+            # surface it; for now the placeholder is empty).
+            log.warning(
+                "MCP token verification failed",
+                extra={
+                    "event": "mcp_auth_failed",
+                    "error_code": "MCP_AUTH_FAILED",
+                    "service": name,
+                    "enforced": enforce,
+                    "err_msg": str(exc),
+                },
+            )
             if enforce:
                 return JSONResponse(
                     status_code=status.HTTP_401_UNAUTHORIZED,
@@ -213,7 +233,6 @@ def create_app(
                         "x-request-id": getattr(request.state, "request_id", ""),
                     },
                 )
-            log.warning("MCP token verification failed (dev mode, allowing): %s", exc)
             request.state.mcp_claims = None
             return await call_next(request)
 
@@ -226,11 +245,17 @@ def create_app(
         if enforce and effective_scope:
             if effective_scope not in claims.scopes:
                 log.warning(
-                    "scope check failed: %s required %s, token has %s (user=%s)",
+                    "scope check failed: %s required %s, token has %s",
                     name,
                     effective_scope,
                     list(claims.scopes),
-                    claims.user,
+                    extra={
+                        "event": "mcp_scope_denied",
+                        "error_code": "MCP_SCOPE_DENIED",
+                        "service": name,
+                        "required_scope": effective_scope,
+                        "user": hash_user(getattr(claims, "user", "") or ""),
+                    },
                 )
                 return JSONResponse(
                     status_code=status.HTTP_403_FORBIDDEN,
@@ -241,6 +266,22 @@ def create_app(
                     headers={"x-request-id": getattr(request.state, "request_id", "")},
                 )
 
+        # Bind the hashed user onto the log context for the duration of
+        # `call_next`. The handler (and any sub-middleware) sees `user`
+        # on every log record it emits. We deliberately don't manage
+        # the lifetime with try/finally because Starlette's
+        # BaseHTTPMiddleware wraps `call_next` in an anyio task — the
+        # binding is local to THIS middleware's task context and
+        # vanishes automatically when control returns to
+        # `add_request_id`.
+        #
+        # The access-log emission in `add_request_id` runs in its own
+        # (parent) task context, which never saw this binding, so that
+        # middleware re-binds `user` from `request.state.mcp_claims`
+        # before emitting — see the comment there for details.
+        user_hash = hash_user(getattr(claims, "user", "") or "")
+        if user_hash:
+            bind_log_context(user=user_hash)
         return await call_next(request)
 
     @app.middleware("http")
@@ -248,10 +289,95 @@ def create_app(
         request: Request,
         call_next: Callable[[Request], Awaitable[Response]],
     ) -> Response:
+        # Each MCP service hosts a `service` value that flows from
+        # create_app(name=...) onto every log record (via the
+        # `_ServiceFilter` set up in configure_logging). The request_id
+        # binding scope is per-request only.
         rid = request.headers.get("x-request-id") or str(uuid.uuid4())
         request.state.request_id = rid
-        response = await call_next(request)
+        # Validate the session_id header before binding it to the log
+        # context: an attacker stuffing SMILES / a CMP code into the
+        # header would otherwise land it in Loki via the `session_id`
+        # passthrough field (which the redaction filter intentionally
+        # skips because real ids look benign). Accept only UUID-shaped
+        # values; silently drop anything else.
+        raw_session = request.headers.get("x-session-id") or ""
+        valid_session = ""
+        if raw_session:
+            try:
+                uuid.UUID(raw_session)
+                valid_session = raw_session
+            except (ValueError, AttributeError):
+                valid_session = ""
+        token = bind_log_context(
+            request_id=rid,
+            session_id=valid_session,
+        )
+        started = time.monotonic()
+        try:
+            response = await call_next(request)
+        except Exception:
+            # Per-request access log even on exception, then re-raise so the
+            # exception handlers below can map it to a status code.
+            duration_ms = int((time.monotonic() - started) * 1000)
+            log.exception(
+                "request failed before response",
+                extra={
+                    "event": "http_request_failed",
+                    "method": request.method,
+                    "path": request.url.path,
+                    "duration_ms": duration_ms,
+                },
+            )
+            reset_log_context(token)
+            raise
+        duration_ms = int((time.monotonic() - started) * 1000)
+
+        # Re-bind the user hash for the access-log emit. The auth
+        # middleware's binding does NOT propagate back here because
+        # Starlette's BaseHTTPMiddleware wraps `call_next` in a fresh
+        # contextvars context (see https://www.starlette.io/middleware/),
+        # so any inner-middleware ContextVar.set is local to that nested
+        # context and disappears when call_next returns. By reading
+        # `request.state.mcp_claims` (which IS shared via the request
+        # object) we can re-bind here just for the access log emit.
+        # Without this, every authenticated request emits an access log
+        # with no `user` field — silently breaking per-user Loki queries.
+        user_token = None
+        claims = getattr(request.state, "mcp_claims", None)
+        if claims is not None:
+            user_raw = getattr(claims, "user", "") or ""
+            if user_raw:
+                user_hash = hash_user(user_raw)
+                if user_hash:
+                    user_token = bind_log_context(user=user_hash)
+
+        # Skip access logs for probe endpoints — they fire every few
+        # seconds from k8s liveness/readiness and would dominate the log
+        # volume. Operators can re-enable by setting LOG_ACCESS_PROBES=true
+        # if a probe failure investigation needs the trail.
+        if request.url.path in ("/healthz", "/readyz") and (
+            os.getenv("LOG_ACCESS_PROBES", "").lower() != "true"
+        ):
+            response.headers["x-request-id"] = rid
+            if user_token is not None:
+                reset_log_context(user_token)
+            reset_log_context(token)
+            return response
+        log.info(
+            "http request",
+            extra={
+                "event": "http_request",
+                "method": request.method,
+                "path": request.url.path,
+                "status": response.status_code,
+                "duration_ms": duration_ms,
+            },
+        )
         response.headers["x-request-id"] = rid
+        if user_token is not None:
+            reset_log_context(user_token)
+        reset_log_context(token)
         return response
 
     @app.exception_handler(ValueError)

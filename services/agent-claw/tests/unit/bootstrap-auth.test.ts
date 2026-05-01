@@ -126,13 +126,19 @@ describe("setupAuthAndErrorHandler — error handler mapping", () => {
 
     app.errorHandler!(thrown, req, reply);
     expect(reply.code).toHaveBeenCalledWith(401);
-    expect(reply.send).toHaveBeenCalledWith({
-      error: "unauthenticated",
-      detail: "x-user-entra-id header is required",
-    });
+    // Envelope is additive over the legacy {error, detail} shape:
+    // cycle-2 adds message / request_id / trace_id / hint so a 401
+    // can be linked back to a Loki log line. objectContaining keeps
+    // the test stable as new optional fields are added.
+    expect(reply.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: "unauthenticated",
+        detail: "x-user-entra-id header is required",
+      }),
+    );
   });
 
-  it("non-MissingUserError preserves statusCode (production hides detail)", () => {
+  it("non-MissingUserError preserves statusCode and does not leak err.message", () => {
     const app = makeAppStub();
     const cfg = { CHEMCLAW_DEV_MODE: false } as never;
     setupAuthAndErrorHandler(app as never, cfg);
@@ -142,14 +148,25 @@ describe("setupAuthAndErrorHandler — error handler mapping", () => {
 
     app.errorHandler!(err, req, reply);
     expect(reply.code).toHaveBeenCalledWith(503);
-    // In production, detail must be undefined (not "boom — internal detail").
-    expect(reply.send).toHaveBeenCalledWith({
-      error: "internal",
-      detail: undefined,
-    });
+    // Cycle-2 defense-in-depth: the response body emits the same
+    // generic placeholder regardless of dev mode (Postgres / MCP
+    // errors regularly carry SMILES / compound codes embedded in
+    // err.message). Operators pivot via trace_id from the response →
+    // server log to read the full err.message.
+    expect(reply.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: "internal",
+        detail: "internal error — see server logs",
+      }),
+    );
+    const sentBody = reply.send.mock.calls[0][0];
+    expect(JSON.stringify(sentBody)).not.toContain("boom");
   });
 
-  it("non-MissingUserError exposes detail in dev mode", () => {
+  it("non-MissingUserError does NOT echo err.message even in dev mode", () => {
+    // Cycle-2 defense-in-depth — same generic body in dev as in prod.
+    // The diagnostic err.message is in the structured server log;
+    // operator pivots via trace_id.
     const app = makeAppStub();
     const cfg = { CHEMCLAW_DEV_MODE: true } as never;
     setupAuthAndErrorHandler(app as never, cfg);
@@ -158,10 +175,14 @@ describe("setupAuthAndErrorHandler — error handler mapping", () => {
     const err = Object.assign(new Error("boom — dev detail"), { statusCode: 503 });
 
     app.errorHandler!(err, req, reply);
-    expect(reply.send).toHaveBeenCalledWith({
-      error: "internal",
-      detail: "boom — dev detail",
-    });
+    expect(reply.send).toHaveBeenCalledWith(
+      expect.objectContaining({
+        error: "internal",
+        detail: "internal error — see server logs",
+      }),
+    );
+    const sentBody = reply.send.mock.calls[0][0];
+    expect(JSON.stringify(sentBody)).not.toContain("boom");
   });
 
   it("error without statusCode defaults to 500", () => {

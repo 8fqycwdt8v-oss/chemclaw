@@ -1,0 +1,32 @@
+# Grafana datasource provisioning — wired automatically at container start.
+#
+# `loki` is the only datasource ChemClaw provisions; ad-hoc Prometheus /
+# Tempo / Postgres datasources can be added by an operator via the UI.
+
+apiVersion: 1
+
+datasources:
+  - name: Loki
+    # Explicit UID — the dashboards reference `uid: loki` in every
+    # panel's datasource. Without this line, Grafana auto-generates a
+    # UID from the lowercased name (which happens to be `loki` so
+    # things appear to work), and an operator who renames the
+    # datasource would silently break every dashboard.
+    uid: loki
+    type: loki
+    access: proxy
+    url: http://loki:3100
+    isDefault: true
+    editable: false
+    jsonData:
+      # Larger queries (last 24h dashboards) sometimes fall foul of the
+      # default 11000-line cap. Bump generously for dev; lower in prod.
+      maxLines: 50000
+      # Derived field — when a log line contains `trace_id`, render it
+      # as a clickable link to the (future) Tempo / Langfuse OTel UI.
+      # Operator must set GRAFANA_TEMPO_URL env var to enable.
+      derivedFields:
+        - matcherRegex: '"trace_id"\s*:\s*"([0-9a-f]+)"'
+          name: trace_id
+          url: "${__value.raw}"
+          urlDisplayLabel: "Open trace"

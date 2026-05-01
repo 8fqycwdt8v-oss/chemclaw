@@ -1,0 +1,90 @@
+# Promtail config for ChemClaw structured-log shipping.
+#
+# Reads container stdout from the host's /var/lib/docker/containers/*.log
+# files (mounted read-only into the Promtail container by docker-compose),
+# parses each line as JSON, and ships to Loki.
+#
+# Cardinality discipline:
+#   - LABELS (indexed, must stay low-cardinality):
+#       * service       — agent-claw | paperclip | mcp-<name> |
+#                         kg-experiments | kg-hypotheses | kg-source-cache |
+#                         chunk-embedder | reaction-vectorizer |
+#                         contextual-chunker | session-reanimator |
+#                         session-purger | gepa-runner | skill-promoter |
+#                         forged-tool-validator
+#                         (the docker-compose service name with the
+#                         `chemclaw-` prefix stripped — see the relabel
+#                         block below).
+#       * level         — debug | info | warn | error | fatal
+#       * compose_proj  — the docker-compose project name (default `chemclaw`)
+#   - PARSED FIELDS (NOT indexed; searchable via LogQL filters):
+#       * trace_id, request_id, session_id, user, error_code, event,
+#         tool_id, duration_ms, ...everything else from the JSON
+#
+# Adding a new label requires careful thought — every distinct value
+# becomes a new Loki stream. trace_id / request_id / session_id / user
+# are intentionally NOT labels because they're high-cardinality.
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+
+positions:
+  filename: /tmp/promtail/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: chemclaw_containers
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 5s
+        # Only ship logs from containers in the chemclaw compose project.
+        # Filtering at scrape time keeps the host's other workloads from
+        # leaking into Loki.
+        filters:
+          - name: label
+            values: ["com.docker.compose.project=chemclaw"]
+    relabel_configs:
+      # Set `service` label from the container name (stripped of the
+      # `chemclaw-` prefix — `chemclaw-mcp-rdkit` becomes `mcp-rdkit`).
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/?chemclaw-(.+)"
+        target_label: service
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_project"]
+        target_label: compose_proj
+      # Drop everything else Promtail wants to add (logger / image /
+      # network / etc.) so the label set stays bounded.
+      - action: labelallow
+        regex: "service|compose_proj"
+    pipeline_stages:
+      # Parse the JSON message into the record. Fields that don't exist
+      # silently disappear from the parsed record (no error).
+      - json:
+          expressions:
+            level: level
+            ts: timestamp
+            request_id: request_id
+            session_id: session_id
+            trace_id: trace_id
+            user: user
+            error_code: error_code
+            event: event
+      # Promote `level` to a label so LogQL queries can filter on it
+      # without parsing every line.
+      - labels:
+          level:
+      # Use the JSON timestamp as the log line's timestamp when
+      # available; falls back to Promtail's receive time otherwise.
+      - timestamp:
+          source: ts
+          format: RFC3339Nano
+          fallback_formats:
+            - RFC3339
+          action_on_failure: skip
+      # Drop k8s-style /healthz / /readyz access lines if any service
+      # doesn't honour LOG_ACCESS_PROBES — keeps the volume manageable.
+      - match:
+          selector: '{service=~".+"} |~ "GET /(healthz|readyz)"'
+          action: drop

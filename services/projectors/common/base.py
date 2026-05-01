@@ -282,6 +282,7 @@ class BaseProjector(ABC):
     async def _process_row(
         self, work_conn: psycopg.AsyncConnection[dict[str, Any]], row: dict[str, Any]
     ) -> None:
+        import time as _t
         event_id = row["id"]
         event_type = row["event_type"]
         payload = row["payload"] or {}
@@ -300,6 +301,7 @@ class BaseProjector(ABC):
             {"request_id": request_id, "event_id": event_id, "projector": self.name},
         )
         should_ack = True
+        started = _t.monotonic()
 
         try:
             if (
@@ -318,12 +320,24 @@ class BaseProjector(ABC):
                 )
         except PermanentHandlerError as exc:
             log_ctx.warning(
-                "[%s] permanent handler error on event %s: %s (acking to stop retries)",
-                self.name, event_id, exc,
+                "permanent handler error on event %s: %s (acking to stop retries)",
+                event_id, exc,
+                extra={
+                    "event": "projector_handler_failed",
+                    "error_code": "PROJECTOR_HANDLER_FAILED_PERMANENT",
+                    "event_type": event_type,
+                    "duration_ms": int((_t.monotonic() - started) * 1000),
+                },
             )
         except Exception:
             log_ctx.exception(
-                "[%s] transient handler error on event %s; NOT acking", self.name, event_id
+                "transient handler error on event %s; NOT acking", event_id,
+                extra={
+                    "event": "projector_handler_failed",
+                    "error_code": "PROJECTOR_HANDLER_FAILED_TRANSIENT",
+                    "event_type": event_type,
+                    "duration_ms": int((_t.monotonic() - started) * 1000),
+                },
             )
             should_ack = False
 
@@ -340,4 +354,13 @@ class BaseProjector(ABC):
                 (event_id, self.name),
             )
         await work_conn.commit()
-        log_ctx.debug("[%s] acked %s (%s)", self.name, event_id, event_type)
+        log_ctx.info(
+            "acked %s",
+            event_id,
+            extra={
+                "event": "projector_ack",
+                "event_type": event_type,
+                "handler_duration_ms": int((_t.monotonic() - started) * 1000),
+                "ack_status": "ok",
+            },
+        )

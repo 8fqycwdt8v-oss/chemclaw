@@ -1,0 +1,16 @@
+# Tells Grafana to load every JSON file in this directory as a dashboard.
+
+apiVersion: 1
+
+providers:
+  - name: ChemClaw
+    orgId: 1
+    folder: "ChemClaw"
+    type: file
+    disableDeletion: false
+    editable: true
+    updateIntervalSeconds: 30
+    allowUiUpdates: true
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

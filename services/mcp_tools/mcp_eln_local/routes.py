@@ -19,8 +19,8 @@ from typing import Annotated
 import psycopg
 from fastapi import Body, FastAPI, HTTPException
 
-from . import models as M
-from . import queries as Q
+from . import models as M  # noqa: N812 — `M` is the project-wide models alias
+from . import queries as Q  # noqa: N812 — `Q` is the project-wide queries alias
 
 
 def _acquire():

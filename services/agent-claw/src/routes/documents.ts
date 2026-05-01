@@ -12,8 +12,10 @@
 import type { FastifyInstance, FastifyRequest, FastifyReply } from "fastify";
 import type { Pool } from "pg";
 import type { Config } from "../config.js";
+import { runWithRequestContext } from "../core/request-context.js";
 import { withUserContext } from "../db/with-user-context.js";
 import { postJson } from "../mcp/postJson.js";
+import { hashUser } from "../observability/user-hash.js";
 import { z } from "zod";
 
 const _FetchOut = z.object({
@@ -35,9 +37,33 @@ export interface DocumentsRouteDeps {
 }
 
 export function registerDocumentsRoute(app: FastifyInstance, deps: DocumentsRouteDeps): void {
-  app.get("/api/documents/:id/original", async (req: FastifyRequest, reply: FastifyReply) => {
-    const { id } = req.params as { id: string };
+  app.get("/api/documents/:id/original", (req: FastifyRequest, reply: FastifyReply) => {
+    // Wrap in AsyncLocalStorage so the postJson call to mcp-doc-fetcher
+    // forwards the request user identity (JWT minted with the right
+    // `user` claim) AND the cross-process correlation headers
+    // (x-request-id, x-session-id) — without this wrapper the document
+    // fetch lands at the MCP service with no caller context, defeating
+    // the cross-service log correlation guarantee.
     const user = deps.getUser(req);
+    return runWithRequestContext(
+      {
+        userEntraId: user,
+        signal: req.signal,
+        requestId: req.id,
+        userHash: hashUser(user),
+      },
+      () => handleDocumentsOriginal(req, reply, deps, user),
+    );
+  });
+}
+
+async function handleDocumentsOriginal(
+  req: FastifyRequest,
+  reply: FastifyReply,
+  deps: DocumentsRouteDeps,
+  user: string,
+): Promise<void> {
+    const { id } = req.params as { id: string };
 
     // Validate UUID format.
     const uuidRe = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
@@ -104,5 +130,4 @@ export function registerDocumentsRoute(app: FastifyInstance, deps: DocumentsRout
     reply.raw.setHeader("Content-Length", bytes.length);
     reply.hijack();
     reply.raw.end(bytes);
-  });
 }

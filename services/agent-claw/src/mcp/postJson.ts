@@ -46,6 +46,23 @@ function authHeaders(service: string, explicitUserEntraId?: string): Record<stri
   return token ? { Authorization: `Bearer ${token}` } : {};
 }
 
+/**
+ * Build correlation headers (X-Request-Id, X-Session-Id) for the
+ * outbound call. Read from the AsyncLocalStorage RequestContext so the
+ * Python-side `add_request_id` middleware binds the SAME id into its
+ * log context. Without this, every outbound call lands at the MCP
+ * service with a freshly-generated id and the cross-process
+ * correlation that the Pino mixin promises is broken at the boundary.
+ */
+function correlationHeaders(): Record<string, string> {
+  const ctx = getRequestContext();
+  if (!ctx) return {};
+  const out: Record<string, string> = {};
+  if (ctx.requestId) out["x-request-id"] = ctx.requestId;
+  if (ctx.sessionId) out["x-session-id"] = ctx.sessionId;
+  return out;
+}
+
 export interface RequestOptions {
   /** Override the user identity for this single call. Normally not needed
    * — postJson reads from the AsyncLocalStorage request context that the
@@ -111,6 +128,7 @@ export async function postJson<TRes>(
       headers: {
         "content-type": "application/json",
         ...authHeaders(service, opts.userEntraId),
+        ...correlationHeaders(),
       },
       body: JSON.stringify(body),
       signal,
@@ -155,6 +173,7 @@ export async function getJson<TRes>(
       headers: {
         "content-type": "application/json",
         ...authHeaders(service, opts.userEntraId),
+        ...correlationHeaders(),
       },
       signal,
     });

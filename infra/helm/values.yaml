@@ -13,6 +13,30 @@ global:
     user: chemclaw
     passwordSecret: chemclaw-pg-password
     passwordKey: password
+  # LOG_USER_SALT — salts the per-user hash that flows into Loki log
+  # records and the audit_log table. Required outside dev mode; the
+  # TS / Python helpers throw at first use when unset and
+  # CHEMCLAW_DEV_MODE != true. Generate via `openssl rand -hex 32`.
+  #
+  # CRITICAL: this value MUST match the Postgres `app.log_user_salt`
+  # parameter set via:
+  #   ALTER DATABASE chemclaw SET app.log_user_salt = '<same-value>';
+  # Otherwise audit_log hashes will not line up with Loki user hashes
+  # for the same person, breaking cross-layer correlation.
+  #
+  # Leave secretName empty for dev clusters running with
+  # CHEMCLAW_DEV_MODE=true (this chart does not set that flag; it is
+  # the operator's responsibility).
+  logUserSalt:
+    secretName: ""    # e.g. chemclaw-log-user-salt
+    secretKey: salt
+  # MCP Bearer-token signing key (ADR 006). Required outside dev mode;
+  # generate via `openssl rand -hex 32`. When unset, agent-claw mints
+  # no JWTs and Python MCP services accept unsigned requests only when
+  # MCP_AUTH_DEV_MODE=true is also set.
+  mcpAuth:
+    signingKeySecret: ""    # e.g. chemclaw-mcp-auth-signing-key
+    signingKeyField: key
 
 # ── Core services (always deployed) ──────────────────────────────────────────
 

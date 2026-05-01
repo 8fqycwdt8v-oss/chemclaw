@@ -1,0 +1,71 @@
+{
+  "uid": "chemclaw-overview",
+  "title": "ChemClaw — Overview",
+  "tags": ["chemclaw", "overview"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Error rate by service",
+      "type": "timeseries",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (service) (count_over_time({service=~\".+\", level=~\"error|fatal\"}[1m]))",
+          "refId": "A",
+          "legendFormat": "{{service}}"
+        }
+      ],
+      "options": {
+        "legend": { "displayMode": "list", "placement": "bottom", "showLegend": true }
+      }
+    },
+    {
+      "id": 2,
+      "title": "Top error codes (last 6h)",
+      "type": "table",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "topk(20, sum by (error_code, service) (count_over_time({service=~\".+\", level=~\"warn|error|fatal\"} | json | error_code != \"\" [6h])))",
+          "refId": "A",
+          "format": "table"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "Total log volume (per minute)",
+      "type": "timeseries",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (service) (count_over_time({service=~\".+\"}[1m]))",
+          "refId": "A",
+          "legendFormat": "{{service}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Recent errors (live tail)",
+      "type": "logs",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 16, "w": 24, "h": 12 },
+      "targets": [
+        {
+          "expr": "{service=~\".+\", level=~\"error|fatal\"}",
+          "refId": "A"
+        }
+      ],
+      "options": { "showTime": true, "wrapLogMessage": true }
+    }
+  ]
+}

@@ -85,8 +85,18 @@ def chat(
                 if response.status_code >= 400:
                     response.read()
                     snippet = response.text[:500]
+                    rid = response.headers.get("x-request-id", "")
+                    if rid:
+                        _stderr.print(
+                            f"[dim](server request_id: {rid} — include in bug reports)[/dim]"
+                        )
                     _stdout.print(snippet)
                     raise typer.Exit(code=EXIT_SERVER_ERROR)
+
+                if verbose:
+                    rid = response.headers.get("x-request-id", "")
+                    if rid:
+                        _stderr.print(f"[dim]server request_id: {rid}[/dim]")
 
                 exit_code = _consume_stream(response, store=store, user=cfg.user, verbose=verbose)
                 raise typer.Exit(code=exit_code)
@@ -141,9 +151,23 @@ def _consume_stream(
 
         if etype == "error":
             err = event.get("error", "<unknown error>")
+            # The error frame now carries optional request_id / trace_id
+            # alongside the legacy `error` code (additive shape — see
+            # services/agent-claw/src/streaming/sse.ts). Surfacing both
+            # to the user makes a streaming failure traceable in Loki +
+            # Langfuse without needing the server-log access role.
+            rid = event.get("request_id")
+            tid = event.get("trace_id")
             if saw_text:
                 _stdout.print()
             _stdout.print(f"[red]{err}[/red]")
+            if rid or tid:
+                parts = []
+                if rid:
+                    parts.append(f"request_id={rid}")
+                if tid:
+                    parts.append(f"trace_id={tid}")
+                _stderr.print(f"[dim]({' · '.join(parts)})[/dim]")
             return EXIT_SERVER_ERROR
 
         if etype == "finish":

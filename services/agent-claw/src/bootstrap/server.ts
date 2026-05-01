@@ -67,5 +67,18 @@ export async function buildServer(cfg: Config): Promise<FastifyInstance> {
     allowList: (req) => req.url === "/healthz" || req.url === "/readyz",
   });
 
+  // Echo `x-request-id` on every response so clients can correlate a
+  // failure ticket back to a server log line + Langfuse trace. The id
+  // itself comes from `genReqId` above (header → fallback UUID); this
+  // hook just makes sure it appears on the wire even when a handler
+  // never explicitly set it. Skips probes to keep them as cheap as
+  // possible (k8s probes don't need correlation).
+  app.addHook("onSend", async (req, reply, payload) => {
+    if (req.url !== "/healthz" && req.url !== "/readyz") {
+      reply.header("x-request-id", req.id);
+    }
+    return payload;
+  });
+
   return await app;
 }

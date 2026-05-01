@@ -26,6 +26,7 @@ import type { ToolRegistry } from "../tools/registry.js";
 import { Budget } from "../core/budget.js";
 import { PromptRegistry } from "../prompts/registry.js";
 import { runWithRequestContext } from "../core/request-context.js";
+import { hashUser } from "../observability/user-hash.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 import { hydrateScratchpad } from "../core/session-state.js";
 import { lifecycle } from "../core/runtime.js";
@@ -300,10 +301,17 @@ export function registerDeepResearchRoute(
     // Wrap in AsyncLocalStorage so outbound MCP calls inherit the user's
     // identity (mirrors /api/chat) and the upstream AbortSignal so a
     // mid-stream disconnect cancels in-flight postJson / getJson calls.
-    (req, reply) =>
-      runWithRequestContext(
-        { userEntraId: deps.getUser(req), signal: req.signal },
+    (req, reply) => {
+      const u = deps.getUser(req);
+      return runWithRequestContext(
+        {
+          userEntraId: u,
+          signal: req.signal,
+          requestId: req.id,
+          userHash: hashUser(u),
+        },
         () => handleDeepResearch(req, reply, deps),
-      ),
+      );
+    },
   );
 }

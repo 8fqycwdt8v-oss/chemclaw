@@ -40,7 +40,7 @@ AllChem: Any = _AllChem
 Crippen: Any = _Crippen
 Descriptors: Any = _Descriptors
 Lipinski: Any = _Lipinski
-rdMolDescriptors: Any = _rdMolDescriptors
+rdMolDescriptors: Any = _rdMolDescriptors  # noqa: N816 — RDKit's actual module name
 MolToInchiKey: Any = _MolToInchiKey
 
 from services.mcp_tools.common.app import create_app

@@ -1,0 +1,68 @@
+{
+  "uid": "chemclaw-tools",
+  "title": "ChemClaw — Tool calls",
+  "tags": ["chemclaw", "tools"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "30s",
+  "time": { "from": "now-6h", "to": "now" },
+  "panels": [
+    {
+      "id": 1,
+      "title": "Tool invocation rate (per minute)",
+      "type": "timeseries",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (tool_id) (count_over_time({service=\"agent-claw\"} | json | event = \"tool_invoked\" [1m]))",
+          "refId": "A",
+          "legendFormat": "{{tool_id}}"
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "title": "Tool failure rate (per minute)",
+      "type": "timeseries",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (tool_id) (count_over_time({service=\"agent-claw\"} | json | event = \"tool_failed\" [1m]))",
+          "refId": "A",
+          "legendFormat": "{{tool_id}}"
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "title": "MCP retry events",
+      "type": "timeseries",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 8, "w": 24, "h": 8 },
+      "targets": [
+        {
+          "expr": "sum by (operation) (count_over_time({service=\"agent-claw\"} | json | event =~ \"retry_(scheduled|exhausted|skipped)\" [1m]))",
+          "refId": "A",
+          "legendFormat": "{{operation}}"
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "title": "Recent tool failures (live)",
+      "type": "logs",
+      "datasource": { "type": "loki", "uid": "loki" },
+      "gridPos": { "x": 0, "y": 16, "w": 24, "h": 10 },
+      "targets": [
+        {
+          "expr": "{service=\"agent-claw\"} | json | event = \"tool_failed\"",
+          "refId": "A"
+        }
+      ],
+      "options": { "showTime": true, "wrapLogMessage": true }
+    }
+  ]
+}

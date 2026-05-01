@@ -33,6 +33,7 @@
 //                                + emits generic "internal" error event
 
 import type { FastifyReply, FastifyRequest } from "fastify";
+import { trace } from "@opentelemetry/api";
 import {
   BudgetExceededError,
   SessionBudgetExceededError,
@@ -41,6 +42,26 @@ import { OptimisticLockError } from "../core/session-store.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 import { writeEvent } from "../streaming/sse.js";
 import { isAbortLikeError } from "./chat-helpers.js";
+
+/**
+ * Build the SSE error frame's optional correlation IDs. Pulls trace_id
+ * from the active OTel span (when one is active) and request_id from
+ * the Fastify request — both surface in the same record path so a
+ * client SSE consumer can `error.trace_id` / `error.request_id` to
+ * jump straight to the Langfuse trace / Loki log line.
+ */
+function correlationIds(req: FastifyRequest): { trace_id?: string; request_id?: string } {
+  const out: { trace_id?: string; request_id?: string } = {};
+  const span = trace.getActiveSpan();
+  if (span) {
+    const sc = span.spanContext();
+    if (sc.traceId && /[1-9a-f]/.test(sc.traceId)) {
+      out.trace_id = sc.traceId;
+    }
+  }
+  if (req.id) out.request_id = req.id;
+  return out;
+}
 
 export type StreamFinishReason =
   | "stop"
@@ -75,10 +96,11 @@ export function classifyStreamError(
   // Distinguish typed control-flow / quota errors so clients can render
   // appropriate UI. instanceof checks instead of err.name strings —
   // safer under minification and rename refactors.
+  const ids = correlationIds(req);
   if (err instanceof SessionBudgetExceededError) {
     req.log.warn({ err }, "chat stream stopped: session budget exceeded");
     if (!conn.closed) {
-      writeEvent(reply, { type: "error", error: "session_budget_exceeded" });
+      writeEvent(reply, { type: "error", error: "session_budget_exceeded", ...ids });
     }
     return { finishReason: "session_budget_exceeded" };
   }
@@ -90,14 +112,14 @@ export function classifyStreamError(
     // generic else below.
     req.log.warn({ err }, "chat stream stopped: per-turn budget exceeded");
     if (!conn.closed) {
-      writeEvent(reply, { type: "error", error: "budget_exceeded" });
+      writeEvent(reply, { type: "error", error: "budget_exceeded", ...ids });
     }
     return { finishReason: "budget_exceeded" };
   }
   if (err instanceof OptimisticLockError) {
     req.log.warn({ err }, "chat stream stopped: concurrent modification");
     if (!conn.closed) {
-      writeEvent(reply, { type: "error", error: "concurrent_modification" });
+      writeEvent(reply, { type: "error", error: "concurrent_modification", ...ids });
     }
     return { finishReason: "concurrent_modification" };
   }
@@ -134,7 +156,7 @@ export function classifyStreamError(
   // it.
   req.log.error({ err }, "chat stream failed");
   if (!conn.closed) {
-    writeEvent(reply, { type: "error", error: "internal" });
+    writeEvent(reply, { type: "error", error: "internal", ...ids });
   }
   return { finishReason: "error" };
 }

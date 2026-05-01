@@ -17,6 +17,7 @@ import { planStore } from "../core/plan-mode.js";
 import { hydrateScratchpad } from "../core/session-state.js";
 import { lifecycle } from "../core/runtime.js";
 import { runWithRequestContext } from "../core/request-context.js";
+import { hashUser } from "../observability/user-hash.js";
 import { writeEvent, setupSse } from "../streaming/sse.js";
 import type { ToolContext } from "../core/types.js";
 import type { Pool } from "pg";
@@ -93,7 +94,12 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
       // and the upstream client's AbortSignal — a mid-stream disconnect
       // here cancels both LLM calls and any in-flight MCP fetches.
       const result = await runWithRequestContext(
-        { userEntraId: user, signal: req.signal },
+        {
+          userEntraId: user,
+          signal: req.signal,
+          requestId: req.id,
+          userHash: hashUser(user),
+        },
         () =>
           runHarness({
             messages: plan.messages,

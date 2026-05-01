@@ -8,6 +8,7 @@
 //   - All methods throw SandboxError on failure.
 
 import type { Config } from "../config.js";
+import { getLogger } from "../observability/logger.js";
 
 // ---------------------------------------------------------------------------
 // Types
@@ -257,8 +258,14 @@ export function buildSandboxClient(cfg: Pick<Config, "E2B_API_KEY" | "E2B_TEMPLA
         await instance.kill();
       } catch (err) {
         // Non-fatal — log but don't throw.
-         
-        console.warn(`SandboxClient: kill() failed for sandbox ${handle.id}: ${(err as Error).message}`);
+        getLogger("agent-claw.sandbox").warn(
+          {
+            event: "sandbox_kill_failed",
+            sandbox_id: handle.id,
+            err_msg: (err as Error).message,
+          },
+          "SandboxClient.kill() failed",
+        );
       }
     },
   };

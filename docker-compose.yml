@@ -20,6 +20,22 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-chemclaw}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}
       POSTGRES_INITDB_ARGS: "--encoding=UTF8 --locale=C"
+    # Observability — slow-query logging + lock-wait warnings so pathological
+    # queries surface in `docker logs chemclaw-postgres` before they pin a
+    # connection. log_line_prefix matches what Promtail's postgres pipeline
+    # parses (see infra/promtail/promtail-config.yaml).
+    command:
+      - "postgres"
+      - "-c"
+      - "log_min_duration_statement=${POSTGRES_LOG_MIN_DURATION_MS:-500}"
+      - "-c"
+      - "log_lock_waits=on"
+      - "-c"
+      - "log_statement=ddl"
+      - "-c"
+      - "log_temp_files=0"
+      - "-c"
+      - "log_line_prefix=%m [%p] user=%u db=%d app=%a "
     ports:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
@@ -528,6 +544,97 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # Loki + Promtail + Grafana — structured-log aggregation.
+  #
+  # Loki stores JSON log lines emitted by every ChemClaw service,
+  # indexed by a SMALL set of low-cardinality labels (service, level)
+  # only. Trace_id / request_id / session_id / user (hashed) /
+  # error_code / event are PARSED FIELDS — searchable via LogQL filters
+  # but never indexed, so cardinality stays bounded.
+  #
+  # Promtail tails every container's stdout via the Docker socket, parses
+  # the JSON, attaches the labels, and ships to Loki. Grafana then reads
+  # from Loki for the dashboards provisioned in infra/grafana/.
+  #
+  # All three services share the existing `observability` profile so a
+  # single `docker compose --profile observability up -d` brings up
+  # Langfuse + the new logs stack together.
+  # -------------------------------------------------------------
+  loki:
+    image: grafana/loki:3.2.1
+    container_name: chemclaw-loki
+    restart: unless-stopped
+    profiles: ["observability"]
+    command: -config.file=/etc/loki/local-config.yaml
+    # Bind to loopback only — Loki ships with NO authentication. The
+    # observability profile is intended for local dev / single-host
+    # deployments; in production, fronting Loki with an auth proxy is
+    # the operator's responsibility (set LOKI_BIND=0.0.0.0 explicitly
+    # to expose, with eyes open).
+    ports:
+      - "${LOKI_BIND:-127.0.0.1}:${LOKI_PORT:-3100}:3100"
+    volumes:
+      - loki-data:/loki
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://127.0.0.1:3100/ready"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
+  promtail:
+    image: grafana/promtail:3.2.1
+    container_name: chemclaw-promtail
+    restart: unless-stopped
+    profiles: ["observability"]
+    depends_on:
+      loki:
+        condition: service_healthy
+    command: -config.file=/etc/promtail/promtail-config.yaml
+    volumes:
+      # Read-only access to the Docker socket so Promtail can enumerate
+      # containers; the actual log files are read from the host's
+      # docker container log directory.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+      - ./infra/promtail/promtail-config.yaml:/etc/promtail/promtail-config.yaml:ro
+      - promtail-positions:/tmp/promtail
+    security_opt:
+      - no-new-privileges:true
+
+  grafana:
+    image: grafana/grafana:11.3.1
+    container_name: chemclaw-grafana
+    restart: unless-stopped
+    profiles: ["observability"]
+    depends_on:
+      loki:
+        condition: service_healthy
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-chemclaw_grafana_dev_pw}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+      GF_AUTH_ANONYMOUS_ENABLED: "false"
+      GF_FEATURE_TOGGLES_ENABLE: "publicDashboards"
+    # Bind to loopback only — even with admin auth, exposing Grafana
+    # publicly without an SSO proxy is a footgun. Operators set
+    # GRAFANA_BIND=0.0.0.0 explicitly when they intend public access.
+    ports:
+      - "${GRAFANA_BIND:-127.0.0.1}:${GRAFANA_PORT:-3001}:3000"
+    volumes:
+      - grafana-data:/var/lib/grafana
+      - ./infra/grafana/provisioning:/etc/grafana/provisioning:ro
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://127.0.0.1:3000/api/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # forged-tool-validator — nightly validation harness (Phase D.5)
   # Profile: optimizer — `docker compose --profile optimizer up`
   # Runs at 02:00 UTC nightly; also runs immediately on startup.
@@ -941,3 +1048,6 @@ volumes:
   mcp-doc-fetcher-tmp:
   langfuse-clickhouse-data:
   langfuse-postgres-data:
+  loki-data:
+  grafana-data:
+  promtail-positions:

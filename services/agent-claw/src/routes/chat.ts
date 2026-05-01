@@ -31,6 +31,7 @@ import { hydrateScratchpad, persistTurnState } from "../core/session-state.js";
 import { lifecycle } from "../core/runtime.js";
 import { buildSystemPromptForTurn, resolveSession } from "./chat-setup.js";
 import { runWithRequestContext } from "../core/request-context.js";
+import { hashUser } from "../observability/user-hash.js";
 import type {
   Message,
   ToolContext,
@@ -575,10 +576,17 @@ export function registerChatRoute(app: FastifyInstance, deps: ChatRouteDeps): vo
     // (see core/request-context.ts and mcp/postJson.ts:authHeaders). Also
     // thread the upstream client's AbortSignal so postJson / getJson abort
     // their fetches when the client disconnects mid-stream.
-    (req, reply) =>
-      runWithRequestContext(
-        { userEntraId: deps.getUser(req), signal: req.signal },
+    (req, reply) => {
+      const u = deps.getUser(req);
+      return runWithRequestContext(
+        {
+          userEntraId: u,
+          signal: req.signal,
+          requestId: req.id,
+          userHash: hashUser(u),
+        },
         () => handleChat(req, reply, deps),
-      ),
+      );
+    },
   );
 }

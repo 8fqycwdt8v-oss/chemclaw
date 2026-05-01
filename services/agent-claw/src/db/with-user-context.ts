@@ -19,11 +19,25 @@
 
 import { type Pool, type PoolClient } from "pg";
 
+import { hashUser } from "../observability/user-hash.js";
+import { getLogger } from "../observability/logger.js";
+
+// Slow-transaction threshold. Any withUserContext block whose total
+// duration exceeds this emits a structured warn record (event=db_slow_txn)
+// so operators can spot pathological queries in Loki without enabling
+// log_min_duration_statement on every Postgres replica. Default chosen
+// conservatively at 200ms — typical project-scoped reads finish in <50ms;
+// a 200ms ceiling catches missing indexes and N+1 patterns.
+const SLOW_TXN_MS = Number(process.env.DB_SLOW_TXN_MS ?? "200");
+
 export async function withUserContext<T>(
   pool: Pool,
   userEntraId: string,
   fn: (client: PoolClient) => Promise<T>,
 ): Promise<T> {
+  const log = getLogger("agent-claw.db");
+  const userHash = hashUser(userEntraId);
+  const started = Date.now();
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
@@ -31,10 +45,27 @@ export async function withUserContext<T>(
       "SELECT set_config('app.current_user_entra_id', $1, true)",
       [userEntraId],
     );
+    log.debug(
+      { event: "rls_context_set", user: userHash },
+      "RLS context set on transaction",
+    );
     const result = await fn(client);
     await client.query("COMMIT");
+    const duration = Date.now() - started;
+    if (duration >= SLOW_TXN_MS) {
+      log.warn(
+        {
+          event: "db_slow_txn",
+          error_code: "DB_SLOW_QUERY",
+          duration_ms: duration,
+          user: userHash,
+        },
+        "RLS-scoped DB transaction exceeded slow threshold",
+      );
+    }
     return result;
   } catch (err) {
+    const duration = Date.now() - started;
     try {
       await client.query("ROLLBACK");
     } catch (rbErr) {
@@ -42,6 +73,16 @@ export async function withUserContext<T>(
       // to the pool in an unknown state.
       (err as { rollbackError?: unknown }).rollbackError = rbErr;
     }
+    log.error(
+      {
+        event: "db_txn_failed",
+        duration_ms: duration,
+        user: userHash,
+        err_name: (err as Error).name,
+        err_msg: (err as Error).message,
+      },
+      "RLS-scoped DB transaction failed; rolled back",
+    );
     throw err;
   } finally {
     client.release();

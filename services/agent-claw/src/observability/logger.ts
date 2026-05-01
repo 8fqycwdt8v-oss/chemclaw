@@ -22,11 +22,54 @@
 
 import { pino, type Logger } from "pino";
 
+import { logContextFields } from "./log-context.js";
+
+// Defense-in-depth redaction. Pino's `redact` paths apply BEFORE the JSON
+// formatter, so secrets in known-shape fields are scrubbed even if a caller
+// accidentally logs a raw header object or tool input. The list expands the
+// original (Authorization / Cookie) with fields that frequently carry
+// chemistry-sensitive content (raw SMILES, prompts, tool input/output) so
+// they're at least filtered when they pass through the logger; the
+// LiteLLM-redactor backed log filter catches free-form prose.
+// Pino's redact-path syntax — fields scrubbed with "***" before serialization.
+//
+// The list is conservative: it covers fields that frequently carry
+// chemistry-sensitive content (SMILES strings, prompts, tool I/O) AND
+// the error-message channels where Postgres / MCP errors otherwise
+// leak SMILES + compound codes embedded in driver error strings ("invalid
+// input for type … near 'CMP-…'"). Without these, Pino's auth-only
+// redaction catches headers but leaves error payloads exposed.
+//
+// NOTE: Pino redact does NOT run regexes over field values — it only
+// scrubs known field paths. A full content-aware redactor (matching the
+// Python-side LiteLLM redactor) is a separate egress filter, deferred
+// to a follow-up. For now, the path-based list catches the
+// known-risky fields by name.
 const ROOT_REDACT_PATHS = [
   "req.headers.authorization",
   "req.headers.cookie",
   "*.authorization",
   "*.cookie",
+  "*.password",
+  "*.token",
+  "*.api_key",
+  "*.apiKey",
+  "tool_input.smiles",
+  "tool_output.smiles",
+  "messages[*].content",
+  "prompt",
+  "raw_user",
+  // Error-detail channels — Postgres errors carry "Failing row contains
+  // (...)" with column values literally embedded; UpstreamError.detail
+  // wraps the raw upstream response body. Both are reliable carriers of
+  // chemistry-sensitive content. We deliberately do NOT redact `err.message`
+  // / `err.stack` — those are diagnostic and an operator triaging a
+  // production incident needs them. The TS-side has no full LiteLLM
+  // redactor (H1 in the first audit, follow-up); content-aware redaction
+  // for free-form prose is a deferred follow-up. For now: scrub the
+  // known-risky fields by name and let messages through.
+  "err.detail",
+  "*.detail",
 ];
 
 let _root: Logger | null = null;
@@ -38,6 +81,11 @@ function buildRoot(): Logger {
     base: { service: "agent-claw" },
     redact: { paths: ROOT_REDACT_PATHS, censor: "***" },
     timestamp: pino.stdTimeFunctions.isoTime,
+    // Auto-enrich every record with correlation fields when an HTTP request
+    // / OTel span is active. Returning {} when nothing is available is a
+    // no-op for Pino. The mixin is called per-call, not per-instance, so
+    // child loggers inherit it automatically.
+    mixin: () => logContextFields(),
   });
 }
 

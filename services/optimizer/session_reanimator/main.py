@@ -30,6 +30,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from datetime import datetime, timezone
 from typing import Any
 
@@ -175,7 +176,14 @@ async def resume_session(
         proxy where header forgery isn't a concern).
     """
     base = settings.agent_base_url.rstrip("/")
-    headers: dict[str, str] = {}
+    # Mint a fresh request_id per resume so the agent-claw log line, the
+    # plan/run inner harness, the projector handlers, and the
+    # error_events row (if anything fails) can all be tied back to this
+    # specific tick + session. Without this, every reanimator-triggered
+    # resume on the agent side gets a randomly-generated UUID and the
+    # tick summary loses any link to the per-session work it caused.
+    request_id = str(uuid.uuid4())
+    headers: dict[str, str] = {"x-request-id": request_id}
     url: str
 
     if settings.mcp_auth_signing_key:
@@ -225,6 +233,9 @@ async def amain() -> None:
     async with httpx.AsyncClient() as client:
         while True:
             tick_started = datetime.now(timezone.utc)
+            sessions_resumed = 0
+            sessions_skipped = 0
+            errors = 0
             try:
                 resumable = await find_resumable(settings)
                 if resumable:
@@ -241,12 +252,13 @@ async def amain() -> None:
                     # peer in the same tick until the next 5-minute cycle.
                     try:
                         log.info(
-                            "resuming session %s (user=%s, attempt=%d/%d)",
-                            sid, uid, row["auto_resume_count"] + 1, row["auto_resume_cap"],
+                            "resuming session %s (attempt=%d/%d)",
+                            sid, row["auto_resume_count"] + 1, row["auto_resume_cap"],
                         )
                         result = await resume_session(client, settings, sid, uid)
                         if result["ok"]:
                             body = result["body"]
+                            sessions_resumed += 1
                             log.info(
                                 "session %s resumed: finish=%s steps=%d count=%d",
                                 sid,
@@ -255,19 +267,35 @@ async def amain() -> None:
                                 body.get("auto_resume_count", 0),
                             )
                         else:
+                            sessions_skipped += 1
                             log.warning(
                                 "session %s resume failed (%d): %s",
                                 sid, result["status"], result["body"],
                             )
                     except Exception as session_exc:  # noqa: BLE001 — keep batch alive
+                        errors += 1
                         log.exception(
                             "session %s resume raised; skipping to next: %s",
                             sid, session_exc,
                         )
             except Exception as exc:  # noqa: BLE001 — keep the loop alive
+                errors += 1
                 log.exception("tick failed: %s", exc)
 
             elapsed = (datetime.now(timezone.utc) - tick_started).total_seconds()
+            # Tick summary — single record per tick so a Loki query can
+            # plot reanimator activity by minute without grepping every
+            # per-session line.
+            log.info(
+                "reanimator tick complete",
+                extra={
+                    "event": "reanimator_tick",
+                    "tick_duration_ms": int(elapsed * 1000),
+                    "sessions_resumed": sessions_resumed,
+                    "sessions_skipped": sessions_skipped,
+                    "errors": errors,
+                },
+            )
             sleep_for = max(0, settings.poll_interval_seconds - int(elapsed))
             await asyncio.sleep(sleep_for)
 

@@ -14,6 +14,9 @@
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Config } from "../config.js";
 
+import { ERROR_CODES } from "../errors/codes.js";
+import { envelopeFor } from "../errors/envelope.js";
+
 /**
  * Thrown when a non-dev request arrives without x-user-entra-id. Mapped to
  * a 401 by the global error handler below.
@@ -52,22 +55,48 @@ export function setupAuthAndErrorHandler(
   };
 
   // Map MissingUserError → 401 with the standard envelope so missing-auth-header
-  // failures don't surface as opaque 500s.
+  // failures don't surface as opaque 500s. Additive new fields (`message`,
+  // `request_id`, `trace_id`, `hint`) sit alongside the legacy
+  // `{error, detail}` shape so existing CLI / clients keep working while
+  // any new caller can correlate failures back to a Langfuse trace + log.
   app.setErrorHandler((err, req, reply) => {
     if (err instanceof MissingUserError) {
+      const env = envelopeFor(
+        ERROR_CODES.AGENT_UNAUTHENTICATED,
+        "x-user-entra-id header is required",
+        { hint: "set the upstream auth proxy or use CHEMCLAW_DEV_MODE=true locally" },
+      );
       return reply.code(401).send({
         error: "unauthenticated",
-        detail: "x-user-entra-id header is required",
+        detail: env.message,
+        message: env.message,
+        request_id: env.request_id,
+        trace_id: env.trace_id,
+        hint: env.hint,
       });
     }
-    // Default Fastify error handler — preserves prior behavior for everything else.
     req.log.error({ err }, "unhandled error");
     // err is typed as FastifyError | Error | unknown across Fastify versions;
-    // narrow defensively before reading statusCode/message.
-    const e = err as { statusCode?: number; message?: string };
+    // narrow defensively before reading statusCode.
+    //
+    // Why we DO NOT echo `e.message` (or `e.detail`) into the response
+    // body even in dev mode: Postgres / MCP / OS errors regularly carry
+    // SMILES, compound codes, or NCE project ids embedded in their
+    // message strings. The Pino redact path scrubs them in the LOG, but
+    // a 500 response body shipped to the client would leak them
+    // verbatim. The trace_id + request_id are sufficient to look up the
+    // full err.message in the structured server log.
+    const e = err as { statusCode?: number };
+    const env = envelopeFor(
+      ERROR_CODES.AGENT_INTERNAL,
+      "internal error — check server logs for trace_id",
+    );
     return reply.code(e.statusCode ?? 500).send({
       error: "internal",
-      detail: cfg.CHEMCLAW_DEV_MODE ? e.message : undefined,
+      detail: "internal error — see server logs",
+      message: env.message,
+      request_id: env.request_id,
+      trace_id: env.trace_id,
     });
   });
 

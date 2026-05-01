@@ -160,9 +160,31 @@ def redact_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
     Does not mutate the input; returns a new list.
     """
-    import json
+    redacted, _counts = redact_messages_with_counts(messages)
+    return redacted
 
-    redacted = []
+
+def redact_messages_with_counts(
+    messages: list[dict[str, Any]],
+) -> tuple[list[dict[str, Any]], dict[str, int]]:
+    """Same shape as redact_messages, but also returns aggregated
+    redaction counts (`{kind: total_count}`) summed across every
+    string redacted in the message list.
+
+    This avoids the double-redact pattern where a counts-aggregator
+    would re-run `redact()` over every message just to read `.counts`
+    — for a 200-row OFAT-campaign assistant turn that's a measurable
+    hot-path cost. Callers that need both (litellm_redactor.callback)
+    use this; callers that only need the wire payload keep using the
+    old `redact_messages` shim above.
+    """
+    redacted: list[dict[str, Any]] = []
+    totals: dict[str, int] = {}
+
+    def _bump(kind_counts: dict[str, int]) -> None:
+        for kind, n in kind_counts.items():
+            totals[kind] = totals.get(kind, 0) + n
+
     for m in messages:
         if not isinstance(m, dict):
             redacted.append(m)
@@ -170,14 +192,18 @@ def redact_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
         copy = dict(m)
         content = m.get("content")
         if isinstance(content, str):
-            copy["content"] = redact(content).text
+            r = redact(content)
+            _bump(r.counts)
+            copy["content"] = r.text
         elif isinstance(content, list):
             # Anthropic-style list of content blocks.
             new_blocks = []
             for block in content:
                 if isinstance(block, dict) and isinstance(block.get("text"), str):
                     nb = dict(block)
-                    nb["text"] = redact(block["text"]).text
+                    r = redact(block["text"])
+                    _bump(r.counts)
+                    nb["text"] = r.text
                     new_blocks.append(nb)
                 else:
                     new_blocks.append(block)
@@ -202,10 +228,12 @@ def redact_messages(messages: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     if isinstance(args, str) and args:
                         # Redact the JSON string verbatim — patterns are
                         # length-bounded so this is safe on any size payload.
-                        new_fn["arguments"] = redact(args).text
+                        r = redact(args)
+                        _bump(r.counts)
+                        new_fn["arguments"] = r.text
                     new_tc["function"] = new_fn
                 new_tcs.append(new_tc)
             copy["tool_calls"] = new_tcs
 
         redacted.append(copy)
-    return redacted
+    return redacted, totals

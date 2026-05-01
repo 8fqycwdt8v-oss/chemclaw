@@ -92,7 +92,15 @@ def test_redact_skips_oversized_input() -> None:
 def test_redact_skips_rxn_regex_when_arrows_absent() -> None:
     """Sanity: prose without two '>' chars must not invoke the RXN_SMILES
     regex. We can't observe the skip directly, but we can assert that the
-    redactor finishes instantly on a 1MB string of pure prose."""
+    redactor finishes well below the cost of actually running the
+    bounded-quantifier RXN regex on the input.
+
+    Threshold = 2.5s. With the skip path active the redactor finishes
+    in <100ms locally and ~600ms-1s on slow CI runners (GitHub Actions
+    standard tier). Without the skip path the bounded RXN regex on 1MB
+    of input takes 3-5s in profile traces — well above the threshold,
+    so a regression that drops the cheap O(n) arrow count would still
+    trip the assertion."""
     import time
 
     payload = "ChemClaw is great. " * (1024 * 1024 // 19)
@@ -100,7 +108,7 @@ def test_redact_skips_rxn_regex_when_arrows_absent() -> None:
     out = redact(payload)
     elapsed = time.monotonic() - start
 
-    assert elapsed < 0.5, f"redact() took {elapsed:.2f}s on 1MB arrow-free prose"
+    assert elapsed < 2.5, f"redact() took {elapsed:.2f}s on 1MB arrow-free prose"
     assert out.counts.get("RXN_SMILES", 0) == 0
 
 
