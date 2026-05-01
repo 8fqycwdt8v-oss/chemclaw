@@ -102,12 +102,16 @@ async function loadReactionRows(
 ): Promise<ReactionRow[]> {
   return await withUserContext(pool, userEntraId, async (client) => {
     const q = await client.query(
-      `SELECT r.id::text               AS reaction_id,
+      `SELECT r.id::text                                           AS reaction_id,
               r.rxn_smiles, r.rxno_class,
-              e.temperature_c          AS temp_c,
-              e.time_min, e.solvent,
-              (e.conditions_json->>'catalyst_loading_mol_pct')::numeric AS catalyst_loading_mol_pct,
-              e.base, e.yield_pct
+              -- Z2: structured cols on reactions win; JSONB fallback for
+              -- rows the conditions_normalizer projector hasn't covered yet.
+              COALESCE(r.temperature_c, (e.tabular_data->>'temp_c')::numeric)         AS temp_c,
+              COALESCE(r.time_min,      (e.tabular_data->>'time_min')::numeric)       AS time_min,
+              COALESCE(r.solvent,       e.tabular_data->>'solvent')                    AS solvent,
+              (e.tabular_data->>'catalyst_loading_mol_pct')::numeric                  AS catalyst_loading_mol_pct,
+              COALESCE(r.base,          e.tabular_data->>'base')                       AS base,
+              e.yield_pct
          FROM reactions r
          JOIN experiments e ON e.id = r.experiment_id
         WHERE r.id = ANY($1::uuid[])`,
@@ -154,17 +158,24 @@ export function buildStatisticalAnalyzeTool(pool: Pool, mcpTabiclUrl: string) {
       if (input.question === "compare_conditions") {
         const rows = await withUserContext(pool, ctx.userEntraId, async (client) => {
           const q = await client.query<Record<string, unknown>>(
-            `SELECT CONCAT(COALESCE(e.solvent,'?'), '·',
-                          width_bucket(COALESCE(e.temperature_c,0), 0, 200, 10)::text) AS bucket_label,
+            `WITH effective AS (
+                SELECT r.id,
+                       COALESCE(r.solvent,       e.tabular_data->>'solvent')                          AS solvent,
+                       COALESCE(r.temperature_c, (e.tabular_data->>'temp_c')::numeric)                AS temp_c,
+                       e.yield_pct
+                  FROM reactions r
+                  JOIN experiments e ON e.id = r.experiment_id
+                 WHERE r.id = ANY($1::uuid[])
+                   AND e.yield_pct IS NOT NULL
+             )
+             SELECT CONCAT(COALESCE(solvent,'?'), '·',
+                          width_bucket(COALESCE(temp_c,0), 0, 200, 10)::text) AS bucket_label,
                     COUNT(*)::int AS n,
-                    AVG(e.yield_pct)::float8 AS mean_yield,
-                    percentile_cont(0.5) WITHIN GROUP (ORDER BY e.yield_pct)::float8 AS median_yield,
-                    percentile_cont(0.25) WITHIN GROUP (ORDER BY e.yield_pct)::float8 AS p25,
-                    percentile_cont(0.75) WITHIN GROUP (ORDER BY e.yield_pct)::float8 AS p75
-               FROM reactions r
-               JOIN experiments e ON e.id = r.experiment_id
-              WHERE r.id = ANY($1::uuid[])
-                AND e.yield_pct IS NOT NULL
+                    AVG(yield_pct)::float8 AS mean_yield,
+                    percentile_cont(0.5) WITHIN GROUP (ORDER BY yield_pct)::float8 AS median_yield,
+                    percentile_cont(0.25) WITHIN GROUP (ORDER BY yield_pct)::float8 AS p25,
+                    percentile_cont(0.75) WITHIN GROUP (ORDER BY yield_pct)::float8 AS p75
+               FROM effective
               GROUP BY bucket_label
               ORDER BY mean_yield DESC`,
             [input.reaction_ids],
