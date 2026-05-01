@@ -125,7 +125,8 @@ describe("buildFindSimilarReactionsTool — Z2 structured filters", () => {
     const found = calls.find(([q]) =>
       (typeof q === "string" ? q : q.text).includes("drfp_vector <=>"),
     );
-    return (found?.[1] as unknown[]) ?? [];
+    if (!found) return [];
+    return found[1];
   }
 
   it("forwards solvent param to SQL", async () => {
