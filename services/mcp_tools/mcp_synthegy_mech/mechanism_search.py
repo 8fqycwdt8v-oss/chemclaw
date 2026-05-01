@@ -18,6 +18,7 @@ is the rule-based environment that proposes candidate next states.
 """
 from __future__ import annotations
 
+import asyncio
 import heapq
 import logging
 from dataclasses import dataclass, field
@@ -25,6 +26,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from rdkit import Chem, RDLogger
 
+from services.mcp_tools.mcp_synthegy_mech._utils import smiles_tag as _hash_for_log
 from services.mcp_tools.mcp_synthegy_mech.vendored.molecule_set import (
     legal_moves_from_smiles,
 )
@@ -106,8 +108,12 @@ class MechanismSearch:
     async def search(self, src: str, dest: str) -> SearchResult:
         """Run A* from `src` SMILES until `dest` SMILES is reached or budget exhausted."""
 
-        src_canonical = _canonical(src)
-        dest_canonical = _canonical(dest)
+        # RDKit MolFromSmiles/MolToSmiles are synchronous C-extension calls.
+        # Wrapping in asyncio.to_thread keeps them off the event loop so a
+        # 400-node search doesn't stall every other concurrent HTTP request
+        # for ~200-800 ms. Same treatment for legal_moves_from_smiles below.
+        src_canonical = await asyncio.to_thread(_canonical, src)
+        dest_canonical = await asyncio.to_thread(_canonical, dest)
 
         if src_canonical == dest_canonical:
             return SearchResult(
@@ -130,7 +136,20 @@ class MechanismSearch:
 
         while open_list and nodes_explored < self.max_nodes:
             current = heapq.heappop(open_list)
-            current_canonical = _canonical(current.smiles)
+            current_canonical = await asyncio.to_thread(_canonical, current.smiles)
+
+            # Cycle-2 guard: drop unparseable nodes explicitly. _canonical
+            # falls back to returning the input string on RDKit parse failure;
+            # if we don't filter here, the move enumerator may emit further
+            # un-parseable moves and the search consumes its budget on garbage
+            # rather than producing a clean "truncated" diagnostic.
+            if Chem.MolFromSmiles(current.smiles) is None:
+                log.warning(
+                    "Skipping unparseable node (smiles len=%d, hash=%s)",
+                    len(current.smiles),
+                    _hash_for_log(current.smiles),
+                )
+                continue
 
             if current_canonical in closed:
                 continue
@@ -139,9 +158,16 @@ class MechanismSearch:
 
             history = current.reconstruct_path()[1:]  # exclude root
             try:
-                moves = self._possible_moves(current.smiles)
+                # legal_moves_from_smiles is vendored synchronous RDKit code —
+                # walks all bonds to enumerate ionization/attack candidates.
+                # Off-thread to avoid blocking the event loop.
+                moves = await asyncio.to_thread(self._possible_moves, current.smiles)
             except Exception as exc:  # pragma: no cover — defensive
-                log.warning("Move enumeration failed at node %r: %s", current.smiles[:80], exc)
+                log.warning(
+                    "Move enumeration failed at node hash=%s: %s",
+                    _hash_for_log(current.smiles),
+                    exc,
+                )
                 continue
 
             if not moves:
@@ -149,8 +175,12 @@ class MechanismSearch:
 
             scores = await self.policy(rxn_specifier, history, moves)
 
-            for move, score in zip(moves, scores):
-                if _canonical(move) == dest_canonical:
+            # Canonicalize the destination match in a single thread hop per
+            # batch, not per move (which would be N RDKit parses on the loop).
+            move_canonicals = await asyncio.to_thread(_batch_canonical, moves)
+
+            for move, move_canonical, score in zip(moves, move_canonicals, scores):
+                if move_canonical == dest_canonical:
                     final = Node(
                         smiles=move,
                         f=current.g + 1.0,
@@ -201,11 +231,28 @@ class MechanismSearch:
 
 
 def _canonical(smiles: str) -> str:
-    """Canonicalize a SMILES so equality compares structures, not strings."""
+    """Canonicalize a SMILES so equality compares structures, not strings.
+
+    On RDKit parse failure, returns the input unchanged. The search loop
+    detects this case explicitly via `Chem.MolFromSmiles(...) is None` and
+    drops the node — see the parse-failure guard inside `search()`.
+    """
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
-        return smiles  # let the search treat it as opaque rather than crash
+        return smiles
     try:
         return Chem.MolToSmiles(mol)
     except Exception:  # pragma: no cover — defensive
         return smiles
+
+
+def _batch_canonical(smiles_list: list[str]) -> list[str]:
+    """Canonicalize a batch in one thread hop.
+
+    Hot-path optimization: per-move canonicalization in the search inner
+    loop costs N event-loop hops per A* step, each one paying the asyncio
+    thread-pool dispatch overhead. Batching collapses N hops into 1.
+    """
+    return [_canonical(s) for s in smiles_list]
+
+

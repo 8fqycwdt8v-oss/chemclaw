@@ -30,8 +30,29 @@ from dataclasses import dataclass
 import httpx
 
 from services.mcp_tools.common.auth import McpAuthError, sign_mcp_token
+from services.mcp_tools.mcp_synthegy_mech._utils import smiles_tag as _smiles_tag
 
 log = logging.getLogger("mcp-synthegy-mech.xtb_validator")
+
+
+def _canonicalize_batch(smiles_list: list[str]) -> list[str]:
+    """Canonicalize a batch of SMILES via RDKit. Falls back to the input
+    string on parse failure so the caller can still look up by the original
+    key (and can detect failures via `compute_energy_deltas` returning None).
+    """
+    from rdkit import Chem  # noqa: PLC0415 — only call on validate path
+
+    out: list[str] = []
+    for s in smiles_list:
+        mol = Chem.MolFromSmiles(s)
+        if mol is None:
+            out.append(s)
+            continue
+        try:
+            out.append(Chem.MolToSmiles(mol))
+        except Exception:  # pragma: no cover — defensive
+            out.append(s)
+    return out
 
 _DEFAULT_TIMEOUT_S = 60.0  # xtb opt for small molecules takes ~5–30 s.
 _TARGET_SCOPE = "mcp_xtb:invoke"
@@ -71,11 +92,20 @@ class XtbValidator:
     async def validate(self, intermediates: list[str]) -> ValidationResult:
         """Compute single-point energies for each unique intermediate SMILES.
 
-        Deduplicates intermediates so we don't pay xtb's ~10 s cost twice
-        for the same state (the search occasionally revisits intermediates).
+        Cycle-2 fix M-2: dedup by RDKit canonical form, not by Python string
+        identity. Two SMILES like "c1ccccc1" and "C1=CC=CC=C1" both denote
+        benzene; without canonicalization the dedup misses the duplicate
+        and we'd pay xtb's ~10 s cost twice. Energies are stored under
+        canonical keys; `compute_energy_deltas` looks up by canonical too.
         """
-        unique = list(dict.fromkeys(intermediates))  # order-preserving dedupe
-        if not unique:
+        # Off-thread RDKit canonicalization (synchronous C-ext) — keeps the
+        # event loop responsive on a long path.
+        canonical_inputs = await asyncio.to_thread(_canonicalize_batch, intermediates)
+        # Order-preserving dedup by canonical form. Empty/None entries
+        # from RDKit parse failure are kept under their original key so
+        # the caller still sees them in `compute_energy_deltas`.
+        unique_canonical: list[str] = list(dict.fromkeys(canonical_inputs))
+        if not unique_canonical:
             return ValidationResult(energy_per_smiles={}, warnings=[])
 
         try:
@@ -89,25 +119,38 @@ class XtbValidator:
             )
 
         async with httpx.AsyncClient(timeout=self.timeout_s) as client:
-            tasks = [self._optimize_one(client, headers, smi) for smi in unique]
+            tasks = [self._optimize_one(client, headers, smi) for smi in unique_canonical]
             results = await asyncio.gather(*tasks, return_exceptions=True)
 
-        energy_map: dict[str, float] = {}
+        energy_map_canonical: dict[str, float] = {}
         warnings: list[str] = []
-        for smi, result in zip(unique, results):
+        for smi, result in zip(unique_canonical, results):
+            tag = _smiles_tag(smi)
+            if isinstance(result, asyncio.CancelledError):
+                # Never swallow CancelledError — propagate so the outer
+                # request's cancellation actually cancels.
+                raise result
             if isinstance(result, BaseException):
                 warnings.append(
-                    f"xTB validation failed for intermediate {smi[:40]!r}: "
-                    f"{type(result).__name__}: {str(result)[:120]}"
+                    f"xTB validation failed for intermediate {tag}: "
+                    f"{type(result).__name__}"
                 )
                 continue
             if result is None:
                 warnings.append(
-                    f"xTB returned no energy for intermediate {smi[:40]!r}; "
+                    f"xTB returned no energy for intermediate {tag}; "
                     f"see mcp-xtb logs."
                 )
                 continue
-            energy_map[smi] = result
+            energy_map_canonical[smi] = result
+
+        # Re-key the energy map back to the ORIGINAL SMILES so callers can
+        # look up by the same string they passed in. canonical_inputs is
+        # aligned with `intermediates` so we can map orig→canonical→energy.
+        energy_map: dict[str, float] = {}
+        for orig, canonical in zip(intermediates, canonical_inputs):
+            if canonical in energy_map_canonical:
+                energy_map[orig] = energy_map_canonical[canonical]
 
         return ValidationResult(energy_per_smiles=energy_map, warnings=warnings)
 
@@ -117,6 +160,7 @@ class XtbValidator:
         headers: dict[str, str],
         smiles: str,
     ) -> float | None:
+        tag = _smiles_tag(smiles)
         async with self._sem:
             try:
                 response = await client.post(
@@ -125,15 +169,14 @@ class XtbValidator:
                     headers=headers,
                 )
             except httpx.HTTPError as exc:
-                log.warning("HTTP error calling mcp-xtb for %r: %s", smiles[:40], exc)
+                log.warning("HTTP error calling mcp-xtb for %s: %s", tag, exc)
                 return None
 
             if response.status_code != 200:
                 log.warning(
-                    "mcp-xtb returned %d for %r: %s",
+                    "mcp-xtb returned %d for %s",
                     response.status_code,
-                    smiles[:40],
-                    response.text[:120],
+                    tag,
                 )
                 return None
 

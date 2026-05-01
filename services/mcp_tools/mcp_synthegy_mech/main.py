@@ -14,10 +14,13 @@ Architecture notes:
 - The LLM scoring policy in `llm_policy.py` calls ChemClaw's central LiteLLM
   proxy via `litellm.acompletion(api_base=$LITELLM_BASE_URL)` so every prompt
   traverses the redactor callback (`services/litellm_redactor/callback.py`).
-- xTB-based energy validation is wired in for Phase 3 but is a stub here:
-  when `validate_energies=True`, the response surfaces a warning and leaves
-  `energy_delta_hartree=None` per move. Phase 3 will implement the call to
-  mcp-xtb.
+- xTB-based energy validation is live via `XtbValidator` → `mcp-xtb`.
+  Populates `energy_delta_hartree` per move when `validate_energies=True`.
+  Failures surface as `warnings` entries; the mechanism itself still
+  returns successfully.
+- A server-side wall-clock timeout (270 s) caps runaway LLM spending if
+  the upstream is slow; cancellation propagates cleanly through both the
+  scoring policy and the xtb validator.
 
 Limitations (from the paper):
 - Ionic chemistry only — radicals and pericyclic mechanisms are upstream
@@ -26,6 +29,7 @@ Limitations (from the paper):
 """
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import re
@@ -49,6 +53,15 @@ from services.mcp_tools.mcp_synthegy_mech.xtb_validator import (
 # mcp-xtb URL for Phase 3 energy validation. Reads from env at module import
 # so tests can monkey-patch it via os.environ before TestClient construction.
 _DEFAULT_MCP_XTB_URL = os.environ.get("MCP_XTB_BASE_URL", "http://mcp-xtb:8010")
+
+# Cycle-3 cost cap. The agent-side timeout is 300 s
+# (TIMEOUT_SYNTHEGY_MECH_MS in elucidate_mechanism.ts). Without a matching
+# server-side wall-clock cap, a slow LiteLLM upstream lets the search loop
+# keep issuing LLM calls — and accumulating cost — long after the agent
+# gave up. We cap server-side at 270 s (30 s under the client) so the
+# search is cancelled cleanly before the client disconnects, freeing
+# LiteLLM resources and stopping the spending.
+_SERVER_SEARCH_TIMEOUT_S = 270.0
 
 log = logging.getLogger("mcp-synthegy-mech")
 settings = ToolSettings()
@@ -160,7 +173,34 @@ class ElucidateMechanismOut(BaseModel):
 
 # Crude but consistent with the paper's documented limitation: ionic chemistry
 # only. We surface a warning when the input looks radical-y or pericyclic.
-_RADICAL_HINT = re.compile(r"\[[A-Za-z]+\.[+-]?\d*\]")  # e.g. [O.] or [C.+]
+# Quantifiers are bounded per CLAUDE.md's "bound every quantifier" rule.
+# Element symbols are 1-3 chars (Uup, Uuh exist); explicit-charge tail is at
+# most 4 digits (no real molecule has more than that). 8 + tail keeps this
+# linear-time even on a 10 000-char input.
+_RADICAL_HINT = re.compile(r"\[[A-Za-z]{1,3}\.[+-]?\d{0,4}\]")  # e.g. [O.] or [C.+]
+
+# Synthegy's canonical prompt template uses these XML tags as structural
+# delimiters. Any user-supplied free-text field is concatenated *into* that
+# template — if a malicious caller types a closing tag mid-string, the LLM
+# can be tricked into reading subsequent text as instructions outside the
+# query block. Strip these tokens (case-insensitive) before concatenation.
+# Worst-case sans this stripper is biased scoring, not RCE (temperature=0.1,
+# no tool-calling on the scored prompt) — but biased scoring on a system
+# meant to act autonomously on pharma-data is its own integrity issue.
+_PROMPT_STRUCTURAL_TAGS = re.compile(
+    r"</?\s*(target_reaction|proposed_mechanism|potential_next_step|"
+    r"mechanism_evaluation|score_justification|score|query|analysis)\s*>",
+    re.IGNORECASE,
+)
+
+
+def _strip_prompt_tags(text: str) -> str:
+    """Remove Synthegy's structural XML tags from user-supplied free text.
+
+    Keeps the rest of the text intact; just neutralizes the delimiters that
+    would otherwise let a caller escape into instruction position. Idempotent.
+    """
+    return _PROMPT_STRUCTURAL_TAGS.sub("", text)
 
 
 def _diagnose_warnings(reactants: str, products: str) -> list[str]:
@@ -178,7 +218,10 @@ def _canonical_smiles(smiles: str) -> str:
     from rdkit import Chem  # noqa: PLC0415
     mol = Chem.MolFromSmiles(smiles)
     if mol is None:
-        raise ValueError(f"invalid SMILES: {smiles!r}")
+        # Don't echo the input value into the error — proprietary SMILES
+        # would round-trip through the response body. The request_id in the
+        # server log correlates to the rejected payload for debugging.
+        raise ValueError("invalid SMILES (RDKit parse failed)")
     return Chem.MolToSmiles(mol)
 
 
@@ -196,26 +239,32 @@ async def elucidate_mechanism(
     req: Annotated[ElucidateMechanismIn, Body(...)],
 ) -> ElucidateMechanismOut:
     # Validate inputs via RDKit canonicalization. Raises ValueError → 400.
-    reactants_canonical = _canonical_smiles(req.reactants_smiles)
-    products_canonical = _canonical_smiles(req.products_smiles)
+    # Off-thread because RDKit MolFromSmiles/MolToSmiles are synchronous
+    # C-extension calls (~0.5-2 ms each on normal-size molecules) and we
+    # don't want them stalling the event loop.
+    reactants_canonical = await asyncio.to_thread(_canonical_smiles, req.reactants_smiles)
+    products_canonical = await asyncio.to_thread(_canonical_smiles, req.products_smiles)
 
     warnings = _diagnose_warnings(req.reactants_smiles, req.products_smiles)
 
     # Build the prompt for the LLM policy. If the user supplied a guidance
     # prompt, prepend it as a "## Guidance" block before the canonical prompt
     # — the paper documents this materially boosts scoring (Figure 4E).
+    # User-supplied free text is run through `_strip_prompt_tags` first so
+    # that a closing-tag injection can't escape the canonical template's
+    # query/proposed_mechanism/score delimiters.
     prefix = prompt_canonical.prefix
     if req.guidance_prompt:
         prefix = (
             "## Guidance from caller\n\n"
-            + req.guidance_prompt.strip()
+            + _strip_prompt_tags(req.guidance_prompt.strip())
             + "\n\n"
             + prefix
         )
     if req.conditions:
         prefix = (
             "## Reaction conditions\n\n"
-            + req.conditions.strip()
+            + _strip_prompt_tags(req.conditions.strip())
             + "\n\n"
             + prefix
         )
@@ -228,10 +277,53 @@ async def elucidate_mechanism(
     )
 
     search = MechanismSearch(policy=policy, max_nodes=req.max_nodes)
-    result = await search.search(reactants_canonical, products_canonical)
+    try:
+        result = await asyncio.wait_for(
+            search.search(reactants_canonical, products_canonical),
+            timeout=_SERVER_SEARCH_TIMEOUT_S,
+        )
+    except asyncio.TimeoutError:
+        # Server wall-clock cap fired. The asyncio cancellation we triggered
+        # propagates through llm_policy and xtb_validator (both re-raise
+        # CancelledError) so outstanding LLM calls and httpx tasks are
+        # cancelled, freeing upstream resources. Return a graceful
+        # truncated response — the agent's TIMEOUT_SYNTHEGY_MECH_MS
+        # would otherwise abort the connection in 30 s anyway.
+        log.warning(
+            "Server-side search timeout fired after %.0fs (max_nodes=%d, model=%s)",
+            _SERVER_SEARCH_TIMEOUT_S,
+            req.max_nodes,
+            req.model,
+        )
+        warnings.append(
+            f"Server-side search timeout ({_SERVER_SEARCH_TIMEOUT_S:.0f}s) "
+            f"fired before completion. LLM cost is bounded; the moves list "
+            f"is empty. Reduce max_nodes or refine the guidance_prompt."
+        )
+        return ElucidateMechanismOut(
+            moves=[],
+            reactants_smiles=reactants_canonical,
+            products_smiles=products_canonical,
+            total_llm_calls=policy.stats.total_calls,
+            total_nodes_explored=0,
+            prompt_tokens=policy.stats.prompt_tokens,
+            completion_tokens=policy.stats.completion_tokens,
+            parse_failures=policy.stats.parse_failures,
+            upstream_errors=policy.stats.upstream_errors,
+            warnings=warnings,
+            truncated=True,
+        )
 
     # The path is [src, intermediate1, intermediate2, ..., dest]. Convert to
     # consecutive (from, to) moves with their scores.
+    # Cycle-2 fix M-3: pin the invariant that scores and path align.
+    # Otherwise zip(...) silently truncates if a future refactor diverges
+    # the two lengths, dropping moves from the response with no error.
+    if len(result.scores) != len(result.path):
+        raise RuntimeError(
+            f"Internal: search returned scores/path length mismatch "
+            f"({len(result.scores)} vs {len(result.path)})"
+        )
     move_endpoints: list[tuple[str, str]] = []
     for i in range(1, len(result.path)):
         move_endpoints.append((result.path[i - 1], result.path[i]))
@@ -267,8 +359,9 @@ async def elucidate_mechanism(
     if result.truncated:
         warnings.append(
             f"Search budget exhausted after {result.nodes_explored} nodes "
-            f"without reaching the product. Returned the search root only; "
-            f"increase max_nodes (currently {req.max_nodes}, max 400) or "
+            f"without reaching the product. The moves list is empty — "
+            f"the response carries no mechanism. "
+            f"Increase max_nodes (currently {req.max_nodes}, max 400) or "
             f"refine the guidance_prompt."
         )
 

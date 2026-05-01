@@ -24,8 +24,10 @@ import asyncio
 import logging
 import os
 import re
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
+
+from services.mcp_tools.mcp_synthegy_mech._utils import smiles_tag as _smiles_tag
 
 log = logging.getLogger("mcp-synthegy-mech.policy")
 
@@ -42,7 +44,6 @@ class PolicyStats:
     completion_tokens: int = 0
     parse_failures: int = 0
     upstream_errors: int = 0
-    rationales: list[str] = field(default_factory=list)
 
 
 class LiteLLMScoringPolicy:
@@ -98,6 +99,17 @@ class LiteLLMScoringPolicy:
             return []
         coros = [self._score_one(rxn, history, m) for m in moves]
         scores = await asyncio.gather(*coros, return_exceptions=False)
+        # Cycle-3 fix: defensively pin the gather contract. Today _score_one
+        # catches all non-CancelledError exceptions and returns 0.0, so
+        # `scores` is always the same length as `moves`. If a future change
+        # lets a non-CancelledError exception escape `_score_one`, gather's
+        # return_exceptions=False would silently produce a short list, and
+        # the search loop's positional zip(moves, scores) would silently
+        # misalign scores to wrong moves — corrupting the heuristic.
+        assert len(scores) == len(moves), (
+            f"policy.gather contract violated: {len(scores)} scores "
+            f"for {len(moves)} moves"
+        )
         return scores
 
     # ------------------------------------------------------------------
@@ -106,12 +118,28 @@ class LiteLLMScoringPolicy:
 
     async def _score_one(self, rxn: str, history: list[str], move: str) -> float:
         async with self._sem:
-            messages = self._build_messages(rxn, history, move)
             try:
+                # Cycle-2 fix H-3: keep _build_messages INSIDE the try.
+                # A bad `{step}` placeholder in self.suffix would otherwise
+                # raise KeyError out of _score_one and bubble through
+                # asyncio.gather (return_exceptions=False) → 500 to caller
+                # with no partial path.
+                messages = self._build_messages(rxn, history, move)
                 response = await self._acompletion(messages)
-            except Exception as exc:  # pragma: no cover — surfaced via stats
+            except asyncio.CancelledError:
+                # NEVER swallow CancelledError — it's the asyncio cooperative
+                # cancellation signal. Letting it propagate makes the search
+                # responsive to caller cancellation (request abort, timeout).
+                raise
+            except Exception as exc:
                 self.stats.upstream_errors += 1
-                log.warning("LiteLLM call failed for move %r: %s", move[:80], exc)
+                # Log a stable hash, not a SMILES prefix — proprietary
+                # compound structures must not appear in log aggregation.
+                log.warning(
+                    "LiteLLM call failed for move %s: %s",
+                    _smiles_tag(move),
+                    exc,
+                )
                 return 0.0
 
             self.stats.total_calls += 1
@@ -122,13 +150,14 @@ class LiteLLMScoringPolicy:
             score = self._parse_score(content)
             if score is None:
                 self.stats.parse_failures += 1
+                # Log only the move's hash and the parse-failure type. The
+                # raw LLM completion is intentionally not logged: it could
+                # echo redacted tokens or proprietary SMILES from the prompt.
                 log.warning(
-                    "Could not parse <score> from response (move=%r, head=%r)",
-                    move[:80],
-                    content[:120],
+                    "Could not parse <score> from response for move %s",
+                    _smiles_tag(move),
                 )
                 return 0.0
-            self.stats.rationales.append(content)
             return score
 
     async def _acompletion(self, messages: list[dict[str, Any]]) -> Any:
