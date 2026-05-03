@@ -110,7 +110,7 @@ app = create_app(
 
 class SinglePointOut(QmRespBase):
     energy_hartree: float | None = None
-    homo_lumo_eV: float | None = None
+    homo_lumo_eV: float | None = None  # noqa: N815 — eV is a chemistry unit
     dipole: list[float] | None = None
 
 
@@ -456,7 +456,7 @@ def _build_scan_constrain(coord: CoordDef) -> str:
 class MdIn(QmReqBase):
     n_steps: int = Field(default=2000, ge=10, le=_MAX_MD_STEPS)
     dt_fs: float = Field(default=1.0, gt=0.0, le=10.0)
-    temp_K: float = Field(default=298.15, gt=0.0)
+    temp_K: float = Field(default=298.15, gt=0.0)  # noqa: N815 — K is a chemistry unit
 
 
 class MdOut(QmRespBase):
@@ -802,9 +802,9 @@ class RedoxIn(QmReqBase):
 
 
 class RedoxOut(QmRespBase):
-    redox_potential_V: float | None = None
-    vertical_ie_eV: float | None = None
-    vertical_ea_eV: float | None = None
+    redox_potential_V: float | None = None  # noqa: N815 — V is a chemistry unit
+    vertical_ie_eV: float | None = None      # noqa: N815 — eV is a chemistry unit
+    vertical_ea_eV: float | None = None      # noqa: N815 — eV is a chemistry unit
     reference: str = "SHE"
 
 
