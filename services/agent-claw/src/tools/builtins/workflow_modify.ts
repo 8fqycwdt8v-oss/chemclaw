@@ -43,7 +43,7 @@ export function buildWorkflowModifyTool(pool: Pool) {
           `new_definition is ${definitionBytes} bytes; max is ${MAX_DEFINITION_BYTES}`,
         );
       }
-      const actor = ctx.userEntraId ?? "__agent__";
+      const actor = ctx.userEntraId;
       await modifyDefinition(
         pool, input.run_id, input.new_definition, actor, input.justification,
       );

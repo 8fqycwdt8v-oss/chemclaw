@@ -52,7 +52,7 @@ export function buildEnqueueBatchTool(pool: Pool) {
     execute: async (ctx, input) => {
       const batchId = await createBatch(
         pool, input.name, input.task_kind, input.payloads.length,
-        ctx.userEntraId ?? "__agent__",
+        ctx.userEntraId,
       );
       const { inserted } = await enqueueRows(
         pool, batchId,
@@ -67,7 +67,7 @@ export function buildEnqueueBatchTool(pool: Pool) {
         "batch enqueued",
       );
       await appendAudit(pool, {
-        actor: ctx.userEntraId ?? "__agent__",
+        actor: ctx.userEntraId,
         action: "queue.enqueue",
         target: batchId,
         afterValue: { task_kind: input.task_kind, total: input.payloads.length, inserted },

@@ -55,7 +55,7 @@ export function buildPromoteWorkflowToToolTool(pool: Pool) {
     outputSchema: PromoteWorkflowToToolOut,
     annotations: { readOnly: false },
     execute: async (ctx, input) => {
-      const actor = ctx.userEntraId ?? "__agent__";
+      const actor = ctx.userEntraId;
       const scope = input.scope ?? "private";
 
       // Admin gate. Private scope is always allowed; project / org / global
@@ -72,7 +72,8 @@ export function buildPromoteWorkflowToToolTool(pool: Pool) {
           if (!input.scope_id) throw new Error("scope='org' requires scope_id");
           const ok = await isAdmin(pool, actor, "org_admin", input.scope_id);
           if (!ok) throw new Error(`scope='org' requires org_admin role for org ${input.scope_id}`);
-        } else if (scope === "project") {
+        } else {
+          // scope === "project" — exhaustive over the discriminated union.
           if (!input.scope_id) throw new Error("scope='project' requires scope_id");
           const ok = await isAdmin(pool, actor, "project_admin", input.scope_id);
           if (!ok) throw new Error(`scope='project' requires project_admin role for project ${input.scope_id}`);
@@ -84,10 +85,11 @@ export function buildPromoteWorkflowToToolTool(pool: Pool) {
           `SELECT version FROM workflows WHERE id = $1::uuid`,
           [input.workflow_id],
         );
-        if (ver.rowCount === 0) {
+        const verRow = ver.rows[0];
+        if (!verRow) {
           throw new Error(`workflow not found: ${input.workflow_id}`);
         }
-        const version = ver.rows[0]!.version;
+        const version = verRow.version;
         // Forged tools live in skill_library with kind='forged_tool'. The
         // prompt_md field carries the workflow reference as JSON so the
         // harness's forged-tool dispatcher can materialize it as a

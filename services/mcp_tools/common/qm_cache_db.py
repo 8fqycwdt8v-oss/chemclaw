@@ -64,7 +64,10 @@ def _build_dsn() -> str:
 
 
 @contextmanager
-def _connect() -> Iterator[psycopg.Connection]:
+def _connect() -> Iterator[psycopg.Connection[dict[str, Any]]]:
+    # row_factory=dict_row makes every fetched row a dict[str, Any] rather
+    # than the default tuple. Parameterising Connection here keeps mypy
+    # honest about cur.fetchone() / cur.fetchall() row types downstream.
     conn = psycopg.connect(_build_dsn(), row_factory=dict_row)
     try:
         yield conn

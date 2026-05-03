@@ -32,12 +32,14 @@ export async function createBatch(
   total: number,
   createdBy: string,
 ): Promise<string> {
-  return withSystemContext(pool, async (client) => {
+  return await withSystemContext(pool, async (client) => {
     const res = await client.query<{ id: string }>(
       `INSERT INTO task_batches (name, kind, total, created_by) VALUES ($1, $2, $3, $4) RETURNING id::text AS id`,
       [name, kind, total, createdBy],
     );
-    return res.rows[0]!.id;
+    const inserted = res.rows[0];
+    if (!inserted) throw new Error("task_batches INSERT returned no rows");
+    return inserted.id;
   });
 }
 
@@ -47,7 +49,7 @@ export async function enqueueRows(
   rows: EnqueueRow[],
 ): Promise<{ inserted: number }> {
   if (rows.length === 0) return { inserted: 0 };
-  return withSystemContext(pool, async (client) => {
+  return await withSystemContext(pool, async (client) => {
     let inserted = 0;
     for (const row of rows) {
       const idemKey =
@@ -82,7 +84,7 @@ export async function inspectBatch(
   batchId: string,
   sampleN: number = 5,
 ): Promise<BatchSummary & { sample_results: Array<{ task_kind: string; status: string; result: unknown }>; }> {
-  return withSystemContext(pool, async (client) => {
+  return await withSystemContext(pool, async (client) => {
     const sumRes = await client.query<BatchSummary>(
       `SELECT id::text AS batch_id, name, kind, total, succeeded, failed, cancelled,
               created_at::text AS created_at,

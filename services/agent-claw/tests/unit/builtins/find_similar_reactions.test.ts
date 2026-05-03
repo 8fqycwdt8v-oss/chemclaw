@@ -106,3 +106,89 @@ describe("buildFindSimilarReactionsTool", () => {
     expect(r.success).toBe(false);
   });
 });
+
+describe("buildFindSimilarReactionsTool — Z2 structured filters", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  function _findSelectSql(client: { querySpy: { mock: { calls: unknown[][] } } }): string {
+    const calls = client.querySpy.mock.calls as Array<[string | { text: string }, ...unknown[]]>;
+    const found = calls.find(([q]) =>
+      (typeof q === "string" ? q : q.text).includes("drfp_vector <=>"),
+    );
+    if (!found) return "";
+    const q = found[0];
+    return typeof q === "string" ? q : q.text;
+  }
+
+  function _findSelectParams(client: { querySpy: { mock: { calls: unknown[][] } } }): unknown[] {
+    const calls = client.querySpy.mock.calls as Array<[string | { text: string }, unknown[]]>;
+    const found = calls.find(([q]) =>
+      (typeof q === "string" ? q : q.text).includes("drfp_vector <=>"),
+    );
+    if (!found) return [];
+    return found[1];
+  }
+
+  it("forwards solvent param to SQL", async () => {
+    vi.stubGlobal("fetch", mockFetchDrfp(DRFP_RESPONSE));
+    const { pool, client } = mockPool();
+    client.queryResults.push(
+      { rows: [], rowCount: 0 },
+      { rows: [], rowCount: 0 },
+      { rows: [], rowCount: 0 },
+      { rows: [], rowCount: 0 },
+    );
+
+    const tool = buildFindSimilarReactionsTool(pool, MCP_DRFP_URL);
+    await tool.execute(makeCtx(), {
+      rxn_smiles: "CC>>CCC",
+      k: 5,
+      solvent: "EtOH",
+    });
+
+    expect(_findSelectSql(client)).toMatch(/r\.solvent = \$5/);
+    expect(_findSelectParams(client)).toContain("EtOH");
+  });
+
+  it("forwards temperature range params to SQL", async () => {
+    vi.stubGlobal("fetch", mockFetchDrfp(DRFP_RESPONSE));
+    const { pool, client } = mockPool();
+    client.queryResults.push(
+      { rows: [], rowCount: 0 },
+      { rows: [], rowCount: 0 },
+      { rows: [], rowCount: 0 },
+      { rows: [], rowCount: 0 },
+    );
+    const tool = buildFindSimilarReactionsTool(pool, MCP_DRFP_URL);
+    await tool.execute(makeCtx(), {
+      rxn_smiles: "CC>>CCC",
+      k: 5,
+      min_temperature_c: 50,
+      max_temperature_c: 120,
+    });
+    const sql = _findSelectSql(client);
+    expect(sql).toMatch(/r\.temperature_c >= \$7/);
+    expect(sql).toMatch(/r\.temperature_c <= \$8/);
+    const params = _findSelectParams(client);
+    expect(params).toContain(50);
+    expect(params).toContain(120);
+  });
+
+  it("does not break existing callers (omitted Z2 params bind to null)", async () => {
+    vi.stubGlobal("fetch", mockFetchDrfp(DRFP_RESPONSE));
+    const { pool, client } = mockPool();
+    client.queryResults.push(
+      { rows: [], rowCount: 0 },
+      { rows: [], rowCount: 0 },
+      { rows: [], rowCount: 0 },
+      { rows: [], rowCount: 0 },
+    );
+    const tool = buildFindSimilarReactionsTool(pool, MCP_DRFP_URL);
+    await tool.execute(makeCtx(), { rxn_smiles: "CC>>CCC", k: 5 });
+    const params = _findSelectParams(client);
+    expect(params).toBeDefined();
+    // Solvent / base / min_temp / max_temp params (positions 4..7 zero-indexed)
+    // should all be null.
+    expect(params.slice(4)).toEqual([null, null, null, null]);
+  });
+});

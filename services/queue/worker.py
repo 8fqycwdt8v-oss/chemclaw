@@ -134,6 +134,9 @@ class QueueWorker:
         self._task_kinds = [k.strip() for k in settings.queue_tasks.split(",") if k.strip()]
         self._sema = asyncio.Semaphore(settings.queue_concurrency)
         self._lease_id = f"{socket.gethostname()}/{os.getpid()}"
+        # Hold strong refs to in-flight handler tasks so the GC can't reap
+        # them before completion (RUF006).
+        self._inflight_tasks: set[asyncio.Task[None]] = set()
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
@@ -147,7 +150,7 @@ class QueueWorker:
         async with await psycopg.AsyncConnection.connect(
             self.settings.dsn, autocommit=True, row_factory=dict_row,
         ) as listen_conn:
-            for k in self._task_kinds:
+            for _kind in self._task_kinds:
                 async with listen_conn.cursor() as cur:
                     await cur.execute("LISTEN task_queue_pending")
             log.info("[queue] LISTEN task_queue_pending established")
@@ -198,7 +201,9 @@ class QueueWorker:
     async def _dispatch_kind(self, work_conn: psycopg.AsyncConnection, kind: str) -> None:
         leased = await self._lease_one(work_conn, kind)
         while leased is not None and not self._shutdown.is_set():
-            asyncio.create_task(self._handle_with_sema(leased))
+            task = asyncio.create_task(self._handle_with_sema(leased))
+            self._inflight_tasks.add(task)
+            task.add_done_callback(self._inflight_tasks.discard)
             leased = await self._lease_one(work_conn, kind)
 
     async def _lease_one(self, work_conn: psycopg.AsyncConnection, kind: str) -> dict[str, Any] | None:

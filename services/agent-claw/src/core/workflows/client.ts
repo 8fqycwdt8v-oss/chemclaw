@@ -48,13 +48,15 @@ export async function defineWorkflow(
   createdBy: string,
 ): Promise<WorkflowRecord> {
   const def = validate(rawDefinition);
-  return withSystemContext(pool, async (client) => {
+  return await withSystemContext(pool, async (client) => {
     // Bump version: pick next int per name; close any prior live row.
     const next = await client.query<{ next_version: number }>(
       `SELECT COALESCE(MAX(version), 0) + 1 AS next_version FROM workflows WHERE name = $1`,
       [def.name],
     );
-    const version = next.rows[0]!.next_version;
+    const versionRow = next.rows[0];
+    if (!versionRow) throw new Error("workflow version SELECT returned no rows");
+    const version = versionRow.next_version;
     await client.query(
       `UPDATE workflows SET valid_to = NOW() WHERE name = $1 AND valid_to IS NULL`,
       [def.name],
@@ -66,7 +68,9 @@ export async function defineWorkflow(
                  created_by, created_at::text AS created_at`,
       [def.name, version, JSON.stringify(def), createdBy],
     );
-    return res.rows[0]!;
+    const inserted = res.rows[0];
+    if (!inserted) throw new Error("workflows INSERT returned no rows");
+    return inserted;
   });
 }
 
@@ -77,14 +81,16 @@ export async function startRun(
   createdBy: string,
   sessionId: string | null = null,
 ): Promise<string> {
-  return withSystemContext(pool, async (client) => {
+  return await withSystemContext(pool, async (client) => {
     const res = await client.query<{ id: string }>(
       `INSERT INTO workflow_runs (workflow_id, session_id, status, input, started_at, created_by)
        VALUES ($1::uuid, $2::uuid, 'running', $3::jsonb, NOW(), $4)
        RETURNING id::text AS id`,
       [workflowId, sessionId, JSON.stringify(input), createdBy],
     );
-    const runId = res.rows[0]!.id;
+    const startRow = res.rows[0];
+    if (!startRow) throw new Error("workflow_runs INSERT returned no rows");
+    const runId = startRow.id;
     await appendEvent(client, runId, "start", null, { input });
     await client.query(
       `INSERT INTO workflow_state (run_id, current_step, scope, cursor)
@@ -101,7 +107,7 @@ export async function inspectRun(
   runId: string,
   eventLimit: number = 50,
 ): Promise<{ run: WorkflowRunRecord; state: { current_step: string | null; scope: unknown; cursor: unknown } | null; events: WorkflowEventRecord[] }> {
-  return withSystemContext(pool, async (client) => {
+  return await withSystemContext(pool, async (client) => {
     const runRes = await client.query<WorkflowRunRecord>(
       `SELECT id::text AS id, workflow_id::text AS workflow_id,
               parent_run_id::text AS parent_run_id, session_id::text AS session_id,
@@ -197,7 +203,7 @@ export async function replayRun(
   inputOverride: Record<string, unknown> | null,
   by: string,
 ): Promise<string> {
-  return withSystemContext(pool, async (client) => {
+  return await withSystemContext(pool, async (client) => {
     const r = await client.query<{ workflow_id: string; input: Record<string, unknown> }>(
       `SELECT workflow_id::text AS workflow_id, input FROM workflow_runs WHERE id = $1::uuid`,
       [parentRunId],
@@ -211,7 +217,9 @@ export async function replayRun(
        RETURNING id::text AS id`,
       [parent.workflow_id, parentRunId, JSON.stringify(input), by],
     );
-    const runId = ins.rows[0]!.id;
+    const insertedRow = ins.rows[0];
+    if (!insertedRow) throw new Error("replay workflow_runs INSERT returned no rows");
+    const runId = insertedRow.id;
     await appendEvent(client, runId, "replay", null, { parent_run_id: parentRunId, by });
     return runId;
   });
