@@ -318,6 +318,34 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # qm_kg — projects succeeded qm_jobs into Neo4j with bi-temporal edges
+  # -------------------------------------------------------------
+  qm-kg:
+    build:
+      context: .
+      dockerfile: services/projectors/qm_kg/Dockerfile
+    container_name: chemclaw-qm-kg
+    user: "1001:1001"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-chemclaw_dev_neo4j_change_me}
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # kg_hypotheses — hypothesis generation projector
   # -------------------------------------------------------------
   kg-hypotheses:
