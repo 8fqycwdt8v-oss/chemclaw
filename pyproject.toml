@@ -71,6 +71,9 @@ ignore = [
     "N802",  # invalid-function-name — chemistry naming idioms
     "N803",  # invalid-argument-name — chemistry naming idioms
     "N806",  # non-lowercase-variable-in-function — chemistry naming idioms
+    "N815",  # mixed-case-variable-in-class-scope — chemistry unit suffixes
+             # (homo_lumo_eV, temp_K, redox_potential_V, vertical_ie_eV,
+             #  vertical_ea_eV) are intentional in mcp_xtb's Pydantic schemas.
     "N818",  # error-suffix-on-exception-name — paydown PR-N
     "RUF001",  # ambiguous-unicode-character-string — chemistry strings
     "RUF002",  # ambiguous-unicode-character-docstring — chemistry strings
