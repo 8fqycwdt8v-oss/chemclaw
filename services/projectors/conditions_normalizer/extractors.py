@@ -112,14 +112,17 @@ def extract_tier1(
         ("mock_eln_fields_jsonb", mock_eln_fields),
     ]
 
-    string_keys = {
+    # Explicit `tuple[str, ...]` value type so mypy unifies the 1-tuple
+    # and N-tuple literals (otherwise the loop variable's inferred type
+    # collapses to `tuple[str]` and rejects the multi-key entries).
+    string_keys: dict[str, tuple[str, ...]] = {
         "solvent":         ("solvent",),
         "solvent_smiles":  ("solvent_smiles",),
         "catalyst_smiles": ("catalyst_smiles",),
         "ligand_smiles":   ("ligand_smiles",),
         "base":            ("base",),
     }
-    float_keys = {
+    float_keys: dict[str, tuple[str, ...]] = {
         "temperature_c": ("temperature_c", "temp_c", "temp"),
         "time_min":      ("time_min", "time_minutes"),
         "pressure_atm":  ("pressure_atm",),

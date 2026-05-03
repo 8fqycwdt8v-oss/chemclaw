@@ -174,7 +174,9 @@ if __name__ == "__main__":
 
     from services.mcp_tools.common.logging import configure_logging
 
-    settings = Settings(_env_file=None)
+    # env_file is already None in the Settings model_config above; no
+    # need to pass it again here (mypy rejects the call kwarg).
+    settings = Settings()
     configure_logging(settings.projector_log_level)
     proj = ConditionsNormalizer(settings)
     asyncio.run(proj.run())
