@@ -31,6 +31,7 @@ import { buildComputeConformerEnsembleTool } from "../tools/builtins/compute_con
 import { buildIdentifyUnknownFromMsTool } from "../tools/builtins/identify_unknown_from_ms.js";
 import { buildPredictMolecularPropertyTool } from "../tools/builtins/predict_molecular_property.js";
 import { buildPredictReactionYieldTool } from "../tools/builtins/predict_reaction_yield.js";
+import { buildPredictYieldWithUqTool } from "../tools/builtins/predict_yield_with_uq.js";
 import { buildQueryKgTool } from "../tools/builtins/query_kg.js";
 import { buildProposeRetrosynthesisTool } from "../tools/builtins/propose_retrosynthesis.js";
 import { buildElucidateMechanismTool } from "../tools/builtins/elucidate_mechanism.js";
@@ -147,6 +148,9 @@ function registerBuiltinTools(
   registry.registerBuiltin("identify_unknown_from_ms", () => asTool(buildIdentifyUnknownFromMsTool(cfg.MCP_SIRIUS_URL)));
   registry.registerBuiltin("predict_molecular_property", () => asTool(buildPredictMolecularPropertyTool(cfg.MCP_CHEMPROP_URL)));
   registry.registerBuiltin("predict_reaction_yield", () => asTool(buildPredictReactionYieldTool(cfg.MCP_CHEMPROP_URL)));
+  registry.registerBuiltin("predict_yield_with_uq", () =>
+    asTool(buildPredictYieldWithUqTool(pool, cfg.MCP_YIELD_BASELINE_URL)),
+  );
   registry.registerBuiltin("query_kg", () => asTool(buildQueryKgTool(cfg.MCP_KG_URL)));
   registry.registerBuiltin("propose_retrosynthesis", () =>
     asTool(buildProposeRetrosynthesisTool(cfg.MCP_ASKCOS_URL, cfg.MCP_AIZYNTH_URL)),

@@ -1032,4 +1032,36 @@ ON CONFLICT (name) DO UPDATE SET
   source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
   description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
 
+-- ── Yield baseline ensemble (Phase Z3) ────────────────────────────────────
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'predict_yield_with_uq',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "rxn_smiles_list": {
+        "type": "array",
+        "items": {"type": "string", "minLength": 1, "maxLength": 20000},
+        "minItems": 1,
+        "maxItems": 100,
+        "description": "Reaction SMILES to predict yield for."
+      },
+      "project_internal_id": {
+        "type": "string",
+        "maxLength": 200,
+        "description": "Optional NCE project internal_id; per-project model is used when available."
+      }
+    },
+    "required": ["rxn_smiles_list"]
+  }',
+  'Predict yield with calibrated uncertainty. Combines chemprop''s MVE-head std (aleatoric) with chemprop-XGBoost disagreement (epistemic) into a single ensemble_std. Returns per-reaction ensemble_mean + ensemble_std + component scores. Per-project XGBoost trained on user''s RLS-scoped reactions; global pretrained fallback when project has < 50 labeled reactions.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
 COMMIT;
