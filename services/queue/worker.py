@@ -30,6 +30,7 @@ from psycopg.rows import dict_row
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from services.mcp_tools.common.logging import configure_logging
+from services.mcp_tools.common.mcp_token_cache import McpTokenCache
 
 
 log = logging.getLogger("queue.worker")
@@ -70,33 +71,44 @@ class WorkerSettings(BaseSettings):
 
 def _build_handlers(settings: WorkerSettings) -> dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]]:
     client = httpx.AsyncClient(timeout=600.0)
+    token_cache = McpTokenCache(default_subject="queue-worker")
 
-    async def post(url: str, body: dict[str, Any]) -> dict[str, Any]:
-        resp = await client.post(url, json=body)
+    def _headers(service: str) -> dict[str, str]:
+        token = token_cache.get(service=service, user_entra_id="__system__")
+        if token is None:
+            return {}
+        return {"Authorization": f"Bearer {token}"}
+
+    async def post(service: str, url: str, body: dict[str, Any]) -> dict[str, Any]:
+        # Mint / cache a JWT for the destination service so the queue worker
+        # is auth-correct in production (MCP_AUTH_REQUIRED=true). In dev
+        # mode (no signing key) we send no header and the MCP service
+        # accepts the call with a warning.
+        resp = await client.post(url, json=body, headers=_headers(service))
         if resp.status_code >= 400:
             raise RuntimeError(f"{url} → {resp.status_code}: {resp.text[:200]}")
         return resp.json()
 
     async def qm_single_point(p: dict[str, Any]) -> dict[str, Any]:
-        return await post(f"{settings.mcp_xtb_url}/single_point", p)
+        return await post("mcp-xtb", f"{settings.mcp_xtb_url}/single_point", p)
 
     async def qm_geometry_opt(p: dict[str, Any]) -> dict[str, Any]:
-        return await post(f"{settings.mcp_xtb_url}/geometry_opt", p)
+        return await post("mcp-xtb", f"{settings.mcp_xtb_url}/geometry_opt", p)
 
     async def qm_frequencies(p: dict[str, Any]) -> dict[str, Any]:
-        return await post(f"{settings.mcp_xtb_url}/frequencies", p)
+        return await post("mcp-xtb", f"{settings.mcp_xtb_url}/frequencies", p)
 
     async def qm_fukui(p: dict[str, Any]) -> dict[str, Any]:
-        return await post(f"{settings.mcp_xtb_url}/fukui", p)
+        return await post("mcp-xtb", f"{settings.mcp_xtb_url}/fukui", p)
 
     async def qm_crest_conformers(p: dict[str, Any]) -> dict[str, Any]:
-        return await post(f"{settings.mcp_crest_url}/conformers", p)
+        return await post("mcp-crest", f"{settings.mcp_crest_url}/conformers", p)
 
     async def genchem_scaffold(p: dict[str, Any]) -> dict[str, Any]:
-        return await post(f"{settings.mcp_genchem_url}/scaffold_decorate", p)
+        return await post("mcp-genchem", f"{settings.mcp_genchem_url}/scaffold_decorate", p)
 
     async def genchem_bioisostere(p: dict[str, Any]) -> dict[str, Any]:
-        return await post(f"{settings.mcp_genchem_url}/bioisostere_replace", p)
+        return await post("mcp-genchem", f"{settings.mcp_genchem_url}/bioisostere_replace", p)
 
     return {
         "qm_single_point":    qm_single_point,

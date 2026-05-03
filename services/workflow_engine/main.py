@@ -35,6 +35,7 @@ from psycopg.rows import dict_row
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from services.mcp_tools.common.logging import configure_logging
+from services.mcp_tools.common.mcp_token_cache import McpTokenCache
 
 
 log = logging.getLogger("workflow_engine")
@@ -67,6 +68,7 @@ class WorkflowEngine:
         self.settings = settings
         self._shutdown = asyncio.Event()
         self._http: httpx.AsyncClient | None = None
+        self._token_cache = McpTokenCache(default_subject="workflow-engine")
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
@@ -196,10 +198,29 @@ class WorkflowEngine:
         tool = step["tool"]
         args = step.get("args", {})
         url = self._tool_url(tool)
-        resp = await self._http.post(url, json=args)
+        # Mint a service-scoped JWT for the destination MCP service so the
+        # workflow engine works against MCP_AUTH_REQUIRED=true clusters.
+        # In dev mode (no signing key), no Authorization header is sent.
+        service = self._tool_service(tool)
+        token = self._token_cache.get(service=service, user_entra_id="__system__")
+        headers = {"Authorization": f"Bearer {token}"} if token else {}
+        resp = await self._http.post(url, json=args, headers=headers)
         if resp.status_code >= 400:
             raise RuntimeError(f"{tool} → {resp.status_code}: {resp.text[:200]}")
         return resp.json()
+
+    @staticmethod
+    def _tool_service(tool: str) -> str:
+        """Return the MCP service name (matches SERVICE_SCOPES key) for `tool`."""
+        if tool.startswith("qm_crest"):
+            return "mcp-crest"
+        if tool.startswith("qm_"):
+            return "mcp-xtb"
+        if tool == "generate_focused_library" or tool.startswith("genchem_"):
+            return "mcp-genchem"
+        # Sensible default — services that don't map cleanly fall back to
+        # mcp-xtb's scope, which is what the existing tool_url fallback used.
+        return "mcp-xtb"
 
     async def _exec_wait(self, step: dict[str, Any], scope: dict[str, Any]) -> Any:
         spec = step.get("for", {})
