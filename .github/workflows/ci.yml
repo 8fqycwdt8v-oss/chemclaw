@@ -139,7 +139,9 @@ jobs:
           mypy services/mcp_tools/mcp_rdkit
           # services/projectors expanded to per-package subset because
           # compound_classifier and compound_fingerprinter (added on
-          # main via Phase-3/4 chem PRs) carry pre-existing mypy debt.
+          # main via Phase-3/4 chem PRs) carry pre-existing mypy debt:
+          # bare psycopg.AsyncConnection annotations that don't match
+          # BaseProjector's AsyncConnection[dict[str, Any]] supertype.
           # Restore the wildcard once a follow-up PR pays the debt down.
           mypy services/projectors/common
           mypy services/projectors/chunk_embedder
