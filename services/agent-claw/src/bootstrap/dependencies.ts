@@ -39,6 +39,8 @@ import { buildQmCrestScreenTool } from "../tools/builtins/qm_crest_screen.js";
 import { buildFindSimilarCompoundsTool } from "../tools/builtins/find_similar_compounds.js";
 import { buildSubstructureSearchTool } from "../tools/builtins/substructure_search.js";
 import { buildMatchSmartsCatalogTool } from "../tools/builtins/match_smarts_catalog.js";
+// Phase 4 — compound ontology + auto-classification.
+import { buildClassifyCompoundTool } from "../tools/builtins/classify_compound.js";
 import { buildIdentifyUnknownFromMsTool } from "../tools/builtins/identify_unknown_from_ms.js";
 import { buildPredictMolecularPropertyTool } from "../tools/builtins/predict_molecular_property.js";
 import { buildPredictReactionYieldTool } from "../tools/builtins/predict_reaction_yield.js";
@@ -166,6 +168,8 @@ function registerBuiltinTools(
   registry.registerBuiltin("find_similar_compounds", () => asTool(buildFindSimilarCompoundsTool(pool, cfg.MCP_RDKIT_URL)));
   registry.registerBuiltin("substructure_search", () => asTool(buildSubstructureSearchTool(pool, cfg.MCP_RDKIT_URL)));
   registry.registerBuiltin("match_smarts_catalog", () => asTool(buildMatchSmartsCatalogTool(pool, cfg.MCP_RDKIT_URL)));
+  // Phase 4 — compound ontology / role classification.
+  registry.registerBuiltin("classify_compound", () => asTool(buildClassifyCompoundTool(pool)));
   registry.registerBuiltin("identify_unknown_from_ms", () => asTool(buildIdentifyUnknownFromMsTool(cfg.MCP_SIRIUS_URL)));
   registry.registerBuiltin("predict_molecular_property", () => asTool(buildPredictMolecularPropertyTool(cfg.MCP_CHEMPROP_URL)));
   registry.registerBuiltin("predict_reaction_yield", () => asTool(buildPredictReactionYieldTool(cfg.MCP_CHEMPROP_URL)));
