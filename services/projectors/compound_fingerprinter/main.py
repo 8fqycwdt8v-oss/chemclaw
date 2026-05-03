@@ -257,13 +257,7 @@ class CompoundFingerprinter(BaseProjector):
         return resp.json()
 
 
-def _bits_to_vector(on_bits: list[int], n_bits: int) -> str:
-    """Encode a sparse on-bits list as a pgvector literal string '[0,1,0,...]'."""
-    bits = [0] * n_bits
-    for b in on_bits:
-        if 0 <= b < n_bits:
-            bits[b] = 1
-    return "[" + ",".join(str(b) for b in bits) + "]"
+from services.mcp_tools.common.fingerprint import bits_to_pgvector_literal as _bits_to_vector  # noqa: E402, F401
 
 
 def main() -> None:
