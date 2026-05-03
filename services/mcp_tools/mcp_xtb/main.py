@@ -30,7 +30,7 @@ from pydantic import BaseModel, Field
 from services.mcp_tools.common.app import create_app
 from services.mcp_tools.common.limits import MAX_SMILES_LEN
 from services.mcp_tools.common.settings import ToolSettings
-from services.mcp_tools.mcp_xtb import workflow
+from services.mcp_tools.mcp_xtb import _helpers, workflow
 
 log = logging.getLogger("mcp-xtb")
 settings = ToolSettings()
@@ -85,45 +85,8 @@ app = create_app(
 
 
 # ---------------------------------------------------------------------------
-# SMILES → XYZ via RDKit (before calling xtb)
-# ---------------------------------------------------------------------------
-
-def _smiles_to_xyz(smiles: str) -> str:
-    """Convert a SMILES to 3-D XYZ block via RDKit ETKDG.
-
-    rdkit ships no stubs, so we keep the imports and module objects
-    typed as Any. Each call through Chem/AllChem is then duck-typed
-    rather than flagged by mypy strict mode.
-    """
-    try:
-        from rdkit import Chem as _Chem  # noqa: PLC0415
-        from rdkit.Chem import AllChem as _AllChem  # noqa: PLC0415
-    except ImportError as exc:
-        raise ImportError("rdkit required inside the Docker image") from exc
-
-    Chem: Any = _Chem
-    AllChem: Any = _AllChem
-
-    if not smiles or not smiles.strip():
-        raise ValueError("smiles must be a non-empty string")
-    mol = Chem.MolFromSmiles(smiles)
-    if mol is None:
-        raise ValueError(f"invalid SMILES: {smiles!r}")
-    mol = Chem.AddHs(mol)
-    if AllChem.EmbedMolecule(mol, AllChem.ETKDGv3()) == -1:
-        raise ValueError(f"RDKit could not generate 3-D embedding for SMILES: {smiles!r}")
-    AllChem.MMFFOptimizeMolecule(mol)
-
-    conf = mol.GetConformer()
-    lines = [str(mol.GetNumAtoms()), smiles]
-    for atom in mol.GetAtoms():
-        pos = conf.GetAtomPosition(atom.GetIdx())
-        lines.append(f"{atom.GetSymbol():2s}  {pos.x:12.6f}  {pos.y:12.6f}  {pos.z:12.6f}")
-    return "\n".join(lines)
-
-
-# ---------------------------------------------------------------------------
-# subprocess helper
+# subprocess helper for the legacy /optimize_geometry path. Engine-routed
+# paths use ``services.mcp_tools.mcp_xtb.workflow.run_subprocess`` instead.
 # ---------------------------------------------------------------------------
 
 def _run_xtb(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
@@ -136,43 +99,6 @@ def _run_xtb(args: list[str], cwd: Path) -> subprocess.CompletedProcess[str]:
         timeout=_XTB_TIMEOUT,
         shell=False,  # explicit — never shell=True
     )
-
-
-def _parse_energy(stdout: str) -> float | None:
-    """Extract total energy (Hartree) from xtb stdout.
-
-    xtb prints lines like:
-        TOTAL ENERGY          -5.123456789000 Eh
-    so the numeric value is at index 2 (0-based).
-    """
-    for line in stdout.splitlines():
-        if "TOTAL ENERGY" in line:
-            parts = line.split()
-            # Try index 2 first (canonical xtb format), fall back to -2.
-            for idx in (2, -2):
-                try:
-                    return float(parts[idx])
-                except (IndexError, ValueError):
-                    pass
-    return None
-
-
-def _parse_gnorm(stdout: str) -> float | None:
-    """Extract gradient norm from xtb stdout.
-
-    xtb prints lines like:
-        GRADIENT NORM          0.000234 Eh/a0
-    so the numeric value is at index 2 (0-based).
-    """
-    for line in stdout.splitlines():
-        if "GRADIENT NORM" in line:
-            parts = line.split()
-            for idx in (2, -2):
-                try:
-                    return float(parts[idx])
-                except (IndexError, ValueError):
-                    pass
-    return None
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +121,7 @@ class OptimizeGeometryOut(BaseModel):
 async def optimize_geometry(
     req: Annotated[OptimizeGeometryIn, Body(...)],
 ) -> OptimizeGeometryOut:
-    xyz_block = _smiles_to_xyz(req.smiles)  # validates SMILES via RDKit
+    xyz_block = _helpers.smiles_to_xyz(req.smiles)  # validates SMILES via RDKit
 
     gfn_flag = "--gfn2" if req.method == "GFN2-xTB" else "--gfnff"
 
@@ -218,8 +144,8 @@ async def optimize_geometry(
             raise ValueError("xtb did not produce xtbopt.xyz")
         optimized_xyz = optimized_path.read_text()
 
-    energy = _parse_energy(result.stdout)
-    gnorm = _parse_gnorm(result.stdout)
+    energy = _helpers.parse_energy(result.stdout)
+    gnorm = _helpers.parse_gnorm(result.stdout)
     converged = "GEOMETRY CONVERGED" in result.stdout or "GEOMETRY OPTIMIZATION CONVERGED" in result.stdout
 
     return OptimizeGeometryOut(
@@ -250,34 +176,6 @@ class ConformerEnsembleIn(BaseModel):
 
 class ConformerEnsembleOut(BaseModel):
     conformers: list[ConformerEntry]
-
-
-def _parse_crest_ensemble(ensemble_text: str) -> list[tuple[str, float]]:
-    """Parse a multi-structure XYZ file from CREST into (xyz_block, energy) pairs."""
-    conformers: list[tuple[str, float]] = []
-    lines = ensemble_text.splitlines()
-    i = 0
-    while i < len(lines):
-        line = lines[i].strip()
-        if not line:
-            i += 1
-            continue
-        try:
-            n_atoms = int(line)
-        except ValueError:
-            i += 1
-            continue
-        if i + 1 + n_atoms >= len(lines):
-            break
-        comment = lines[i + 1]
-        try:
-            energy = float(comment.split()[0])
-        except (ValueError, IndexError):
-            energy = float("nan")
-        xyz_lines = [line] + lines[i + 1: i + 2 + n_atoms]
-        conformers.append(("\n".join(xyz_lines), energy))
-        i += 2 + n_atoms
-    return conformers
 
 
 @app.post("/conformer_ensemble", response_model=ConformerEnsembleOut, tags=["xtb"])

@@ -26,6 +26,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from services.mcp_tools.common.limits import MAX_SMILES_LEN
+from services.mcp_tools.mcp_xtb import _helpers
 from services.mcp_tools.mcp_xtb import workflow as wf
 from services.mcp_tools.mcp_xtb.workflow import Ctx, Step, Workflow
 
@@ -44,11 +45,9 @@ async def _opt_one(ctx: Ctx, smiles_key: str, subdir: str) -> tuple[str, float]:
     smiles = ctx.inputs[smiles_key]
     gfn_flag = "--gfn2" if ctx.inputs["method"] == "GFN2-xTB" else "--gfnff"
 
-    from services.mcp_tools.mcp_xtb import main as _main
-
     d = ctx.workdir / subdir
     d.mkdir(exist_ok=True)
-    (d / "mol.xyz").write_text(_main._smiles_to_xyz(smiles))
+    (d / "mol.xyz").write_text(_helpers.smiles_to_xyz(smiles))
 
     result = await wf.run_subprocess(
         ["xtb", "mol.xyz", gfn_flag, "--opt", "tight", "--json"],
@@ -62,7 +61,7 @@ async def _opt_one(ctx: Ctx, smiles_key: str, subdir: str) -> tuple[str, float]:
     opt = d / "xtbopt.xyz"
     if not opt.exists():
         raise ValueError(f"xtb did not produce xtbopt.xyz in {subdir}")
-    energy = _main._parse_energy(result.stdout)
+    energy = _helpers.parse_energy(result.stdout)
     if energy is None:
         raise ValueError(f"could not parse energy for {subdir}")
     return (opt.read_text(), energy)

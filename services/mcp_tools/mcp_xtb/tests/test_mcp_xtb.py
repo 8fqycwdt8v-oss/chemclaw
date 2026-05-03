@@ -100,7 +100,7 @@ def test_optimize_geometry_happy_path(client, tmp_path):
         return proc_result
 
     with mock.patch(
-        "services.mcp_tools.mcp_xtb.main._smiles_to_xyz",
+        "services.mcp_tools.mcp_xtb._helpers.smiles_to_xyz",
         return_value=_FAKE_XYZ,
     ), mock.patch(
         "services.mcp_tools.mcp_xtb.main._run_xtb",
@@ -120,7 +120,7 @@ def test_optimize_geometry_happy_path(client, tmp_path):
 
 def test_optimize_geometry_invalid_smiles_returns_400(client):
     with mock.patch(
-        "services.mcp_tools.mcp_xtb.main._smiles_to_xyz",
+        "services.mcp_tools.mcp_xtb._helpers.smiles_to_xyz",
         side_effect=ValueError("invalid SMILES"),
     ):
         r = client.post(
@@ -141,7 +141,7 @@ def test_optimize_geometry_method_enum_rejected(client):
 def test_xtb_process_failure_raises_400(client):
     proc_result = _make_mock_subprocess_result(returncode=1, stderr="SCF did not converge")
     with mock.patch(
-        "services.mcp_tools.mcp_xtb.main._smiles_to_xyz",
+        "services.mcp_tools.mcp_xtb._helpers.smiles_to_xyz",
         return_value=_FAKE_XYZ,
     ), mock.patch(
         "services.mcp_tools.mcp_xtb.main._run_xtb",
@@ -178,7 +178,7 @@ def test_conformer_ensemble_happy_path(client):
         raise AssertionError(f"unexpected subprocess call: {args!r}")
 
     with mock.patch(
-        "services.mcp_tools.mcp_xtb.main._smiles_to_xyz",
+        "services.mcp_tools.mcp_xtb._helpers.smiles_to_xyz",
         return_value=_FAKE_XYZ,
     ), mock.patch(
         "services.mcp_tools.mcp_xtb.workflow.run_subprocess",
@@ -218,7 +218,7 @@ def test_conformer_ensemble_propagates_step_failure(client):
         return wf.SubprocessResult(returncode=2, stdout="", stderr="CREST blew up")
 
     with mock.patch(
-        "services.mcp_tools.mcp_xtb.main._smiles_to_xyz",
+        "services.mcp_tools.mcp_xtb._helpers.smiles_to_xyz",
         return_value=_FAKE_XYZ,
     ), mock.patch(
         "services.mcp_tools.mcp_xtb.workflow.run_subprocess",

@@ -26,9 +26,6 @@ export const ComputeConformerEnsembleIn = z.object({
     .enum(["GFN2-xTB", "GFN-FF"])
     .default("GFN2-xTB")
     .describe("Semi-empirical method for the per-conformer geometry optimisation."),
-  optimize_first: z.boolean().default(true).describe(
-    "Retained for backward compatibility. The new engine always optimises each conformer; this flag is ignored.",
-  ),
 });
 export type ComputeConformerEnsembleInput = z.infer<typeof ComputeConformerEnsembleIn>;
 

@@ -57,7 +57,7 @@ describe("buildComputeConformerEnsembleTool", () => {
     const tool = buildComputeConformerEnsembleTool(XTB_URL);
     const result = await tool.execute(
       makeCtx(),
-      { smiles: "CCO", n_conformers: 20, method: "GFN2-xTB", optimize_first: true },
+      { smiles: "CCO", n_conformers: 20, method: "GFN2-xTB" },
     );
 
     expect(result.conformers).toHaveLength(2);
@@ -93,7 +93,7 @@ describe("buildComputeConformerEnsembleTool", () => {
     );
     const tool = buildComputeConformerEnsembleTool(XTB_URL);
     await expect(
-      tool.execute(makeCtx(), { smiles: "CCO", n_conformers: 10, method: "GFN2-xTB", optimize_first: true }),
+      tool.execute(makeCtx(), { smiles: "CCO", n_conformers: 10, method: "GFN2-xTB" }),
     ).rejects.toThrow(/crest/);
   });
 
@@ -104,7 +104,7 @@ describe("buildComputeConformerEnsembleTool", () => {
     );
     const tool = buildComputeConformerEnsembleTool(XTB_URL);
     await expect(
-      tool.execute(makeCtx(), { smiles: "INVALID", n_conformers: 10, method: "GFN2-xTB", optimize_first: true }),
+      tool.execute(makeCtx(), { smiles: "INVALID", n_conformers: 10, method: "GFN2-xTB" }),
     ).rejects.toThrow(/400/);
   });
 
@@ -118,7 +118,7 @@ describe("buildComputeConformerEnsembleTool", () => {
     const tool = buildComputeConformerEnsembleTool(`${XTB_URL}/`);
     await tool.execute(
       makeCtx(),
-      { smiles: "CCO", n_conformers: 5, method: "GFN-FF", optimize_first: false },
+      { smiles: "CCO", n_conformers: 5, method: "GFN-FF" },
     );
 
     const [url] = mockFetch.mock.calls[0] as [string, ...unknown[]];

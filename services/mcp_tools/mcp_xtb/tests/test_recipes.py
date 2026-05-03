@@ -69,7 +69,7 @@ async def test_optimize_ensemble_full_pipeline():
     from services.mcp_tools.mcp_xtb.recipes import optimize_ensemble
 
     with mock.patch(
-        "services.mcp_tools.mcp_xtb.main._smiles_to_xyz",
+        "services.mcp_tools.mcp_xtb._helpers.smiles_to_xyz",
         return_value=_FAKE_XYZ,
     ), mock.patch(
         "services.mcp_tools.mcp_xtb.workflow.run_subprocess",
@@ -133,7 +133,7 @@ async def test_optimize_ensemble_boltzmann_weights_match_RT_298():
         raise AssertionError(f"unexpected: {args!r}")
 
     with mock.patch(
-        "services.mcp_tools.mcp_xtb.main._smiles_to_xyz",
+        "services.mcp_tools.mcp_xtb._helpers.smiles_to_xyz",
         return_value=_FAKE_XYZ,
     ), mock.patch(
         "services.mcp_tools.mcp_xtb.workflow.run_subprocess",
@@ -167,7 +167,7 @@ async def test_optimize_ensemble_caps_at_n_conformers():
     from services.mcp_tools.mcp_xtb.recipes import optimize_ensemble
 
     with mock.patch(
-        "services.mcp_tools.mcp_xtb.main._smiles_to_xyz",
+        "services.mcp_tools.mcp_xtb._helpers.smiles_to_xyz",
         return_value=_FAKE_XYZ,
     ), mock.patch(
         "services.mcp_tools.mcp_xtb.workflow.run_subprocess",
@@ -191,7 +191,7 @@ async def test_optimize_ensemble_crest_failure_reports_step():
         raise AssertionError("xtb should not run")
 
     with mock.patch(
-        "services.mcp_tools.mcp_xtb.main._smiles_to_xyz",
+        "services.mcp_tools.mcp_xtb._helpers.smiles_to_xyz",
         return_value=_FAKE_XYZ,
     ), mock.patch(
         "services.mcp_tools.mcp_xtb.workflow.run_subprocess",
@@ -233,7 +233,7 @@ async def test_reaction_energy_computes_delta():
         )
 
     with mock.patch(
-        "services.mcp_tools.mcp_xtb.main._smiles_to_xyz",
+        "services.mcp_tools.mcp_xtb._helpers.smiles_to_xyz",
         return_value=_FAKE_XYZ,
     ), mock.patch(
         "services.mcp_tools.mcp_xtb.workflow.run_subprocess",

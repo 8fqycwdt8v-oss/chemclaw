@@ -22,6 +22,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field
 
 from services.mcp_tools.common.limits import MAX_SMILES_LEN
+from services.mcp_tools.mcp_xtb import _helpers
 from services.mcp_tools.mcp_xtb import workflow as wf
 from services.mcp_tools.mcp_xtb.workflow import Ctx, Step, Workflow
 
@@ -45,13 +46,8 @@ class Inputs(BaseModel):
 # ---------------------------------------------------------------------------
 
 async def _embed(ctx: Ctx) -> str:
-    # Inputs are pre-validated by Inputs Pydantic model; cast is safe.
-    smiles = ctx.inputs["smiles"]
-    # Lazy import: avoids a circular import at module load time
-    # (main.py registers /run_workflow which imports this package).
-    from services.mcp_tools.mcp_xtb import main as _main
-
-    xyz = _main._smiles_to_xyz(smiles)
+    # Inputs are pre-validated by the engine against the Inputs schema.
+    xyz = _helpers.smiles_to_xyz(ctx.inputs["smiles"])
     (ctx.workdir / "mol.xyz").write_text(xyz)
     return xyz
 
@@ -73,9 +69,7 @@ async def _crest(ctx: Ctx) -> str:
 
 
 async def _parse(ctx: Ctx) -> list[tuple[str, float]]:
-    from services.mcp_tools.mcp_xtb import main as _main
-
-    raw = _main._parse_crest_ensemble(ctx.artifacts["crest"])
+    raw = _helpers.parse_crest_ensemble(ctx.artifacts["crest"])
     return raw[: ctx.inputs["n_conformers"]]
 
 
@@ -101,10 +95,7 @@ async def _opt(ctx: Ctx) -> list[tuple[str, float]]:
         opt_xyz = d / "xtbopt.xyz"
         if not opt_xyz.exists():
             raise ValueError(f"xtb did not produce xtbopt.xyz for conf{idx}")
-
-        from services.mcp_tools.mcp_xtb import main as _main
-
-        energy = _main._parse_energy(result.stdout)
+        energy = _helpers.parse_energy(result.stdout)
         if energy is None:
             raise ValueError(f"could not parse energy for conf{idx}")
         return (opt_xyz.read_text(), energy)

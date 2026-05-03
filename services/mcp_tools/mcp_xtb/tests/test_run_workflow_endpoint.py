@@ -74,7 +74,7 @@ def test_run_workflow_reaction_energy_happy_path(client):
         )
 
     with mock.patch(
-        "services.mcp_tools.mcp_xtb.main._smiles_to_xyz",
+        "services.mcp_tools.mcp_xtb._helpers.smiles_to_xyz",
         return_value=_FAKE_XYZ,
     ), mock.patch(
         "services.mcp_tools.mcp_xtb.workflow.run_subprocess",
@@ -102,7 +102,7 @@ def test_run_workflow_failed_step_returns_200_with_success_false(client):
         return wf.SubprocessResult(returncode=1, stdout="", stderr="boom")
 
     with mock.patch(
-        "services.mcp_tools.mcp_xtb.main._smiles_to_xyz",
+        "services.mcp_tools.mcp_xtb._helpers.smiles_to_xyz",
         return_value=_FAKE_XYZ,
     ), mock.patch(
         "services.mcp_tools.mcp_xtb.workflow.run_subprocess",
