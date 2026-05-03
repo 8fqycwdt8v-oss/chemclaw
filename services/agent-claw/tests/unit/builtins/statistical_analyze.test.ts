@@ -164,3 +164,60 @@ describe("buildStatisticalAnalyzeTool — rank_feature_importance", () => {
     expect(r.success).toBe(false);
   });
 });
+
+describe("buildStatisticalAnalyzeTool — Z2 COALESCE precedence", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  it("compare_conditions SQL reads structured r.solvent with tabular_data fallback", async () => {
+    vi.stubGlobal("fetch", vi.fn());
+    const { pool, client } = mockPool();
+    client.queryResults.push(
+      { rows: [], rowCount: 0 }, // BEGIN
+      { rows: [], rowCount: 0 }, // set_config
+      { rows: COMPARE_CONDITION_ROWS, rowCount: 1 },
+      { rows: [], rowCount: 0 }, // COMMIT
+    );
+
+    const tool = buildStatisticalAnalyzeTool(pool, MCP_TABICL_URL);
+    await tool.execute(makeCtx(), {
+      reaction_ids: REACTION_IDS,
+      question: "compare_conditions",
+    });
+
+    // Inspect the SQL that hit the mock pool — must contain the new COALESCE form.
+    const sqls = client.querySpy.mock.calls.map((c) => (typeof c[0] === "string" ? c[0] : c[0].text));
+    const compareSql = sqls.find((s) => s.includes("bucket_label")) ?? "";
+    expect(compareSql).toMatch(/COALESCE\(r\.solvent,\s*e\.tabular_data->>'solvent'\)/);
+    expect(compareSql).toMatch(/COALESCE\(r\.temperature_c,/);
+  });
+
+  it("loadReactionRows SQL uses structured columns first", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      text: async () => JSON.stringify({
+        rows: [],
+        targets: [],
+        feature_names: [],
+        categorical_names: [],
+        skipped: [],
+      }),
+    }));
+    const { pool, client } = mockPool();
+    client.queryResults.push(
+      { rows: [], rowCount: 0 }, // BEGIN
+      { rows: [], rowCount: 0 }, // set_config
+      { rows: makeReactionDbRows(REACTION_IDS), rowCount: 5 },
+      { rows: [], rowCount: 0 }, // COMMIT
+    );
+    const tool = buildStatisticalAnalyzeTool(pool, MCP_TABICL_URL);
+    await tool.execute(makeCtx(), {
+      reaction_ids: REACTION_IDS,
+      question: "rank_feature_importance",
+    });
+    const sqls = client.querySpy.mock.calls.map((c) => (typeof c[0] === "string" ? c[0] : c[0].text));
+    const loadSql = sqls.find((s) => s.includes("AS reaction_id")) ?? "";
+    expect(loadSql).toMatch(/COALESCE\(r\.solvent,/);
+    expect(loadSql).toMatch(/COALESCE\(r\.temperature_c,/);
+    expect(loadSql).toMatch(/COALESCE\(r\.base,/);
+  });
+});

@@ -33,6 +33,9 @@ export const SERVICE_SCOPES: Record<string, string> = {
   "mcp-askcos": "mcp_askcos:invoke",
   "mcp-aizynth": "mcp_aizynth:invoke",
   "mcp-chemprop": "mcp_chemprop:invoke",
+  "mcp-yield-baseline": "mcp_yield_baseline:invoke",
+  "mcp-plate-designer": "mcp_plate_designer:invoke",
+  "mcp-ord-io": "mcp_ord_io:invoke",
   "mcp-xtb": "mcp_xtb:invoke",
   "mcp-crest": "mcp_crest:invoke",
   "mcp-genchem": "mcp_genchem:invoke",
@@ -40,11 +43,7 @@ export const SERVICE_SCOPES: Record<string, string> = {
   "mcp-eln-local": "mcp_eln:read",
   "mcp-logs-sciy": "mcp_instrument:read",
   "mcp-synthegy-mech": "mcp_synthegy_mech:invoke",
-  // Z3-Z5 reaction-condition optimization stack.
-  "mcp-yield-baseline": "mcp_yield_baseline:invoke",
   "mcp-reaction-optimizer": "mcp_reaction_optimizer:invoke",
-  "mcp-plate-designer": "mcp_plate_designer:invoke",
-  "mcp-ord-io": "mcp_ord_io:invoke",
 };
 
 const DEFAULT_TTL_SECONDS = 300; // 5 min — matches the verifier's expiry check

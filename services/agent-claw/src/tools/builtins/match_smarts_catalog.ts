@@ -94,7 +94,7 @@ export function buildMatchSmartsCatalogTool(pool: Pool, mcpRdkitUrl: string) {
               description: rule.description,
             });
           }
-        } catch (err) {
+        } catch (_err) {
           log.warn(
             { event: "smarts_catalog_rule_failed", name: rule.name },
             "skipping catalog rule on error",

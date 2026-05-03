@@ -87,10 +87,12 @@ export interface QmJobRow {
  * Mirrors services/mcp_tools/common/qm_hash.py:qm_cache_key.
  */
 export function computeQmCacheKey(input: QmCacheKeyInput): Buffer {
-  if (!input.method || !input.task) {
-    throw new Error("method and task are required");
-  }
-  if (!input.smilesCanonical?.trim()) {
+  // method and task are typed as required QmMethod/QmTask string unions
+  // — TS prevents construction without them, so the prior `!input.method`
+  // runtime checks were dead per the type contract. We still defend the
+  // empty-smiles case at runtime since SMILES is a non-empty string in
+  // practice but TS only enforces it's a string (could be "").
+  if (!input.smilesCanonical.trim()) {
     throw new Error("smilesCanonical must be non-empty");
   }
   const multiplicity = input.multiplicity ?? 1;
@@ -123,7 +125,7 @@ export async function lookupQmCache(
   pool: Pool,
   cacheKey: Buffer,
 ): Promise<QmJobRow | null> {
-  return withSystemContext(pool, async (client) => {
+  return await withSystemContext(pool, async (client) => {
     const res = await client.query<{
       id: string;
       status: string;
@@ -152,8 +154,8 @@ export async function lookupQmCache(
         LIMIT 1`,
       [cacheKey],
     );
-    if (res.rowCount === 0) return null;
-    const row = res.rows[0]!;
+    const row = res.rows[0];
+    if (!row) return null;
     log.debug(
       { event: "qm_cache_hit", job_id: row.id, method: row.method, task: row.task },
       "qm cache hit",
@@ -184,7 +186,7 @@ export async function invalidateQmCache(
   pool: Pool,
   cacheKey: Buffer,
 ): Promise<number> {
-  return withSystemContext(pool, async (client) => {
+  return await withSystemContext(pool, async (client) => {
     const res = await client.query(
       `UPDATE qm_jobs
           SET valid_to = NOW()

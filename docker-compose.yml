@@ -430,6 +430,37 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # conditions_normalizer — Phase z2: extract reaction conditions from
+  # procedure_text + tabular_data into first-class reactions columns.
+  # Falls back to LiteLLM (Haiku-class) when CONDITIONS_NORMALIZER_LLM_FALLBACK
+  # is true; otherwise pure regex/heuristic extraction.
+  # -------------------------------------------------------------
+  conditions-normalizer:
+    build:
+      context: .
+      dockerfile: services/projectors/conditions_normalizer/Dockerfile
+    container_name: chemclaw-conditions-normalizer
+    user: "1001:1001"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      MCP_RDKIT_URL: http://mcp-rdkit:8001
+      CONDITIONS_NORMALIZER_LLM_FALLBACK: ${CONDITIONS_NORMALIZER_LLM_FALLBACK:-false}
+      LITELLM_BASE_URL: http://litellm:4000
+      LITELLM_API_KEY: ${LITELLM_MASTER_KEY:-}
+      AGENT_MODEL_COMPACTOR: ${AGENT_MODEL_COMPACTOR:-claude-haiku-4-5}
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # qm_kg — projects succeeded qm_jobs into Neo4j with bi-temporal edges
   # -------------------------------------------------------------
   qm-kg:
@@ -946,6 +977,52 @@ services:
       timeout: 10s
       retries: 5
       start_period: 60s
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # mcp-green-chemistry — solvent guides + Bretherick (port 8019)
+  # -------------------------------------------------------------
+  mcp-green-chemistry:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_green_chemistry/Dockerfile
+    container_name: chemclaw-mcp-green-chemistry
+    restart: unless-stopped
+    profiles: ["chemistry"]
+    ports:
+      - "8019:8019"
+    environment:
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:?required}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8019/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # mcp-applicability-domain — 3-signal AD verdict (port 8017)
+  # -------------------------------------------------------------
+  mcp-applicability-domain:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_applicability_domain/Dockerfile
+    container_name: chemclaw-mcp-applicability-domain
+    restart: unless-stopped
+    profiles: ["chemistry"]
+    ports:
+      - "8017:8017"
+    environment:
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:?required}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8017/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
     security_opt:
       - no-new-privileges:true
 

@@ -1233,4 +1233,66 @@ ON CONFLICT (name) DO UPDATE SET
   source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
   description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
 
+-- ── Applicability-domain & green-chemistry (Phase Z1) ─────────────────────
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'score_green_chemistry',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "solvents": {
+        "type": "array",
+        "items": {
+          "type": "object",
+          "properties": {
+            "smiles": {"type": "string", "minLength": 1, "maxLength": 10000},
+            "name":   {"type": "string", "minLength": 1, "maxLength": 200}
+          }
+        },
+        "minItems": 1,
+        "maxItems": 50,
+        "description": "Solvents to score; each entry needs a smiles or a name."
+      }
+    },
+    "required": ["solvents"]
+  }',
+  'Score solvents against CHEM21 / GSK / Pfizer / AZ / Sanofi / ACS GCI-PR guides. Returns per-solvent class + score + match_confidence (smiles_exact / inchikey / name_only / unmatched). Use BEFORE proposing conditions so the soft-greenness penalty in condition-design can be applied.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'assess_applicability_domain',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "rxn_smiles": {
+        "type": "string",
+        "minLength": 3,
+        "maxLength": 20000,
+        "description": "Reaction SMILES (reactants>>products)."
+      },
+      "project_internal_id": {
+        "type": "string",
+        "maxLength": 200,
+        "description": "Optional NCE project internal_id; calibration is per-project."
+      }
+    },
+    "required": ["rxn_smiles"]
+  }',
+  'Three-signal applicability-domain verdict for a reaction: Tanimoto-NN, Mahalanobis, conformal-prediction interval width. Returns verdict (in_domain/borderline/out_of_domain) + underlying scores. Annotate-don''t-block: the verdict is descriptive; the chemist still sees every recommendation.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
 COMMIT;

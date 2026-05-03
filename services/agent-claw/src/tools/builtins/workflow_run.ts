@@ -31,7 +31,7 @@ export function buildWorkflowRunTool(pool: Pool) {
     outputSchema: WorkflowRunOut,
     annotations: { readOnly: false },
     execute: async (ctx, input) => {
-      const actor = ctx.userEntraId ?? "__agent__";
+      const actor = ctx.userEntraId;
       const runId = await startRun(
         pool, input.workflow_id, input.input ?? {},
         actor,

@@ -1,0 +1,5 @@
+psycopg[binary]>=3.2
+pydantic>=2.8
+pydantic-settings>=2.4
+httpx>=0.27
+litellm>=1.60

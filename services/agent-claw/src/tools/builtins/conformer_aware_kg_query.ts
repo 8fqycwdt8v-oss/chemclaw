@@ -47,7 +47,7 @@ export function buildConformerAwareKgQueryTool(pool: Pool) {
       const rows = await withSystemContext(pool, async (client) => {
         switch (input.query) {
           case "compounds_with_calculation": {
-            const r = await client.query(
+            const r = await client.query<Record<string, unknown>>(
               `SELECT j.inchikey,
                       c.smiles_canonical,
                       j.method,
@@ -69,7 +69,7 @@ export function buildConformerAwareKgQueryTool(pool: Pool) {
             return r.rows;
           }
           case "lowest_conformer_energy": {
-            const r = await client.query(
+            const r = await client.query<Record<string, unknown>>(
               `SELECT j.inchikey,
                       c.smiles_canonical,
                       MIN(qc.energy_hartree) AS lowest_energy_hartree,
@@ -90,7 +90,7 @@ export function buildConformerAwareKgQueryTool(pool: Pool) {
             if (!input.inchikey) {
               throw new Error("inchikey is required for calculation_history_for_compound");
             }
-            const r = await client.query(
+            const r = await client.query<Record<string, unknown>>(
               `SELECT j.id::text AS job_id,
                       j.method,
                       j.task,
@@ -112,7 +112,7 @@ export function buildConformerAwareKgQueryTool(pool: Pool) {
           }
         }
       });
-      return { query: input.query, rows: rows ?? [] };
+      return { query: input.query, rows };
     },
   });
 }

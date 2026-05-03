@@ -66,7 +66,7 @@ export function buildRunChemspaceScreenTool(pool: Pool) {
     annotations: { readOnly: false },
     execute: async (ctx, input) => {
       // 1. Resolve candidates → list of {inchikey, smiles}.
-      const candidates = await resolveCandidates(pool, input.candidates as CandidateSourceInput);
+      const candidates = await resolveCandidates(pool, input.candidates);
       if (candidates.length === 0) {
         throw new Error("candidate set is empty");
       }
@@ -75,7 +75,7 @@ export function buildRunChemspaceScreenTool(pool: Pool) {
       const total = candidates.length * input.scoring_pipeline.length;
       const batchId = await createBatch(
         pool, input.name, "chemspace_screen", total,
-        ctx.userEntraId ?? "__agent__",
+        ctx.userEntraId,
       );
       const screenId = await withSystemContext(pool, async (client) => {
         const res = await client.query<{ id: string }>(
@@ -90,10 +90,12 @@ export function buildRunChemspaceScreenTool(pool: Pool) {
             candidates.length,
             JSON.stringify(input.scoring_pipeline),
             batchId,
-            ctx.userEntraId ?? "__agent__",
+            ctx.userEntraId,
           ],
         );
-        return res.rows[0]!.id;
+        const screenRow = res.rows[0];
+        if (!screenRow) throw new Error("chemspace_screens INSERT returned no rows");
+        return screenRow.id;
       });
 
       // 3. Enqueue one task per (candidate, step).
@@ -149,7 +151,7 @@ async function resolveCandidates(
   pool: Pool,
   src: CandidateSourceInput,
 ): Promise<Array<{ inchikey: string; smiles: string }>> {
-  return withSystemContext(pool, async (client) => {
+  return await withSystemContext(pool, async (client) => {
     if (src.from === "list") {
       const res = await client.query<{ inchikey: string; smiles_canonical: string }>(
         `SELECT inchikey, smiles_canonical FROM compounds WHERE inchikey = ANY($1)`,
