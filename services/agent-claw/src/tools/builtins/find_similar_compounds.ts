@@ -59,6 +59,16 @@ export function buildFindSimilarCompoundsTool(pool: Pool, mcpRdkitUrl: string) {
       const k = input.k ?? 20;
       const minSimilarity = input.min_similarity ?? 0.0;
 
+      // SECURITY: defensive whitelist BEFORE any external work — Zod
+      // constrains `fingerprint` to one of these four names today, but
+      // interpolating into SQL means a future schema relaxation must not
+      // become a SQL-injection vector. We reject anything outside the
+      // literal allow-list before the fingerprint fetch or the SQL run.
+      const ALLOWED_COLUMNS = new Set(["morgan_r2", "morgan_r3", "maccs", "atompair"]);
+      if (!ALLOWED_COLUMNS.has(fingerprint)) {
+        throw new Error(`fingerprint must be one of ${[...ALLOWED_COLUMNS].join(",")}`);
+      }
+
       // 1. Get fingerprint of the query molecule from mcp-rdkit.
       const fpReq =
         fingerprint === "maccs"
@@ -75,7 +85,9 @@ export function buildFindSimilarCompoundsTool(pool: Pool, mcpRdkitUrl: string) {
       const fp = await postJson(`${base}${fpPath}`, fpReq, MorganOut, TIMEOUT_MS, "mcp-rdkit");
       const queryVec = onBitsToPgvectorLiteral(fp.on_bits, fp.n_bits);
 
-      // 2. Cosine search the matching column.
+      // 2. Cosine search the matching column. The whitelist guard above
+      // ensures `fingerprint` is safe to interpolate into the SQL identifier
+      // position; never reuse this pattern with unvalidated input.
       const column = fingerprint;
       const rows = await withSystemContext(pool, async (client) => {
         const res = await client.query<{

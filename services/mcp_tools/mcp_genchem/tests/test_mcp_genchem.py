@@ -61,6 +61,8 @@ def test_scaffold_decorate_returns_proposals(client, monkeypatch):
 
 
 def test_fragment_link_assembles(client, monkeypatch):
+    """Hardened API requires explicit [*] dummy atoms on both fragments and
+    bivalent [*]-bearing linkers. See test_fragment_link.py for details."""
     monkeypatch.setattr(
         "services.mcp_tools.mcp_genchem.main._record_run",
         lambda **kw: "stub-run-id",
@@ -68,9 +70,9 @@ def test_fragment_link_assembles(client, monkeypatch):
     r = client.post(
         "/fragment_link",
         json={
-            "fragment_a_smiles": "c1ccccc1",
-            "fragment_b_smiles": "c1ccccc1",
-            "linkers": ["", "C", "CC", "OC"],
+            "fragment_a_smiles": "c1ccccc1[*]",
+            "fragment_b_smiles": "[*]c1ccccc1",
+            "linkers": ["[*]C[*]", "[*]CC[*]"],
             "max_proposals": 10,
         },
     )

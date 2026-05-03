@@ -5,6 +5,7 @@ import type { Pool } from "pg";
 
 import { defineTool } from "../tool.js";
 import { replayRun } from "../../core/workflows/client.js";
+import { appendAudit } from "../../routes/admin/audit-log.js";
 
 export const WorkflowReplayIn = z.object({
   parent_run_id: z.string().uuid(),
@@ -31,11 +32,18 @@ export function buildWorkflowReplayTool(pool: Pool) {
     outputSchema: WorkflowReplayOut,
     annotations: { readOnly: false },
     execute: async (ctx, input) => {
+      const actor = ctx.userEntraId ?? "__agent__";
       const runId = await replayRun(
         pool, input.parent_run_id,
         input.input_override ?? null,
-        ctx.userEntraId ?? "__agent__",
+        actor,
       );
+      await appendAudit(pool, {
+        actor,
+        action: "workflow.replay",
+        target: runId,
+        afterValue: { parent_run_id: input.parent_run_id },
+      }).catch(() => undefined);
       return { run_id: runId, parent_run_id: input.parent_run_id };
     },
   });

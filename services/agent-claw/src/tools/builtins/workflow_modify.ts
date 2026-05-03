@@ -5,6 +5,9 @@ import type { Pool } from "pg";
 
 import { defineTool } from "../tool.js";
 import { modifyDefinition } from "../../core/workflows/client.js";
+import { appendAudit } from "../../routes/admin/audit-log.js";
+
+const MAX_DEFINITION_BYTES = 256 * 1024;
 
 export const WorkflowModifyIn = z.object({
   run_id: z.string().uuid(),
@@ -32,10 +35,24 @@ export function buildWorkflowModifyTool(pool: Pool) {
     outputSchema: WorkflowModifyOut,
     annotations: { readOnly: false },
     execute: async (ctx, input) => {
-      await modifyDefinition(
-        pool, input.run_id, input.new_definition,
-        ctx.userEntraId ?? "__agent__", input.justification,
+      const definitionBytes = Buffer.byteLength(
+        JSON.stringify(input.new_definition), "utf8",
       );
+      if (definitionBytes > MAX_DEFINITION_BYTES) {
+        throw new Error(
+          `new_definition is ${definitionBytes} bytes; max is ${MAX_DEFINITION_BYTES}`,
+        );
+      }
+      const actor = ctx.userEntraId ?? "__agent__";
+      await modifyDefinition(
+        pool, input.run_id, input.new_definition, actor, input.justification,
+      );
+      await appendAudit(pool, {
+        actor,
+        action: "workflow.modify",
+        target: input.run_id,
+        reason: input.justification,
+      }).catch(() => undefined);
       return { run_id: input.run_id, applied: true };
     },
   });

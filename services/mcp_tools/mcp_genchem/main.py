@@ -265,6 +265,78 @@ def _attachment_labels(mol: Any) -> set[str]:
     return labels
 
 
+def _assemble_via_dummy_atoms(a_smi: str, linker_smi: str, b_smi: str) -> Any:
+    """Combine fragment_a + linker + fragment_b by matching their [*] dummies.
+
+    Algorithm:
+      1. Parse all three.
+      2. Combine into a single Mol via Chem.CombineMols (twice).
+      3. Replace each pair of dummies with a real bond using
+         Chem.ReplaceSubstructs(..., useChirality=False) — but we instead
+         use the more controllable EditableMol API: identify dummy atom
+         indices, add bonds between their (unique) heavy-atom neighbours,
+         then remove the dummies.
+      4. Sanitize.
+    Returns the resulting Mol or None on failure.
+    """
+    from rdkit import Chem as _Chem  # noqa: PLC0415
+    Chem: Any = _Chem
+
+    a = Chem.MolFromSmiles(a_smi)
+    linker = Chem.MolFromSmiles(linker_smi)
+    b = Chem.MolFromSmiles(b_smi)
+    if a is None or linker is None or b is None:
+        return None
+
+    combined = Chem.CombineMols(a, linker)
+    combined = Chem.CombineMols(combined, b)
+    rw = Chem.RWMol(combined)
+
+    # Collect dummy atom indices and their neighbours.
+    dummies: list[tuple[int, int]] = []
+    for atom in rw.GetAtoms():
+        if atom.GetSymbol() == "*":
+            neighbours = atom.GetNeighbors()
+            if len(neighbours) != 1:
+                # A dummy with 0 or >1 neighbours is malformed.
+                return None
+            dummies.append((atom.GetIdx(), neighbours[0].GetIdx()))
+
+    # We expect 4 dummies total (1 in a, 2 in linker, 1 in b).
+    if len(dummies) != 4:
+        return None
+
+    # The simplest deterministic pairing: dummy from a connects to one linker
+    # dummy, dummy from b connects to the other. Use atom indices from the
+    # CombineMols layout: a's atoms are first, linker next, b last.
+    a_n = a.GetNumAtoms()
+    linker_n = linker.GetNumAtoms()
+    a_dummies = [d for d in dummies if d[0] < a_n]
+    linker_dummies = [d for d in dummies if a_n <= d[0] < a_n + linker_n]
+    b_dummies = [d for d in dummies if d[0] >= a_n + linker_n]
+    if len(a_dummies) != 1 or len(linker_dummies) != 2 or len(b_dummies) != 1:
+        return None
+
+    a_dummy, a_anchor = a_dummies[0]
+    b_dummy, b_anchor = b_dummies[0]
+    l1_dummy, l1_anchor = linker_dummies[0]
+    l2_dummy, l2_anchor = linker_dummies[1]
+
+    rw.AddBond(a_anchor, l1_anchor, Chem.BondType.SINGLE)
+    rw.AddBond(b_anchor, l2_anchor, Chem.BondType.SINGLE)
+
+    # Remove dummies in DESCENDING index order so earlier removals don't
+    # shift indices for later removals.
+    for idx in sorted([a_dummy, b_dummy, l1_dummy, l2_dummy], reverse=True):
+        rw.RemoveAtom(idx)
+
+    try:
+        Chem.SanitizeMol(rw)
+    except Exception:  # noqa: BLE001
+        return None
+    return rw.GetMol()
+
+
 def _attach_rgroups(scaffold_smi: str, labels: list[str], rgroups: tuple[str, ...]) -> Any:
     from rdkit import Chem as _Chem  # noqa: PLC0415
     from rdkit.Chem import AllChem as _AllChem  # noqa: PLC0415
@@ -461,38 +533,68 @@ async def fragment_grow(req: Annotated[FragmentGrowIn, Body(...)]) -> GenRunOut:
 # ---------------------------------------------------------------------------
 
 class FragmentLinkIn(BaseModel):
-    fragment_a_smiles: str = Field(min_length=1, max_length=MAX_SMILES_LEN)
-    fragment_b_smiles: str = Field(min_length=1, max_length=MAX_SMILES_LEN)
+    fragment_a_smiles: str = Field(min_length=1, max_length=MAX_SMILES_LEN,
+                                    description="Fragment A. Must contain a [*] dummy atom marking the linkage point.")
+    fragment_b_smiles: str = Field(min_length=1, max_length=MAX_SMILES_LEN,
+                                    description="Fragment B. Must contain a [*] dummy atom marking the linkage point.")
     linkers: list[str] = Field(
-        default_factory=lambda: ["", "C", "CC", "CCC", "C=C", "Oc1ccccc1"],
+        default_factory=lambda: ["[*]C[*]", "[*]CC[*]", "[*]CCC[*]", "[*]C=C[*]", "[*]Oc1ccccc1[*]", "[*][*]"],
+        description="Bivalent linker SMILES; each MUST contain exactly two [*] dummy atoms that get matched to the two fragments.",
     )
     max_proposals: int = Field(default=50, ge=1, le=500)
 
 
 @app.post("/fragment_link", response_model=GenRunOut, tags=["genchem"])
 async def fragment_link(req: Annotated[FragmentLinkIn, Body(...)]) -> GenRunOut:
-    a = _mol(req.fragment_a_smiles)
-    b = _mol(req.fragment_b_smiles)
-    a_smi = _canon(a).rstrip(".")
-    b_smi = _canon(b).rstrip(".")
+    """Link two fragments via bivalent linkers using RDKit reaction SMARTS.
+
+    The previous implementation concatenated the SMILES strings as raw text
+    (`f"{a}{linker}{b}"`) which silently produced wrong molecules whenever
+    the strings contained ring-closure digits, charges, or stereochemistry —
+    the wrong atoms ended up bonded. We now require each fragment and each
+    linker to declare its connection point via a `[*]` dummy atom and apply
+    a proper RDKit reaction transformation.
+    """
+    from rdkit import Chem as _Chem  # noqa: PLC0415
+    from rdkit.Chem import AllChem as _AllChem  # noqa: PLC0415
+    Chem: Any = _Chem
+    AllChem: Any = _AllChem
+
+    if not _has_attachment_points(_mol(req.fragment_a_smiles)):
+        raise ValueError("fragment_a_smiles must contain a [*] dummy atom")
+    if not _has_attachment_points(_mol(req.fragment_b_smiles)):
+        raise ValueError("fragment_b_smiles must contain a [*] dummy atom")
 
     proposals: list[dict[str, Any]] = []
     seen: set[str] = set()
+    seed_a = _mol(req.fragment_a_smiles)
+
     for linker in req.linkers:
         if len(proposals) >= req.max_proposals:
             break
-        candidate = f"{a_smi}{linker}{b_smi}" if linker else f"{a_smi}.{b_smi}"
         try:
-            new_mol = _mol(candidate)
+            linker_mol = _mol(linker)
         except ValueError:
             continue
-        smi = _canon(new_mol)
+        n_dummies = sum(1 for atom in linker_mol.GetAtoms() if atom.GetSymbol() == "*")
+        if n_dummies != 2:
+            # A bivalent linker must have exactly two dummy attachment points.
+            continue
+        try:
+            assembled = _assemble_via_dummy_atoms(
+                req.fragment_a_smiles, linker, req.fragment_b_smiles,
+            )
+        except Exception:  # noqa: BLE001
+            continue
+        if assembled is None:
+            continue
+        smi = _canon(assembled)
         if smi in seen:
             continue
         seen.add(smi)
         proposals.append({
             "smiles": smi,
-            "inchikey": _inchikey(new_mol),
+            "inchikey": _inchikey(assembled),
             "transformation": {"kind": "fragment_link", "linker": linker},
         })
 

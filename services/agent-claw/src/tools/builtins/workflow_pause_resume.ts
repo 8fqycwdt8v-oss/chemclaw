@@ -5,6 +5,7 @@ import type { Pool } from "pg";
 
 import { defineTool } from "../tool.js";
 import { pauseRun, resumeRun } from "../../core/workflows/client.js";
+import { appendAudit } from "../../routes/admin/audit-log.js";
 
 export const WorkflowPauseResumeIn = z.object({
   run_id: z.string().uuid(),
@@ -36,6 +37,11 @@ export function buildWorkflowPauseResumeTool(pool: Pool) {
       } else {
         await resumeRun(pool, input.run_id, by);
       }
+      await appendAudit(pool, {
+        actor: by,
+        action: `workflow.${input.action}`,
+        target: input.run_id,
+      }).catch(() => undefined);
       return { run_id: input.run_id, action: input.action, applied: true };
     },
   });

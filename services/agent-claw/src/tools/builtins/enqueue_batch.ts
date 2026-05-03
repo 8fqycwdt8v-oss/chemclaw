@@ -5,6 +5,7 @@ import type { Pool } from "pg";
 
 import { defineTool } from "../tool.js";
 import { createBatch, enqueueRows } from "../../db/queue.js";
+import { appendAudit } from "../../routes/admin/audit-log.js";
 import { getLogger } from "../../observability/logger.js";
 
 const log = getLogger("enqueue_batch");
@@ -65,6 +66,12 @@ export function buildEnqueueBatchTool(pool: Pool) {
         { event: "enqueue_batch", batch_id: batchId, total: input.payloads.length, inserted },
         "batch enqueued",
       );
+      await appendAudit(pool, {
+        actor: ctx.userEntraId ?? "__agent__",
+        action: "queue.enqueue",
+        target: batchId,
+        afterValue: { task_kind: input.task_kind, total: input.payloads.length, inserted },
+      }).catch(() => undefined);
       return {
         batch_id: batchId,
         task_kind: input.task_kind,

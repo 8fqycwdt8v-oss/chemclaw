@@ -5,6 +5,7 @@ import type { Pool } from "pg";
 
 import { defineTool } from "../tool.js";
 import { startRun } from "../../core/workflows/client.js";
+import { appendAudit } from "../../routes/admin/audit-log.js";
 
 export const WorkflowRunIn = z.object({
   workflow_id: z.string().uuid(),
@@ -30,11 +31,18 @@ export function buildWorkflowRunTool(pool: Pool) {
     outputSchema: WorkflowRunOut,
     annotations: { readOnly: false },
     execute: async (ctx, input) => {
+      const actor = ctx.userEntraId ?? "__agent__";
       const runId = await startRun(
         pool, input.workflow_id, input.input ?? {},
-        ctx.userEntraId ?? "__agent__",
+        actor,
         input.session_id ?? null,
       );
+      await appendAudit(pool, {
+        actor,
+        action: "workflow.run",
+        target: runId,
+        afterValue: { workflow_id: input.workflow_id },
+      }).catch(() => undefined);
       return { run_id: runId, status: "running" as const };
     },
   });
