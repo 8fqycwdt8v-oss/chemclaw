@@ -318,6 +318,37 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # workflow-engine — agent-controlled, auditable workflow executor (Phase 8)
+  # Consumes pg_notify('workflow_event'), advances workflow_runs by folding
+  # workflow_events into workflow_state. Step kinds tool_call + wait(batch_id)
+  # are fully wired; conditional / loop / parallel / sub_agent are accepted
+  # but executed serially in the MVP (extension follows in Phase 9).
+  # -------------------------------------------------------------
+  workflow-engine:
+    build:
+      context: .
+      dockerfile: services/workflow_engine/Dockerfile
+    container_name: chemclaw-workflow-engine
+    user: "1001:1001"
+    restart: unless-stopped
+    profiles: ["chemistry"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      MCP_XTB_URL: http://mcp-xtb:8010
+      MCP_CREST_URL: http://mcp-crest:8014
+      MCP_GENCHEM_URL: http://mcp-genchem:8015
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # queue-worker — Postgres-backed batch worker (Phase 6)
   # SELECT ... FOR UPDATE SKIP LOCKED + LISTEN/NOTIFY for scheduling.
   # Replicate via `docker compose up --scale queue-worker=N`.

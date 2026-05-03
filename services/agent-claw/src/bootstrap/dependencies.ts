@@ -50,6 +50,13 @@ import { buildInspectBatchTool } from "../tools/builtins/inspect_batch.js";
 // Phase 7 — chemspace screens + conformer-aware KG retrieval.
 import { buildRunChemspaceScreenTool } from "../tools/builtins/run_chemspace_screen.js";
 import { buildConformerAwareKgQueryTool } from "../tools/builtins/conformer_aware_kg_query.js";
+// Phase 8 — agent-controlled workflow engine.
+import { buildWorkflowDefineTool } from "../tools/builtins/workflow_define.js";
+import { buildWorkflowRunTool } from "../tools/builtins/workflow_run.js";
+import { buildWorkflowInspectTool } from "../tools/builtins/workflow_inspect.js";
+import { buildWorkflowPauseResumeTool } from "../tools/builtins/workflow_pause_resume.js";
+import { buildWorkflowModifyTool } from "../tools/builtins/workflow_modify.js";
+import { buildWorkflowReplayTool } from "../tools/builtins/workflow_replay.js";
 import { buildIdentifyUnknownFromMsTool } from "../tools/builtins/identify_unknown_from_ms.js";
 import { buildPredictMolecularPropertyTool } from "../tools/builtins/predict_molecular_property.js";
 import { buildPredictReactionYieldTool } from "../tools/builtins/predict_reaction_yield.js";
@@ -188,6 +195,13 @@ function registerBuiltinTools(
   // Phase 7 — chemspace screen + conformer-aware KG retrieval.
   registry.registerBuiltin("run_chemspace_screen", () => asTool(buildRunChemspaceScreenTool(pool)));
   registry.registerBuiltin("conformer_aware_kg_query", () => asTool(buildConformerAwareKgQueryTool(pool)));
+  // Phase 8 — agent-controlled workflow engine.
+  registry.registerBuiltin("workflow_define",       () => asTool(buildWorkflowDefineTool(pool)));
+  registry.registerBuiltin("workflow_run",          () => asTool(buildWorkflowRunTool(pool)));
+  registry.registerBuiltin("workflow_inspect",      () => asTool(buildWorkflowInspectTool(pool)));
+  registry.registerBuiltin("workflow_pause_resume", () => asTool(buildWorkflowPauseResumeTool(pool)));
+  registry.registerBuiltin("workflow_modify",       () => asTool(buildWorkflowModifyTool(pool)));
+  registry.registerBuiltin("workflow_replay",       () => asTool(buildWorkflowReplayTool(pool)));
   registry.registerBuiltin("identify_unknown_from_ms", () => asTool(buildIdentifyUnknownFromMsTool(cfg.MCP_SIRIUS_URL)));
   registry.registerBuiltin("predict_molecular_property", () => asTool(buildPredictMolecularPropertyTool(cfg.MCP_CHEMPROP_URL)));
   registry.registerBuiltin("predict_reaction_yield", () => asTool(buildPredictReactionYieldTool(cfg.MCP_CHEMPROP_URL)));
