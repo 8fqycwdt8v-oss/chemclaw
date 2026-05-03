@@ -36,6 +36,7 @@ setup.python: ## Create .venv and install Python deps for all services
 	$(PIP) install -r services/mcp_tools/mcp_yield_baseline/requirements.txt
 	$(PIP) install -r services/mcp_tools/mcp_plate_designer/requirements.txt
 	$(PIP) install -r services/mcp_tools/mcp_ord_io/requirements.txt
+	$(PIP) install -r services/mcp_tools/mcp_reaction_optimizer/requirements.txt
 	$(PIP) install -r services/projectors/reaction_vectorizer/requirements.txt
 	$(PIP) install -r services/projectors/chunk_embedder/requirements.txt
 	$(PIP) install -r services/projectors/conditions_normalizer/requirements.txt

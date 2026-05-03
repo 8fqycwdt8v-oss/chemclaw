@@ -1064,6 +1064,29 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # mcp-reaction-optimizer — BoFire BO closed-loop campaigns (port 8018)
+  # -------------------------------------------------------------
+  mcp-reaction-optimizer:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_reaction_optimizer/Dockerfile
+    container_name: chemclaw-mcp-reaction-optimizer
+    restart: unless-stopped
+    profiles: ["chemistry"]
+    ports:
+      - "8018:8018"
+    environment:
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:?required}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8018/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # mcp-plate-designer — BoFire space-filling DoE for HTE plates (port 8020)
   # -------------------------------------------------------------
   mcp-plate-designer:

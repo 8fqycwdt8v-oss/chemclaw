@@ -28,6 +28,7 @@ SERVICE_SCOPES: dict[str, str] = {
     "mcp-aizynth": "mcp_aizynth:invoke",
     "mcp-chemprop": "mcp_chemprop:invoke",
     "mcp-yield-baseline": "mcp_yield_baseline:invoke",
+    "mcp-reaction-optimizer": "mcp_reaction_optimizer:invoke",
     "mcp-plate-designer": "mcp_plate_designer:invoke",
     "mcp-ord-io": "mcp_ord_io:invoke",
     "mcp-xtb": "mcp_xtb:invoke",

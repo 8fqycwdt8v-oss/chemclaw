@@ -95,6 +95,8 @@ const ConfigSchema = z.object({
   // Phase Z4 — HTE plate design + ORD I/O.
   MCP_PLATE_DESIGNER_URL: z.string().url().default("http://localhost:8020"),
   MCP_ORD_IO_URL: z.string().url().default("http://localhost:8021"),
+  // Phase Z5 — closed-loop BoFire BO.
+  MCP_REACTION_OPTIMIZER_URL: z.string().url().default("http://localhost:8018"),
   MCP_XTB_URL: z.string().url().default("http://localhost:8010"),
   MCP_SYNTHEGY_MECH_URL: z.string().url().default("http://localhost:8011"),
   MCP_SIRIUS_URL: z.string().url().default("http://localhost:8012"),
