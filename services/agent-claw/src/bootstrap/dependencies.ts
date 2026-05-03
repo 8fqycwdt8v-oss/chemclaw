@@ -28,6 +28,7 @@ import {
 import { buildCanonicalizeSmilesTool } from "../tools/builtins/canonicalize_smiles.js";
 import { buildCheckContradictionsTool } from "../tools/builtins/check_contradictions.js";
 import { buildComputeConformerEnsembleTool } from "../tools/builtins/compute_conformer_ensemble.js";
+import { buildRunXtbWorkflowTool } from "../tools/builtins/run_xtb_workflow.js";
 import { buildIdentifyUnknownFromMsTool } from "../tools/builtins/identify_unknown_from_ms.js";
 import { buildPredictMolecularPropertyTool } from "../tools/builtins/predict_molecular_property.js";
 import { buildPredictReactionYieldTool } from "../tools/builtins/predict_reaction_yield.js";
@@ -144,6 +145,7 @@ function registerBuiltinTools(
   registry.registerBuiltin("canonicalize_smiles", () => asTool(buildCanonicalizeSmilesTool(cfg.MCP_RDKIT_URL)));
   registry.registerBuiltin("check_contradictions", () => asTool(buildCheckContradictionsTool(cfg.MCP_KG_URL)));
   registry.registerBuiltin("compute_conformer_ensemble", () => asTool(buildComputeConformerEnsembleTool(cfg.MCP_XTB_URL)));
+  registry.registerBuiltin("run_xtb_workflow", () => asTool(buildRunXtbWorkflowTool(cfg.MCP_XTB_URL)));
   registry.registerBuiltin("identify_unknown_from_ms", () => asTool(buildIdentifyUnknownFromMsTool(cfg.MCP_SIRIUS_URL)));
   registry.registerBuiltin("predict_molecular_property", () => asTool(buildPredictMolecularPropertyTool(cfg.MCP_CHEMPROP_URL)));
   registry.registerBuiltin("predict_reaction_yield", () => asTool(buildPredictReactionYieldTool(cfg.MCP_CHEMPROP_URL)));

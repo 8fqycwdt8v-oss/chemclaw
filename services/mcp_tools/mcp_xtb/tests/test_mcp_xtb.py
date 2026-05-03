@@ -159,31 +159,47 @@ def test_xtb_process_failure_raises_400(client):
 # ---------------------------------------------------------------------------
 
 def test_conformer_ensemble_happy_path(client):
-    proc_result = _make_mock_subprocess_result(stdout="CREST done")
+    """/conformer_ensemble routes through the workflow engine since the
+    refactor; mock ``workflow.run_subprocess`` so both the CREST step and
+    the per-conformer ``xtb --opt`` step return canned successful results.
+    """
+    from services.mcp_tools.mcp_xtb import workflow as wf
+
+    async def fake_run_subprocess(args, cwd, timeout_s):
+        from pathlib import Path as _Path
+        cmd = args[0]
+        cwd_p = _Path(cwd)
+        if cmd == "crest":
+            (cwd_p / "crest_conformers.xyz").write_text(_FAKE_CREST_ENSEMBLE)
+            return wf.SubprocessResult(returncode=0, stdout="CREST done", stderr="")
+        if cmd == "xtb":
+            (cwd_p / "xtbopt.xyz").write_text(_FAKE_OPTIMIZED_XYZ)
+            return wf.SubprocessResult(returncode=0, stdout=_FAKE_STDOUT_OPT, stderr="")
+        raise AssertionError(f"unexpected subprocess call: {args!r}")
 
     with mock.patch(
         "services.mcp_tools.mcp_xtb.main._smiles_to_xyz",
         return_value=_FAKE_XYZ,
     ), mock.patch(
-        "services.mcp_tools.mcp_xtb.main._run_xtb",
-        return_value=proc_result,
-    ), mock.patch(
-        "pathlib.Path.exists",
-        return_value=True,
-    ), mock.patch(
-        "pathlib.Path.read_text",
-        return_value=_FAKE_CREST_ENSEMBLE,
+        "services.mcp_tools.mcp_xtb.workflow.run_subprocess",
+        side_effect=fake_run_subprocess,
     ):
         r = client.post(
             "/conformer_ensemble",
             json={"smiles": "CCO", "n_conformers": 5},
         )
 
-    assert r.status_code == 200
+    assert r.status_code == 200, r.text
     body = r.json()
     assert len(body["conformers"]) == 2  # only 2 in the fake ensemble
     total_weight = sum(c["weight"] for c in body["conformers"])
     assert total_weight == pytest.approx(1.0)
+    # Energies are now POST-opt, so they match the optimisation stdout
+    # rather than the CREST comment-line energies.
+    assert all(
+        c["energy_hartree"] == pytest.approx(-5.123456789)
+        for c in body["conformers"]
+    )
 
 
 def test_conformer_ensemble_n_conformers_max(client):
@@ -192,6 +208,29 @@ def test_conformer_ensemble_n_conformers_max(client):
         json={"smiles": "CCO", "n_conformers": 101},
     )
     assert r.status_code == 422
+
+
+def test_conformer_ensemble_propagates_step_failure(client):
+    """A CREST exit-non-zero surfaces as a 400 with the failing step name."""
+    from services.mcp_tools.mcp_xtb import workflow as wf
+
+    async def fake_run_subprocess(args, cwd, timeout_s):
+        return wf.SubprocessResult(returncode=2, stdout="", stderr="CREST blew up")
+
+    with mock.patch(
+        "services.mcp_tools.mcp_xtb.main._smiles_to_xyz",
+        return_value=_FAKE_XYZ,
+    ), mock.patch(
+        "services.mcp_tools.mcp_xtb.workflow.run_subprocess",
+        side_effect=fake_run_subprocess,
+    ):
+        r = client.post(
+            "/conformer_ensemble",
+            json={"smiles": "CCO", "n_conformers": 5},
+        )
+    assert r.status_code == 400
+    body = r.json()
+    assert "crest" in body["detail"].lower()
 
 
 def test_healthz(client):

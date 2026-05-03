@@ -1,19 +1,22 @@
 """mcp-xtb — GFN2-xTB semi-empirical geometry optimization and CREST conformer search (port 8010).
 
 Tools:
-- POST /optimize_geometry   — GFN2-xTB or GFN-FF single-point / geometry optimization
-- POST /conformer_ensemble  — CREST conformer ensemble generation
+- POST /optimize_geometry   — GFN2-xTB or GFN-FF single-point / geometry optimization (atomic)
+- POST /conformer_ensemble  — CREST conformer ensemble + per-conformer optimisation (engine-routed)
+- POST /run_workflow        — run a named multi-step recipe (see ``recipes/``)
 
 Security:
 - subprocess.run uses shell=False with an explicit arg list.
 - SMILES validated via RDKit before invoking xTB.
-- Subprocess timeout hard-capped at 120 s.
+- Subprocess timeout hard-capped at 120 s for the legacy atomic path,
+  per-step + per-workflow caps for the engine-routed paths.
 - Temporary directory cleaned up automatically.
 """
 
 from __future__ import annotations
 
 import logging
+import os
 import shutil
 import subprocess
 import tempfile
@@ -26,11 +29,38 @@ from pydantic import BaseModel, Field
 from services.mcp_tools.common.app import create_app
 from services.mcp_tools.common.limits import MAX_SMILES_LEN
 from services.mcp_tools.common.settings import ToolSettings
+from services.mcp_tools.mcp_xtb import workflow
 
 log = logging.getLogger("mcp-xtb")
 settings = ToolSettings()
 
-_XTB_TIMEOUT = 120  # seconds
+_XTB_TIMEOUT = 120  # seconds — legacy /optimize_geometry path
+
+# Engine-routed paths read these from env vars; admin-friendly migration
+# to ``config_settings`` is a follow-up (mcp-xtb does not currently
+# carry a Postgres dependency).
+_DEFAULT_STEP_TIMEOUT_S = 120
+_DEFAULT_WORKFLOW_TIMEOUT_S = 600
+_HARD_WORKFLOW_TIMEOUT_CEILING_S = 1800
+
+
+def _step_timeout_s() -> int:
+    raw = os.environ.get("MCP_XTB_STEP_TIMEOUT_SECONDS")
+    try:
+        return int(raw) if raw else _DEFAULT_STEP_TIMEOUT_S
+    except ValueError:
+        return _DEFAULT_STEP_TIMEOUT_S
+
+
+def _workflow_timeout_s(requested: int | None) -> int:
+    if requested is not None:
+        return min(max(1, requested), _HARD_WORKFLOW_TIMEOUT_CEILING_S)
+    raw = os.environ.get("MCP_XTB_WORKFLOW_TIMEOUT_SECONDS")
+    try:
+        cfg = int(raw) if raw else _DEFAULT_WORKFLOW_TIMEOUT_S
+    except ValueError:
+        cfg = _DEFAULT_WORKFLOW_TIMEOUT_S
+    return min(max(1, cfg), _HARD_WORKFLOW_TIMEOUT_CEILING_S)
 
 
 def _xtb_available() -> bool:
@@ -246,44 +276,57 @@ def _parse_crest_ensemble(ensemble_text: str) -> list[tuple[str, float]]:
 async def conformer_ensemble(
     req: Annotated[ConformerEnsembleIn, Body(...)],
 ) -> ConformerEnsembleOut:
-    xyz_block = _smiles_to_xyz(req.smiles)
+    """Boltzmann-weighted CREST ensemble (engine-routed since the
+    workflow refactor: each conformer is xtb-optimised before weighting).
+    """
+    from services.mcp_tools.mcp_xtb.recipes import RECIPES
 
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
-        input_xyz = tmp_path / "mol.xyz"
-        input_xyz.write_text(xyz_block)
-
-        result = _run_xtb(
-            ["crest", "mol.xyz", "--T", "4", "--niceprint"],
-            cwd=tmp_path,
+    result = await workflow.run(
+        RECIPES["optimize_ensemble"],
+        {"smiles": req.smiles, "n_conformers": req.n_conformers},
+        total_timeout_s=_workflow_timeout_s(None),
+        step_timeout_s=_step_timeout_s(),
+    )
+    if not result.success:
+        failed = next((s for s in result.steps if not s.ok), None)
+        raise ValueError(
+            f"conformer_ensemble failed at step "
+            f"{failed.name if failed else '?'}: "
+            f"{failed.error if failed else 'unknown'}",
         )
-        if result.returncode != 0:
-            raise ValueError(
-                f"crest failed (exit {result.returncode}): {result.stderr[:500]}"
-            )
+    return ConformerEnsembleOut(
+        conformers=[ConformerEntry(**c) for c in result.outputs["conformers"]],
+    )
 
-        ensemble_path = tmp_path / "crest_conformers.xyz"
-        if not ensemble_path.exists():
-            raise ValueError("crest did not produce crest_conformers.xyz")
-        ensemble_text = ensemble_path.read_text()
 
-    raw = _parse_crest_ensemble(ensemble_text)
-    raw = raw[: req.n_conformers]
+# ---------------------------------------------------------------------------
+# /run_workflow — generic multi-step xtb recipe runner
+# ---------------------------------------------------------------------------
 
-    # Boltzmann weights (relative, temperature-independent approximation).
-    import math
+class RunWorkflowIn(BaseModel):
+    recipe: str = Field(min_length=1, max_length=64)
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    total_timeout_seconds: int | None = Field(default=None, ge=1)
 
-    energies = [e for _, e in raw]
-    e_min = min(energies) if energies else 0.0
-    exp_vals = [math.exp(-(e - e_min) * 627.509) for e in energies]  # kcal/mol
-    total = sum(exp_vals) or 1.0
-    weights = [v / total for v in exp_vals]
 
-    conformers = [
-        ConformerEntry(xyz=xyz, energy_hartree=e, weight=w)
-        for (xyz, e), w in zip(raw, weights)
-    ]
-    return ConformerEnsembleOut(conformers=conformers)
+@app.post("/run_workflow", response_model=workflow.WorkflowResult, tags=["xtb"])
+async def run_workflow(
+    req: Annotated[RunWorkflowIn, Body(...)],
+) -> workflow.WorkflowResult:
+    from services.mcp_tools.mcp_xtb.recipes import RECIPES
+
+    wf = RECIPES.get(req.recipe)
+    if wf is None:
+        raise ValueError(
+            f"unknown recipe {req.recipe!r}; available: "
+            f"{sorted(RECIPES.keys())}",
+        )
+    return await workflow.run(
+        wf,
+        req.inputs,
+        total_timeout_s=_workflow_timeout_s(req.total_timeout_seconds),
+        step_timeout_s=_step_timeout_s(),
+    )
 
 
 if __name__ == "__main__":
