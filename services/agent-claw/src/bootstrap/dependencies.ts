@@ -47,6 +47,9 @@ import { buildFindMatchedPairsTool } from "../tools/builtins/find_matched_pairs.
 // Phase 6 — Postgres-backed batch queue.
 import { buildEnqueueBatchTool } from "../tools/builtins/enqueue_batch.js";
 import { buildInspectBatchTool } from "../tools/builtins/inspect_batch.js";
+// Phase 7 — chemspace screens + conformer-aware KG retrieval.
+import { buildRunChemspaceScreenTool } from "../tools/builtins/run_chemspace_screen.js";
+import { buildConformerAwareKgQueryTool } from "../tools/builtins/conformer_aware_kg_query.js";
 import { buildIdentifyUnknownFromMsTool } from "../tools/builtins/identify_unknown_from_ms.js";
 import { buildPredictMolecularPropertyTool } from "../tools/builtins/predict_molecular_property.js";
 import { buildPredictReactionYieldTool } from "../tools/builtins/predict_reaction_yield.js";
@@ -182,6 +185,9 @@ function registerBuiltinTools(
   // Phase 6 — Postgres-backed batch queue.
   registry.registerBuiltin("enqueue_batch", () => asTool(buildEnqueueBatchTool(pool)));
   registry.registerBuiltin("inspect_batch", () => asTool(buildInspectBatchTool(pool)));
+  // Phase 7 — chemspace screen + conformer-aware KG retrieval.
+  registry.registerBuiltin("run_chemspace_screen", () => asTool(buildRunChemspaceScreenTool(pool)));
+  registry.registerBuiltin("conformer_aware_kg_query", () => asTool(buildConformerAwareKgQueryTool(pool)));
   registry.registerBuiltin("identify_unknown_from_ms", () => asTool(buildIdentifyUnknownFromMsTool(cfg.MCP_SIRIUS_URL)));
   registry.registerBuiltin("predict_molecular_property", () => asTool(buildPredictMolecularPropertyTool(cfg.MCP_CHEMPROP_URL)));
   registry.registerBuiltin("predict_reaction_yield", () => asTool(buildPredictReactionYieldTool(cfg.MCP_CHEMPROP_URL)));
