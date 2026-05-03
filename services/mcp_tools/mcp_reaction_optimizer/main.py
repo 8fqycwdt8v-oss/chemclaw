@@ -199,6 +199,43 @@ async def recommend_next(
     )
 
 
+# ---------------------------------------------------------------------------
+# /extract_pareto (Z6)
+# ---------------------------------------------------------------------------
+
+class ExtractParetoIn(BaseModel):
+    measured_outcomes: list[MeasuredItem] = Field(min_length=1, max_length=10_000)
+    output_directions: dict[str, str] = Field(min_length=1)
+
+
+class ExtractParetoOut(BaseModel):
+    pareto: list[MeasuredItem]
+    n_total: int
+    n_pareto: int
+    output_directions: dict[str, str]
+
+
+@app.post("/extract_pareto", response_model=ExtractParetoOut, tags=["reaction_optimizer"])
+async def extract_pareto(
+    req: Annotated[ExtractParetoIn, Body(...)],
+) -> ExtractParetoOut:
+    for direction in req.output_directions.values():
+        if direction not in ("maximize", "minimize"):
+            raise HTTPException(
+                status_code=422,
+                detail=f"output_directions values must be 'maximize' or 'minimize'; got {direction!r}",
+            )
+
+    measured = [m.model_dump() for m in req.measured_outcomes]
+    pareto = _opt.pareto_front(measured, req.output_directions)
+    return ExtractParetoOut(
+        pareto=[MeasuredItem(**p) for p in pareto],
+        n_total=len(measured),
+        n_pareto=len(pareto),
+        output_directions=req.output_directions,
+    )
+
+
 if __name__ == "__main__":
     import uvicorn
 

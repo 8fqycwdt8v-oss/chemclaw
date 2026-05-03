@@ -68,6 +68,7 @@ import { buildExportToOrdTool } from "../tools/builtins/export_to_ord.js";
 import { buildStartOptimizationCampaignTool } from "../tools/builtins/start_optimization_campaign.js";
 import { buildRecommendNextBatchTool } from "../tools/builtins/recommend_next_batch.js";
 import { buildIngestCampaignResultsTool } from "../tools/builtins/ingest_campaign_results.js";
+import { buildExtractParetoFrontTool } from "../tools/builtins/extract_pareto_front.js";
 import { buildQueryKgTool } from "../tools/builtins/query_kg.js";
 import { buildProposeRetrosynthesisTool } from "../tools/builtins/propose_retrosynthesis.js";
 import { buildElucidateMechanismTool } from "../tools/builtins/elucidate_mechanism.js";
@@ -232,6 +233,9 @@ function registerBuiltinTools(
   );
   registry.registerBuiltin("ingest_campaign_results", () =>
     asTool(buildIngestCampaignResultsTool(pool)),
+  );
+  registry.registerBuiltin("extract_pareto_front", () =>
+    asTool(buildExtractParetoFrontTool(pool, cfg.MCP_REACTION_OPTIMIZER_URL)),
   );
   registry.registerBuiltin("query_kg", () => asTool(buildQueryKgTool(cfg.MCP_KG_URL)));
   registry.registerBuiltin("propose_retrosynthesis", () =>

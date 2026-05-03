@@ -4,7 +4,10 @@ Re-fits a Strategy from {Domain JSON, prior measured outcomes} on every call
 and asks for the next batch of recommendations. No persistent surrogate;
 canonical state is in optimization_rounds.measured_outcomes.
 
-Single-objective today (SoboStrategy + qLogEI). Z6 brings multi-objective.
+Single-objective via SoboStrategy + qLogEI. Multi-objective (Z6) via
+MoboStrategy + qNEHVI when the Domain has 2+ outputs. Pareto-front
+extraction available via pareto_front() — pure non-dominated sorting on
+measured outcomes.
 """
 from __future__ import annotations
 
@@ -54,40 +57,103 @@ def recommend_next_batch(
         df = domain.inputs.sample(n=n_candidates, seed=seed)
         return _df_rows_to_proposals(df, source="random_cold_start")
 
-    # Warm path: fit a SoboStrategy and ask.
+    # Single- vs multi-objective routing — count Domain outputs.
     try:
-        from bofire.data_models.acquisition_functions.api import qLogEI
-        from bofire.data_models.strategies.api import SoboStrategy
+        n_outputs = len(domain.outputs.features) if hasattr(domain, "outputs") else 1
+    except (TypeError, AttributeError):
+        n_outputs = 1
+    multi_objective = n_outputs >= 2
+
+    try:
+        from bofire.data_models.acquisition_functions.api import qLogEI, qNEHVI
+        from bofire.data_models.strategies.api import MoboStrategy, SoboStrategy
         from bofire.strategies.api import strategy_map
-        from bofire.strategies.api import SoboStrategy as SoboStrategyImpl
     except ImportError:
-        # Fallback if bofire layout differs from expectations.
         df = domain.inputs.sample(n=n_candidates, seed=seed)
         return _df_rows_to_proposals(df, source="random_fallback")
 
-    strategy_dm = SoboStrategy(domain=domain, acquisition_function=qLogEI(), seed=seed)
+    if multi_objective:
+        try:
+            strategy_dm = MoboStrategy(domain=domain, acquisition_function=qNEHVI(), seed=seed)
+        except Exception as exc:  # noqa: BLE001
+            log.warning("MoboStrategy build failed (%s); falling back", exc)
+            df = domain.inputs.sample(n=n_candidates, seed=seed)
+            return _df_rows_to_proposals(df, source="random_mobo_build_failed")
+        source_label = "qNEHVI"
+    else:
+        strategy_dm = SoboStrategy(domain=domain, acquisition_function=qLogEI(), seed=seed)
+        source_label = "qLogEI"
+
     try:
-        strategy = SoboStrategyImpl(data_model=strategy_dm)
-    except TypeError:
-        # Older API: just pass the data model.
         strategy = strategy_map(strategy_dm)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("strategy_map failed (%s); falling back", exc)
+        df = domain.inputs.sample(n=n_candidates, seed=seed)
+        return _df_rows_to_proposals(df, source="random_strategy_failed")
 
     measured_df = measured_to_dataframe(domain, measured_outcomes)
     try:
         strategy.tell(measured_df)
     except Exception as exc:  # noqa: BLE001
-        log.warning("strategy.tell failed (%s); falling back to space-filling", exc)
+        log.warning("strategy.tell failed (%s); falling back", exc)
         df = domain.inputs.sample(n=n_candidates, seed=seed)
         return _df_rows_to_proposals(df, source="random_tell_failed")
 
     try:
         candidates = strategy.ask(candidate_count=n_candidates)
     except Exception as exc:  # noqa: BLE001
-        log.warning("strategy.ask failed (%s); falling back to space-filling", exc)
+        log.warning("strategy.ask failed (%s); falling back", exc)
         df = domain.inputs.sample(n=n_candidates, seed=seed)
         return _df_rows_to_proposals(df, source="random_ask_failed")
 
-    return _df_rows_to_proposals(candidates, source="qLogEI")
+    return _df_rows_to_proposals(candidates, source=source_label)
+
+
+# ---------------------------------------------------------------------------
+# Pareto-front extraction (Z6) — pure function, no BoFire required.
+# ---------------------------------------------------------------------------
+
+def pareto_front(
+    measured_outcomes: list[dict[str, Any]],
+    output_directions: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Return the non-dominated subset of measured_outcomes.
+
+    output_directions maps each output name to "maximize" or "minimize".
+    A point p dominates q iff p is at least as good as q on every objective
+    AND strictly better on at least one. Non-dominated points form the
+    Pareto frontier.
+    """
+    if not measured_outcomes or not output_directions:
+        return []
+    points: list[tuple[list[float], dict[str, Any]]] = []
+    for item in measured_outcomes:
+        outputs = item.get("outputs") or {}
+        scores: list[float] = []
+        valid = True
+        for name, direction in output_directions.items():
+            val = outputs.get(name)
+            if not isinstance(val, (int, float)):
+                valid = False
+                break
+            scores.append(float(val) if direction == "maximize" else -float(val))
+        if valid:
+            points.append((scores, item))
+
+    pareto: list[dict[str, Any]] = []
+    for i, (scores_i, item_i) in enumerate(points):
+        dominated = False
+        for j, (scores_j, _) in enumerate(points):
+            if i == j:
+                continue
+            ge_all = all(sj >= si for sj, si in zip(scores_j, scores_i))
+            gt_any = any(sj > si for sj, si in zip(scores_j, scores_i))
+            if ge_all and gt_any:
+                dominated = True
+                break
+        if not dominated:
+            pareto.append(item_i)
+    return pareto
 
 
 def _df_rows_to_proposals(df: pd.DataFrame, source: str) -> list[dict[str, Any]]:

@@ -1186,4 +1186,25 @@ ON CONFLICT (name) DO UPDATE SET
   source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
   description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
 
+-- ── Multi-objective Pareto extraction (Phase Z6) ──────────────────────────
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'extract_pareto_front',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "campaign_id": {"type": "string"}
+    },
+    "required": ["campaign_id"]
+  }',
+  'Compute the Pareto frontier (non-dominated set) of a campaign''s measured outcomes. Each output is treated per its declared direction. Surfaces the trade-off frontier in multi-objective campaigns (yield x selectivity x PMI x greenness x safety).',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
 COMMIT;
