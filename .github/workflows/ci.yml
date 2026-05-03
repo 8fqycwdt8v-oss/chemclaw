@@ -90,7 +90,8 @@ jobs:
             tests/unit/test_redactor.py \
             tests/unit/optimizer/test_session_purger.py \
             services/mcp_tools/common/tests/ \
-            services/projectors/kg_source_cache/tests/
+            services/projectors/kg_source_cache/tests/ \
+            services/projectors/conditions_normalizer/tests/
           coverage combine || true
           coverage xml -o coverage.xml
       - name: Parse-check Python services
