@@ -1027,4 +1027,179 @@ ON CONFLICT (name) DO UPDATE SET
   source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
   description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
 
+-- ── Yield baseline ensemble (Phase Z3) ────────────────────────────────────
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'predict_yield_with_uq',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "rxn_smiles_list": {
+        "type": "array",
+        "items": {"type": "string", "minLength": 1, "maxLength": 20000},
+        "minItems": 1,
+        "maxItems": 100,
+        "description": "Reaction SMILES to predict yield for."
+      },
+      "project_internal_id": {
+        "type": "string",
+        "maxLength": 200,
+        "description": "Optional NCE project internal_id; per-project model is used when available."
+      }
+    },
+    "required": ["rxn_smiles_list"]
+  }',
+  'Predict yield with calibrated uncertainty. Combines chemprop''s MVE-head std (aleatoric) with chemprop-XGBoost disagreement (epistemic) into a single ensemble_std. Returns per-reaction ensemble_mean + ensemble_std + component scores. Per-project XGBoost trained on user''s RLS-scoped reactions; global pretrained fallback when project has < 50 labeled reactions.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+-- ── HTE plate design + ORD I/O (Phase Z4) ─────────────────────────────────
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'design_plate',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "plate_format": {"type": "string", "enum": ["24","96","384","1536"]},
+      "reactants_smiles": {"type": "string", "maxLength": 20000},
+      "product_smiles": {"type": "string", "maxLength": 10000},
+      "factors": {"type": "array", "items": {"type": "object"}, "maxItems": 10},
+      "categorical_inputs": {"type": "array", "items": {"type": "object"}, "maxItems": 10},
+      "exclusions": {"type": "object"},
+      "n_wells": {"type": "integer", "minimum": 1, "maximum": 1536},
+      "seed": {"type": "integer", "default": 42},
+      "annotate_yield": {"type": "boolean", "default": false},
+      "project_internal_id": {"type": "string", "maxLength": 200},
+      "disable_chem21_floor": {"type": "boolean", "default": false}
+    },
+    "required": ["plate_format", "n_wells"]
+  }',
+  'Design an HTE plate (24/96/384/1536) via BoFire space-filling DoE. Excluded solvents are dropped from the categorical input; the CHEM21 safety floor auto-drops HighlyHazardous solvents. Optionally annotates each well with predict_yield_with_uq.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'export_to_ord',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "plate_name": {"type": "string", "minLength": 1, "maxLength": 200},
+      "reactants_smiles": {"type": "string", "maxLength": 20000},
+      "product_smiles": {"type": "string", "maxLength": 10000},
+      "wells": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 2000}
+    },
+    "required": ["wells"]
+  }',
+  'Export a plate (or any list of well dicts with factor values) into an Open Reaction Database (ORD) Dataset protobuf, base64-encoded. Portable format for downstream HTE robotics or LIMS systems.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+-- ── Closed-loop optimization (Phase Z5) ───────────────────────────────────
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'start_optimization_campaign',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "campaign_name": {"type": "string", "minLength": 1, "maxLength": 200},
+      "nce_project_internal_id": {"type": "string", "maxLength": 200},
+      "factors": {"type": "array", "items": {"type": "object"}, "maxItems": 20},
+      "categorical_inputs": {"type": "array", "items": {"type": "object"}, "maxItems": 20},
+      "outputs": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 10},
+      "campaign_type": {"type": "string", "enum": ["single_objective","multi_objective"], "default": "single_objective"},
+      "strategy": {"type": "string", "enum": ["SoboStrategy","MoboStrategy","RandomStrategy","QnehviStrategy"], "default": "SoboStrategy"},
+      "acquisition": {"type": "string", "enum": ["qLogEI","qLogNEI","qNEHVI","qEHVI","random"], "default": "qLogEI"}
+    },
+    "required": ["campaign_name", "outputs"]
+  }',
+  'Create a closed-loop optimization campaign. Validates the factor space via BoFire, persists Domain JSON, returns the campaign_id for subsequent recommend_next_batch calls.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'recommend_next_batch',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "campaign_id": {"type": "string"},
+      "n_candidates": {"type": "integer", "minimum": 1, "maximum": 200, "default": 8},
+      "seed": {"type": "integer", "default": 42}
+    },
+    "required": ["campaign_id"]
+  }',
+  'Propose the next batch for an open optimization campaign. Pulls measured outcomes from prior rounds (RLS-scoped), fits a BoFire Strategy, returns n_candidates next conditions. Cold-start (< 3 observations) returns space-filling random.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'ingest_campaign_results',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "round_id": {"type": "string"},
+      "measured_outcomes": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 2000}
+    },
+    "required": ["round_id", "measured_outcomes"]
+  }',
+  'Record measured outcomes for a previously-proposed optimization round. After ingestion, the next recommend_next_batch call incorporates these observations into the BoFire Strategy.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+-- ── Multi-objective Pareto extraction (Phase Z6) ──────────────────────────
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'extract_pareto_front',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "campaign_id": {"type": "string"}
+    },
+    "required": ["campaign_id"]
+  }',
+  'Compute the Pareto frontier (non-dominated set) of a campaign''s measured outcomes. Each output is treated per its declared direction. Surfaces the trade-off frontier in multi-objective campaigns (yield x selectivity x PMI x greenness x safety).',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
 COMMIT;

@@ -18,6 +18,12 @@ export const FindSimilarReactionsIn = z.object({
   k: z.number().int().min(1).max(50).default(10),
   rxno_class: z.string().max(200).optional(),
   min_yield_pct: z.number().min(0).max(100).optional(),
+  // Phase Z2 — optional structured-column filters. Operate over the new
+  // first-class reaction columns populated by conditions_normalizer.
+  solvent: z.string().max(100).optional(),
+  base: z.string().max(100).optional(),
+  min_temperature_c: z.number().min(-100).max(500).optional(),
+  max_temperature_c: z.number().min(-100).max(500).optional(),
 });
 export type FindSimilarReactionsInput = z.infer<typeof FindSimilarReactionsIn>;
 
@@ -108,6 +114,11 @@ export function buildFindSimilarReactionsTool(pool: Pool, mcpDrfpUrl: string) {
            WHERE r.drfp_vector IS NOT NULL
              AND ($2::text IS NULL OR r.rxno_class = $2)
              AND ($3::numeric IS NULL OR e.yield_pct >= $3)
+             -- Z2 structured-column filters
+             AND ($5::text IS NULL OR r.solvent = $5)
+             AND ($6::text IS NULL OR r.base = $6)
+             AND ($7::numeric IS NULL OR r.temperature_c >= $7)
+             AND ($8::numeric IS NULL OR r.temperature_c <= $8)
            ORDER BY r.drfp_vector <=> $1::vector ASC
            LIMIT $4::int
         `;
@@ -116,6 +127,10 @@ export function buildFindSimilarReactionsTool(pool: Pool, mcpDrfpUrl: string) {
           input.rxno_class ?? null,
           input.min_yield_pct ?? null,
           input.k,
+          input.solvent ?? null,
+          input.base ?? null,
+          input.min_temperature_c ?? null,
+          input.max_temperature_c ?? null,
         ]);
         return q.rows;
       });

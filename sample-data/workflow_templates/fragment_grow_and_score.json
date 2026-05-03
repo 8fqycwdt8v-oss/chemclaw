@@ -1,0 +1,39 @@
+{
+  "name": "fragment-grow-and-score-template",
+  "description": "BRICS-grow a fragment, then GFN2 single-point each proposal and rank.",
+  "inputs": {
+    "seed_fragment_smiles": "string",
+    "max_proposals": 30
+  },
+  "steps": [
+    {
+      "id": "grow",
+      "kind": "tool_call",
+      "tool": "generate_focused_library",
+      "args": {
+        "kind": "grow",
+        "seed_smiles": "__from_input__",
+        "max_proposals": 30
+      }
+    },
+    {
+      "id": "score",
+      "kind": "tool_call",
+      "tool": "run_chemspace_screen",
+      "args": {
+        "name": "fragment-grow-score",
+        "candidates": { "from": "list", "inchikeys": ["__from_steps_grow__"] },
+        "scoring_pipeline": [
+          { "kind": "qm_single_point", "params": { "method": "GFN2" } }
+        ],
+        "top_k": 10
+      }
+    },
+    {
+      "id": "wait_for_batch",
+      "kind": "wait",
+      "for": { "batch_id": "steps.score.batch_id" },
+      "timeout_seconds": 1800
+    }
+  ]
+}

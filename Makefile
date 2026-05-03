@@ -33,8 +33,13 @@ setup.python: ## Create .venv and install Python deps for all services
 	$(PIP) install -r services/ingestion/eln_json_importer.legacy/requirements.txt
 	$(PIP) install -r services/mcp_tools/mcp_rdkit/requirements.txt
 	$(PIP) install -r services/mcp_tools/mcp_drfp/requirements.txt
+	$(PIP) install -r services/mcp_tools/mcp_yield_baseline/requirements.txt
+	$(PIP) install -r services/mcp_tools/mcp_plate_designer/requirements.txt
+	$(PIP) install -r services/mcp_tools/mcp_ord_io/requirements.txt
+	$(PIP) install -r services/mcp_tools/mcp_reaction_optimizer/requirements.txt
 	$(PIP) install -r services/projectors/reaction_vectorizer/requirements.txt
 	$(PIP) install -r services/projectors/chunk_embedder/requirements.txt
+	$(PIP) install -r services/projectors/conditions_normalizer/requirements.txt
 	$(PIP) install -r services/ingestion/doc_ingester/requirements.txt
 	$(PIP) install -r services/litellm_redactor/requirements.txt
 	$(PIP) install -r services/mock_eln/seed/requirements.txt

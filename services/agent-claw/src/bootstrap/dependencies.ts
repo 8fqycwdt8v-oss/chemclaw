@@ -29,9 +29,47 @@ import { buildCanonicalizeSmilesTool } from "../tools/builtins/canonicalize_smil
 import { buildCheckContradictionsTool } from "../tools/builtins/check_contradictions.js";
 import { buildComputeConformerEnsembleTool } from "../tools/builtins/compute_conformer_ensemble.js";
 import { buildRunXtbWorkflowTool } from "../tools/builtins/run_xtb_workflow.js";
+// Phase 2 — full xTB / CREST capability surface.
+import { buildQmSinglePointTool } from "../tools/builtins/qm_single_point.js";
+import { buildQmGeometryOptTool } from "../tools/builtins/qm_geometry_opt.js";
+import { buildQmFrequenciesTool } from "../tools/builtins/qm_frequencies.js";
+import { buildQmFukuiTool } from "../tools/builtins/qm_fukui.js";
+import { buildQmRedoxTool } from "../tools/builtins/qm_redox_potential.js";
+import { buildQmCrestScreenTool } from "../tools/builtins/qm_crest_screen.js";
+// Phase 3 — compound similarity + SMARTS substructure + class catalog.
+import { buildFindSimilarCompoundsTool } from "../tools/builtins/find_similar_compounds.js";
+import { buildSubstructureSearchTool } from "../tools/builtins/substructure_search.js";
+import { buildMatchSmartsCatalogTool } from "../tools/builtins/match_smarts_catalog.js";
+// Phase 4 — compound ontology + auto-classification.
+import { buildClassifyCompoundTool } from "../tools/builtins/classify_compound.js";
+// Phase 5 — focused chemical-space generation.
+import { buildGenerateFocusedLibraryTool } from "../tools/builtins/generate_focused_library.js";
+import { buildFindMatchedPairsTool } from "../tools/builtins/find_matched_pairs.js";
+// Phase 6 — Postgres-backed batch queue.
+import { buildEnqueueBatchTool } from "../tools/builtins/enqueue_batch.js";
+import { buildInspectBatchTool } from "../tools/builtins/inspect_batch.js";
+// Phase 7 — chemspace screens + conformer-aware KG retrieval.
+import { buildRunChemspaceScreenTool } from "../tools/builtins/run_chemspace_screen.js";
+import { buildConformerAwareKgQueryTool } from "../tools/builtins/conformer_aware_kg_query.js";
+// Phase 8 — agent-controlled workflow engine.
+import { buildWorkflowDefineTool } from "../tools/builtins/workflow_define.js";
+import { buildWorkflowRunTool } from "../tools/builtins/workflow_run.js";
+import { buildWorkflowInspectTool } from "../tools/builtins/workflow_inspect.js";
+import { buildWorkflowPauseResumeTool } from "../tools/builtins/workflow_pause_resume.js";
+import { buildWorkflowModifyTool } from "../tools/builtins/workflow_modify.js";
+import { buildWorkflowReplayTool } from "../tools/builtins/workflow_replay.js";
+// Phase 9 — promote a workflow run into a forged callable tool.
+import { buildPromoteWorkflowToToolTool } from "../tools/builtins/promote_workflow_to_tool.js";
 import { buildIdentifyUnknownFromMsTool } from "../tools/builtins/identify_unknown_from_ms.js";
 import { buildPredictMolecularPropertyTool } from "../tools/builtins/predict_molecular_property.js";
 import { buildPredictReactionYieldTool } from "../tools/builtins/predict_reaction_yield.js";
+import { buildPredictYieldWithUqTool } from "../tools/builtins/predict_yield_with_uq.js";
+import { buildDesignPlateTool } from "../tools/builtins/design_plate.js";
+import { buildExportToOrdTool } from "../tools/builtins/export_to_ord.js";
+import { buildStartOptimizationCampaignTool } from "../tools/builtins/start_optimization_campaign.js";
+import { buildRecommendNextBatchTool } from "../tools/builtins/recommend_next_batch.js";
+import { buildIngestCampaignResultsTool } from "../tools/builtins/ingest_campaign_results.js";
+import { buildExtractParetoFrontTool } from "../tools/builtins/extract_pareto_front.js";
 import { buildQueryKgTool } from "../tools/builtins/query_kg.js";
 import { buildProposeRetrosynthesisTool } from "../tools/builtins/propose_retrosynthesis.js";
 import { buildElucidateMechanismTool } from "../tools/builtins/elucidate_mechanism.js";
@@ -146,9 +184,61 @@ function registerBuiltinTools(
   registry.registerBuiltin("check_contradictions", () => asTool(buildCheckContradictionsTool(cfg.MCP_KG_URL)));
   registry.registerBuiltin("compute_conformer_ensemble", () => asTool(buildComputeConformerEnsembleTool(cfg.MCP_XTB_URL)));
   registry.registerBuiltin("run_xtb_workflow", () => asTool(buildRunXtbWorkflowTool(cfg.MCP_XTB_URL)));
+  // Phase 2 — full xTB / CREST capability surface.
+  registry.registerBuiltin("qm_single_point", () => asTool(buildQmSinglePointTool(cfg.MCP_XTB_URL)));
+  registry.registerBuiltin("qm_geometry_opt", () => asTool(buildQmGeometryOptTool(cfg.MCP_XTB_URL)));
+  registry.registerBuiltin("qm_frequencies", () => asTool(buildQmFrequenciesTool(cfg.MCP_XTB_URL)));
+  registry.registerBuiltin("qm_fukui", () => asTool(buildQmFukuiTool(cfg.MCP_XTB_URL)));
+  registry.registerBuiltin("qm_redox_potential", () => asTool(buildQmRedoxTool(cfg.MCP_XTB_URL)));
+  registry.registerBuiltin("qm_crest_screen", () => asTool(buildQmCrestScreenTool(cfg.MCP_CREST_URL)));
+  // Phase 3 — compound similarity / SMARTS / class catalog.
+  registry.registerBuiltin("find_similar_compounds", () => asTool(buildFindSimilarCompoundsTool(pool, cfg.MCP_RDKIT_URL)));
+  registry.registerBuiltin("substructure_search", () => asTool(buildSubstructureSearchTool(pool, cfg.MCP_RDKIT_URL)));
+  registry.registerBuiltin("match_smarts_catalog", () => asTool(buildMatchSmartsCatalogTool(pool, cfg.MCP_RDKIT_URL)));
+  // Phase 4 — compound ontology / role classification.
+  registry.registerBuiltin("classify_compound", () => asTool(buildClassifyCompoundTool(pool)));
+  // Phase 5 — focused-generation library + MMP search.
+  registry.registerBuiltin("generate_focused_library", () => asTool(buildGenerateFocusedLibraryTool(cfg.MCP_GENCHEM_URL)));
+  registry.registerBuiltin("find_matched_pairs", () => asTool(buildFindMatchedPairsTool(cfg.MCP_GENCHEM_URL)));
+  // Phase 6 — Postgres-backed batch queue.
+  registry.registerBuiltin("enqueue_batch", () => asTool(buildEnqueueBatchTool(pool)));
+  registry.registerBuiltin("inspect_batch", () => asTool(buildInspectBatchTool(pool)));
+  // Phase 7 — chemspace screen + conformer-aware KG retrieval.
+  registry.registerBuiltin("run_chemspace_screen", () => asTool(buildRunChemspaceScreenTool(pool)));
+  registry.registerBuiltin("conformer_aware_kg_query", () => asTool(buildConformerAwareKgQueryTool(pool)));
+  // Phase 8 — agent-controlled workflow engine.
+  registry.registerBuiltin("workflow_define",       () => asTool(buildWorkflowDefineTool(pool)));
+  registry.registerBuiltin("workflow_run",          () => asTool(buildWorkflowRunTool(pool)));
+  registry.registerBuiltin("workflow_inspect",      () => asTool(buildWorkflowInspectTool(pool)));
+  registry.registerBuiltin("workflow_pause_resume", () => asTool(buildWorkflowPauseResumeTool(pool)));
+  registry.registerBuiltin("workflow_modify",       () => asTool(buildWorkflowModifyTool(pool)));
+  registry.registerBuiltin("workflow_replay",       () => asTool(buildWorkflowReplayTool(pool)));
+  // Phase 9 — promote a workflow into a reusable forged tool.
+  registry.registerBuiltin("promote_workflow_to_tool", () => asTool(buildPromoteWorkflowToToolTool(pool)));
   registry.registerBuiltin("identify_unknown_from_ms", () => asTool(buildIdentifyUnknownFromMsTool(cfg.MCP_SIRIUS_URL)));
   registry.registerBuiltin("predict_molecular_property", () => asTool(buildPredictMolecularPropertyTool(cfg.MCP_CHEMPROP_URL)));
   registry.registerBuiltin("predict_reaction_yield", () => asTool(buildPredictReactionYieldTool(cfg.MCP_CHEMPROP_URL)));
+  registry.registerBuiltin("predict_yield_with_uq", () =>
+    asTool(buildPredictYieldWithUqTool(pool, cfg.MCP_YIELD_BASELINE_URL)),
+  );
+  registry.registerBuiltin("design_plate", () =>
+    asTool(buildDesignPlateTool(cfg.MCP_PLATE_DESIGNER_URL, cfg.MCP_YIELD_BASELINE_URL)),
+  );
+  registry.registerBuiltin("export_to_ord", () =>
+    asTool(buildExportToOrdTool(cfg.MCP_ORD_IO_URL)),
+  );
+  registry.registerBuiltin("start_optimization_campaign", () =>
+    asTool(buildStartOptimizationCampaignTool(pool, cfg.MCP_REACTION_OPTIMIZER_URL)),
+  );
+  registry.registerBuiltin("recommend_next_batch", () =>
+    asTool(buildRecommendNextBatchTool(pool, cfg.MCP_REACTION_OPTIMIZER_URL)),
+  );
+  registry.registerBuiltin("ingest_campaign_results", () =>
+    asTool(buildIngestCampaignResultsTool(pool)),
+  );
+  registry.registerBuiltin("extract_pareto_front", () =>
+    asTool(buildExtractParetoFrontTool(pool, cfg.MCP_REACTION_OPTIMIZER_URL)),
+  );
   registry.registerBuiltin("query_kg", () => asTool(buildQueryKgTool(cfg.MCP_KG_URL)));
   registry.registerBuiltin("propose_retrosynthesis", () =>
     asTool(buildProposeRetrosynthesisTool(cfg.MCP_ASKCOS_URL, cfg.MCP_AIZYNTH_URL)),

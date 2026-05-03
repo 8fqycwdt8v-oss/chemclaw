@@ -91,9 +91,19 @@ const ConfigSchema = z.object({
   MCP_ASKCOS_URL: z.string().url().default("http://localhost:8007"),
   MCP_AIZYNTH_URL: z.string().url().default("http://localhost:8008"),
   MCP_CHEMPROP_URL: z.string().url().default("http://localhost:8009"),
+  MCP_YIELD_BASELINE_URL: z.string().url().default("http://localhost:8015"),
+  // Phase Z4 — HTE plate design + ORD I/O.
+  MCP_PLATE_DESIGNER_URL: z.string().url().default("http://localhost:8020"),
+  MCP_ORD_IO_URL: z.string().url().default("http://localhost:8021"),
+  // Phase Z5 — closed-loop BoFire BO.
+  MCP_REACTION_OPTIMIZER_URL: z.string().url().default("http://localhost:8018"),
   MCP_XTB_URL: z.string().url().default("http://localhost:8010"),
   MCP_SYNTHEGY_MECH_URL: z.string().url().default("http://localhost:8011"),
   MCP_SIRIUS_URL: z.string().url().default("http://localhost:8012"),
+  // Phase 2 — CREST conformer / tautomer / protomer screen.
+  MCP_CREST_URL: z.string().url().default("http://localhost:8014"),
+  // Phase 5 — focused chemical-space generation.
+  MCP_GENCHEM_URL: z.string().url().default("http://localhost:8015"),
 
   // Source-system MCPs (Postgres-backed mock ELN, Phase F.2 reboot).
   MCP_ELN_LOCAL_URL: z.string().url().default("http://localhost:8013"),

@@ -12,6 +12,15 @@ This repository often has multiple parallel sessions touching the same checkout.
 
 When you skip step 1 and the parent checkout's branch flips under you, your files vanish and you re-do work. Don't.
 
+## General rules
+
+These apply to every change, every session. They override convenience.
+
+1. **Don't assume. Don't hide confusion. Surface tradeoffs.** If a requirement, file location, or behavior is ambiguous, say so — don't paper over it with a plausible guess. When two paths exist, name them and the cost of each before picking one.
+2. **Minimum code that solves the problem. Nothing speculative.** No "while I'm here" refactors, no flags or abstractions for hypothetical future needs, no error handling for cases that can't happen. Three similar lines beat a premature abstraction.
+3. **Touch only what you must. Clean up only your mess.** Unfamiliar files, branches, or in-progress state belong to someone else — investigate before deleting or overwriting. If you broke it this session, you fix it; otherwise leave it.
+4. **Define success criteria. Loop until verified.** Before starting, state what "done" looks like (specific command output, test count, observable behavior). Run the verification yourself; don't claim completion on the strength of "it should work." If verification fails, iterate — don't hand back partial work labeled green.
+
 ## What ChemClaw is
 
 Autonomous knowledge-intelligence agent for pharmaceutical chemical & analytical development. The central artifact is a **living bi-temporal knowledge graph** of compounds / reactions / experiments / conditions / documents with confidence-scored edges and explicit contradiction handling. Vector search is a complementary layer, not a replacement. The system is designed to act **proactively** (new data triggers autonomous investigation + outbound chat notifications) and to use scientific tools autonomously (RDKit, DFT, GFN2-xTB, TabPFN, etc.).

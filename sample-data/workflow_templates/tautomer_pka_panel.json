@@ -1,0 +1,32 @@
+{
+  "name": "tautomer-pka-panel-template",
+  "description": "Enumerate tautomers + protomers, pick the dominant Boltzmann-weighted form, then run a single-point energy on it.",
+  "inputs": {
+    "smiles": "string"
+  },
+  "steps": [
+    {
+      "id": "tautomers",
+      "kind": "tool_call",
+      "tool": "qm_crest_screen",
+      "args": { "smiles": "__from_input__", "mode": "tautomers", "n_max": 10 }
+    },
+    {
+      "id": "protomers",
+      "kind": "tool_call",
+      "tool": "qm_crest_screen",
+      "args": { "smiles": "__from_input__", "mode": "protomers", "n_max": 10 }
+    },
+    {
+      "id": "single_point",
+      "kind": "tool_call",
+      "tool": "qm_single_point",
+      "args": { "smiles": "__from_input__", "method": "GFN2", "solvent_model": "alpb", "solvent_name": "water" }
+    }
+  ],
+  "outputs": {
+    "tautomer_ensemble": "steps.tautomers.ensemble",
+    "protomer_ensemble": "steps.protomers.ensemble",
+    "energy_hartree": "steps.single_point.energy_hartree"
+  }
+}

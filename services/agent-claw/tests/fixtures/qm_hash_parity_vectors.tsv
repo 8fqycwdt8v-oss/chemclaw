@@ -1,0 +1,6 @@
+661d11b1bdc64f795b862e5f840111a8fa026adfd6797ddedd392ef49b58a458	{"method": "GFN2", "smiles_canonical": "CCO", "task": "opt"}
+38ae650b62f70f0d9df87b8470367c73bf71c4792727b815a457aac69e374011	{"method": "GFN2", "smiles_canonical": "CCO", "task": "freq"}
+1a7cf2c1e97f5a7d5889da04cd3303e772fc1e3cf845b227e03d5a8e41749c5a	{"method": "g-xTB", "smiles_canonical": "c1ccccc1", "task": "sp"}
+2856b96d17a800e1d2a22d6e72f7b44e35d981c714740978c16523a99713121e	{"charge": -1, "method": "GFN-FF", "multiplicity": 2, "smiles_canonical": "CCO", "task": "opt"}
+79f3b26634dbb2f9573b38a7d7521324119fb16cb073ea235128f680d63ff0d1	{"method": "CREST", "params": {"n_max": 20}, "smiles_canonical": "CCO", "solvent_model": "alpb", "solvent_name": "water", "task": "conformers"}
+87ff5b3abe23544117d5ba00b1c4eb70d9d9a907fd1f42ea2e11a7809928968c	{"method": "IPEA-xTB", "params": {"electrons": 1, "reference": "SHE"}, "smiles_canonical": "C1=CC=CC=C1", "solvent_model": "alpb", "solvent_name": "water", "task": "redox"}

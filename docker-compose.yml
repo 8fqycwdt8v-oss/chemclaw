@@ -318,6 +318,177 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # workflow-engine — agent-controlled, auditable workflow executor (Phase 8)
+  # Consumes pg_notify('workflow_event'), advances workflow_runs by folding
+  # workflow_events into workflow_state. Step kinds tool_call + wait(batch_id)
+  # are fully wired; conditional / loop / parallel / sub_agent are accepted
+  # but executed serially in the MVP (extension follows in Phase 9).
+  # -------------------------------------------------------------
+  workflow-engine:
+    build:
+      context: .
+      dockerfile: services/workflow_engine/Dockerfile
+    container_name: chemclaw-workflow-engine
+    user: "1001:1001"
+    restart: unless-stopped
+    profiles: ["chemistry"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      MCP_XTB_URL: http://mcp-xtb:8010
+      MCP_CREST_URL: http://mcp-crest:8014
+      MCP_GENCHEM_URL: http://mcp-genchem:8015
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # queue-worker — Postgres-backed batch worker (Phase 6)
+  # SELECT ... FOR UPDATE SKIP LOCKED + LISTEN/NOTIFY for scheduling.
+  # Replicate via `docker compose up --scale queue-worker=N`.
+  # -------------------------------------------------------------
+  queue-worker:
+    build:
+      context: .
+      dockerfile: services/queue/Dockerfile
+    container_name: chemclaw-queue-worker
+    user: "1001:1001"
+    restart: unless-stopped
+    profiles: ["chemistry"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      QUEUE_CONCURRENCY: ${QUEUE_CONCURRENCY:-4}
+      QUEUE_LEASE_SECONDS: ${QUEUE_LEASE_SECONDS:-300}
+      QUEUE_TASKS: ${QUEUE_TASKS:-qm,genchem,classifier}
+      MCP_XTB_URL: http://mcp-xtb:8010
+      MCP_CREST_URL: http://mcp-crest:8014
+      MCP_GENCHEM_URL: http://mcp-genchem:8015
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # compound_fingerprinter — populates Morgan/MACCS/AP fingerprints + SMARTS hits
+  # -------------------------------------------------------------
+  compound-fingerprinter:
+    build:
+      context: .
+      dockerfile: services/projectors/compound_fingerprinter/Dockerfile
+    container_name: chemclaw-compound-fingerprinter
+    user: "1001:1001"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mcp-rdkit:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      MCP_RDKIT_URL: http://mcp-rdkit:8001
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # compound_classifier — auto-tags role + chemotype family from SMARTS hits
+  # -------------------------------------------------------------
+  compound-classifier:
+    build:
+      context: .
+      dockerfile: services/projectors/compound_classifier/Dockerfile
+    container_name: chemclaw-compound-classifier
+    user: "1001:1001"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # conditions_normalizer — Phase z2: extract reaction conditions from
+  # procedure_text + tabular_data into first-class reactions columns.
+  # Falls back to LiteLLM (Haiku-class) when CONDITIONS_NORMALIZER_LLM_FALLBACK
+  # is true; otherwise pure regex/heuristic extraction.
+  # -------------------------------------------------------------
+  conditions-normalizer:
+    build:
+      context: .
+      dockerfile: services/projectors/conditions_normalizer/Dockerfile
+    container_name: chemclaw-conditions-normalizer
+    user: "1001:1001"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      MCP_RDKIT_URL: http://mcp-rdkit:8001
+      CONDITIONS_NORMALIZER_LLM_FALLBACK: ${CONDITIONS_NORMALIZER_LLM_FALLBACK:-false}
+      LITELLM_BASE_URL: http://litellm:4000
+      LITELLM_API_KEY: ${LITELLM_MASTER_KEY:-}
+      AGENT_MODEL_COMPACTOR: ${AGENT_MODEL_COMPACTOR:-claude-haiku-4-5}
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # qm_kg — projects succeeded qm_jobs into Neo4j with bi-temporal edges
+  # -------------------------------------------------------------
+  qm-kg:
+    build:
+      context: .
+      dockerfile: services/projectors/qm_kg/Dockerfile
+    container_name: chemclaw-qm-kg
+    user: "1001:1001"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-chemclaw_dev_neo4j_change_me}
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # kg_hypotheses — hypothesis generation projector
   # -------------------------------------------------------------
   kg-hypotheses:
@@ -868,6 +1039,100 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # mcp-yield-baseline — chemprop + per-project XGBoost ensemble (port 8015)
+  # -------------------------------------------------------------
+  mcp-yield-baseline:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_yield_baseline/Dockerfile
+    container_name: chemclaw-mcp-yield-baseline
+    restart: unless-stopped
+    profiles: ["chemistry"]
+    ports:
+      - "8015:8015"
+    environment:
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:?required}
+      MCP_DRFP_URL: http://mcp-drfp:8002
+      MCP_CHEMPROP_URL: http://mcp-chemprop:8009
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8015/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # mcp-reaction-optimizer — BoFire BO closed-loop campaigns (port 8018)
+  # -------------------------------------------------------------
+  mcp-reaction-optimizer:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_reaction_optimizer/Dockerfile
+    container_name: chemclaw-mcp-reaction-optimizer
+    restart: unless-stopped
+    profiles: ["chemistry"]
+    ports:
+      - "8018:8018"
+    environment:
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:?required}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8018/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # mcp-plate-designer — BoFire space-filling DoE for HTE plates (port 8020)
+  # -------------------------------------------------------------
+  mcp-plate-designer:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_plate_designer/Dockerfile
+    container_name: chemclaw-mcp-plate-designer
+    restart: unless-stopped
+    profiles: ["chemistry"]
+    ports:
+      - "8020:8020"
+    environment:
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:?required}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8020/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # mcp-ord-io — ORD protobuf import/export (port 8021)
+  # -------------------------------------------------------------
+  mcp-ord-io:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_ord_io/Dockerfile
+    container_name: chemclaw-mcp-ord-io
+    restart: unless-stopped
+    profiles: ["chemistry"]
+    ports:
+      - "8021:8021"
+    environment:
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:?required}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8021/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # mcp-xtb — GFN2-xTB + CREST conformer search (port 8010)
   # Requires xtb + crest binaries installed via conda-forge in the image.
   # Note: GEPA runner also uses 8010 on profile=optimizer — profiles don't overlap.
@@ -881,8 +1146,81 @@ services:
     profiles: ["chemistry"]
     ports:
       - "8010:8010"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:-}
+      MCP_AUTH_REQUIRED: ${MCP_AUTH_REQUIRED:-}
+      MCP_AUTH_DEV_MODE: ${MCP_AUTH_DEV_MODE:-}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8010/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # mcp-genchem — focused chemical-space generation (port 8015)
+  # Scaffold-decorate, R-group enumerate, MMP search, bioisostere replace,
+  # fragment grow / link. Uses RDKit only — no DFT, no GPU.
+  # -------------------------------------------------------------
+  mcp-genchem:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_genchem/Dockerfile
+    container_name: chemclaw-mcp-genchem
+    restart: unless-stopped
+    profiles: ["chemistry"]
+    ports:
+      - "8015:8015"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:-}
+      MCP_AUTH_REQUIRED: ${MCP_AUTH_REQUIRED:-}
+      MCP_AUTH_DEV_MODE: ${MCP_AUTH_DEV_MODE:-}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8015/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # mcp-crest — CREST conformer / tautomer / protomer screening (port 8014)
+  # Split from mcp-xtb so CREST resource limits and image size are independent.
+  # Every result is cached through the qm_jobs table (db/init/23_qm_results.sql).
+  # -------------------------------------------------------------
+  mcp-crest:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_crest/Dockerfile
+    container_name: chemclaw-mcp-crest
+    restart: unless-stopped
+    profiles: ["chemistry"]
+    ports:
+      - "8014:8014"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:-}
+      MCP_AUTH_REQUIRED: ${MCP_AUTH_REQUIRED:-}
+      MCP_AUTH_DEV_MODE: ${MCP_AUTH_DEV_MODE:-}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8014/readyz',timeout=5).status==200 else 1)\""]
       interval: 30s
       timeout: 10s
       retries: 5
