@@ -57,6 +57,8 @@ import { buildWorkflowInspectTool } from "../tools/builtins/workflow_inspect.js"
 import { buildWorkflowPauseResumeTool } from "../tools/builtins/workflow_pause_resume.js";
 import { buildWorkflowModifyTool } from "../tools/builtins/workflow_modify.js";
 import { buildWorkflowReplayTool } from "../tools/builtins/workflow_replay.js";
+// Phase 9 — promote a workflow run into a forged callable tool.
+import { buildPromoteWorkflowToToolTool } from "../tools/builtins/promote_workflow_to_tool.js";
 import { buildIdentifyUnknownFromMsTool } from "../tools/builtins/identify_unknown_from_ms.js";
 import { buildPredictMolecularPropertyTool } from "../tools/builtins/predict_molecular_property.js";
 import { buildPredictReactionYieldTool } from "../tools/builtins/predict_reaction_yield.js";
@@ -202,6 +204,8 @@ function registerBuiltinTools(
   registry.registerBuiltin("workflow_pause_resume", () => asTool(buildWorkflowPauseResumeTool(pool)));
   registry.registerBuiltin("workflow_modify",       () => asTool(buildWorkflowModifyTool(pool)));
   registry.registerBuiltin("workflow_replay",       () => asTool(buildWorkflowReplayTool(pool)));
+  // Phase 9 — promote a workflow into a reusable forged tool.
+  registry.registerBuiltin("promote_workflow_to_tool", () => asTool(buildPromoteWorkflowToToolTool(pool)));
   registry.registerBuiltin("identify_unknown_from_ms", () => asTool(buildIdentifyUnknownFromMsTool(cfg.MCP_SIRIUS_URL)));
   registry.registerBuiltin("predict_molecular_property", () => asTool(buildPredictMolecularPropertyTool(cfg.MCP_CHEMPROP_URL)));
   registry.registerBuiltin("predict_reaction_yield", () => asTool(buildPredictReactionYieldTool(cfg.MCP_CHEMPROP_URL)));
