@@ -65,6 +65,9 @@ import { buildPredictReactionYieldTool } from "../tools/builtins/predict_reactio
 import { buildPredictYieldWithUqTool } from "../tools/builtins/predict_yield_with_uq.js";
 import { buildDesignPlateTool } from "../tools/builtins/design_plate.js";
 import { buildExportToOrdTool } from "../tools/builtins/export_to_ord.js";
+import { buildStartOptimizationCampaignTool } from "../tools/builtins/start_optimization_campaign.js";
+import { buildRecommendNextBatchTool } from "../tools/builtins/recommend_next_batch.js";
+import { buildIngestCampaignResultsTool } from "../tools/builtins/ingest_campaign_results.js";
 import { buildQueryKgTool } from "../tools/builtins/query_kg.js";
 import { buildProposeRetrosynthesisTool } from "../tools/builtins/propose_retrosynthesis.js";
 import { buildElucidateMechanismTool } from "../tools/builtins/elucidate_mechanism.js";
@@ -220,6 +223,15 @@ function registerBuiltinTools(
   );
   registry.registerBuiltin("export_to_ord", () =>
     asTool(buildExportToOrdTool(cfg.MCP_ORD_IO_URL)),
+  );
+  registry.registerBuiltin("start_optimization_campaign", () =>
+    asTool(buildStartOptimizationCampaignTool(pool, cfg.MCP_REACTION_OPTIMIZER_URL)),
+  );
+  registry.registerBuiltin("recommend_next_batch", () =>
+    asTool(buildRecommendNextBatchTool(pool, cfg.MCP_REACTION_OPTIMIZER_URL)),
+  );
+  registry.registerBuiltin("ingest_campaign_results", () =>
+    asTool(buildIngestCampaignResultsTool(pool)),
   );
   registry.registerBuiltin("query_kg", () => asTool(buildQueryKgTool(cfg.MCP_KG_URL)));
   registry.registerBuiltin("propose_retrosynthesis", () =>
