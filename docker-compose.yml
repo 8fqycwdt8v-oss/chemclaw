@@ -1033,6 +1033,52 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # mcp-plate-designer — BoFire space-filling DoE for HTE plates (port 8020)
+  # -------------------------------------------------------------
+  mcp-plate-designer:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_plate_designer/Dockerfile
+    container_name: chemclaw-mcp-plate-designer
+    restart: unless-stopped
+    profiles: ["chemistry"]
+    ports:
+      - "8020:8020"
+    environment:
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:?required}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8020/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # mcp-ord-io — ORD protobuf import/export (port 8021)
+  # -------------------------------------------------------------
+  mcp-ord-io:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_ord_io/Dockerfile
+    container_name: chemclaw-mcp-ord-io
+    restart: unless-stopped
+    profiles: ["chemistry"]
+    ports:
+      - "8021:8021"
+    environment:
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:?required}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8021/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # mcp-xtb — GFN2-xTB + CREST conformer search (port 8010)
   # Requires xtb + crest binaries installed via conda-forge in the image.
   # Note: GEPA runner also uses 8010 on profile=optimizer — profiles don't overlap.

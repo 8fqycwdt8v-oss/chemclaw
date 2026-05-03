@@ -63,6 +63,8 @@ import { buildIdentifyUnknownFromMsTool } from "../tools/builtins/identify_unkno
 import { buildPredictMolecularPropertyTool } from "../tools/builtins/predict_molecular_property.js";
 import { buildPredictReactionYieldTool } from "../tools/builtins/predict_reaction_yield.js";
 import { buildPredictYieldWithUqTool } from "../tools/builtins/predict_yield_with_uq.js";
+import { buildDesignPlateTool } from "../tools/builtins/design_plate.js";
+import { buildExportToOrdTool } from "../tools/builtins/export_to_ord.js";
 import { buildQueryKgTool } from "../tools/builtins/query_kg.js";
 import { buildProposeRetrosynthesisTool } from "../tools/builtins/propose_retrosynthesis.js";
 import { buildElucidateMechanismTool } from "../tools/builtins/elucidate_mechanism.js";
@@ -212,6 +214,12 @@ function registerBuiltinTools(
   registry.registerBuiltin("predict_reaction_yield", () => asTool(buildPredictReactionYieldTool(cfg.MCP_CHEMPROP_URL)));
   registry.registerBuiltin("predict_yield_with_uq", () =>
     asTool(buildPredictYieldWithUqTool(pool, cfg.MCP_YIELD_BASELINE_URL)),
+  );
+  registry.registerBuiltin("design_plate", () =>
+    asTool(buildDesignPlateTool(cfg.MCP_PLATE_DESIGNER_URL, cfg.MCP_YIELD_BASELINE_URL)),
+  );
+  registry.registerBuiltin("export_to_ord", () =>
+    asTool(buildExportToOrdTool(cfg.MCP_ORD_IO_URL)),
   );
   registry.registerBuiltin("query_kg", () => asTool(buildQueryKgTool(cfg.MCP_KG_URL)));
   registry.registerBuiltin("propose_retrosynthesis", () =>
