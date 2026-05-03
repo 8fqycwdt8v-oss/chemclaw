@@ -3,29 +3,12 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
+import { QmRequestBase, QmResponseBase } from "./_qm_base.js";
 
-const QmMethod = z.enum([
-  "GFN0", "GFN1", "GFN2", "GFN-FF", "g-xTB", "sTDA-xTB", "IPEA-xTB",
-]);
-
-export const QmFrequenciesIn = z.object({
-  smiles: z.string().min(1).max(10_000),
-  method: QmMethod.default("GFN2"),
-  charge: z.number().int().default(0),
-  multiplicity: z.number().int().min(1).default(1),
-  solvent_model: z.enum(["none", "alpb", "gbsa", "cpcmx"]).default("none"),
-  solvent_name: z.string().optional(),
-  force_recompute: z.boolean().default(false),
-});
+export const QmFrequenciesIn = QmRequestBase;
 export type QmFrequenciesInput = z.infer<typeof QmFrequenciesIn>;
 
-export const QmFrequenciesOut = z.object({
-  job_id: z.string().nullable(),
-  cache_hit: z.boolean(),
-  status: z.string(),
-  summary: z.string(),
-  method: z.string(),
-  task: z.string(),
+export const QmFrequenciesOut = QmResponseBase.extend({
   frequencies_cm1: z.array(z.number()),
   ir_intensities: z.array(z.number()),
   thermo: z.record(z.string(), z.number()),

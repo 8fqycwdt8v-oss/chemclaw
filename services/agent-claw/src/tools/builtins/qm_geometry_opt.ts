@@ -3,36 +3,14 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
+import { QmRequestBase, QmResponseBase } from "./_qm_base.js";
 
-const QmMethod = z.enum([
-  "GFN0",
-  "GFN1",
-  "GFN2",
-  "GFN-FF",
-  "g-xTB",
-  "sTDA-xTB",
-  "IPEA-xTB",
-]);
-
-export const QmGeometryOptIn = z.object({
-  smiles: z.string().min(1).max(10_000),
-  method: QmMethod.default("GFN2"),
-  charge: z.number().int().default(0),
-  multiplicity: z.number().int().min(1).default(1),
-  solvent_model: z.enum(["none", "alpb", "gbsa", "cpcmx"]).default("none"),
-  solvent_name: z.string().optional(),
+export const QmGeometryOptIn = QmRequestBase.extend({
   threshold: z.enum(["crude", "loose", "normal", "tight", "vtight"]).default("tight"),
-  force_recompute: z.boolean().default(false),
 });
 export type QmGeometryOptInput = z.infer<typeof QmGeometryOptIn>;
 
-export const QmGeometryOptOut = z.object({
-  job_id: z.string().nullable(),
-  cache_hit: z.boolean(),
-  status: z.string(),
-  summary: z.string(),
-  method: z.string(),
-  task: z.string(),
+export const QmGeometryOptOut = QmResponseBase.extend({
   optimized_xyz: z.string(),
   energy_hartree: z.number().nullable(),
   gnorm: z.number().nullable(),

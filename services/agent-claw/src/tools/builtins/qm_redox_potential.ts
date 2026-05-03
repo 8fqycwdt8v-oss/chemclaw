@@ -3,26 +3,17 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
+import { QmRequestBase, QmResponseBase } from "./_qm_base.js";
 
-export const QmRedoxIn = z.object({
-  smiles: z.string().min(1).max(10_000),
-  charge: z.number().int().default(0),
-  multiplicity: z.number().int().min(1).default(1),
-  solvent_model: z.enum(["none", "alpb", "gbsa", "cpcmx"]).default("none"),
-  solvent_name: z.string().optional(),
+// Redox path always uses IPEA-xTB on the server; we omit the `method` field
+// from the shared base and add the redox-specific knobs.
+export const QmRedoxIn = QmRequestBase.omit({ method: true }).extend({
   electrons: z.number().int().default(1),
   reference: z.enum(["SHE", "Fc"]).default("SHE"),
-  force_recompute: z.boolean().default(false),
 });
 export type QmRedoxInput = z.infer<typeof QmRedoxIn>;
 
-export const QmRedoxOut = z.object({
-  job_id: z.string().nullable(),
-  cache_hit: z.boolean(),
-  status: z.string(),
-  summary: z.string(),
-  method: z.string(),
-  task: z.string(),
+export const QmRedoxOut = QmResponseBase.extend({
   redox_potential_V: z.number().nullable(),
   vertical_ie_eV: z.number().nullable(),
   vertical_ea_eV: z.number().nullable(),

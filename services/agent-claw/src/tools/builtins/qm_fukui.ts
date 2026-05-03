@@ -3,27 +3,12 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
+import { QmRequestBase, QmResponseBase } from "./_qm_base.js";
 
-const QmMethod = z.enum([
-  "GFN0", "GFN1", "GFN2", "GFN-FF", "g-xTB",
-]);
-
-export const QmFukuiIn = z.object({
-  smiles: z.string().min(1).max(10_000),
-  method: QmMethod.default("GFN2"),
-  charge: z.number().int().default(0),
-  multiplicity: z.number().int().min(1).default(1),
-  force_recompute: z.boolean().default(false),
-});
+export const QmFukuiIn = QmRequestBase;
 export type QmFukuiInput = z.infer<typeof QmFukuiIn>;
 
-export const QmFukuiOut = z.object({
-  job_id: z.string().nullable(),
-  cache_hit: z.boolean(),
-  status: z.string(),
-  summary: z.string(),
-  method: z.string(),
-  task: z.string(),
+export const QmFukuiOut = QmResponseBase.extend({
   f_plus: z.array(z.number()),
   f_minus: z.array(z.number()),
   f_zero: z.array(z.number()),
