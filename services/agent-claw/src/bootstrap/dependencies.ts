@@ -41,6 +41,9 @@ import { buildSubstructureSearchTool } from "../tools/builtins/substructure_sear
 import { buildMatchSmartsCatalogTool } from "../tools/builtins/match_smarts_catalog.js";
 // Phase 4 — compound ontology + auto-classification.
 import { buildClassifyCompoundTool } from "../tools/builtins/classify_compound.js";
+// Phase 5 — focused chemical-space generation.
+import { buildGenerateFocusedLibraryTool } from "../tools/builtins/generate_focused_library.js";
+import { buildFindMatchedPairsTool } from "../tools/builtins/find_matched_pairs.js";
 import { buildIdentifyUnknownFromMsTool } from "../tools/builtins/identify_unknown_from_ms.js";
 import { buildPredictMolecularPropertyTool } from "../tools/builtins/predict_molecular_property.js";
 import { buildPredictReactionYieldTool } from "../tools/builtins/predict_reaction_yield.js";
@@ -170,6 +173,9 @@ function registerBuiltinTools(
   registry.registerBuiltin("match_smarts_catalog", () => asTool(buildMatchSmartsCatalogTool(pool, cfg.MCP_RDKIT_URL)));
   // Phase 4 — compound ontology / role classification.
   registry.registerBuiltin("classify_compound", () => asTool(buildClassifyCompoundTool(pool)));
+  // Phase 5 — focused-generation library + MMP search.
+  registry.registerBuiltin("generate_focused_library", () => asTool(buildGenerateFocusedLibraryTool(cfg.MCP_GENCHEM_URL)));
+  registry.registerBuiltin("find_matched_pairs", () => asTool(buildFindMatchedPairsTool(cfg.MCP_GENCHEM_URL)));
   registry.registerBuiltin("identify_unknown_from_ms", () => asTool(buildIdentifyUnknownFromMsTool(cfg.MCP_SIRIUS_URL)));
   registry.registerBuiltin("predict_molecular_property", () => asTool(buildPredictMolecularPropertyTool(cfg.MCP_CHEMPROP_URL)));
   registry.registerBuiltin("predict_reaction_yield", () => asTool(buildPredictReactionYieldTool(cfg.MCP_CHEMPROP_URL)));

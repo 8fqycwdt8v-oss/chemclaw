@@ -977,6 +977,38 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # mcp-genchem — focused chemical-space generation (port 8015)
+  # Scaffold-decorate, R-group enumerate, MMP search, bioisostere replace,
+  # fragment grow / link. Uses RDKit only — no DFT, no GPU.
+  # -------------------------------------------------------------
+  mcp-genchem:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_genchem/Dockerfile
+    container_name: chemclaw-mcp-genchem
+    restart: unless-stopped
+    profiles: ["chemistry"]
+    ports:
+      - "8015:8015"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:-}
+      MCP_AUTH_REQUIRED: ${MCP_AUTH_REQUIRED:-}
+      MCP_AUTH_DEV_MODE: ${MCP_AUTH_DEV_MODE:-}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8015/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # mcp-crest — CREST conformer / tautomer / protomer screening (port 8014)
   # Split from mcp-xtb so CREST resource limits and image size are independent.
   # Every result is cached through the qm_jobs table (db/init/23_qm_results.sql).
