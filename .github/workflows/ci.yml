@@ -45,6 +45,9 @@ jobs:
       - run: npm audit --audit-level=high
       - name: Diff coverage (TypeScript - non-routes)
         # Thresholds per docs/review/2026-04-29-codebase-audit/05-coverage-baseline.md §8.
+        # NOTE: --fail-paths-not-found was removed in diff-cover 9.x; the
+        # default behaviour (treat missing-path as zero-coverage, do not
+        # error) is what we want.
         if: github.event_name == 'pull_request'
         run: |
           diff-cover services/agent-claw/coverage/lcov.info \
