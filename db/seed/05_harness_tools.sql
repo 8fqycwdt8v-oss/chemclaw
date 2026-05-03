@@ -1117,4 +1117,73 @@ ON CONFLICT (name) DO UPDATE SET
   source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
   description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
 
+-- ── Closed-loop optimization (Phase Z5) ───────────────────────────────────
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'start_optimization_campaign',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "campaign_name": {"type": "string", "minLength": 1, "maxLength": 200},
+      "nce_project_internal_id": {"type": "string", "maxLength": 200},
+      "factors": {"type": "array", "items": {"type": "object"}, "maxItems": 20},
+      "categorical_inputs": {"type": "array", "items": {"type": "object"}, "maxItems": 20},
+      "outputs": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 10},
+      "campaign_type": {"type": "string", "enum": ["single_objective","multi_objective"], "default": "single_objective"},
+      "strategy": {"type": "string", "enum": ["SoboStrategy","MoboStrategy","RandomStrategy","QnehviStrategy"], "default": "SoboStrategy"},
+      "acquisition": {"type": "string", "enum": ["qLogEI","qLogNEI","qNEHVI","qEHVI","random"], "default": "qLogEI"}
+    },
+    "required": ["campaign_name", "outputs"]
+  }',
+  'Create a closed-loop optimization campaign. Validates the factor space via BoFire, persists Domain JSON, returns the campaign_id for subsequent recommend_next_batch calls.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'recommend_next_batch',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "campaign_id": {"type": "string"},
+      "n_candidates": {"type": "integer", "minimum": 1, "maximum": 200, "default": 8},
+      "seed": {"type": "integer", "default": 42}
+    },
+    "required": ["campaign_id"]
+  }',
+  'Propose the next batch for an open optimization campaign. Pulls measured outcomes from prior rounds (RLS-scoped), fits a BoFire Strategy, returns n_candidates next conditions. Cold-start (< 3 observations) returns space-filling random.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'ingest_campaign_results',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "round_id": {"type": "string"},
+      "measured_outcomes": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 2000}
+    },
+    "required": ["round_id", "measured_outcomes"]
+  }',
+  'Record measured outcomes for a previously-proposed optimization round. After ingestion, the next recommend_next_batch call incorporates these observations into the BoFire Strategy.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
 COMMIT;
