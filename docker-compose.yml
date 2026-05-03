@@ -318,6 +318,32 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # compound_fingerprinter — populates Morgan/MACCS/AP fingerprints + SMARTS hits
+  # -------------------------------------------------------------
+  compound-fingerprinter:
+    build:
+      context: .
+      dockerfile: services/projectors/compound_fingerprinter/Dockerfile
+    container_name: chemclaw-compound-fingerprinter
+    user: "1001:1001"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mcp-rdkit:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      MCP_RDKIT_URL: http://mcp-rdkit:8001
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # qm_kg — projects succeeded qm_jobs into Neo4j with bi-temporal edges
   # -------------------------------------------------------------
   qm-kg:

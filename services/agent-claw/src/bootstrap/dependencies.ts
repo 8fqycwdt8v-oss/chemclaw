@@ -35,6 +35,10 @@ import { buildQmFrequenciesTool } from "../tools/builtins/qm_frequencies.js";
 import { buildQmFukuiTool } from "../tools/builtins/qm_fukui.js";
 import { buildQmRedoxTool } from "../tools/builtins/qm_redox_potential.js";
 import { buildQmCrestScreenTool } from "../tools/builtins/qm_crest_screen.js";
+// Phase 3 — compound similarity + SMARTS substructure + class catalog.
+import { buildFindSimilarCompoundsTool } from "../tools/builtins/find_similar_compounds.js";
+import { buildSubstructureSearchTool } from "../tools/builtins/substructure_search.js";
+import { buildMatchSmartsCatalogTool } from "../tools/builtins/match_smarts_catalog.js";
 import { buildIdentifyUnknownFromMsTool } from "../tools/builtins/identify_unknown_from_ms.js";
 import { buildPredictMolecularPropertyTool } from "../tools/builtins/predict_molecular_property.js";
 import { buildPredictReactionYieldTool } from "../tools/builtins/predict_reaction_yield.js";
@@ -158,6 +162,10 @@ function registerBuiltinTools(
   registry.registerBuiltin("qm_fukui", () => asTool(buildQmFukuiTool(cfg.MCP_XTB_URL)));
   registry.registerBuiltin("qm_redox_potential", () => asTool(buildQmRedoxTool(cfg.MCP_XTB_URL)));
   registry.registerBuiltin("qm_crest_screen", () => asTool(buildQmCrestScreenTool(cfg.MCP_CREST_URL)));
+  // Phase 3 — compound similarity / SMARTS / class catalog.
+  registry.registerBuiltin("find_similar_compounds", () => asTool(buildFindSimilarCompoundsTool(pool, cfg.MCP_RDKIT_URL)));
+  registry.registerBuiltin("substructure_search", () => asTool(buildSubstructureSearchTool(pool, cfg.MCP_RDKIT_URL)));
+  registry.registerBuiltin("match_smarts_catalog", () => asTool(buildMatchSmartsCatalogTool(pool, cfg.MCP_RDKIT_URL)));
   registry.registerBuiltin("identify_unknown_from_ms", () => asTool(buildIdentifyUnknownFromMsTool(cfg.MCP_SIRIUS_URL)));
   registry.registerBuiltin("predict_molecular_property", () => asTool(buildPredictMolecularPropertyTool(cfg.MCP_CHEMPROP_URL)));
   registry.registerBuiltin("predict_reaction_yield", () => asTool(buildPredictReactionYieldTool(cfg.MCP_CHEMPROP_URL)));
