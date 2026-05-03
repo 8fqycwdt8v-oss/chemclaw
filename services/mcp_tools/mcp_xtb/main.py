@@ -15,6 +15,7 @@ Security:
 
 from __future__ import annotations
 
+import functools
 import logging
 import os
 import shutil
@@ -44,6 +45,9 @@ _DEFAULT_WORKFLOW_TIMEOUT_S = 600
 _HARD_WORKFLOW_TIMEOUT_CEILING_S = 1800
 
 
+# Env vars are read once per process; tests that want to flip them call
+# ``_step_timeout_s.cache_clear()`` / ``_workflow_timeout_default_s.cache_clear()``.
+@functools.lru_cache(maxsize=1)
 def _step_timeout_s() -> int:
     raw = os.environ.get("MCP_XTB_STEP_TIMEOUT_SECONDS")
     try:
@@ -52,15 +56,19 @@ def _step_timeout_s() -> int:
         return _DEFAULT_STEP_TIMEOUT_S
 
 
+@functools.lru_cache(maxsize=1)
+def _workflow_timeout_default_s() -> int:
+    raw = os.environ.get("MCP_XTB_WORKFLOW_TIMEOUT_SECONDS")
+    try:
+        return int(raw) if raw else _DEFAULT_WORKFLOW_TIMEOUT_S
+    except ValueError:
+        return _DEFAULT_WORKFLOW_TIMEOUT_S
+
+
 def _workflow_timeout_s(requested: int | None) -> int:
     if requested is not None:
         return min(max(1, requested), _HARD_WORKFLOW_TIMEOUT_CEILING_S)
-    raw = os.environ.get("MCP_XTB_WORKFLOW_TIMEOUT_SECONDS")
-    try:
-        cfg = int(raw) if raw else _DEFAULT_WORKFLOW_TIMEOUT_S
-    except ValueError:
-        cfg = _DEFAULT_WORKFLOW_TIMEOUT_S
-    return min(max(1, cfg), _HARD_WORKFLOW_TIMEOUT_CEILING_S)
+    return min(max(1, _workflow_timeout_default_s()), _HARD_WORKFLOW_TIMEOUT_CEILING_S)
 
 
 def _xtb_available() -> bool:
@@ -303,9 +311,16 @@ async def conformer_ensemble(
 # /run_workflow — generic multi-step xtb recipe runner
 # ---------------------------------------------------------------------------
 
+# Cap the number of top-level keys in a recipe inputs object. The
+# per-recipe Inputs schema also rejects unknown keys (Pydantic strict
+# mode), but this is a cheap front-line defence so a 100k-key payload
+# can't burn the schema-validator before bouncing.
+_MAX_INPUT_KEYS = 32
+
+
 class RunWorkflowIn(BaseModel):
     recipe: str = Field(min_length=1, max_length=64)
-    inputs: dict[str, Any] = Field(default_factory=dict)
+    inputs: dict[str, Any] = Field(default_factory=dict, max_length=_MAX_INPUT_KEYS)
     total_timeout_seconds: int | None = Field(default=None, ge=1)
 
 
@@ -321,6 +336,9 @@ async def run_workflow(
             f"unknown recipe {req.recipe!r}; available: "
             f"{sorted(RECIPES.keys())}",
         )
+    # Engine validates inputs against ``wf.inputs_schema`` itself; failures
+    # appear as a synthetic ``validate_inputs`` step with success=false in
+    # the WorkflowResult body, not a 400.
     return await workflow.run(
         wf,
         req.inputs,

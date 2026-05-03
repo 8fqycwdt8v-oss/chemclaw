@@ -64,10 +64,19 @@ export type RunXtbWorkflowOutput = z.infer<typeof RunXtbWorkflowOut>;
 
 // ---------- Timeout ---------------------------------------------------------
 
-// Server-side hard ceiling is 1800 s; we add 30 s of network slack so the
-// server's own timeout enforcement fires first and we get a structured
-// response with per-step timings rather than a bare TS abort.
-const TIMEOUT_MS = 1830 * 1000;
+// Server-side hard ceiling is 1800 s; absolute network cap is 1830 s so
+// the server's own timeout enforcement fires first and we get a structured
+// response with per-step timings rather than a bare TS abort. When the
+// caller supplies total_timeout_seconds, scale the network timeout down
+// so a 60-second-budget request doesn't sit idle for 30 minutes.
+const SERVER_CEILING_S = 1800;
+const NETWORK_SLACK_S = 30;
+const ABSOLUTE_TIMEOUT_MS = (SERVER_CEILING_S + NETWORK_SLACK_S) * 1000;
+
+function networkTimeoutMs(requestedSeconds: number | null | undefined): number {
+  if (requestedSeconds == null) return ABSOLUTE_TIMEOUT_MS;
+  return Math.min(ABSOLUTE_TIMEOUT_MS, (requestedSeconds + NETWORK_SLACK_S) * 1000);
+}
 
 // ---------- Factory ---------------------------------------------------------
 
@@ -89,7 +98,7 @@ export function buildRunXtbWorkflowTool(mcpXtbUrl: string) {
         `${base}/run_workflow`,
         input,
         RunXtbWorkflowOut,
-        TIMEOUT_MS,
+        networkTimeoutMs(input.total_timeout_seconds),
         "mcp-xtb",
       );
     },

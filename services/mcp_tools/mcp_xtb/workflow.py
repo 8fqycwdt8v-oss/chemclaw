@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, TypeVar
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ValidationError
 
 log = logging.getLogger("mcp-xtb.workflow")
 
@@ -76,6 +76,10 @@ async def run_subprocess(args: list[str], cwd: Path, timeout_s: int) -> Subproce
 # parallel_map — bounded concurrency for fan-out steps.
 # Lifted from the ad-hoc ``Semaphore(4)`` block in mcp_synthegy_mech.xtb_validator;
 # that file should migrate onto this helper in a follow-up.
+#
+# Uses TaskGroup so the first sibling failure cancels the rest — important
+# for multi-conformer optimisations where a single bad geometry shouldn't
+# burn another 10× wall-clock waiting for the remaining xtb runs.
 # ---------------------------------------------------------------------------
 
 async def parallel_map(
@@ -85,13 +89,26 @@ async def parallel_map(
 ) -> list[U]:
     if max_concurrency < 1:
         raise ValueError("max_concurrency must be >= 1")
+    items_list = list(items)
+    if not items_list:
+        return []
     sem = asyncio.Semaphore(max_concurrency)
+    results: list[U] = [None] * len(items_list)  # type: ignore[list-item]
 
-    async def _bounded(item: T) -> U:
+    async def _bounded(idx: int, item: T) -> None:
         async with sem:
-            return await fn(item)
+            results[idx] = await fn(item)
 
-    return await asyncio.gather(*[_bounded(it) for it in items])
+    try:
+        async with asyncio.TaskGroup() as tg:
+            for i, item in enumerate(items_list):
+                tg.create_task(_bounded(i, item))
+    except* Exception as eg:
+        # TaskGroup wraps everything in an ExceptionGroup; the engine layer
+        # only knows how to render one error per step, so unwrap to the
+        # first exception (the one that triggered the cancellation).
+        raise eg.exceptions[0] from None
+    return results
 
 
 # ---------------------------------------------------------------------------
@@ -122,6 +139,13 @@ class Workflow:
     name: str
     steps: tuple[Step, ...]
     output: Callable[[Ctx], dict[str, Any]]
+    # Pydantic model the recipe uses to validate inputs up-front. The
+    # /run_workflow handler calls ``inputs_schema(**req.inputs)`` before
+    # calling ``run`` so a typo in a key name fails at the request edge
+    # with a structured 400 instead of as a step-level engine failure.
+    # Optional for backward-compat with engine-only callers; production
+    # recipes should always set it.
+    inputs_schema: type[BaseModel] | None = None
 
 
 class StepReport(BaseModel):
@@ -162,10 +186,37 @@ async def run(
     reports: list[StepReport] = []
     failed = False
 
+    # Validate inputs up-front against the recipe's schema (if set) so
+    # typos surface as a structured failure with field-level detail
+    # instead of as an in-step KeyError. This synthetic step is reported
+    # back so the caller sees timing for it like any other.
+    validated_inputs: dict[str, Any] = dict(inputs)
+    if wf.inputs_schema is not None:
+        t0 = time.monotonic()
+        try:
+            validated_inputs = wf.inputs_schema.model_validate(inputs).model_dump()
+            reports.append(
+                StepReport(
+                    name="validate_inputs",
+                    seconds=time.monotonic() - t0,
+                    ok=True,
+                ),
+            )
+        except ValidationError as exc:
+            reports.append(
+                StepReport(
+                    name="validate_inputs",
+                    seconds=time.monotonic() - t0,
+                    ok=False,
+                    error=f"input validation failed: {exc.errors()}",
+                ),
+            )
+            failed = True
+
     with tempfile.TemporaryDirectory() as tmp:
         ctx = Ctx(
             workdir=Path(tmp),
-            inputs=dict(inputs),
+            inputs=validated_inputs,
             step_timeout_s=step_timeout_s,
         )
         for step in wf.steps:
@@ -209,7 +260,7 @@ async def run(
                     failed = True
 
         outputs: dict[str, Any] = {} if failed else wf.output(ctx)
-        return WorkflowResult(
+        result = WorkflowResult(
             recipe=wf.name,
             success=not failed,
             steps=reports,
@@ -217,6 +268,15 @@ async def run(
             warnings=list(ctx.warnings),
             total_seconds=time.monotonic() - started,
         )
+        log.info(
+            "workflow_complete recipe=%s success=%s total_seconds=%.3f n_steps=%d n_warnings=%d",
+            result.recipe,
+            result.success,
+            result.total_seconds,
+            len(result.steps),
+            len(result.warnings),
+        )
+        return result
 
 
 def _record(reports: list[StepReport], step: Step, t0: float, error: str) -> None:

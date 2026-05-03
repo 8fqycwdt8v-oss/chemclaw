@@ -21,6 +21,34 @@ def client():
             yield c
 
 
+def test_input_validation_failure_appears_as_validate_inputs_step(client):
+    """Bad inputs surface as a synthetic validate_inputs step with
+    success=false in the body, not as a 400."""
+    r = client.post(
+        "/run_workflow",
+        json={
+            "recipe": "reaction_energy",
+            "inputs": {"reactant_smiles": "CCO"},  # missing product_smiles
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["success"] is False
+    assert body["steps"][0]["name"] == "validate_inputs"
+    assert body["steps"][0]["ok"] is False
+    assert "product_smiles" in body["steps"][0]["error"]
+
+
+def test_input_size_cap_returns_422(client):
+    """The body-size cap on inputs is enforced before validation."""
+    huge_inputs = {f"k{i}": "x" for i in range(100)}
+    r = client.post(
+        "/run_workflow",
+        json={"recipe": "reaction_energy", "inputs": huge_inputs},
+    )
+    assert r.status_code == 422
+
+
 def test_unknown_recipe_returns_400(client):
     r = client.post("/run_workflow", json={"recipe": "no_such", "inputs": {}})
     assert r.status_code == 400

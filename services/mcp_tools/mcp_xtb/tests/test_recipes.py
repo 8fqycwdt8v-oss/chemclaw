@@ -81,13 +81,86 @@ async def test_optimize_ensemble_full_pipeline():
             total_timeout_s=30,
         )
     assert res.success, res.steps
-    assert [s.name for s in res.steps] == ["embed", "crest", "parse", "opt", "boltzmann"]
+    assert [s.name for s in res.steps] == [
+        "validate_inputs", "embed", "crest", "parse", "opt", "boltzmann",
+    ]
     confs = res.outputs["conformers"]
     assert len(confs) == 3
     weights = [c["weight"] for c in confs]
     assert sum(weights) == pytest.approx(1.0)
     # All three conformers are POST-opt, so they share the same parsed energy.
     assert all(c["energy_hartree"] == pytest.approx(-5.123456789) for c in confs)
+
+
+async def test_optimize_ensemble_boltzmann_weights_match_RT_298():
+    """Three conformers with energies 0, +0.5, +1.0 kcal/mol relative to
+    the minimum should produce weights consistent with RT(298 K) ≈
+    0.5925 kcal/mol — i.e. NOT the legacy implicit RT = 1 kcal/mol that
+    used a partition function of exp(-ΔE_kcal).
+
+    Expected at 298 K: w_i ∝ exp(-ΔE_i / 0.5925).
+    """
+    import math
+    from services.mcp_tools.mcp_xtb.recipes import optimize_ensemble
+
+    # 3 distinct post-opt energies. conf_0 is the minimum; conf_1 and
+    # conf_2 sit 0.5 and 1.0 kcal/mol above it. Adding (positive) ΔE in
+    # hartree to the minimum (-5.0 Eh) makes the energy LESS negative,
+    # i.e. higher.
+    HARTREE_TO_KCAL = 627.509
+    deltas_kcal = [0.0, 0.5, 1.0]
+    e_min_hartree = -5.0
+    energies_hartree = [e_min_hartree + d / HARTREE_TO_KCAL for d in deltas_kcal]
+
+    # Map by conf directory so the energy assignment is deterministic
+    # regardless of which parallel xtb worker finishes first.
+    by_conf = {f"conf_{i}": e for i, e in enumerate(energies_hartree)}
+
+    async def _fake(args, cwd, timeout_s):
+        cmd = args[0]
+        cwd_p = Path(cwd)
+        if cmd == "crest":
+            (cwd_p / "crest_conformers.xyz").write_text(_FAKE_CREST_ENSEMBLE)
+            return wf.SubprocessResult(returncode=0, stdout="ok", stderr="")
+        if cmd == "xtb":
+            (cwd_p / "xtbopt.xyz").write_text(_FAKE_OPTIMIZED_XYZ)
+            e = by_conf[cwd_p.name]
+            return wf.SubprocessResult(
+                returncode=0,
+                stdout=f"TOTAL ENERGY          {e:.9f} Eh\n",
+                stderr="",
+            )
+        raise AssertionError(f"unexpected: {args!r}")
+
+    with mock.patch(
+        "services.mcp_tools.mcp_xtb.main._smiles_to_xyz",
+        return_value=_FAKE_XYZ,
+    ), mock.patch(
+        "services.mcp_tools.mcp_xtb.workflow.run_subprocess",
+        side_effect=_fake,
+    ):
+        res = await wf.run(
+            optimize_ensemble.WORKFLOW,
+            {"smiles": "CCO", "n_conformers": 3, "method": "GFN2-xTB"},
+            total_timeout_s=30,
+        )
+
+    assert res.success, res.steps
+    confs = res.outputs["conformers"]
+    assert len(confs) == 3
+    weights = [c["weight"] for c in confs]
+    assert sum(weights) == pytest.approx(1.0)
+
+    expected = [math.exp(-d / 0.5925) for d in deltas_kcal]
+    z = sum(expected)
+    expected_norm = [v / z for v in expected]
+    for got, exp in zip(weights, expected_norm, strict=True):
+        assert got == pytest.approx(exp, rel=1e-4)
+
+    # Sanity: at RT(298 K) ≈ 0.5925 kcal/mol the weight ratio between the
+    # minimum and a +0.5 kcal/mol conformer is e^(0.5/0.5925) ≈ 2.31. The
+    # legacy implicit RT = 1 kcal/mol code would have given e^0.5 ≈ 1.65.
+    assert weights[0] / weights[1] == pytest.approx(math.exp(0.5 / 0.5925), rel=1e-4)
 
 
 async def test_optimize_ensemble_caps_at_n_conformers():

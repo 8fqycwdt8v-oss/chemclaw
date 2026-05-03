@@ -21,20 +21,28 @@ sum.
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import Any, Literal
 
+from pydantic import BaseModel, Field
+
+from services.mcp_tools.common.limits import MAX_SMILES_LEN
 from services.mcp_tools.mcp_xtb import workflow as wf
 from services.mcp_tools.mcp_xtb.workflow import Ctx, Step, Workflow
 
 _HARTREE_TO_KCAL = 627.509
 
 
+class Inputs(BaseModel):
+    """Validated up-front by /run_workflow before the engine runs."""
+
+    reactant_smiles: str = Field(min_length=1, max_length=MAX_SMILES_LEN)
+    product_smiles: str = Field(min_length=1, max_length=MAX_SMILES_LEN)
+    method: Literal["GFN2-xTB", "GFN-FF"] = "GFN2-xTB"
+
+
 async def _opt_one(ctx: Ctx, smiles_key: str, subdir: str) -> tuple[str, float]:
-    smiles = ctx.inputs.get(smiles_key)
-    if not isinstance(smiles, str) or not smiles.strip():
-        raise ValueError(f"input {smiles_key!r} required (non-empty string)")
-    method = str(ctx.inputs.get("method", "GFN2-xTB"))
-    gfn_flag = "--gfn2" if method == "GFN2-xTB" else "--gfnff"
+    smiles = ctx.inputs[smiles_key]
+    gfn_flag = "--gfn2" if ctx.inputs["method"] == "GFN2-xTB" else "--gfnff"
 
     from services.mcp_tools.mcp_xtb import main as _main
 
@@ -61,12 +69,6 @@ async def _opt_one(ctx: Ctx, smiles_key: str, subdir: str) -> tuple[str, float]:
 
 
 async def _opt_both(ctx: Ctx) -> dict[str, tuple[str, float]]:
-    # Validate up-front so a missing input fails fast instead of after a
-    # subprocess launch attempt for the half-valid pair.
-    for k in ("reactant_smiles", "product_smiles"):
-        v = ctx.inputs.get(k)
-        if not isinstance(v, str) or not v.strip():
-            raise ValueError(f"input {k!r} required (non-empty string)")
     r, p = await asyncio.gather(
         _opt_one(ctx, "reactant_smiles", "reactant"),
         _opt_one(ctx, "product_smiles", "product"),
@@ -89,6 +91,7 @@ def _output(ctx: Ctx) -> dict[str, Any]:
 
 WORKFLOW = Workflow(
     name="reaction_energy",
+    inputs_schema=Inputs,
     steps=(
         Step(name="opt_both", fn=_opt_both),
     ),

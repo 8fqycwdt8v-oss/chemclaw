@@ -17,8 +17,11 @@ than the implicit RT = 1 kcal/mol the legacy code used.
 from __future__ import annotations
 
 import math
-from typing import Any
+from typing import Any, Literal
 
+from pydantic import BaseModel, Field
+
+from services.mcp_tools.common.limits import MAX_SMILES_LEN
 from services.mcp_tools.mcp_xtb import workflow as wf
 from services.mcp_tools.mcp_xtb.workflow import Ctx, Step, Workflow
 
@@ -26,6 +29,15 @@ _HARTREE_TO_KCAL = 627.509
 _RT_298_KCAL = 0.5925  # R·T at 298.15 K, kcal/mol
 
 _MAX_PARALLEL_OPTS = 4
+_MAX_CONFORMERS = 100
+
+
+class Inputs(BaseModel):
+    """Validated up-front by /run_workflow before the engine runs."""
+
+    smiles: str = Field(min_length=1, max_length=MAX_SMILES_LEN)
+    n_conformers: int = Field(default=20, ge=1, le=_MAX_CONFORMERS)
+    method: Literal["GFN2-xTB", "GFN-FF"] = "GFN2-xTB"
 
 
 # ---------------------------------------------------------------------------
@@ -33,7 +45,8 @@ _MAX_PARALLEL_OPTS = 4
 # ---------------------------------------------------------------------------
 
 async def _embed(ctx: Ctx) -> str:
-    smiles = _require_str(ctx.inputs, "smiles")
+    # Inputs are pre-validated by Inputs Pydantic model; cast is safe.
+    smiles = ctx.inputs["smiles"]
     # Lazy import: avoids a circular import at module load time
     # (main.py registers /run_workflow which imports this package).
     from services.mcp_tools.mcp_xtb import main as _main
@@ -62,15 +75,13 @@ async def _crest(ctx: Ctx) -> str:
 async def _parse(ctx: Ctx) -> list[tuple[str, float]]:
     from services.mcp_tools.mcp_xtb import main as _main
 
-    n = int(ctx.inputs.get("n_conformers", 20))
     raw = _main._parse_crest_ensemble(ctx.artifacts["crest"])
-    return raw[:n]
+    return raw[: ctx.inputs["n_conformers"]]
 
 
 async def _opt(ctx: Ctx) -> list[tuple[str, float]]:
     raw: list[tuple[str, float]] = ctx.artifacts["parse"]
-    method = str(ctx.inputs.get("method", "GFN2-xTB"))
-    gfn_flag = "--gfn2" if method == "GFN2-xTB" else "--gfnff"
+    gfn_flag = "--gfn2" if ctx.inputs["method"] == "GFN2-xTB" else "--gfnff"
 
     async def _opt_one(item: tuple[int, tuple[str, float]]) -> tuple[str, float]:
         idx, (xyz, _e_pre) = item
@@ -126,19 +137,9 @@ def _output(ctx: Ctx) -> dict[str, Any]:
     return {"conformers": ctx.artifacts["boltzmann"]}
 
 
-# ---------------------------------------------------------------------------
-# Helpers
-# ---------------------------------------------------------------------------
-
-def _require_str(inputs: dict[str, Any], key: str) -> str:
-    v = inputs.get(key)
-    if not isinstance(v, str) or not v.strip():
-        raise ValueError(f"input {key!r} required (non-empty string)")
-    return v
-
-
 WORKFLOW = Workflow(
     name="optimize_ensemble",
+    inputs_schema=Inputs,
     steps=(
         Step(name="embed", fn=_embed),
         Step(name="crest", fn=_crest),

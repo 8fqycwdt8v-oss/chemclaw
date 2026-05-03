@@ -38,6 +38,13 @@ const ConformerEntry = z.object({
   weight: z.number(),
 });
 
+// The recipe's outputs.conformers shape inside the WorkflowResult body.
+// Validated explicitly here so a mismatch surfaces as a recipe-shape
+// error at this boundary, not as an opaque outer-Zod failure.
+const OptimizeEnsembleOutputs = z.object({
+  conformers: z.array(ConformerEntry),
+});
+
 export const ComputeConformerEnsembleOut = z.object({
   conformers: z.array(ConformerEntry),
 });
@@ -84,12 +91,13 @@ export function buildComputeConformerEnsembleTool(mcpXtbUrl: string) {
           `optimize_ensemble failed at step ${failed?.name ?? "?"}: ${failed?.error ?? "unknown"}`,
         );
       }
-      const conformers = result.outputs.conformers as Array<{
-        xyz: string;
-        energy_hartree: number;
-        weight: number;
-      }>;
-      return { conformers };
+      const parsed = OptimizeEnsembleOutputs.safeParse(result.outputs);
+      if (!parsed.success) {
+        throw new Error(
+          `optimize_ensemble returned an unexpected outputs shape: ${parsed.error.issues[0]?.message ?? "?"}`,
+        );
+      }
+      return { conformers: parsed.data.conformers };
     },
   });
 }
