@@ -121,7 +121,6 @@ INSERT INTO model_cards (
 )
 ON CONFLICT (service_name, model_version) DO NOTHING;
 
-<<<<<<< HEAD
 -- ── Z4 model_cards row ───────────────────────────────────────────────────
 
 INSERT INTO model_cards (
@@ -136,7 +135,9 @@ INSERT INTO model_cards (
   '{"sampling_strategy": "space_filling", "deterministic_seed": true}'::jsonb,
   'No mechanistic causal model. DoE is information-theoretic (space-filling). The chemist supplies the design space; the sampler covers it uniformly.',
   'BoFire 0.3.x DoE module. CHEM21 solvent classification from Prat et al., Green Chem. 2016 (built-in 24-solvent allowlist mirroring Z1).'
-=======
+)
+ON CONFLICT (service_name, model_version) DO NOTHING;
+
 -- ── Z1 model_cards rows ──────────────────────────────────────────────────
 
 INSERT INTO model_cards (
@@ -178,7 +179,6 @@ INSERT INTO model_cards (
   '{}'::jsonb,
   'No mechanistic model. Industry / academic guides curated by their authors. PMI is a widely-used pharmaceutical greenness proxy; Bretherick groups encode known thermal / shock / reactive hazards.',
   'Prat et al. Green Chem. 2016 (CHEM21); GSK guide; Alfonsi et al. Green Chem. 2008 (Pfizer); Diorazio et al. Org. Process Res. Dev. 2016 (AZ); Prat et al. Org. Process Res. Dev. 2013 (Sanofi); Byrne et al. 2016 (ACS GCI-PR); Bretherick subset (public-disclosable patterns only).'
->>>>>>> 53aed91 (feat(z1): wire AD + green-chem builtins; condition-design skill v1->v2)
 )
 ON CONFLICT (service_name, model_version) DO NOTHING;
 
