@@ -28,7 +28,9 @@ const OutputSpec = z.object({
 
 export const StartOptimizationCampaignIn = z.object({
   campaign_name: z.string().min(1).max(200),
-  nce_project_internal_id: z.string().max(200).optional(),
+  // Required: campaigns must be project-scoped so RLS can confine them to
+  // members of that project. Unscoped (NULL) campaigns are not supported.
+  nce_project_internal_id: z.string().min(1).max(200),
   factors: z.array(ContinuousFactor).max(20).default([]),
   categorical_inputs: z.array(CategoricalInputSpec).max(20).default([]),
   outputs: z.array(OutputSpec).min(1).max(10),
@@ -96,13 +98,16 @@ export function buildStartOptimizationCampaignTool(
 
       // 2. Persist (RLS-scoped insert).
       const campaign = await withUserContext(pool, userEntraId, async (client) => {
-        let nceProjectId: string | null = null;
-        if (input.nce_project_internal_id) {
-          const proj = await client.query<{ id: string }>(
-            `SELECT id::text FROM nce_projects WHERE internal_id = $1`,
-            [input.nce_project_internal_id],
-          );
-          nceProjectId = proj.rows[0]?.id ?? null;
+        // Resolve project under RLS: a missing or RLS-filtered hit must throw,
+        // not silently fall through to NULL (which would create an orphan row
+        // and — pre-Z-review fix — would have been visible to all users).
+        const proj = await client.query<{ id: string }>(
+          `SELECT id::text FROM nce_projects WHERE internal_id = $1`,
+          [input.nce_project_internal_id],
+        );
+        const nceProjectId = proj.rows[0]?.id;
+        if (nceProjectId === undefined) {
+          throw new Error("nce_project_not_found_or_forbidden");
         }
         const result = await client.query<{
           id: string;

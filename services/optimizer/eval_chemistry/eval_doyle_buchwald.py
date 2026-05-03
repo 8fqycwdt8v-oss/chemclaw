@@ -21,26 +21,9 @@ from typing import Any
 import httpx
 import numpy as np
 
+from services.mcp_tools.mcp_yield_baseline.metrics import expected_calibration_error
+
 _DEFAULT_BASE = "http://localhost:8015"
-
-
-def _ece(predictions: list[dict[str, Any]], n_bins: int = 10) -> float:
-    errors = [abs(p["true"] - p["ensemble_mean"]) for p in predictions]
-    stds = [p["ensemble_std"] for p in predictions]
-    if not errors:
-        return float("nan")
-    bins = np.linspace(0, max(stds) + 1e-6, n_bins + 1)
-    n = len(errors)
-    ece = 0.0
-    for i in range(n_bins):
-        lo, hi = bins[i], bins[i + 1]
-        in_bin = [j for j, s in enumerate(stds) if lo <= s < hi]
-        if not in_bin:
-            continue
-        avg_err = float(np.mean([errors[j] for j in in_bin]))
-        avg_std = float(np.mean([stds[j] for j in in_bin]))
-        ece += (len(in_bin) / n) * abs(avg_err - avg_std)
-    return float(ece)
 
 
 def run(
@@ -83,11 +66,13 @@ def run(
                 },
             )
             if resp.status_code != 200:
+                # Don't echo `resp.text` — it can include the request body
+                # (SMILES list) on validation failures.
                 return {
                     "task": "doyle_buchwald",
                     "status": "error",
                     "passed": False,
-                    "error": f"mcp-yield-baseline returned {resp.status_code}: {resp.text[:200]}",
+                    "error": f"mcp-yield-baseline returned http_{resp.status_code}",
                 }
             for (_, y_true), pred in zip(batch, resp.json()["predictions"]):
                 predictions.append({
@@ -105,7 +90,7 @@ def run(
     rmse_xgb = math.sqrt(
         float(np.mean([(p["true"] - p["xgboost_mean"]) ** 2 for p in predictions]))
     )
-    ece = _ece(predictions)
+    ece = expected_calibration_error(predictions)
 
     return {
         "task": "doyle_buchwald",

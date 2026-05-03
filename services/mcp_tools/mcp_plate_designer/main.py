@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Annotated, Any, AsyncIterator
 
 from fastapi import Body, FastAPI, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from services.mcp_tools.common.app import create_app
 from services.mcp_tools.common.limits import MAX_RXN_SMILES_LEN, MAX_SMILES_LEN
@@ -77,6 +77,18 @@ class DesignPlateIn(BaseModel):
     n_wells: int = Field(ge=1, le=1536)
     seed: int = Field(default=42)
     disable_chem21_floor: bool = False
+
+    @field_validator("reactants_smiles", "product_smiles")
+    @classmethod
+    def _no_reaction_arrow(cls, v: str | None) -> str | None:
+        # These fields hold molecule SMILES, not reaction SMILES — accepting
+        # `>>` would corrupt the f-string concat in designer.py:152 into a
+        # double-arrow string and propagate to the ORD export.
+        if v is not None and ">>" in v:
+            raise ValueError(
+                "must be a molecule SMILES, not a reaction SMILES (no '>>')"
+            )
+        return v
 
 
 class WellOut(BaseModel):

@@ -79,10 +79,10 @@ export function buildRecommendNextBatchTool(pool: Pool, optimizerUrl: string) {
           );
           const c = camp.rows[0];
           if (c === undefined) {
-            throw new Error(`campaign_not_found: ${input.campaign_id}`);
+            throw new Error("campaign_not_found");
           }
           if (c.status !== "active") {
-            throw new Error(`campaign_not_active: status=${c.status}`);
+            throw new Error(`campaign_not_active:${c.status}`);
           }
           const rounds = await client.query<RoundRow>(
             `SELECT measured_outcomes, round_index
@@ -124,17 +124,22 @@ export function buildRecommendNextBatchTool(pool: Pool, optimizerUrl: string) {
         "mcp-reaction-optimizer",
       );
 
+      // Concurrent recommend_next_batch calls can both compute the same nextIndex.
+      // The (campaign_id, round_index) UNIQUE constraint prevents duplicate rows;
+      // ON CONFLICT translates the race into a typed retry signal instead of an
+      // opaque 23505 surfacing as an internal_server_error.
       const round = await withUserContext(pool, userEntraId, async (client) => {
         const result = await client.query<{ id: string }>(
           `INSERT INTO optimization_rounds
              (campaign_id, round_index, proposals)
            VALUES ($1, $2, $3::jsonb)
+           ON CONFLICT (campaign_id, round_index) DO NOTHING
            RETURNING id::text`,
           [input.campaign_id, nextIndex, JSON.stringify(reco.proposals)],
         );
         const row = result.rows[0];
         if (!row) {
-          throw new Error("round insert returned no row");
+          throw new Error("round_index_conflict");
         }
         return row;
       });

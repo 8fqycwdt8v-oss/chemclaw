@@ -14,6 +14,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Annotated, Any, AsyncIterator
 
+import anyio
 import httpx
 import numpy as np
 from fastapi import Body, FastAPI, HTTPException
@@ -157,11 +158,14 @@ async def train(req: Annotated[TrainIn, Body(...)]) -> TrainOut:
         )
 
     try:
-        vectors = _encode_drfp_batch(smiles)
+        # _encode_drfp_batch uses sync httpx.Client (mocked in tests on this
+        # exact symbol). Run on a worker thread so the route stays non-blocking.
+        vectors = await anyio.to_thread.run_sync(_encode_drfp_batch, smiles)
     except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=503, detail=f"drfp_unavailable: {exc}"
-        ) from exc
+        # Don't echo `exc` into `detail`: httpx errors stringify request URL +
+        # response body, both of which can carry SMILES from the upstream call.
+        log.warning("drfp upstream call failed", extra={"err": type(exc).__name__})
+        raise HTTPException(status_code=503, detail="drfp_unavailable") from exc
 
     X = np.asarray(vectors, dtype=np.float64)
     y = np.asarray(yields, dtype=np.float64)
@@ -199,7 +203,12 @@ async def train(req: Annotated[TrainIn, Body(...)]) -> TrainOut:
 
 
 class PredictYieldIn(BaseModel):
-    rxn_smiles_list: list[str] = Field(min_length=1, max_length=100)
+    # Per-item bound matches /train (TrainingPair.rxn_smiles uses
+    # MAX_RXN_SMILES_LEN); without it /predict_yield bypasses the redaction
+    # length contract that the rest of the pipeline enforces.
+    rxn_smiles_list: list[
+        Annotated[str, Field(min_length=3, max_length=MAX_RXN_SMILES_LEN)]
+    ] = Field(min_length=1, max_length=100)
     project_internal_id: str | None = Field(default=None, max_length=200)
     model_id: str | None = Field(default=None, max_length=300)
     used_global_fallback: bool = False
@@ -268,17 +277,19 @@ async def predict_yield(
         model = _GLOBAL_XGB_MODEL
 
     try:
-        vectors = _encode_drfp_batch(req.rxn_smiles_list)
+        vectors = await anyio.to_thread.run_sync(
+            _encode_drfp_batch, req.rxn_smiles_list
+        )
     except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=503, detail=f"drfp_unavailable: {exc}"
-        ) from exc
+        log.warning("drfp upstream call failed", extra={"err": type(exc).__name__})
+        raise HTTPException(status_code=503, detail="drfp_unavailable") from exc
     try:
-        chem = _call_chemprop_batch(req.rxn_smiles_list)
+        chem = await anyio.to_thread.run_sync(
+            _call_chemprop_batch, req.rxn_smiles_list
+        )
     except httpx.HTTPError as exc:
-        raise HTTPException(
-            status_code=503, detail=f"chemprop_unavailable: {exc}"
-        ) from exc
+        log.warning("chemprop upstream call failed", extra={"err": type(exc).__name__})
+        raise HTTPException(status_code=503, detail="chemprop_unavailable") from exc
 
     xgb_means = _xgboost_predict(model, vectors)
 

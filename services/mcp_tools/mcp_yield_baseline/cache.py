@@ -42,7 +42,7 @@ def get(model_id: str) -> Any | None:
 def _evict() -> None:
     """Drop expired entries; if still over cap, drop oldest."""
     now = time.time()
-    expired = [k for k, v in _CACHE.items() if v["expires_at"] < now]
+    expired = [k for k, v in _CACHE.items() if v["expires_at"] <= now]
     for k in expired:
         del _CACHE[k]
     while len(_CACHE) > _CAP:

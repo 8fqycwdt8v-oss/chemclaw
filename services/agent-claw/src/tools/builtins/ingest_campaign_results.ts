@@ -51,18 +51,29 @@ export function buildIngestCampaignResultsTool(pool: Pool) {
       }
 
       const updated = await withUserContext(pool, userEntraId, async (client) => {
+        // Idempotency guard: refuse to overwrite an already-ingested round.
+        // Distinguishes "round absent / not visible to user" from "already ingested"
+        // by re-checking existence on miss.
         const result = await client.query<UpdatedRow>(
           `UPDATE optimization_rounds
               SET measured_outcomes = $2::jsonb,
                   ingested_results_at = NOW()
             WHERE id = $1
+              AND ingested_results_at IS NULL
             RETURNING campaign_id::text,
                       ingested_results_at::text`,
           [input.round_id, JSON.stringify(input.measured_outcomes)],
         );
         const row = result.rows[0];
         if (!row) {
-          throw new Error(`round_not_found: ${input.round_id}`);
+          const exists = await client.query<{ ingested_results_at: string | null }>(
+            `SELECT ingested_results_at FROM optimization_rounds WHERE id = $1`,
+            [input.round_id],
+          );
+          if (exists.rows[0] === undefined) {
+            throw new Error("round_not_found");
+          }
+          throw new Error("round_already_ingested");
         }
         return row;
       });

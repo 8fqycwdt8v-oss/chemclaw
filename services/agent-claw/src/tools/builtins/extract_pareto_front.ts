@@ -75,7 +75,7 @@ export function buildExtractParetoFrontTool(pool: Pool, optimizerUrl: string) {
           );
           const c = camp.rows[0];
           if (c === undefined) {
-            throw new Error(`campaign_not_found: ${input.campaign_id}`);
+            throw new Error("campaign_not_found");
           }
           const features = c.bofire_domain.outputs?.features ?? [];
           const dirs: Record<string, string> = {};
