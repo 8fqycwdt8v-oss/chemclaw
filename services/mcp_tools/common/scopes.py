@@ -27,6 +27,7 @@ SERVICE_SCOPES: dict[str, str] = {
     "mcp-askcos": "mcp_askcos:invoke",
     "mcp-aizynth": "mcp_aizynth:invoke",
     "mcp-chemprop": "mcp_chemprop:invoke",
+    "mcp-yield-baseline": "mcp_yield_baseline:invoke",
     "mcp-xtb": "mcp_xtb:invoke",
     "mcp-sirius": "mcp_sirius:invoke",
     "mcp-eln-local": "mcp_eln:read",
