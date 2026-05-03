@@ -909,8 +909,49 @@ services:
     profiles: ["chemistry"]
     ports:
       - "8010:8010"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:-}
+      MCP_AUTH_REQUIRED: ${MCP_AUTH_REQUIRED:-}
+      MCP_AUTH_DEV_MODE: ${MCP_AUTH_DEV_MODE:-}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8010/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # mcp-crest — CREST conformer / tautomer / protomer screening (port 8014)
+  # Split from mcp-xtb so CREST resource limits and image size are independent.
+  # Every result is cached through the qm_jobs table (db/init/23_qm_results.sql).
+  # -------------------------------------------------------------
+  mcp-crest:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_crest/Dockerfile
+    container_name: chemclaw-mcp-crest
+    restart: unless-stopped
+    profiles: ["chemistry"]
+    ports:
+      - "8014:8014"
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:-}
+      MCP_AUTH_REQUIRED: ${MCP_AUTH_REQUIRED:-}
+      MCP_AUTH_DEV_MODE: ${MCP_AUTH_DEV_MODE:-}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8014/readyz',timeout=5).status==200 else 1)\""]
       interval: 30s
       timeout: 10s
       retries: 5

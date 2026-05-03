@@ -153,7 +153,7 @@ export async function lookupQmCache(
       [cacheKey],
     );
     if (res.rowCount === 0) return null;
-    const row = res.rows[0];
+    const row = res.rows[0]!;
     log.debug(
       { event: "qm_cache_hit", job_id: row.id, method: row.method, task: row.task },
       "qm cache hit",

@@ -94,6 +94,8 @@ const ConfigSchema = z.object({
   MCP_XTB_URL: z.string().url().default("http://localhost:8010"),
   MCP_SYNTHEGY_MECH_URL: z.string().url().default("http://localhost:8011"),
   MCP_SIRIUS_URL: z.string().url().default("http://localhost:8012"),
+  // Phase 2 — CREST conformer / tautomer / protomer screen.
+  MCP_CREST_URL: z.string().url().default("http://localhost:8014"),
 
   // Source-system MCPs (Postgres-backed mock ELN, Phase F.2 reboot).
   MCP_ELN_LOCAL_URL: z.string().url().default("http://localhost:8013"),

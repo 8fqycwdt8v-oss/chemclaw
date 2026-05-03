@@ -34,6 +34,7 @@ export const SERVICE_SCOPES: Record<string, string> = {
   "mcp-aizynth": "mcp_aizynth:invoke",
   "mcp-chemprop": "mcp_chemprop:invoke",
   "mcp-xtb": "mcp_xtb:invoke",
+  "mcp-crest": "mcp_crest:invoke",
   "mcp-sirius": "mcp_sirius:invoke",
   "mcp-eln-local": "mcp_eln:read",
   "mcp-logs-sciy": "mcp_instrument:read",
