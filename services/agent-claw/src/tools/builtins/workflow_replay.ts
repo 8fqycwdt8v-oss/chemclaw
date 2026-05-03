@@ -32,7 +32,7 @@ export function buildWorkflowReplayTool(pool: Pool) {
     outputSchema: WorkflowReplayOut,
     annotations: { readOnly: false },
     execute: async (ctx, input) => {
-      const actor = ctx.userEntraId ?? "__agent__";
+      const actor = ctx.userEntraId;
       const runId = await replayRun(
         pool, input.parent_run_id,
         input.input_override ?? null,

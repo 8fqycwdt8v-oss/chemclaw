@@ -91,7 +91,7 @@ export function buildClassifyCompoundTool(pool: Pool) {
           name: r.name,
           role: r.role,
           family: r.family,
-          confidence: Number(r.confidence),
+          confidence: r.confidence,
           source: "assignment" as const,
         })),
       };

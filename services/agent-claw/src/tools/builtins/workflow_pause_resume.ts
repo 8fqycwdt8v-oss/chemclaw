@@ -31,7 +31,7 @@ export function buildWorkflowPauseResumeTool(pool: Pool) {
     outputSchema: WorkflowPauseResumeOut,
     annotations: { readOnly: false },
     execute: async (ctx, input) => {
-      const by = ctx.userEntraId ?? "__agent__";
+      const by = ctx.userEntraId;
       if (input.action === "pause") {
         await pauseRun(pool, input.run_id, by);
       } else {

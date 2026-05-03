@@ -54,7 +54,11 @@ export function buildQmCrestScreenTool(mcpCrestUrl: string) {
     outputSchema: QmCrestScreenOut,
     annotations: { readOnly: true },
     execute: async (_ctx, input) => {
-      const path = `/${input.mode}`;
+      // Zod's .default("conformers") applies at parse time, but the
+      // SDK-derived input type still includes undefined; coerce here so
+      // the path interpolation never produces "/undefined".
+      const mode = input.mode ?? "conformers";
+      const path = `/${mode}`;
       const { mode: _mode, ...payload } = input;
       return await postJson(
         `${base}${path}`,

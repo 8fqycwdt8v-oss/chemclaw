@@ -45,7 +45,7 @@ export function buildWorkflowDefineTool(pool: Pool) {
           `workflow definition is ${definitionBytes} bytes; max is ${MAX_DEFINITION_BYTES}`,
         );
       }
-      const actor = ctx.userEntraId ?? "__agent__";
+      const actor = ctx.userEntraId;
       const rec = await defineWorkflow(pool, input.definition, actor);
       await appendAudit(pool, {
         actor,
