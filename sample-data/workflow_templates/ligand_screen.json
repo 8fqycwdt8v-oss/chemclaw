@@ -1,0 +1,33 @@
+{
+  "name": "ligand-screen-template",
+  "description": "Generic ligand screen: take a list of inchikeys, GFN2 optimize, frequencies, rank by G298. Loaded by Phase 9 seed scripts as a starting template.",
+  "inputs": {
+    "candidate_inchikeys": "string[]",
+    "scoring_method": "GFN2"
+  },
+  "steps": [
+    {
+      "id": "screen",
+      "kind": "tool_call",
+      "tool": "run_chemspace_screen",
+      "args": {
+        "name": "ligand-screen-from-template",
+        "candidates": { "from": "list", "inchikeys": ["__from_input__"] },
+        "scoring_pipeline": [
+          { "kind": "qm_geometry_opt", "params": { "method": "GFN2", "threshold": "tight" } },
+          { "kind": "qm_frequencies", "params": { "method": "GFN2" } }
+        ],
+        "top_k": 10
+      }
+    },
+    {
+      "id": "wait_for_batch",
+      "kind": "wait",
+      "for": { "batch_id": "steps.screen.batch_id" },
+      "timeout_seconds": 3600
+    }
+  ],
+  "outputs": {
+    "ranked_top_k": "steps.screen.batch_id"
+  }
+}

@@ -183,6 +183,159 @@ async def compute_descriptors(req: Annotated[DescriptorsIn, Body(...)]) -> Descr
     return DescriptorsOut(values={k: float(_DESCRIPTORS[k](mol)) for k in keys})
 
 
+# --------------------------------------------------------------------------
+# Phase 3 — MACCS, atom-pair, SMARTS substructure
+# --------------------------------------------------------------------------
+
+class MaccsIn(BaseModel):
+    smiles: str = Field(min_length=1, max_length=MAX_SMILES_LEN)
+
+
+class MaccsOut(BaseModel):
+    n_bits: int
+    on_bits: list[int]
+
+
+@app.post("/tools/maccs_fingerprint", response_model=MaccsOut, tags=["rdkit"])
+async def maccs_fingerprint(req: Annotated[MaccsIn, Body(...)]) -> MaccsOut:
+    from rdkit.Chem import MACCSkeys as _MACCSkeys  # noqa: PLC0415
+    MACCSkeys: Any = _MACCSkeys
+    mol = _mol_from_smiles(req.smiles)
+    fp = MACCSkeys.GenMACCSKeys(mol)
+    return MaccsOut(n_bits=167, on_bits=list(fp.GetOnBits()))
+
+
+class AtomPairIn(BaseModel):
+    smiles: str = Field(min_length=1, max_length=MAX_SMILES_LEN)
+    n_bits: int = Field(default=2048, ge=512, le=4096)
+
+
+class AtomPairOut(BaseModel):
+    n_bits: int
+    on_bits: list[int]
+
+
+@app.post("/tools/atompair_fingerprint", response_model=AtomPairOut, tags=["rdkit"])
+async def atompair_fingerprint(req: Annotated[AtomPairIn, Body(...)]) -> AtomPairOut:
+    from rdkit.Chem import rdFingerprintGenerator as _rdFingerprintGenerator  # noqa: PLC0415
+    rdFingerprintGenerator: Any = _rdFingerprintGenerator
+    mol = _mol_from_smiles(req.smiles)
+    gen = rdFingerprintGenerator.GetAtomPairGenerator(fpSize=req.n_bits)
+    fp = gen.GetFingerprint(mol)
+    return AtomPairOut(n_bits=req.n_bits, on_bits=list(fp.GetOnBits()))
+
+
+_MAX_SMARTS_LEN = 500
+
+
+class SubstructureMatchIn(BaseModel):
+    query_smarts: str = Field(min_length=1, max_length=_MAX_SMARTS_LEN)
+    target_smiles: str = Field(min_length=1, max_length=MAX_SMILES_LEN)
+    use_chirality: bool = False
+
+
+class SubstructureMatchOut(BaseModel):
+    matches: list[list[int]]
+    count: int
+
+
+@app.post("/tools/substructure_match", response_model=SubstructureMatchOut, tags=["rdkit"])
+async def substructure_match(
+    req: Annotated[SubstructureMatchIn, Body(...)],
+) -> SubstructureMatchOut:
+    target = _mol_from_smiles(req.target_smiles)
+    query = Chem.MolFromSmarts(req.query_smarts)
+    if query is None:
+        raise ValueError(f"invalid SMARTS: {req.query_smarts!r}")
+    raw = target.GetSubstructMatches(query, useChirality=req.use_chirality, uniquify=True)
+    matches = [[int(i) for i in m] for m in raw]
+    return SubstructureMatchOut(matches=matches, count=len(matches))
+
+
+class BulkSubstructureSearchIn(BaseModel):
+    """Bulk SMARTS query against a candidate list of SMILES.
+
+    The agent passes a candidate list (typically from a fingerprint pre-filter
+    on the corpus) plus the SMARTS query; we re-verify each candidate
+    server-side. The MCP service does NOT touch the canonical compounds table
+    directly — the projector + agent do that — so this endpoint is stateless.
+    """
+
+    query_smarts: str = Field(min_length=1, max_length=_MAX_SMARTS_LEN)
+    candidates: list[dict[str, str]] = Field(
+        ...,
+        description="List of {inchikey, smiles} dicts to re-verify against the SMARTS.",
+    )
+    limit: int = Field(default=200, ge=1, le=5000)
+
+
+class BulkSubstructureHit(BaseModel):
+    inchikey: str
+    smiles: str
+    n_matches: int
+
+
+class BulkSubstructureSearchOut(BaseModel):
+    hits: list[BulkSubstructureHit]
+    n_scanned: int
+
+
+@app.post(
+    "/tools/bulk_substructure_search",
+    response_model=BulkSubstructureSearchOut,
+    tags=["rdkit"],
+)
+async def bulk_substructure_search(
+    req: Annotated[BulkSubstructureSearchIn, Body(...)],
+) -> BulkSubstructureSearchOut:
+    query = Chem.MolFromSmarts(req.query_smarts)
+    if query is None:
+        raise ValueError(f"invalid SMARTS: {req.query_smarts!r}")
+
+    hits: list[BulkSubstructureHit] = []
+    n_scanned = 0
+    for cand in req.candidates[: req.limit]:
+        n_scanned += 1
+        smi = cand.get("smiles", "")
+        ik = cand.get("inchikey", "")
+        if not smi:
+            continue
+        mol = Chem.MolFromSmiles(smi)
+        if mol is None:
+            continue
+        matches = mol.GetSubstructMatches(query, uniquify=True)
+        if matches:
+            hits.append(BulkSubstructureHit(
+                inchikey=ik, smiles=smi, n_matches=len(matches),
+            ))
+    return BulkSubstructureSearchOut(hits=hits, n_scanned=n_scanned)
+
+
+class ScaffoldIn(BaseModel):
+    smiles: str = Field(min_length=1, max_length=MAX_SMILES_LEN)
+
+
+class ScaffoldOut(BaseModel):
+    scaffold_smiles: str | None
+    scaffold_inchikey: str | None
+
+
+@app.post("/tools/murcko_scaffold", response_model=ScaffoldOut, tags=["rdkit"])
+async def murcko_scaffold(req: Annotated[ScaffoldIn, Body(...)]) -> ScaffoldOut:
+    from rdkit.Chem.Scaffolds import MurckoScaffold as _MurckoScaffold  # noqa: PLC0415
+    MurckoScaffold: Any = _MurckoScaffold
+    mol = _mol_from_smiles(req.smiles)
+    scaffold = MurckoScaffold.GetScaffoldForMol(mol)
+    if scaffold is None or scaffold.GetNumAtoms() == 0:
+        return ScaffoldOut(scaffold_smiles=None, scaffold_inchikey=None)
+    smi = Chem.MolToSmiles(scaffold)
+    try:
+        ik = MolToInchiKey(scaffold)
+    except Exception:  # noqa: BLE001
+        ik = None
+    return ScaffoldOut(scaffold_smiles=smi, scaffold_inchikey=ik or None)
+
+
 if __name__ == "__main__":
     import uvicorn
 
