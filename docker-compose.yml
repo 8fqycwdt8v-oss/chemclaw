@@ -318,6 +318,38 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # queue-worker — Postgres-backed batch worker (Phase 6)
+  # SELECT ... FOR UPDATE SKIP LOCKED + LISTEN/NOTIFY for scheduling.
+  # Replicate via `docker compose up --scale queue-worker=N`.
+  # -------------------------------------------------------------
+  queue-worker:
+    build:
+      context: .
+      dockerfile: services/queue/Dockerfile
+    container_name: chemclaw-queue-worker
+    user: "1001:1001"
+    restart: unless-stopped
+    profiles: ["chemistry"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      QUEUE_CONCURRENCY: ${QUEUE_CONCURRENCY:-4}
+      QUEUE_LEASE_SECONDS: ${QUEUE_LEASE_SECONDS:-300}
+      QUEUE_TASKS: ${QUEUE_TASKS:-qm,genchem,classifier}
+      MCP_XTB_URL: http://mcp-xtb:8010
+      MCP_CREST_URL: http://mcp-crest:8014
+      MCP_GENCHEM_URL: http://mcp-genchem:8015
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # compound_fingerprinter — populates Morgan/MACCS/AP fingerprints + SMARTS hits
   # -------------------------------------------------------------
   compound-fingerprinter:

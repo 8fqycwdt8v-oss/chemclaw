@@ -44,6 +44,9 @@ import { buildClassifyCompoundTool } from "../tools/builtins/classify_compound.j
 // Phase 5 — focused chemical-space generation.
 import { buildGenerateFocusedLibraryTool } from "../tools/builtins/generate_focused_library.js";
 import { buildFindMatchedPairsTool } from "../tools/builtins/find_matched_pairs.js";
+// Phase 6 — Postgres-backed batch queue.
+import { buildEnqueueBatchTool } from "../tools/builtins/enqueue_batch.js";
+import { buildInspectBatchTool } from "../tools/builtins/inspect_batch.js";
 import { buildIdentifyUnknownFromMsTool } from "../tools/builtins/identify_unknown_from_ms.js";
 import { buildPredictMolecularPropertyTool } from "../tools/builtins/predict_molecular_property.js";
 import { buildPredictReactionYieldTool } from "../tools/builtins/predict_reaction_yield.js";
@@ -176,6 +179,9 @@ function registerBuiltinTools(
   // Phase 5 — focused-generation library + MMP search.
   registry.registerBuiltin("generate_focused_library", () => asTool(buildGenerateFocusedLibraryTool(cfg.MCP_GENCHEM_URL)));
   registry.registerBuiltin("find_matched_pairs", () => asTool(buildFindMatchedPairsTool(cfg.MCP_GENCHEM_URL)));
+  // Phase 6 — Postgres-backed batch queue.
+  registry.registerBuiltin("enqueue_batch", () => asTool(buildEnqueueBatchTool(pool)));
+  registry.registerBuiltin("inspect_batch", () => asTool(buildInspectBatchTool(pool)));
   registry.registerBuiltin("identify_unknown_from_ms", () => asTool(buildIdentifyUnknownFromMsTool(cfg.MCP_SIRIUS_URL)));
   registry.registerBuiltin("predict_molecular_property", () => asTool(buildPredictMolecularPropertyTool(cfg.MCP_CHEMPROP_URL)));
   registry.registerBuiltin("predict_reaction_yield", () => asTool(buildPredictReactionYieldTool(cfg.MCP_CHEMPROP_URL)));
