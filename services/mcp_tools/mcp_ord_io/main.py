@@ -159,17 +159,18 @@ async def import_ord(req: Annotated[ImportIn, Body(...)]) -> ImportOut:
             (i.value for i in rxn.identifiers if i.type == rxn_smiles_enum),
             None,
         )
+        # Gate on message presence, NOT on truthiness of the value.
+        # 0.0 °C (cryogenic) is a physically valid setpoint that must round-trip.
         temp_c: float | None = None
         try:
             if rxn.conditions.HasField("temperature"):
-                temp_c = rxn.conditions.temperature.setpoint.value
+                temp_c = float(rxn.conditions.temperature.setpoint.value)
         except ValueError:
-            # singular protobuf fields don't always support HasField in newer ord-schema
-            temp_c = (
-                rxn.conditions.temperature.setpoint.value
-                if rxn.conditions.temperature.setpoint.value
-                else None
-            )
+            # ord-schema versions where scalar HasField raises: fall back to
+            # the nested setpoint message presence (proto3 sub-messages always
+            # support HasField).
+            if rxn.conditions.temperature.HasField("setpoint"):
+                temp_c = float(rxn.conditions.temperature.setpoint.value)
         reactions.append({
             "rxn_smiles": rxn_smiles,
             "procedure_details": rxn.notes.procedure_details,

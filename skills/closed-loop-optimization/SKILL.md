@@ -36,6 +36,8 @@ The user typically engages this skill across multiple turns. Use
 3. **Define factor space.** Either from a prior `design_plate` call (whose
    `domain_json` is the factor spec) OR from the chemist's explicit inputs.
 4. **Start the campaign.** Call `start_optimization_campaign`:
+   - `nce_project_internal_id`: required — the project the campaign belongs
+     to. Must be one the user has access to (RLS-checked at insert time).
    - `factors`: continuous variables (temperature_c, loading_mol_pct,
      time_min, etc.)
    - `categorical_inputs`: catalyst, base, solvent

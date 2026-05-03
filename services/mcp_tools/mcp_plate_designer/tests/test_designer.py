@@ -122,7 +122,7 @@ def test_endpoint_happy_path(client):
         "/design_plate",
         json={
             "plate_format": "24",
-            "reactants_smiles": "CC>>CC",
+            "reactants_smiles": "CC.CC",
             "product_smiles": "CO",
             "factors": [{"name": "temperature_c", "type": "continuous", "range": [25, 100]}],
             "categorical_inputs": [{"name": "solvent", "values": ["EtOH", "2-MeTHF"]}],
@@ -135,8 +135,24 @@ def test_endpoint_happy_path(client):
     body = r.json()
     assert len(body["wells"]) == 4
     assert body["wells"][0]["well_id"] == "A01"
-    assert body["wells"][0]["rxn_smiles"] == "CC>>CC>>CO"
+    assert body["wells"][0]["rxn_smiles"] == "CC.CC>>CO"
     assert body["design_metadata"]["plate_format"] == "24"
+
+
+def test_endpoint_rejects_reaction_arrow_in_reactants(client):
+    """`reactants_smiles` is a molecule SMILES, not a reaction — `>>` must be rejected."""
+    r = client.post(
+        "/design_plate",
+        json={
+            "plate_format": "24",
+            "reactants_smiles": "CC>>CC",
+            "product_smiles": "CO",
+            "factors": [{"name": "temperature_c", "type": "continuous", "range": [25, 100]}],
+            "categorical_inputs": [{"name": "solvent", "values": ["EtOH"]}],
+            "n_wells": 2,
+        },
+    )
+    assert r.status_code == 422
 
 
 def test_endpoint_excludes_dcm_via_floor(client):

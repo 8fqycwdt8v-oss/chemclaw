@@ -189,8 +189,12 @@ async def recommend_next(
         n_candidates=req.n_candidates,
         seed=req.seed,
     )
+    # BO-derived proposals carry the acquisition name as `source`; multi-output
+    # campaigns route through MoboStrategy + qNEHVI, single-output through
+    # SoboStrategy + qLogEI. Cold-start / fallback paths use `random*`.
+    _bo_sources = {"qLogEI", "qLogNEI", "qNEHVI", "qEHVI"}
     used_bo = len(measured) >= _opt.MIN_OBSERVATIONS_FOR_BO and any(
-        p["source"] == "qLogEI" for p in proposals
+        p["source"] in _bo_sources for p in proposals
     )
     return RecommendNextOut(
         proposals=[ProposalOut(**p) for p in proposals],

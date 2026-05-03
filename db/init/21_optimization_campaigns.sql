@@ -22,7 +22,7 @@ BEGIN;
 -- ────────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS optimization_campaigns (
   id                          uuid         PRIMARY KEY DEFAULT uuid_generate_v4(),
-  nce_project_id              uuid         REFERENCES nce_projects(id) ON DELETE CASCADE,
+  nce_project_id              uuid         NOT NULL REFERENCES nce_projects(id) ON DELETE CASCADE,
   synthetic_step_id           uuid         REFERENCES synthetic_steps(id) ON DELETE SET NULL,
   campaign_name               text         NOT NULL,
   campaign_type               text         NOT NULL DEFAULT 'single_objective'
@@ -85,34 +85,37 @@ ALTER TABLE optimization_campaigns FORCE ROW LEVEL SECURITY;
 DROP POLICY IF EXISTS optimization_campaigns_user_access ON optimization_campaigns;
 CREATE POLICY optimization_campaigns_user_access ON optimization_campaigns
   FOR ALL
-  USING (
-    nce_project_id IS NULL OR EXISTS (
-      SELECT 1 FROM user_project_access upa
-       WHERE upa.nce_project_id = optimization_campaigns.nce_project_id
-         AND upa.user_entra_id = current_setting('app.current_user_entra_id', true)
-    )
-  )
-  WITH CHECK (
-    nce_project_id IS NULL OR EXISTS (
-      SELECT 1 FROM user_project_access upa
-       WHERE upa.nce_project_id = optimization_campaigns.nce_project_id
-         AND upa.user_entra_id = current_setting('app.current_user_entra_id', true)
-    )
-  );
+  USING (EXISTS (
+    SELECT 1 FROM user_project_access upa
+     WHERE upa.nce_project_id = optimization_campaigns.nce_project_id
+       AND upa.user_entra_id = current_setting('app.current_user_entra_id', true)
+  ))
+  WITH CHECK (EXISTS (
+    SELECT 1 FROM user_project_access upa
+     WHERE upa.nce_project_id = optimization_campaigns.nce_project_id
+       AND upa.user_entra_id = current_setting('app.current_user_entra_id', true)
+  ));
 
 ALTER TABLE optimization_rounds ENABLE ROW LEVEL SECURITY;
 ALTER TABLE optimization_rounds FORCE ROW LEVEL SECURITY;
 
+-- Direct project-membership join (defense-in-depth — does not rely on
+-- optimization_campaigns RLS being applied inside the EXISTS subquery,
+-- which BYPASSRLS service callers would skip).
 DROP POLICY IF EXISTS optimization_rounds_user_access ON optimization_rounds;
 CREATE POLICY optimization_rounds_user_access ON optimization_rounds
   FOR ALL
   USING (EXISTS (
     SELECT 1 FROM optimization_campaigns c
+      JOIN user_project_access upa ON upa.nce_project_id = c.nce_project_id
      WHERE c.id = optimization_rounds.campaign_id
+       AND upa.user_entra_id = current_setting('app.current_user_entra_id', true)
   ))
   WITH CHECK (EXISTS (
     SELECT 1 FROM optimization_campaigns c
+      JOIN user_project_access upa ON upa.nce_project_id = c.nce_project_id
      WHERE c.id = optimization_rounds.campaign_id
+       AND upa.user_entra_id = current_setting('app.current_user_entra_id', true)
   ));
 
 -- ────────────────────────────────────────────────────────────────────────────

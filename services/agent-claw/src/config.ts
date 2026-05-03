@@ -102,8 +102,10 @@ const ConfigSchema = z.object({
   MCP_SIRIUS_URL: z.string().url().default("http://localhost:8012"),
   // Phase 2 — CREST conformer / tautomer / protomer screen.
   MCP_CREST_URL: z.string().url().default("http://localhost:8014"),
-  // Phase 5 — focused chemical-space generation.
-  MCP_GENCHEM_URL: z.string().url().default("http://localhost:8015"),
+  // Phase 5 — focused chemical-space generation. Distinct from
+  // MCP_YIELD_BASELINE_URL (which also runs internally on :8015 inside its own
+  // container); for native localhost runs they cannot share the port.
+  MCP_GENCHEM_URL: z.string().url().default("http://localhost:8023"),
 
   // Source-system MCPs (Postgres-backed mock ELN, Phase F.2 reboot).
   MCP_ELN_LOCAL_URL: z.string().url().default("http://localhost:8013"),

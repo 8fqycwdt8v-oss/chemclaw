@@ -10,12 +10,18 @@ Synthetic fallback for dev environments without a populated reactions table.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
 import numpy as np
+
+from services.mcp_tools.common.logging import configure_logging
+
+configure_logging(level=os.environ.get("LOG_LEVEL", "INFO"))
+log = logging.getLogger(__name__)
 
 _TARGET = Path(__file__).resolve().parents[1] / "data" / "xgb_global_v1.json"
 _META = Path(__file__).resolve().parents[1] / "data" / "xgb_global_v1.meta.json"
@@ -39,7 +45,10 @@ def _write(model: object, n_train: int, dataset: str, holdout_rmse: float) -> No
             }
         )
     )
-    print(f"Wrote {_TARGET} (n_train={n_train}, holdout_rmse={holdout_rmse:.3f})")
+    log.info(
+        "wrote global xgb artifact",
+        extra={"target": str(_TARGET), "n_train": n_train, "holdout_rmse": holdout_rmse},
+    )
 
 
 def _write_synthetic() -> None:
@@ -58,7 +67,7 @@ def _write_synthetic() -> None:
 def main() -> None:
     dsn = os.environ.get("CHEMCLAW_SERVICE_DSN")
     if not dsn:
-        print("CHEMCLAW_SERVICE_DSN unset — emitting synthetic global model.")
+        log.info("CHEMCLAW_SERVICE_DSN unset; emitting synthetic global model")
         _write_synthetic()
         return
 
@@ -66,7 +75,7 @@ def main() -> None:
         import psycopg
         import xgboost as xgb  # noqa: F401, PLC0415
     except ImportError as exc:
-        print(f"Missing deps: {exc}", file=sys.stderr)
+        log.error("missing deps", extra={"err": type(exc).__name__})
         sys.exit(1)
 
     import httpx
@@ -76,26 +85,30 @@ def main() -> None:
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
             cur.execute("SET search_path TO public")
+            # ORDER BY r.id is required for determinism: without it, the
+            # implementation-defined row order changes as the table grows
+            # and the same `seed=42` reproduces a different artifact.
             cur.execute(
                 """
                 SELECT r.rxn_smiles, e.yield_pct::float
                   FROM reactions r
                   JOIN experiments e ON e.id = r.experiment_id
                  WHERE r.rxn_smiles IS NOT NULL AND e.yield_pct IS NOT NULL
+                 ORDER BY r.id
                  LIMIT 100000
                 """
             )
             rows = cur.fetchall()
 
     if len(rows) < 50:
-        print(f"Only {len(rows)} rows; emitting synthetic.")
+        log.warning("insufficient rows; emitting synthetic", extra={"n_rows": len(rows)})
         _write_synthetic()
         return
 
     smiles = [r[0] for r in rows]
     y = np.asarray([r[1] for r in rows], dtype=np.float64)
 
-    print(f"Encoding {len(smiles)} reactions via DRFP...")
+    log.info("encoding reactions via DRFP", extra={"n": len(smiles)})
     with httpx.Client(timeout=300.0) as cli:
         resp = cli.post(
             f"{drfp_url}/tools/compute_drfp",

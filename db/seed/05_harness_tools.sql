@@ -505,6 +505,32 @@ ON CONFLICT (service_name) DO UPDATE SET
   base_url = EXCLUDED.base_url,
   enabled  = EXCLUDED.enabled;
 
+-- ── Z3-Z5 reaction-condition optimization MCPs ──────────────────────────────
+
+INSERT INTO mcp_tools (service_name, base_url, enabled, health_status)
+VALUES ('mcp-yield-baseline', 'http://localhost:8015', true, 'unknown')
+ON CONFLICT (service_name) DO UPDATE SET
+  base_url = EXCLUDED.base_url,
+  enabled  = EXCLUDED.enabled;
+
+INSERT INTO mcp_tools (service_name, base_url, enabled, health_status)
+VALUES ('mcp-reaction-optimizer', 'http://localhost:8018', true, 'unknown')
+ON CONFLICT (service_name) DO UPDATE SET
+  base_url = EXCLUDED.base_url,
+  enabled  = EXCLUDED.enabled;
+
+INSERT INTO mcp_tools (service_name, base_url, enabled, health_status)
+VALUES ('mcp-plate-designer', 'http://localhost:8020', true, 'unknown')
+ON CONFLICT (service_name) DO UPDATE SET
+  base_url = EXCLUDED.base_url,
+  enabled  = EXCLUDED.enabled;
+
+INSERT INTO mcp_tools (service_name, base_url, enabled, health_status)
+VALUES ('mcp-ord-io', 'http://localhost:8021', true, 'unknown')
+ON CONFLICT (service_name) DO UPDATE SET
+  base_url = EXCLUDED.base_url,
+  enabled  = EXCLUDED.enabled;
+
 -- ── Phase F.1: Chemistry builtin tools ───────────────────────────────────────
 
 INSERT INTO tools (name, source, schema_json, description, enabled, version)
@@ -1127,7 +1153,7 @@ VALUES (
     "type": "object",
     "properties": {
       "campaign_name": {"type": "string", "minLength": 1, "maxLength": 200},
-      "nce_project_internal_id": {"type": "string", "maxLength": 200},
+      "nce_project_internal_id": {"type": "string", "minLength": 1, "maxLength": 200},
       "factors": {"type": "array", "items": {"type": "object"}, "maxItems": 20},
       "categorical_inputs": {"type": "array", "items": {"type": "object"}, "maxItems": 20},
       "outputs": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 10},
@@ -1135,7 +1161,7 @@ VALUES (
       "strategy": {"type": "string", "enum": ["SoboStrategy","MoboStrategy","RandomStrategy","QnehviStrategy"], "default": "SoboStrategy"},
       "acquisition": {"type": "string", "enum": ["qLogEI","qLogNEI","qNEHVI","qEHVI","random"], "default": "qLogEI"}
     },
-    "required": ["campaign_name", "outputs"]
+    "required": ["campaign_name", "nce_project_internal_id", "outputs"]
   }',
   'Create a closed-loop optimization campaign. Validates the factor space via BoFire, persists Domain JSON, returns the campaign_id for subsequent recommend_next_batch calls.',
   true,

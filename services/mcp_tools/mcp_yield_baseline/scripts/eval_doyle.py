@@ -20,27 +20,9 @@ from pathlib import Path
 import httpx
 import numpy as np
 
+from services.mcp_tools.mcp_yield_baseline.metrics import expected_calibration_error
+
 _BASE = os.environ.get("MCP_YIELD_BASELINE_URL", "http://localhost:8015").rstrip("/")
-
-
-def _ece(predictions: list[dict], n_bins: int = 10) -> float:
-    """Expected Calibration Error using equal-width yield bins on the abs error."""
-    errors = [abs(p["true"] - p["ensemble_mean"]) for p in predictions]
-    stds = [p["ensemble_std"] for p in predictions]
-    if not errors:
-        return float("nan")
-    bins = np.linspace(0, max(stds) + 1e-6, n_bins + 1)
-    n = len(errors)
-    ece = 0.0
-    for i in range(n_bins):
-        lo, hi = bins[i], bins[i + 1]
-        in_bin = [j for j, s in enumerate(stds) if lo <= s < hi]
-        if not in_bin:
-            continue
-        avg_err = float(np.mean([errors[j] for j in in_bin]))
-        avg_std = float(np.mean([stds[j] for j in in_bin]))
-        ece += (len(in_bin) / n) * abs(avg_err - avg_std)
-    return float(ece)
 
 
 def main() -> None:
@@ -94,7 +76,7 @@ def main() -> None:
     rmse_xgb = math.sqrt(
         np.mean([(p["true"] - p["xgboost_mean"]) ** 2 for p in predictions])
     )
-    ece = _ece(predictions)
+    ece = expected_calibration_error(predictions)
 
     report = {
         "n": len(predictions),
