@@ -79,6 +79,7 @@ jobs:
           python3 -m pip install -r services/projectors/kg_source_cache/requirements.txt
           python3 -m pip install -r services/optimizer/session_reanimator/requirements.txt
           python3 -m pip install -r services/optimizer/session_purger/requirements.txt
+          python3 -m pip install -r services/projectors/conditions_normalizer/requirements.txt
           python3 -m pip install pytest pytest-asyncio coverage \
             "mypy>=1.11" "ruff>=0.6,<0.7" "diff-cover>=9.0"
       - name: Ruff
