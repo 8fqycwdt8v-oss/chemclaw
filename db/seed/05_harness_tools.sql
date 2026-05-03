@@ -656,11 +656,6 @@ VALUES (
         "enum": ["GFN2-xTB", "GFN-FF"],
         "default": "GFN2-xTB",
         "description": "Semi-empirical method. GFN2-xTB for drug-like molecules; GFN-FF for macrocycles."
-      },
-      "optimize_first": {
-        "type": "boolean",
-        "default": true,
-        "description": "Run geometry optimization before conformer search."
       }
     },
     "required": ["smiles"]

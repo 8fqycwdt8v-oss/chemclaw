@@ -26,6 +26,9 @@ Endpoints (all return {job_id, cache_hit, status, summary, ...task-extras}):
     POST /charges             — Mulliken / CM5 partial charges
     POST /redox               — IPEA-xTB redox potential
 
+  Workflow (multi-step recipes):
+    POST /run_workflow        — run a named recipe (see ``recipes/``)
+
 Each endpoint accepts a base shape: { smiles, charge, multiplicity, method,
 solvent_model, solvent_name, force_recompute }. Pydantic validates SMILES
 length; RDKit validates SMILES content.
@@ -38,13 +41,15 @@ Security:
 - subprocess uses shell=False with explicit arg list.
 - SMILES validated via RDKit before invoking xtb.
 - Subprocess timeout hard-capped at 300 s for heavier endpoints; 120 s default.
+- Workflow endpoints add per-step + per-workflow caps (env-tunable, ceiling 1800 s).
 - Temporary directory cleaned up automatically.
 """
 
 from __future__ import annotations
 
+import functools
 import logging
-import math
+import os
 import tempfile
 import time
 from pathlib import Path
@@ -60,6 +65,7 @@ from services.mcp_tools.common.app import (
 from services.mcp_tools.common.limits import MAX_SMILES_LEN
 from services.mcp_tools.common.qm_cache_db import store as qm_store
 from services.mcp_tools.common.settings import ToolSettings
+from services.mcp_tools.mcp_xtb import _helpers, workflow
 
 # Helpers + Pydantic base shapes live in _shared.py — see that module's
 # docstring for the catalogue. Keeping them out of main.py drops the route
@@ -76,7 +82,6 @@ from services.mcp_tools.mcp_xtb._shared import (
     SolventModel,
     check_cache as _check_cache,
     method_flags as _method_flags,
-    parse_crest_ensemble as _parse_crest_ensemble,
     parse_energy as _parse_energy,
     parse_fukui as _parse_fukui,
     parse_gnorm as _parse_gnorm,
@@ -94,6 +99,41 @@ from services.mcp_tools.mcp_xtb._shared import (
 
 log = logging.getLogger("mcp-xtb")
 settings = ToolSettings()
+
+# Engine-routed paths read these from env vars; admin-friendly migration
+# to ``config_settings`` is a follow-up (mcp-xtb does not currently
+# carry a Postgres dependency). Single-shot endpoints continue to use
+# the _XTB_TIMEOUT in _shared.py.
+_DEFAULT_STEP_TIMEOUT_S = 120
+_DEFAULT_WORKFLOW_TIMEOUT_S = 600
+_HARD_WORKFLOW_TIMEOUT_CEILING_S = 1800
+
+
+# Env vars are read once per process; tests that want to flip them call
+# ``_step_timeout_s.cache_clear()`` / ``_workflow_timeout_default_s.cache_clear()``.
+@functools.lru_cache(maxsize=1)
+def _step_timeout_s() -> int:
+    raw = os.environ.get("MCP_XTB_STEP_TIMEOUT_SECONDS")
+    try:
+        return int(raw) if raw else _DEFAULT_STEP_TIMEOUT_S
+    except ValueError:
+        return _DEFAULT_STEP_TIMEOUT_S
+
+
+@functools.lru_cache(maxsize=1)
+def _workflow_timeout_default_s() -> int:
+    raw = os.environ.get("MCP_XTB_WORKFLOW_TIMEOUT_SECONDS")
+    try:
+        return int(raw) if raw else _DEFAULT_WORKFLOW_TIMEOUT_S
+    except ValueError:
+        return _DEFAULT_WORKFLOW_TIMEOUT_S
+
+
+def _workflow_timeout_s(requested: int | None) -> int:
+    if requested is not None:
+        return min(max(1, requested), _HARD_WORKFLOW_TIMEOUT_CEILING_S)
+    return min(max(1, _workflow_timeout_default_s()), _HARD_WORKFLOW_TIMEOUT_CEILING_S)
+
 
 app = create_app(
     name="mcp-xtb",
@@ -926,35 +966,72 @@ class ConformerEnsembleOut(BaseModel):
     conformers: list[ConformerEntry]
 
 
-@app.post("/conformer_ensemble", response_model=ConformerEnsembleOut, tags=["xtb-compat"])
-async def conformer_ensemble(req: Annotated[ConformerEnsembleIn, Body(...)]) -> ConformerEnsembleOut:
-    canonical, xyz, inchikey = _smiles_to_canonical_and_xyz(req.smiles)
-    with tempfile.TemporaryDirectory() as tmp:
-        tmp_path = Path(tmp)
-        (tmp_path / "mol.xyz").write_text(xyz)
-        result = _run_xtb(["crest", "mol.xyz", "--T", "4", "--niceprint"], tmp_path)
-        if result.returncode != 0:
-            raise ValueError(f"crest failed (exit {result.returncode}): {result.stderr[:500]}")
-        ensemble_path = tmp_path / "crest_conformers.xyz"
-        if not ensemble_path.exists():
-            raise ValueError("crest did not produce crest_conformers.xyz")
-        ensemble_text = ensemble_path.read_text()
+@app.post("/conformer_ensemble", response_model=ConformerEnsembleOut, tags=["xtb"])
+async def conformer_ensemble(
+    req: Annotated[ConformerEnsembleIn, Body(...)],
+) -> ConformerEnsembleOut:
+    """Boltzmann-weighted CREST ensemble, engine-routed: each conformer is
+    xtb-optimised before weighting, so ``energy_hartree`` is post-opt and
+    weights reflect those refined energies (not the CREST comment-line ones).
+    """
+    from services.mcp_tools.mcp_xtb.recipes import RECIPES
 
-    raw = _parse_crest_ensemble(ensemble_text)
-    raw = raw[: req.n_conformers]
-    energies = [e for _, e in raw]
-    e_min = min(energies) if energies else 0.0
-    exp_vals = [math.exp(-(e - e_min) * 627.509) for e in energies]
-    total = sum(exp_vals) or 1.0
-    weights = [v / total for v in exp_vals]
-    conformers = [
-        ConformerEntry(xyz=xyz_, energy_hartree=e, weight=w)
-        for (xyz_, e), w in zip(raw, weights)
-    ]
-    return ConformerEnsembleOut(conformers=conformers)
+    result = await workflow.run(
+        RECIPES["optimize_ensemble"],
+        {"smiles": req.smiles, "n_conformers": req.n_conformers},
+        total_timeout_s=_workflow_timeout_s(None),
+        step_timeout_s=_step_timeout_s(),
+    )
+    if not result.success:
+        failed = next((s for s in result.steps if not s.ok), None)
+        raise ValueError(
+            f"conformer_ensemble failed at step "
+            f"{failed.name if failed else '?'}: "
+            f"{failed.error if failed else 'unknown'}",
+        )
+    return ConformerEnsembleOut(
+        conformers=[ConformerEntry(**c) for c in result.outputs["conformers"]],
+    )
 
 
-# _parse_crest_ensemble lives in _shared.py.
+# ---------------------------------------------------------------------------
+# /run_workflow — generic multi-step xtb recipe runner
+# ---------------------------------------------------------------------------
+
+# Cap the number of top-level keys in a recipe inputs object. The
+# per-recipe Inputs schema also rejects unknown keys (Pydantic strict
+# mode), but this is a cheap front-line defence so a 100k-key payload
+# can't burn the schema-validator before bouncing.
+_MAX_INPUT_KEYS = 32
+
+
+class RunWorkflowIn(BaseModel):
+    recipe: str = Field(min_length=1, max_length=64)
+    inputs: dict[str, Any] = Field(default_factory=dict, max_length=_MAX_INPUT_KEYS)
+    total_timeout_seconds: int | None = Field(default=None, ge=1)
+
+
+@app.post("/run_workflow", response_model=workflow.WorkflowResult, tags=["xtb"])
+async def run_workflow(
+    req: Annotated[RunWorkflowIn, Body(...)],
+) -> workflow.WorkflowResult:
+    from services.mcp_tools.mcp_xtb.recipes import RECIPES
+
+    wf = RECIPES.get(req.recipe)
+    if wf is None:
+        raise ValueError(
+            f"unknown recipe {req.recipe!r}; available: "
+            f"{sorted(RECIPES.keys())}",
+        )
+    # Engine validates inputs against ``wf.inputs_schema`` itself; failures
+    # appear as a synthetic ``validate_inputs`` step with success=false in
+    # the WorkflowResult body, not a 400.
+    return await workflow.run(
+        wf,
+        req.inputs,
+        total_timeout_s=_workflow_timeout_s(req.total_timeout_seconds),
+        step_timeout_s=_step_timeout_s(),
+    )
 
 
 if __name__ == "__main__":
