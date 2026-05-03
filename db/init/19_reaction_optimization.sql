@@ -104,4 +104,21 @@ INSERT INTO model_cards (
 )
 ON CONFLICT (service_name, model_version) DO NOTHING;
 
+-- ── Z3 model_cards row ───────────────────────────────────────────────────
+
+INSERT INTO model_cards (
+  service_name, model_version, defined_endpoint, algorithm,
+  applicability_domain, predictivity_metrics,
+  mechanistic_interpretation, trained_on
+) VALUES (
+  'mcp_yield_baseline', 'yield_baseline_v1',
+  'Per-reaction ensemble yield prediction with calibrated UQ. Returns ensemble_mean + ensemble_std plus chemprop and XGBoost component scores.',
+  'Two-model ensemble: chemprop v2 MPNN with MVE head (aleatoric) + per-project XGBoost over DRFP fingerprints (epistemic via disagreement). Global pretrained XGBoost fallback when project has < 50 labels.',
+  'Reactions whose DRFP fingerprints fall within the per-project training corpus when used_global_fallback=false; broader USPTO + ORD coverage when used_global_fallback=true.',
+  '{"target_ece_global": 0.10, "evaluation_dataset": "Doyle Buchwald-Hartwig HTE (4608 reactions)"}'::jsonb,
+  'Aleatoric uncertainty from chemprop MVE head; epistemic from chemprop-XGBoost disagreement. Components surfaced separately so chemists can act on each (high aleatoric -> noise; high epistemic -> unfamiliar chemotype).',
+  'Per-project: experiments.yield_pct + reactions.rxn_smiles, RLS-scoped. Global fallback: USPTO + ORD subset, snapshot at image-build time.'
+)
+ON CONFLICT (service_name, model_version) DO NOTHING;
+
 COMMIT;

@@ -1008,6 +1008,31 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # mcp-yield-baseline — chemprop + per-project XGBoost ensemble (port 8015)
+  # -------------------------------------------------------------
+  mcp-yield-baseline:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_yield_baseline/Dockerfile
+    container_name: chemclaw-mcp-yield-baseline
+    restart: unless-stopped
+    profiles: ["chemistry"]
+    ports:
+      - "8015:8015"
+    environment:
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:?required}
+      MCP_DRFP_URL: http://mcp-drfp:8002
+      MCP_CHEMPROP_URL: http://mcp-chemprop:8009
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8015/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # mcp-xtb — GFN2-xTB + CREST conformer search (port 8010)
   # Requires xtb + crest binaries installed via conda-forge in the image.
   # Note: GEPA runner also uses 8010 on profile=optimizer — profiles don't overlap.
