@@ -1064,4 +1064,57 @@ ON CONFLICT (name) DO UPDATE SET
   source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
   description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
 
+-- ── HTE plate design + ORD I/O (Phase Z4) ─────────────────────────────────
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'design_plate',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "plate_format": {"type": "string", "enum": ["24","96","384","1536"]},
+      "reactants_smiles": {"type": "string", "maxLength": 20000},
+      "product_smiles": {"type": "string", "maxLength": 10000},
+      "factors": {"type": "array", "items": {"type": "object"}, "maxItems": 10},
+      "categorical_inputs": {"type": "array", "items": {"type": "object"}, "maxItems": 10},
+      "exclusions": {"type": "object"},
+      "n_wells": {"type": "integer", "minimum": 1, "maximum": 1536},
+      "seed": {"type": "integer", "default": 42},
+      "annotate_yield": {"type": "boolean", "default": false},
+      "project_internal_id": {"type": "string", "maxLength": 200},
+      "disable_chem21_floor": {"type": "boolean", "default": false}
+    },
+    "required": ["plate_format", "n_wells"]
+  }',
+  'Design an HTE plate (24/96/384/1536) via BoFire space-filling DoE. Excluded solvents are dropped from the categorical input; the CHEM21 safety floor auto-drops HighlyHazardous solvents. Optionally annotates each well with predict_yield_with_uq.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'export_to_ord',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "plate_name": {"type": "string", "minLength": 1, "maxLength": 200},
+      "reactants_smiles": {"type": "string", "maxLength": 20000},
+      "product_smiles": {"type": "string", "maxLength": 10000},
+      "wells": {"type": "array", "items": {"type": "object"}, "minItems": 1, "maxItems": 2000}
+    },
+    "required": ["wells"]
+  }',
+  'Export a plate (or any list of well dicts with factor values) into an Open Reaction Database (ORD) Dataset protobuf, base64-encoded. Portable format for downstream HTE robotics or LIMS systems.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
 COMMIT;

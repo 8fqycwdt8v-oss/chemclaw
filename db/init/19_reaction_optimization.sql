@@ -121,4 +121,21 @@ INSERT INTO model_cards (
 )
 ON CONFLICT (service_name, model_version) DO NOTHING;
 
+-- ── Z4 model_cards row ───────────────────────────────────────────────────
+
+INSERT INTO model_cards (
+  service_name, model_version, defined_endpoint, algorithm,
+  applicability_domain, predictivity_metrics,
+  mechanistic_interpretation, trained_on
+) VALUES (
+  'mcp_plate_designer', 'plate_designer_v1',
+  'n-well DoE plate over a BoFire Domain of continuous + categorical factors. Returns wells with factor values + canonical Domain JSON for Z5 warm-start.',
+  'BoFire space-filling sampling via domain.inputs.sample(n, seed). User exclusions and the built-in CHEM21 HighlyHazardous safety floor are applied as categorical-input restrictions before Domain construction.',
+  'Any factor space the user can express as a Domain (continuous bounds + categorical lists). Plate capacity capped at 1536. Hazardous solvents auto-excluded unless disable_chem21_floor=true (logged for audit).',
+  '{"sampling_strategy": "space_filling", "deterministic_seed": true}'::jsonb,
+  'No mechanistic causal model. DoE is information-theoretic (space-filling). The chemist supplies the design space; the sampler covers it uniformly.',
+  'BoFire 0.3.x DoE module. CHEM21 solvent classification from Prat et al., Green Chem. 2016 (built-in 24-solvent allowlist mirroring Z1).'
+)
+ON CONFLICT (service_name, model_version) DO NOTHING;
+
 COMMIT;

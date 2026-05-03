@@ -92,6 +92,9 @@ const ConfigSchema = z.object({
   MCP_AIZYNTH_URL: z.string().url().default("http://localhost:8008"),
   MCP_CHEMPROP_URL: z.string().url().default("http://localhost:8009"),
   MCP_YIELD_BASELINE_URL: z.string().url().default("http://localhost:8015"),
+  // Phase Z4 — HTE plate design + ORD I/O.
+  MCP_PLATE_DESIGNER_URL: z.string().url().default("http://localhost:8020"),
+  MCP_ORD_IO_URL: z.string().url().default("http://localhost:8021"),
   MCP_XTB_URL: z.string().url().default("http://localhost:8010"),
   MCP_SYNTHEGY_MECH_URL: z.string().url().default("http://localhost:8011"),
   MCP_SIRIUS_URL: z.string().url().default("http://localhost:8012"),
