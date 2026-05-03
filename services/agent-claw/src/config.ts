@@ -105,6 +105,10 @@ const ConfigSchema = z.object({
   // Phase 5 — focused chemical-space generation.
   MCP_GENCHEM_URL: z.string().url().default("http://localhost:8015"),
 
+  // Phase Z1 — applicability-domain + green-chemistry.
+  MCP_APPLICABILITY_DOMAIN_URL: z.string().url().default("http://localhost:8017"),
+  MCP_GREEN_CHEMISTRY_URL: z.string().url().default("http://localhost:8019"),
+
   // Source-system MCPs (Postgres-backed mock ELN, Phase F.2 reboot).
   MCP_ELN_LOCAL_URL: z.string().url().default("http://localhost:8013"),
   // LOGS-by-SciY analytical SDMS adapter. Backend selection lives

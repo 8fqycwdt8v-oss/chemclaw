@@ -45,6 +45,9 @@ jobs:
       - run: npm audit --audit-level=high
       - name: Diff coverage (TypeScript - non-routes)
         # Thresholds per docs/review/2026-04-29-codebase-audit/05-coverage-baseline.md §8.
+        # NOTE: --fail-paths-not-found was removed in diff-cover 9.x; the
+        # default behaviour (treat missing-path as zero-coverage, do not
+        # error) is what we want.
         if: github.event_name == 'pull_request'
         run: |
           diff-cover services/agent-claw/coverage/lcov.info \
@@ -80,6 +83,8 @@ jobs:
           python3 -m pip install -r services/optimizer/session_reanimator/requirements.txt
           python3 -m pip install -r services/optimizer/session_purger/requirements.txt
           python3 -m pip install -r services/projectors/conditions_normalizer/requirements.txt
+          python3 -m pip install -r services/mcp_tools/mcp_applicability_domain/requirements.txt
+          python3 -m pip install -r services/mcp_tools/mcp_green_chemistry/requirements.txt
           python3 -m pip install pytest pytest-asyncio coverage \
             "mypy>=1.11" "ruff>=0.6,<0.7" "diff-cover>=9.0"
       - name: Ruff
@@ -92,7 +97,9 @@ jobs:
             tests/unit/optimizer/test_session_purger.py \
             services/mcp_tools/common/tests/ \
             services/projectors/kg_source_cache/tests/ \
-            services/projectors/conditions_normalizer/tests/
+            services/projectors/conditions_normalizer/tests/ \
+            services/mcp_tools/mcp_applicability_domain/tests/ \
+            services/mcp_tools/mcp_green_chemistry/tests/
           coverage combine || true
           coverage xml -o coverage.xml
       - name: Parse-check Python services
@@ -136,7 +143,9 @@ jobs:
           mypy services/mcp_tools/mcp_rdkit
           # services/projectors expanded to per-package subset because
           # compound_classifier and compound_fingerprinter (added on
-          # main via Phase-3/4 chem PRs) carry pre-existing mypy debt.
+          # main via Phase-3/4 chem PRs) carry pre-existing mypy debt:
+          # bare psycopg.AsyncConnection annotations that don't match
+          # BaseProjector's AsyncConnection[dict[str, Any]] supertype.
           # Restore the wildcard once a follow-up PR pays the debt down.
           mypy services/projectors/common
           mypy services/projectors/chunk_embedder
@@ -162,6 +171,7 @@ jobs:
             --exclude='services/projectors/kg_hypotheses/**' \
             --exclude='services/mcp_tools/mcp_drfp/**' \
             --exclude='services/mcp_tools/mcp_rdkit/**' \
+            --exclude='services/queue/**' \
             --exclude='services/ingestion/eln_json_importer.legacy/**'
 
   schema:

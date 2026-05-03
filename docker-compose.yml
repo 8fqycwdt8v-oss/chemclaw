@@ -981,6 +981,52 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # mcp-green-chemistry — solvent guides + Bretherick (port 8019)
+  # -------------------------------------------------------------
+  mcp-green-chemistry:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_green_chemistry/Dockerfile
+    container_name: chemclaw-mcp-green-chemistry
+    restart: unless-stopped
+    profiles: ["chemistry"]
+    ports:
+      - "8019:8019"
+    environment:
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:?required}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8019/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # mcp-applicability-domain — 3-signal AD verdict (port 8017)
+  # -------------------------------------------------------------
+  mcp-applicability-domain:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_applicability_domain/Dockerfile
+    container_name: chemclaw-mcp-applicability-domain
+    restart: unless-stopped
+    profiles: ["chemistry"]
+    ports:
+      - "8017:8017"
+    environment:
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:?required}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8017/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # mcp-aizynth — AiZynthFinder retrosynthesis (port 8008)
   # Requires config YAML at /var/lib/mcp-aizynth/configs/config.yml.
   # -------------------------------------------------------------

@@ -134,8 +134,8 @@ class QueueWorker:
         self._task_kinds = [k.strip() for k in settings.queue_tasks.split(",") if k.strip()]
         self._sema = asyncio.Semaphore(settings.queue_concurrency)
         self._lease_id = f"{socket.gethostname()}/{os.getpid()}"
-        # Hold strong refs to in-flight handler tasks so the GC can't reap
-        # them before completion (RUF006).
+        # Hold strong refs to in-flight handler tasks so they don't get
+        # garbage-collected before completion (RUF006).
         self._inflight_tasks: set[asyncio.Task[None]] = set()
 
     async def run(self) -> None:
@@ -150,9 +150,12 @@ class QueueWorker:
         async with await psycopg.AsyncConnection.connect(
             self.settings.dsn, autocommit=True, row_factory=dict_row,
         ) as listen_conn:
-            for _kind in self._task_kinds:
-                async with listen_conn.cursor() as cur:
-                    await cur.execute("LISTEN task_queue_pending")
+            # The LISTEN channel is a single Postgres-side channel; we
+            # set it up once regardless of how many task_kinds we consume.
+            # The `for` loop is a vestige from when each kind had its own
+            # channel; collapsed to one execute.
+            async with listen_conn.cursor() as cur:
+                await cur.execute("LISTEN task_queue_pending")
             log.info("[queue] LISTEN task_queue_pending established")
 
             async with await psycopg.AsyncConnection.connect(
@@ -201,6 +204,10 @@ class QueueWorker:
     async def _dispatch_kind(self, work_conn: psycopg.AsyncConnection, kind: str) -> None:
         leased = await self._lease_one(work_conn, kind)
         while leased is not None and not self._shutdown.is_set():
+            # Hold a reference to the spawned task so the GC can't drop
+            # it mid-flight — Python's asyncio docs warn that orphaned
+            # create_task() return values may be garbage-collected before
+            # they finish (PEP-3148, RUF006).
             task = asyncio.create_task(self._handle_with_sema(leased))
             self._inflight_tasks.add(task)
             task.add_done_callback(self._inflight_tasks.discard)

@@ -73,6 +73,8 @@ import { buildQueryKgTool } from "../tools/builtins/query_kg.js";
 import { buildProposeRetrosynthesisTool } from "../tools/builtins/propose_retrosynthesis.js";
 import { buildElucidateMechanismTool } from "../tools/builtins/elucidate_mechanism.js";
 import { buildRecommendConditionsTool } from "../tools/builtins/recommend_conditions.js";
+import { buildAssessApplicabilityDomainTool } from "../tools/builtins/assess_applicability_domain.js";
+import { buildScoreGreenChemistryTool } from "../tools/builtins/score_green_chemistry.js";
 // Pool-backed tools.
 import { buildAnalyzeCsvTool } from "../tools/builtins/analyze_csv.js";
 import { buildExpandReactionContextTool } from "../tools/builtins/expand_reaction_context.js";
@@ -246,6 +248,17 @@ function registerBuiltinTools(
   );
   registry.registerBuiltin("recommend_conditions", () =>
     asTool(buildRecommendConditionsTool(cfg.MCP_ASKCOS_URL)),
+  );
+  registry.registerBuiltin("score_green_chemistry", () =>
+    asTool(buildScoreGreenChemistryTool(cfg.MCP_GREEN_CHEMISTRY_URL)),
+  );
+  registry.registerBuiltin("assess_applicability_domain", () =>
+    asTool(buildAssessApplicabilityDomainTool(
+      pool,
+      cfg.MCP_DRFP_URL,
+      cfg.MCP_CHEMPROP_URL,
+      cfg.MCP_APPLICABILITY_DOMAIN_URL,
+    )),
   );
 
   // Pool-backed (read-only or scoped via withUserContext at call time inside the factory).
