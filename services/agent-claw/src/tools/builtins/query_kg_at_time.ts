@@ -62,11 +62,12 @@ export const QueryKgAtTimeIn = z.object({
   predicate: Predicate.optional(),
   direction: z.enum(["in", "out", "both"]).default("both"),
   /**
-   * Whether to include facts that were invalidated AS OF the at_time
-   * timestamp. Default false: invalidated facts are excluded even if the
-   * invalidation happened after at_time. This is the more useful default
-   * for "what did we believe on date X" — we want the snapshot the agent
-   * would have seen.
+   * Whether to include facts that were invalidated by at_time. Default
+   * false: a fact is excluded only if its `invalidated_at` is non-null
+   * AND <= at_time. Facts valid on at_time that were *later* invalidated
+   * stay in the result set — that's the snapshot the agent on at_time
+   * would have seen. Set true to include all matching facts regardless
+   * of invalidation state (useful for audit / contradiction trails).
    */
   include_invalidated: z.boolean().default(false),
   group_id: GroupId.optional(),
