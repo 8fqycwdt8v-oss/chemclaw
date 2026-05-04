@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 import pytest
 
 from services.mcp_tools.mcp_kg.cypher import (
+    _safe_group_id,
     _safe_id_property,
     _safe_label,
     _safe_predicate,
@@ -61,6 +62,14 @@ class TestSafeGuards:
     def test_unsafe_id_property_raises(self) -> None:
         with pytest.raises(ValueError):
             _safe_id_property("id; DROP TABLE")
+
+    @pytest.mark.parametrize("bad", ["", "ab/cd", "ab cd", "ab;DROP", "x" * 81])
+    def test_unsafe_group_id_raises(self, bad: str) -> None:
+        # Defense-in-depth: the Pydantic layer would reject these too, but
+        # a future refactor that constructs requests via internal Python
+        # paths must still trip the cypher-level check.
+        with pytest.raises(ValueError):
+            _safe_group_id(bad)
 
 
 class TestWriteFactCypher:

@@ -13,7 +13,10 @@ import type { Pool, PoolClient } from "pg";
 import { buildComputeConfidenceEnsembleTool } from "../../../src/tools/builtins/compute_confidence_ensemble.js";
 import { makeCtx } from "../../helpers/make-ctx.js";
 
-type CapturedQuery = { text: string; values: readonly unknown[] };
+interface CapturedQuery {
+  text: string;
+  values: readonly unknown[];
+}
 
 function makeCapturingPool(rows: unknown[]): {
   pool: Pool;
@@ -24,7 +27,6 @@ function makeCapturingPool(rows: unknown[]): {
   // configured row set on the first call (the artifacts SELECT) and an empty
   // result on every subsequent call (the SET LOCAL inside withUserContext
   // and the final UPDATE artifacts statement).
-  let callCount = 0;
   const client: Partial<PoolClient> = {
     query: vi.fn(async (textOrConfig: unknown, values?: readonly unknown[]) => {
       const text =
@@ -32,14 +34,14 @@ function makeCapturingPool(rows: unknown[]): {
           ? textOrConfig
           : (textOrConfig as { text: string }).text;
       captured.push({ text, values: values ?? [] });
-      callCount += 1;
       // The first SELECT returns rows; everything else returns empty.
       // The SET LOCAL calls inside withUserContext don't read rows, so
       // returning an empty result is harmless for them.
       const isArtifactsSelect =
         text.includes("FROM artifacts") && text.includes("SELECT");
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      return { rows: isArtifactsSelect ? rows : [] } as any;
+      return { rows: isArtifactsSelect ? rows : [] } as unknown as Awaited<
+        ReturnType<NonNullable<PoolClient["query"]>>
+      >;
     }) as unknown as PoolClient["query"],
     release: vi.fn(),
   };

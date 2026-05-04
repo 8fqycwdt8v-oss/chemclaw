@@ -107,7 +107,7 @@ export function buildUpdateHypothesisStatusTool(pool: Pool) {
       const refutedAt: string | null =
         result.refuted_at instanceof Date
           ? result.refuted_at.toISOString()
-          : (result.refuted_at as string | null);
+          : result.refuted_at;
 
       return UpdateHypothesisStatusOut.parse({
         hypothesis_id: result.id,

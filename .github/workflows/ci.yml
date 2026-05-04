@@ -95,6 +95,8 @@ jobs:
           coverage run --rcfile=pyproject.toml -m pytest -q \
             tests/unit/test_redactor.py \
             tests/unit/optimizer/test_session_purger.py \
+            tests/unit/mcp_kg/ \
+            tests/unit/projectors/ \
             services/mcp_tools/common/tests/ \
             services/projectors/kg_source_cache/tests/ \
             services/projectors/conditions_normalizer/tests/ \

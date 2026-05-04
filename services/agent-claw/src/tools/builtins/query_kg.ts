@@ -39,7 +39,7 @@ const GroupId = z
   .string()
   .min(1)
   .max(80)
-  .regex(/^[A-Za-z0-9_\-]+$/);
+  .regex(/^[A-Za-z0-9_-]+$/);
 
 export const QueryKgIn = z.object({
   entity: EntityRef,
