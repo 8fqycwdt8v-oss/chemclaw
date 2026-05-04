@@ -231,6 +231,42 @@ class QueryAtTimeResponse(BaseModel):
     facts: list[QueriedFact]
 
 
+# ---------------------------------------------------------------------------
+# Tranche 3 / H4 — provenance lookup
+# ---------------------------------------------------------------------------
+class GetFactProvenanceRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    fact_id: UUID
+    group_id: GroupIdStr = SYSTEM_GROUP_ID
+
+
+class GetFactProvenanceResponse(BaseModel):
+    """The full provenance + bi-temporal envelope for a fact_id.
+
+    Tranche 3 / H4: today this is the structured `Provenance` blob the
+    write_fact path attached to the edge, plus the bi-temporal columns and
+    confidence tier. Once Tranche 5 lands the kg_documents projector and
+    wires up :Chunk / :Extractor / :Document nodes with explicit
+    DERIVED_FROM / EXTRACTED_BY / FROM_DOCUMENT relationships, this
+    response gains a `chain[]` field that walks the graph; the per-edge
+    provenance fields below stay as the foundation.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+    fact_id: UUID
+    subject: EntityRef
+    predicate: PredicateStr
+    object: EntityRef
+    provenance: Provenance
+    confidence_tier: ConfidenceTier
+    confidence_score: float
+    t_valid_from: AwareDatetime
+    t_valid_to: AwareDatetime | None
+    recorded_at: AwareDatetime
+    invalidated_at: AwareDatetime | None
+    invalidation_reason: str | None
+
+
 def utcnow() -> datetime:
     """UTC-aware current time. Centralised so we can monkey-patch in tests."""
     return datetime.now(tz=timezone.utc)

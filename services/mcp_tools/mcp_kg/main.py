@@ -17,6 +17,8 @@ from fastapi import Body, FastAPI
 from services.mcp_tools.common.app import create_app
 from services.mcp_tools.mcp_kg.driver import KGDriver
 from services.mcp_tools.mcp_kg.models import (
+    GetFactProvenanceRequest,
+    GetFactProvenanceResponse,
     InvalidateFactRequest,
     InvalidateFactResponse,
     QueryAtTimeRequest,
@@ -118,6 +120,28 @@ async def query_at_time(
     req: Annotated[QueryAtTimeRequest, Body(...)],
 ) -> QueryAtTimeResponse:
     return await _driver().query_at_time(req)
+
+
+@app.post(
+    "/tools/get_fact_provenance",
+    response_model=GetFactProvenanceResponse,
+    tags=["kg"],
+)
+async def get_fact_provenance(
+    req: Annotated[GetFactProvenanceRequest, Body(...)],
+) -> GetFactProvenanceResponse:
+    """Tranche 3 / H4 — answer 'why am I seeing this fact?' for a fact_id.
+
+    Returns the bi-temporal envelope plus the structured Provenance object
+    that was attached to the edge at write time. Cross-tenant lookups
+    return 404 (same shape as a missing fact_id).
+    """
+    from fastapi import HTTPException
+
+    try:
+        return await _driver().get_fact_provenance(req)
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 if __name__ == "__main__":
