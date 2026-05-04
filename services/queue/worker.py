@@ -222,6 +222,8 @@ class QueueWorker:
                     FROM task_queue
                    WHERE status = 'pending'
                      AND task_kind LIKE %s
+                     -- Skip rows still under retry backoff (32_rls_completeness.sql).
+                     AND (retry_after IS NULL OR retry_after <= NOW())
                    ORDER BY priority DESC, created_at
                    FOR UPDATE SKIP LOCKED
                    LIMIT 1
@@ -297,6 +299,10 @@ class QueueWorker:
         if row["attempts"] >= row["max_attempts"]:
             await self._fail(row, msg)
             return
+        # Exponential backoff: 30s, 60s, 120s, 240s … capped at 1 hour.
+        # `attempts` was already incremented by _lease_one; using it as the
+        # exponent keeps each retry strictly after the prior one.
+        backoff_seconds = min(30 * (2 ** (row["attempts"] - 1)), 3600)
         async with await psycopg.AsyncConnection.connect(self.settings.dsn) as conn, conn.cursor() as cur:
             await cur.execute(
                 """
@@ -304,10 +310,15 @@ class QueueWorker:
                    SET status = 'pending',
                        leased_by = NULL,
                        lease_expires_at = NULL,
+                       retry_after = NOW() + (%s || ' seconds')::interval,
                        error = %s::jsonb
                  WHERE id = %s::uuid
                 """,
-                (json.dumps({"transient": msg, "attempt": row["attempts"]}), row["id"]),
+                (
+                    backoff_seconds,
+                    json.dumps({"transient": msg, "attempt": row["attempts"], "next_retry_in_seconds": backoff_seconds}),
+                    row["id"],
+                ),
             )
             await conn.commit()
 

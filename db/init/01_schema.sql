@@ -129,13 +129,24 @@ CREATE TABLE IF NOT EXISTS reactions (
 );
 CREATE INDEX IF NOT EXISTS idx_reactions_experiment ON reactions (experiment_id);
 CREATE INDEX IF NOT EXISTS idx_reactions_class ON reactions (rxno_class);
--- DRFP cosine index. pgvector's HNSW caps at 2000 dimensions (we have 2048),
--- so we use ivfflat which has no dimension limit. Slight throughput cost vs
--- HNSW but unblocks fresh-DB applies. If a future pgvector release lifts the
--- HNSW cap (or we move to halfvec/bit indexing), this can be swapped back.
-CREATE INDEX IF NOT EXISTS idx_reactions_drfp_ivfflat
-  ON reactions USING ivfflat (drfp_vector vector_cosine_ops)
-  WITH (lists = 100);
+-- DRFP cosine index intentionally NOT created at the canonical-table layer.
+--
+-- Earlier this file claimed "ivfflat has no dimension limit" — that's
+-- wrong. pgvector 0.8 caps BOTH ivfflat AND hnsw at 2000 dims, and our
+-- DRFP vectors are 2048-bit. The result was a fail-on-bootstrap that
+-- blocked `make db.init` on every fresh Postgres (surfaced by the
+-- 2026-05-03 deep-review smoke test).
+--
+-- Functional impact of dropping the index: nil. The agent never queries
+-- `reactions.drfp_vector` directly with cosine search — that path goes
+-- through the `reaction_vectorizer` projector, which writes a halfvec
+-- collection that has its own index. The column on `reactions` exists
+-- so the projector has a deterministic source to read; sequential scans
+-- here are fine because the table is project-scoped via RLS.
+--
+-- If a future pgvector release lifts the dim cap (or we re-encode DRFP
+-- as halfvec(2048) which has a 4000-dim cap, or as a bit(2048) and use
+-- a hamming/jaccard index), the index can come back here.
 
 -- --------------------------------------------------------------------
 -- Documents + chunks (Phase 1 — SMB scraping + Marker parse)

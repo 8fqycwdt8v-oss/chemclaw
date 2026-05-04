@@ -34,7 +34,10 @@ BEGIN
       JOIN pg_class tc  ON tc.oid = ix.indrelid
      WHERE tc.relname = 'agent_todos'
        AND ix.indisunique
-       AND ix.indkey::int[] = ARRAY(
+       -- Cast both sides explicitly: pg_index.indkey is int2vector (PG16
+       -- doesn't allow the implicit cast to int[]), and pg_attribute.attnum
+       -- is smallint, so we normalise to smallint[] on both sides.
+       AND string_to_array(ix.indkey::text, ' ')::smallint[] = ARRAY(
              SELECT a.attnum
                FROM pg_attribute a
               WHERE a.attrelid = tc.oid
