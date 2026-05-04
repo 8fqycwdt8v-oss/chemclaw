@@ -53,7 +53,7 @@ export function buildUpdateHypothesisStatusTool(pool: Pool) {
     description:
       "Transition a hypothesis to a new status (proposed | confirmed | " +
       "refuted | archived). On 'refuted', stamps refuted_at = NOW(). " +
-      "Emits hypothesis_status_changed via DB trigger so the kg-hypotheses " +
+      "Emits hypothesis_status_changed via DB trigger so the kg_hypotheses " +
       "projector picks it up. Caller must own the hypothesis.",
     inputSchema: UpdateHypothesisStatusIn,
     outputSchema: UpdateHypothesisStatusOut,

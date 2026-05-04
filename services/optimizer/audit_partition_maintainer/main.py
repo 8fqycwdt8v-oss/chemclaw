@@ -20,7 +20,6 @@ from __future__ import annotations
 import asyncio
 import logging
 import signal
-from datetime import datetime, timedelta, timezone
 
 import psycopg
 from pydantic_settings import BaseSettings, SettingsConfigDict
