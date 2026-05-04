@@ -111,7 +111,15 @@ def _encode_drfp_batch(rxn_smiles_list: list[str]) -> list[list[float]]:
     """Call mcp-drfp /tools/compute_drfp for a batch.
 
     Stubbed in tests via mock.patch on this exact symbol.
+
+    The Bearer token is minted via the shared McpTokenCache so production
+    deploys with MCP_AUTH_REQUIRED=true accept the request. In dev mode
+    (no MCP_AUTH_SIGNING_KEY) the helper returns an empty header dict and
+    the receiving service accepts the unsigned request when its own
+    MCP_AUTH_DEV_MODE is true. See services/mcp_tools/common/mcp_token_cache.py.
     """
+    from services.mcp_tools.common.mcp_token_cache import auth_headers
+
     with httpx.Client(timeout=30.0) as client:
         resp = client.post(
             f"{_drfp_url()}/tools/compute_drfp",
@@ -120,6 +128,7 @@ def _encode_drfp_batch(rxn_smiles_list: list[str]) -> list[list[float]]:
                 "n_folded_length": 2048,
                 "radius": 3,
             },
+            headers=auth_headers("mcp-drfp"),
         )
         resp.raise_for_status()
         body = resp.json()
@@ -127,11 +136,17 @@ def _encode_drfp_batch(rxn_smiles_list: list[str]) -> list[list[float]]:
 
 
 def _call_chemprop_batch(rxn_smiles_list: list[str]) -> list[tuple[float, float]]:
-    """Call mcp-chemprop /predict_yield. Stubbed in tests."""
+    """Call mcp-chemprop /predict_yield. Stubbed in tests.
+
+    See _encode_drfp_batch for the McpTokenCache rationale.
+    """
+    from services.mcp_tools.common.mcp_token_cache import auth_headers
+
     with httpx.Client(timeout=60.0) as client:
         resp = client.post(
             f"{_chemprop_url()}/predict_yield",
             json={"rxn_smiles_list": rxn_smiles_list},
+            headers=auth_headers("mcp-chemprop"),
         )
         resp.raise_for_status()
         body = resp.json()

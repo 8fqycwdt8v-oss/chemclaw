@@ -174,6 +174,7 @@ async function handleDeepResearch(
         lifecycle,
         ctx,
         signal: req.signal,
+        permissions: { permissionMode: "enforce" },
       });
       return void reply.send({
         text: result.text,
@@ -226,6 +227,7 @@ async function handleDeepResearch(
       ctx,
       streamSink: sink,
       signal: req.signal,
+      permissions: { permissionMode: "enforce" },
     });
   } catch (err) {
     if (err instanceof AwaitingUserInputError) {

@@ -222,7 +222,8 @@ def run_validation(sandbox: SandboxClient | None = None) -> list[ValidationResul
 
 
 def main() -> None:
-    logging.basicConfig(level=logging.INFO)
+    from services.mcp_tools.common.logging import configure_logging
+    configure_logging("INFO", service="forged_tool_validator")
     logger.info("forge-validator: starting nightly scheduler (02:00 UTC)")
 
     scheduler = BlockingScheduler(timezone="UTC")

@@ -109,6 +109,10 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
             lifecycle,
             ctx,
             signal: req.signal,
+            // Engage the permission resolver in enforce mode so DB-backed
+            // permission_policies fire on the plan/approve path as they do
+            // on /api/chat. Permissive default (allow when no policy matches).
+            permissions: { permissionMode: "enforce" },
           }),
       );
 

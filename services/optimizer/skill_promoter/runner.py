@@ -100,5 +100,6 @@ def healthz() -> dict[str, Any]:
 if __name__ == "__main__":
     import uvicorn
 
-    logging.basicConfig(level=logging.INFO)
+    from services.mcp_tools.common.logging import configure_logging
+    configure_logging("INFO", service="skill_promoter")
     uvicorn.run(app, host="0.0.0.0", port=int(os.environ.get("SKILL_PROMOTER_PORT", "8011")))

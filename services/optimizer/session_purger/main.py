@@ -111,7 +111,8 @@ async def purge_once(settings: Settings) -> list[str]:
 
 async def amain() -> None:
     settings = Settings()
-    logging.basicConfig(level=settings.log_level)
+    from services.mcp_tools.common.logging import configure_logging
+    configure_logging(settings.log_level, service="session_purger")
     log.info(
         "session-purger starting; poll=%ds batch=%d min_age=%dh",
         settings.poll_interval_seconds,

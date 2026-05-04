@@ -44,6 +44,8 @@ export const SERVICE_SCOPES: Record<string, string> = {
   "mcp-logs-sciy": "mcp_instrument:read",
   "mcp-synthegy-mech": "mcp_synthegy_mech:invoke",
   "mcp-reaction-optimizer": "mcp_reaction_optimizer:invoke",
+  "mcp-applicability-domain": "mcp_applicability_domain:invoke",
+  "mcp-green-chemistry": "mcp_green_chemistry:invoke",
 };
 
 const DEFAULT_TTL_SECONDS = 300; // 5 min — matches the verifier's expiry check
