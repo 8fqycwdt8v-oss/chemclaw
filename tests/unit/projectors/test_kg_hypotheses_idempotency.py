@@ -23,6 +23,21 @@ import pytest
 from services.projectors.kg_hypotheses.main import KgHypothesesProjector
 
 
+class _FakeResult:
+    """Async-iterable Neo4j result stand-in for the cascade Cypher in
+    Tranche 2 / C5. The original idempotency check doesn't care about
+    the cascade rows — it only asserts the valid_to guard — so we hand
+    back an empty result here to keep the existing assertions intact
+    while letting the new `async for rec in cascade_res` line in the
+    projector run without crashing."""
+
+    def __aiter__(self) -> "_FakeResult":
+        return self
+
+    async def __anext__(self) -> dict[str, Any]:
+        raise StopAsyncIteration
+
+
 class _FakeSession:
     """Captures cypher run() calls for assertion."""
 
@@ -35,8 +50,9 @@ class _FakeSession:
     async def __aexit__(self, *_args: Any) -> None:
         return None
 
-    async def run(self, query: str, **params: Any) -> None:
+    async def run(self, query: str, **params: Any) -> _FakeResult:
         self.runs.append((query, params))
+        return _FakeResult()
 
 
 class _FakeDriver:
@@ -79,9 +95,19 @@ async def test_refuted_status_uses_idempotent_valid_to_guard() -> None:
         await proj._handle_status_changed({"hypothesis_id": hid}, hid)
 
     runs = proj._driver.session_obj.runs  # type: ignore[attr-defined]
-    assert len(runs) == 2, "expected one cypher per replay"
+    # The Tranche 2 / C5 cascade adds a second Cypher per replay (the :CITES
+    # walk + RETURN), so we now expect 4 runs total — 2 valid_to updates +
+    # 2 cascade queries. The original assertion is preserved as "the
+    # valid_to guard appears in the dedicated update query, regardless of
+    # additional Cypher firing alongside it."
+    valid_to_runs = [
+        (q, p) for (q, p) in runs if "h.valid_to" in q and "h.refuted = true" in q
+    ]
+    assert len(valid_to_runs) == 2, (
+        f"expected one valid_to-update per replay, got {len(valid_to_runs)}"
+    )
 
-    for query, _params in runs:
+    for query, _params in valid_to_runs:
         assert "CASE WHEN h.valid_to IS NULL" in query, (
             "valid_to must be guarded so replays don't advance the timestamp"
         )
@@ -89,4 +115,4 @@ async def test_refuted_status_uses_idempotent_valid_to_guard() -> None:
 
     # The same cypher both times — Neo4j collapses the second run to a no-op
     # because h.valid_to is now non-null.
-    assert runs[0][0] == runs[1][0]
+    assert valid_to_runs[0][0] == valid_to_runs[1][0]

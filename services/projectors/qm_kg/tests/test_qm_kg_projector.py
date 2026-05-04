@@ -84,17 +84,28 @@ def test_merge_writes_compound_calculation_and_conformers(projector: QmKgProject
     # Three Cypher chunks expected: close-prior + merge-calc + N×conformer.
     assert len(calls) == 1 + 1 + len(conformers), [c[0][:40] for c in calls]
     close_prior = calls[0][0]
-    assert "valid_to = datetime()" in close_prior
+    # Tranche 2 / C7: idempotent close — uses CASE WHEN so a replay does
+    # not advance valid_to. The plain `valid_to = datetime()` assertion
+    # this test held before the C7 fix is replaced by the guarded form.
+    assert "CASE" in close_prior and "edge.valid_to IS NULL" in close_prior
+    assert "ELSE edge.valid_to" in close_prior
     merge_calc = calls[1][0]
     assert "MERGE (c:Compound" in merge_calc
     assert "MERGE (cr:CalculationResult" in merge_calc
     assert "HAS_CALCULATION" in merge_calc
-    # All N conformer MERGEs reference the right job id.
+    # Tenant scope mirroring (Tranche 2 / C7): every edge written by qm_kg
+    # carries `group_id`. QM is cross-tenant by design (compound-level cache),
+    # so the value is the system sentinel.
+    assert "edge.group_id" in merge_calc
+    assert calls[1][1]["group_id"] == "__system__"
+    # All N conformer MERGEs reference the right job id and tenant.
     for i, c in enumerate(conformers):
         cypher, params = calls[2 + i]
         assert "Conformer" in cypher
+        assert "edge.group_id" in cypher
         assert params["job_id"] == row["id"]
         assert params["idx"] == c["ensemble_index"]
+        assert params["group_id"] == "__system__"
 
 
 def test_merge_handles_missing_inchikey(projector: QmKgProjector) -> None:
