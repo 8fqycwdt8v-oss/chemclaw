@@ -167,11 +167,85 @@ class KgHypothesesProjector(BaseProjector):
                     "h.refuted = true",
                     fid=node_fact_id,
                 )
+                # Tranche 2 / C5 — refutation cascade.
+                # When a hypothesis is refuted, every :CITES edge it owns is
+                # itself a load-bearing claim that no longer holds. We close
+                # the edges (additive bi-temporal: SET invalidated_at) so
+                # downstream readers can filter them out, and emit one
+                # fact_invalidated event per closed edge so future
+                # consumers (Tranche 5 cache evictor, audit trail) can
+                # react. The :Fact nodes themselves stay live because they
+                # may be cited by other (non-refuted) hypotheses.
+                #
+                # Idempotent: the CASE WHEN guard means a replay does not
+                # overwrite the original invalidated_at timestamp; the
+                # Postgres event-emission below is gated on rowcount > 0
+                # via the RETURN, so a no-op cascade emits no events.
+                cascade_res = await session.run(
+                    """
+                    MATCH (h:Hypothesis {fact_id: $fid})-[r:CITES]->(f:Fact)
+                    WHERE r.invalidated_at IS NULL
+                    SET r.invalidated_at      = datetime(),
+                        r.invalidation_reason = 'hypothesis_refuted'
+                    RETURN r.fact_id AS edge_fact_id,
+                           f.fact_id AS cited_fact_id
+                    """,
+                    fid=node_fact_id,
+                )
+                cascade_rows = [dict(rec) async for rec in cascade_res]
+                if cascade_rows:
+                    await self._emit_fact_invalidated_events(
+                        hypothesis_id=hid, rows=cascade_rows,
+                    )
             elif status == "archived":
                 await session.run(
                     "MATCH (h:Hypothesis {fact_id: $fid}) SET h.archived = true",
                     fid=node_fact_id,
                 )
+
+    async def _emit_fact_invalidated_events(
+        self, *, hypothesis_id: str, rows: list[dict[str, Any]],
+    ) -> None:
+        """Insert one fact_invalidated event per cascaded :CITES edge.
+
+        Idempotency: the upstream cascade Cypher only returns rows for edges
+        that were *just* invalidated (the WHERE r.invalidated_at IS NULL
+        clause filters out edges already closed on a previous replay), so
+        re-processing the same hypothesis_status_changed event emits zero
+        new rows.
+
+        Provenance: source_row_id points at the cascading hypothesis (UUID)
+        and the payload carries both the cited fact_id (the :Fact node's
+        fact_id, which the source-cache projector indexed) and the edge
+        fact_id (the :CITES edge that was closed). Future consumers can pick
+        whichever they need.
+        """
+        async with await psycopg.AsyncConnection.connect(
+            self.settings.postgres_dsn
+        ) as conn, conn.cursor() as cur:
+            await cur.execute("SET LOCAL ROLE chemclaw_service")
+            for r in rows:
+                payload_obj = {
+                    "fact_id":             r.get("cited_fact_id"),
+                    "edge_fact_id":        r.get("edge_fact_id"),
+                    "invalidated_by":      "hypothesis_refuted",
+                    "invalidated_by_hypothesis_id": hypothesis_id,
+                }
+                await cur.execute(
+                    """
+                    INSERT INTO ingestion_events
+                        (event_type, source_table, source_row_id, payload)
+                    VALUES
+                        ('fact_invalidated', 'hypotheses', %s::uuid, %s::jsonb)
+                    """,
+                    (hypothesis_id, json.dumps(payload_obj)),
+                )
+            await conn.commit()
+        log.info(
+            "cascaded refutation: hypothesis=%s edges_invalidated=%d",
+            hypothesis_id,
+            len(rows),
+        )
 
 
 def main() -> None:
