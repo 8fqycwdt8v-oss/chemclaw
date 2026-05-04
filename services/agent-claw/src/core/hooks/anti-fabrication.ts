@@ -11,7 +11,13 @@
 //      check_contradictions output), every element is added.
 //   3. If the output has a `contradictions` array, each item's `fact_ids`
 //      array is added.
-//   4. No-op for tools that don't produce any of these shapes (canonicalize_smiles,
+//   4. If the output has a top-level `fact_id` field (query_provenance, T3/H4),
+//      that single fact_id is added — so the agent can investigate
+//      provenance and then cite the fact.
+//   5. If the output has an `items` array of discriminated-union members
+//      with `kind: 'fact'` and a nested `fact.fact_id` (retrieve_related,
+//      T3/H1), each fact_id is added.
+//   6. No-op for tools that don't produce any of these shapes (canonicalize_smiles,
 //      draft_section, etc.).
 //
 // The hook never throws — a harvesting failure must not abort the tool result.
@@ -65,6 +71,32 @@ export function extractFactIds(output: unknown): string[] {
     for (const c of output.contradictions) {
       if (_isRecord(c) && _isStringArray(c.fact_ids)) {
         ids.push(...c.fact_ids);
+      }
+    }
+  }
+
+  // query_provenance shape (Tranche 3 / H4): top-level { fact_id: "uuid", ... }
+  // The agent invokes this tool to investigate a fact's provenance; if the
+  // fact_id weren't harvested here, a follow-up propose_hypothesis citing
+  // that fact would trip the anti-fabrication HARD GUARD even though the
+  // agent demonstrably saw the fact this turn.
+  if (_isString(output.fact_id)) {
+    const m = output.fact_id.match(_UUID_RE);
+    if (m) ids.push(...m);
+  }
+
+  // retrieve_related shape (Tranche 3 / H1): { items: [{kind: 'fact', fact: {fact_id: ...}}, ...] }
+  // Chunk items don't carry fact_ids; only fact items do.
+  if (Array.isArray(output.items)) {
+    for (const item of output.items) {
+      if (
+        _isRecord(item) &&
+        item.kind === "fact" &&
+        _isRecord(item.fact) &&
+        _isString(item.fact.fact_id)
+      ) {
+        const m = item.fact.fact_id.match(_UUID_RE);
+        if (m) ids.push(...m);
       }
     }
   }

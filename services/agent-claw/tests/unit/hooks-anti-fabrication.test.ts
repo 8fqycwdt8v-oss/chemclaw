@@ -54,6 +54,53 @@ describe("extractFactIds", () => {
     const output = { canonical_smiles: "c1ccccc1", inchikey: "XYZ", formula: "C6H6", mw: 78 };
     expect(extractFactIds(output)).toHaveLength(0);
   });
+
+  // Tranche 3 / H4 — query_provenance shape: top-level fact_id.
+  it("harvests the top-level fact_id from a query_provenance output", () => {
+    const UUID = "aaaaaaaa-1111-2222-3333-444444444444";
+    const output = {
+      fact_id: UUID,
+      subject: { label: "Compound", id_property: "inchikey", id_value: "X" },
+      predicate: "HAS_YIELD",
+      object: { label: "Y", id_property: "id", id_value: "y-1" },
+      provenance: { source_type: "ELN", source_id: "ELN-1" },
+      confidence_tier: "multi_source_llm",
+      confidence_score: 0.8,
+      t_valid_from: "2026-01-01T00:00:00Z",
+      t_valid_to: null,
+      recorded_at: "2026-01-01T00:00:00Z",
+      invalidated_at: null,
+      invalidation_reason: null,
+    };
+    expect(extractFactIds(output)).toEqual([UUID]);
+  });
+
+  // Tranche 3 / H1 — retrieve_related shape: items[].fact.fact_id, but only
+  // for items with kind === 'fact'. chunk items don't contribute fact_ids.
+  it("harvests fact_ids from retrieve_related items but skips chunk items", () => {
+    const FACT_UUID = "aaaaaaaa-1111-2222-3333-444444444444";
+    const CHUNK_UUID = "11111111-2222-3333-4444-555555555555";
+    const output = {
+      items: [
+        {
+          kind: "chunk",
+          rrf_score: 0.5,
+          ranks: [0, -1],
+          chunk: { chunk_id: CHUNK_UUID, text: "..." },
+        },
+        {
+          kind: "fact",
+          rrf_score: 0.4,
+          ranks: [-1, 0],
+          fact: { fact_id: FACT_UUID, predicate: "HAS_YIELD" },
+        },
+      ],
+      arm_counts: { chunks: 1, facts: 1 },
+    };
+    const ids = extractFactIds(output);
+    expect(ids).toContain(FACT_UUID);
+    expect(ids).not.toContain(CHUNK_UUID);
+  });
 });
 
 // ---------- antiFabricationHook post_tool tests ------------------------------

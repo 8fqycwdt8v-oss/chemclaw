@@ -14,6 +14,7 @@ import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { withUserContext } from "../../db/with-user-context.js";
 import type { Citation } from "../../core/types.js";
+import { rrfMerge } from "../../core/rrf.js";
 
 // ---------- Schemas ----------------------------------------------------------
 
@@ -149,22 +150,16 @@ function reciprocalRankFusion(
   k: number,
   limit: number,
 ): Array<RawRow & { score: number }> {
-  const scores = new Map<string, { hit: RawRow; score: number }>();
-  for (const ranking of rankings) {
-    ranking.forEach((row, idx) => {
-      const prev = scores.get(row.chunk_id);
-      const inc = 1 / (k + idx + 1);
-      if (prev) {
-        prev.score += inc;
-      } else {
-        scores.set(row.chunk_id, { hit: row, score: inc });
-      }
-    });
-  }
-  return [...scores.values()]
-    .sort((a, b) => b.score - a.score)
-    .slice(0, limit)
-    .map(({ hit, score }) => ({ ...hit, score: Number(score.toFixed(6)) }));
+  // Tranche 3 / H1 cleanup: thin shim over the shared rrfMerge utility so
+  // both the dense+sparse fusion here and the KG+vector fusion in
+  // retrieve_related run through one implementation. The {chunk_id, …} →
+  // {…, score} reshape is preserved as the existing public test
+  // contract (see _rrfForTests below).
+  return rrfMerge(rankings, {
+    key: (row) => row.chunk_id,
+    k,
+    limit,
+  }).map(({ item, score }) => ({ ...item, score }));
 }
 
 // Exposed for tests.
