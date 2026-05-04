@@ -14,7 +14,8 @@
 // that's worth its own scope.
 
 import { z } from "zod";
-import { defineTool, type Tool } from "../tool.js";
+import { defineTool } from "../tool.js";
+import type { ToolContext } from "../../core/types.js";
 import { rrfMerge } from "../../core/rrf.js";
 import {
   SearchKnowledgeIn,
@@ -26,6 +27,26 @@ import {
   type QueryKgInput,
   type QueryKgOutput,
 } from "./query_kg.js";
+
+/**
+ * Structural dep type for the search_knowledge arm. We only need its execute
+ * surface — typing the full {@link Tool} would couple us to the Zod
+ * input/output generic asymmetry (defineTool infers `I` from the input-side
+ * of the schema, which has optional fields where `z.infer` omits them).
+ */
+interface SearchKnowledgeArm {
+  execute: (
+    ctx: ToolContext,
+    input: SearchKnowledgeInput,
+  ) => Promise<SearchKnowledgeOutput>;
+}
+
+interface QueryKgArm {
+  execute: (
+    ctx: ToolContext,
+    input: QueryKgInput,
+  ) => Promise<QueryKgOutput>;
+}
 
 // ---------- Schemas ----------------------------------------------------------
 
@@ -104,8 +125,8 @@ function rowKey(row: RetrieveRow): string {
  * Pino logger / mcp-token cache the rest of the harness uses are reused.
  */
 export function buildRetrieveRelatedTool(
-  searchKnowledgeTool: Tool<SearchKnowledgeInput, SearchKnowledgeOutput>,
-  queryKgTool: Tool<QueryKgInput, QueryKgOutput>,
+  searchKnowledgeTool: SearchKnowledgeArm,
+  queryKgTool: QueryKgArm,
 ) {
   return defineTool({
     id: "retrieve_related",
