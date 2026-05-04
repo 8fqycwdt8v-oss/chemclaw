@@ -1,0 +1,7 @@
+# Pin floors managed centrally in services/_constraints.txt; this file lists
+# only the deps this projector actually imports.
+-c ../../_constraints.txt
+psycopg[binary]
+pydantic
+pydantic-settings
+neo4j>=5.26,<6
