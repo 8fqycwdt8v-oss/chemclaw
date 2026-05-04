@@ -87,6 +87,7 @@ import { buildStatisticalAnalyzeTool } from "../tools/builtins/statistical_analy
 import { buildSynthesizeInsightsTool } from "../tools/builtins/synthesize_insights.js";
 import { buildComputeConfidenceEnsembleTool } from "../tools/builtins/compute_confidence_ensemble.js";
 import { buildProposeHypothesisTool } from "../tools/builtins/propose_hypothesis.js";
+import { buildUpdateHypothesisStatusTool } from "../tools/builtins/update_hypothesis_status.js";
 import { buildDraftSectionTool } from "../tools/builtins/draft_section.js";
 // Source-system wrappers (Phase F.2 — Postgres-backed mock ELN).
 import { buildQueryElnExperimentsTool } from "../tools/builtins/query_eln_experiments.js";
@@ -276,6 +277,9 @@ function registerBuiltinTools(
   );
   registry.registerBuiltin("compute_confidence_ensemble", () => asTool(buildComputeConfidenceEnsembleTool(pool)));
   registry.registerBuiltin("propose_hypothesis", () => asTool(buildProposeHypothesisTool(pool)));
+  registry.registerBuiltin("update_hypothesis_status", () =>
+    asTool(buildUpdateHypothesisStatusTool(pool)),
+  );
   registry.registerBuiltin("draft_section", () => asTool(buildDraftSectionTool()));
 
   // Source-system wrappers — local Postgres-backed mock ELN (Phase F.2 reboot).

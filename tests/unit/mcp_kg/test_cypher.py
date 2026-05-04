@@ -12,6 +12,7 @@ from datetime import datetime, timezone
 import pytest
 
 from services.mcp_tools.mcp_kg.cypher import (
+    _safe_group_id,
     _safe_id_property,
     _safe_label,
     _safe_predicate,
@@ -61,6 +62,14 @@ class TestSafeGuards:
     def test_unsafe_id_property_raises(self) -> None:
         with pytest.raises(ValueError):
             _safe_id_property("id; DROP TABLE")
+
+    @pytest.mark.parametrize("bad", ["", "ab/cd", "ab cd", "ab;DROP", "x" * 81])
+    def test_unsafe_group_id_raises(self, bad: str) -> None:
+        # Defense-in-depth: the Pydantic layer would reject these too, but
+        # a future refactor that constructs requests via internal Python
+        # paths must still trip the cypher-level check.
+        with pytest.raises(ValueError):
+            _safe_group_id(bad)
 
 
 class TestWriteFactCypher:
@@ -143,3 +152,59 @@ class TestInvalidateFactCypher:
         assert "r.t_valid_to" in q
         assert "$t_valid_to" in q
         assert "r.invalidated_at" in q
+
+
+class TestGroupIdTenantScope:
+    """Tranche 1 / C6: every Cypher path must carry a group_id."""
+
+    def test_write_fact_sets_group_id_on_edge(self) -> None:
+        q, params = build_write_fact_cypher(_req())
+        assert "r.group_id = $group_id" in q
+        # Default falls back to the system sentinel for backward compat.
+        assert params["group_id"] == "__system__"
+
+    def test_write_fact_propagates_explicit_group_id(self) -> None:
+        req = WriteFactRequest(
+            subject=EntityRef(label="Compound", id_property="inchikey", id_value="KEY1"),
+            object=EntityRef(label="Reaction", id_property="uuid", id_value="RXN1"),
+            predicate="IS_REAGENT_IN",
+            confidence_tier=ConfidenceTier.MULTI_SOURCE_LLM,
+            confidence_score=0.8,
+            provenance=Provenance(source_type="ELN", source_id="EXP-1"),
+            group_id="proj-NCE-007",
+        )
+        _, params = build_write_fact_cypher(req)
+        assert params["group_id"] == "proj-NCE-007"
+
+    def test_query_filters_by_group_id_first(self) -> None:
+        req = QueryAtTimeRequest(
+            entity=EntityRef(label="Compound", id_property="inchikey", id_value="K"),
+            include_invalidated=True,
+        )
+        q, params = build_query_at_time_cypher(req)
+        # group_id must be present in the WHERE clause and the params.
+        assert "r.group_id = $group_id" in q
+        assert params["group_id"] == "__system__"
+
+    def test_invalidate_fact_includes_group_id_in_match(self) -> None:
+        # Cross-tenant invalidation surfaces as 'fact not found' because the
+        # MATCH requires the calling tenant.
+        q = build_invalidate_fact_cypher()
+        assert "{ fact_id: $fact_id, group_id: $group_id }" in q
+
+    def test_bootstrap_creates_group_id_index(self) -> None:
+        stmts = bootstrap_cyphers()
+        assert any("FOR ()-[r]-() ON (r.group_id)" in s for s in stmts)
+
+    @pytest.mark.parametrize(
+        "bad",
+        ["", "ab/cd", "ab cd", "ab;DROP", "abc'", "x" * 81],
+    )
+    def test_pydantic_rejects_unsafe_group_id(self, bad: str) -> None:
+        from pydantic import ValidationError
+
+        with pytest.raises(ValidationError):
+            QueryAtTimeRequest(
+                entity=EntityRef(label="Compound", id_property="inchikey", id_value="K"),
+                group_id=bad,
+            )

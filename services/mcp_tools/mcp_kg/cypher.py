@@ -19,6 +19,7 @@ from services.mcp_tools.mcp_kg.models import QueryAtTimeRequest, WriteFactReques
 _LABEL_RE = re.compile(r"^[A-Z][A-Za-z0-9_]{0,79}$")
 _PRED_RE = re.compile(r"^[A-Z][A-Z0-9_]{0,79}$")
 _ID_PROP_RE = re.compile(r"^[a-z][a-z0-9_]{0,39}$")
+_GROUP_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,80}$")
 
 
 def _safe_label(label: str) -> str:
@@ -39,6 +40,18 @@ def _safe_id_property(id_property: str) -> str:
     return id_property
 
 
+def _safe_group_id(group_id: str) -> str:
+    """Defense-in-depth check on the tenant scope identifier.
+
+    The Pydantic layer (`models.GroupIdStr`) already enforces this shape, but
+    the same regex is re-validated here so a future refactor can't bypass it
+    by constructing a request via internal Python paths.
+    """
+    if not _GROUP_ID_RE.fullmatch(group_id):
+        raise ValueError(f"unsafe group_id: {group_id!r}")
+    return group_id
+
+
 # ---------------------------------------------------------------------------
 # STARTUP — uniqueness constraint + indexes
 # ---------------------------------------------------------------------------
@@ -55,6 +68,12 @@ def bootstrap_cyphers() -> list[str]:
         # Lookup index for fact_exists / invalidate_fact (prevents full-graph scan).
         "CREATE INDEX rel_fact_id_lookup IF NOT EXISTS "
         "FOR ()-[r]-() ON (r.fact_id)",
+        # Tenant lookup index — every read filters by group_id. Without this,
+        # a query for project A's facts scans every edge in the graph and
+        # then post-filters; with it, the planner can use the index for
+        # selective tenants. (Non-uniqueness: one tenant has many facts.)
+        "CREATE INDEX rel_group_id_lookup IF NOT EXISTS "
+        "FOR ()-[r]-() ON (r.group_id)",
     ]
 
 
@@ -73,12 +92,27 @@ def build_write_fact_cypher(req: WriteFactRequest) -> tuple[str, dict[str, Any]]
         never overwrite a fact once written.
       - `created` in the RETURN tells the caller whether this call created the
         edge (true) or simply matched an existing one (false).
+
+    Cross-tenant fact_id collisions (deliberate behaviour):
+      The MERGE matches on `fact_id` only, NOT `(fact_id, group_id)`. This
+      means if tenant A writes a fact_id that already exists from tenant B,
+      the MERGE matches B's edge, ON CREATE does not fire, and A's group_id
+      is silently dropped. The response's `created: false` flag is the only
+      signal — and a subsequent query for the same fact_id under tenant A's
+      group_id will return zero rows because read paths filter by group_id.
+      This is a per-fact_id idempotency guarantee that wins over per-tenant
+      attribution: shared canonical facts (e.g. "compound X has InChIKey Y")
+      stay deduplicated globally rather than fanning out across tenants.
+      Callers that need tenant-scoped uniqueness MUST construct fact_ids that
+      include the group_id (the kg_experiments deterministic_fact_id helper
+      should be extended in a later tranche if this becomes a hot path).
     """
     s_label = _safe_label(req.subject.label)
     o_label = _safe_label(req.object.label)
     pred = _safe_predicate(req.predicate)
     s_id_prop = _safe_id_property(req.subject.id_property)
     o_id_prop = _safe_id_property(req.object.id_property)
+    _safe_group_id(req.group_id)  # defense-in-depth; param is bound below
 
     query = f"""
     MERGE (s:{s_label} {{ {s_id_prop}: $s_id_value }})
@@ -93,6 +127,7 @@ def build_write_fact_cypher(req: WriteFactRequest) -> tuple[str, dict[str, Any]]
                     r.confidence_tier = $confidence_tier,
                     r.confidence_score = $confidence_score,
                     r.provenance = $provenance,
+                    r.group_id = $group_id,
                     r += $edge_properties
     RETURN r.fact_id AS fact_id,
            r.t_valid_from AS t_valid_from,
@@ -111,6 +146,7 @@ def build_write_fact_cypher(req: WriteFactRequest) -> tuple[str, dict[str, Any]]
         "confidence_tier": req.confidence_tier.value,
         "confidence_score": req.confidence_score,
         "provenance": None,       # filled in by driver.py (JSON-serialised)
+        "group_id": req.group_id,
     }
     return query, params
 
@@ -119,9 +155,15 @@ def build_write_fact_cypher(req: WriteFactRequest) -> tuple[str, dict[str, Any]]
 # INVALIDATE FACT
 # ---------------------------------------------------------------------------
 def build_invalidate_fact_cypher() -> str:
-    """Use the relationship index on fact_id (see bootstrap_cyphers)."""
+    """Use the relationship index on fact_id (see bootstrap_cyphers).
+
+    Tenant scope: the MATCH includes `group_id: $group_id` so a caller from
+    project A cannot invalidate project B's fact even if they have the
+    fact_id. Cross-tenant invalidation surfaces as LookupError (404) at the
+    driver layer, identical to "fact_id not found".
+    """
     return """
-    MATCH ()-[r { fact_id: $fact_id }]->()
+    MATCH ()-[r { fact_id: $fact_id, group_id: $group_id }]->()
     WITH r, r.t_valid_to AS prev_t_valid_to, r.invalidated_at AS prev_inv
     SET r.t_valid_to = CASE WHEN r.t_valid_to IS NULL THEN $t_valid_to ELSE r.t_valid_to END
     SET r.invalidated_at = CASE WHEN r.invalidated_at IS NULL THEN $invalidated_at ELSE r.invalidated_at END
@@ -140,6 +182,7 @@ def build_query_at_time_cypher(req: QueryAtTimeRequest) -> tuple[str, dict[str, 
     label = _safe_label(req.entity.label)
     id_prop = _safe_id_property(req.entity.id_property)
     pred = _safe_predicate(req.predicate) if req.predicate else None
+    _safe_group_id(req.group_id)
 
     if req.direction == "out":
         match = f"MATCH (n:{label} {{ {id_prop}: $id_value }})-[r{(':' + pred) if pred else ''}]->(m)"
@@ -148,14 +191,17 @@ def build_query_at_time_cypher(req: QueryAtTimeRequest) -> tuple[str, dict[str, 
     else:
         match = f"MATCH (n:{label} {{ {id_prop}: $id_value }})-[r{(':' + pred) if pred else ''}]-(m)"
 
-    where_clauses: list[str] = []
+    # group_id is the load-bearing tenant filter — first WHERE clause so the
+    # planner can drive the relationship index from this predicate. Putting
+    # it last would let the planner consider less selective traversals first.
+    where_clauses: list[str] = ["r.group_id = $group_id"]
     if req.at_time is not None:
         where_clauses.append(
             "(r.t_valid_from <= $at_time) AND (r.t_valid_to IS NULL OR r.t_valid_to > $at_time)"
         )
     if not req.include_invalidated:
         where_clauses.append("r.invalidated_at IS NULL")
-    where = ("WHERE " + " AND ".join(where_clauses)) if where_clauses else ""
+    where = "WHERE " + " AND ".join(where_clauses)
 
     query = f"""
     {match}
@@ -174,4 +220,5 @@ def build_query_at_time_cypher(req: QueryAtTimeRequest) -> tuple[str, dict[str, 
     return query, {
         "id_value": req.entity.id_value,
         "at_time": req.at_time,
+        "group_id": req.group_id,
     }

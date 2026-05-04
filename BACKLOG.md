@@ -28,3 +28,5 @@ Deferred follow-ups discovered while doing other work. One bullet per item, pref
 - [mcp_tools/yield_baseline] add unit test for `combine_batch` length-mismatch path (mcp-chemprop returns fewer predictions than input list with 200 status) — failure mode reaches a 400 today but is unverified
 - [tests/integration] add concurrent-`recommend_next_batch` test asserting only one round row is inserted and the loser raises `round_index_conflict` — locks in the ON-CONFLICT race fix
 
+- [tests/integration] `tests/integration/test_hypotheses_schema.py:204,230` use `DELETE FROM hypotheses` — line 204 is legitimate teardown and line 230 deliberately tests CASCADE FK behaviour, so neither is actually anti-pattern; revisit if we ever want a separate test that exercises the bi-temporal `UPDATE … SET refuted_at = NOW()` pattern
+- [tests/integration] add a Neo4j+Postgres round-trip test for `update_hypothesis_status` → `trg_hypotheses_status_event` → `ingestion_events` → `kg-hypotheses` projector → Neo4j node `valid_to` set; needs the existing testcontainer harness expanded to include 03_hypotheses.sql + 35_event_type_vocabulary.sql + a Neo4j container

@@ -34,8 +34,11 @@ def main() -> None:
     with psycopg.connect(dsn) as conn:
         with conn.cursor() as cur:
             cur.execute("SET search_path TO public")
+            # Bi-temporal: exclude invalidated rows so the applicability
+            # domain isn't biased by retracted reactions.
             cur.execute(
-                "SELECT drfp_vector::text FROM reactions WHERE drfp_vector IS NOT NULL"
+                "SELECT drfp_vector::text FROM reactions "
+                "WHERE drfp_vector IS NOT NULL AND invalidated IS NOT TRUE"
             )
             rows = cur.fetchall()
 

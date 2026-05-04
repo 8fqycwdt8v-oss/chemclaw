@@ -127,6 +127,14 @@ class KGSourceCacheProjector(BaseProjector):
             "valid_until": valid_until,
         }
 
+        # Tranche 1 / C6 deferral: source-cache facts default to mcp-kg's
+        # SYSTEM_GROUP_ID sentinel because the source-cache hook
+        # (services/agent-claw/src/core/hooks/source-cache.ts) does not yet
+        # propagate the user's project context into the event payload.
+        # That means cached ELN/instrument facts are shared across tenants
+        # for now — acceptable transitional state because the underlying
+        # source data is itself project-shared in many real workflows; the
+        # follow-up to thread `group_id` through is logged in BACKLOG.md.
         await self._kg.write_fact(
             subject_label="SourceEntity",
             subject_id_property="source_entity_id",
@@ -149,6 +157,7 @@ class KGSourceCacheProjector(BaseProjector):
             fact_id=fact_id,
             confidence_tier="single_source_llm",
             confidence_score=0.80,
+            group_id=payload.get("group_id"),  # honoured if hook supplies it
         )
 
         log.info(

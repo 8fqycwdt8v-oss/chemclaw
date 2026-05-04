@@ -80,6 +80,9 @@ jobs:
           python3 -m pip install --upgrade pip
           python3 -m pip install -r services/mcp_tools/common/requirements.txt
           python3 -m pip install -r services/projectors/kg_source_cache/requirements.txt
+          python3 -m pip install -r services/projectors/kg_experiments/requirements.txt
+          python3 -m pip install -r services/projectors/kg_hypotheses/requirements.txt
+          python3 -m pip install -r services/mcp_tools/mcp_kg/requirements.txt
           python3 -m pip install -r services/optimizer/session_reanimator/requirements.txt
           python3 -m pip install -r services/optimizer/session_purger/requirements.txt
           python3 -m pip install -r services/projectors/conditions_normalizer/requirements.txt
@@ -95,6 +98,8 @@ jobs:
           coverage run --rcfile=pyproject.toml -m pytest -q \
             tests/unit/test_redactor.py \
             tests/unit/optimizer/test_session_purger.py \
+            tests/unit/mcp_kg/ \
+            tests/unit/projectors/ \
             services/mcp_tools/common/tests/ \
             services/projectors/kg_source_cache/tests/ \
             services/projectors/conditions_normalizer/tests/ \
