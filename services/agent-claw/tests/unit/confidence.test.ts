@@ -1,4 +1,4 @@
-// Tests for the confidence ensemble — Phase C.5
+// Tests for the confidence ensemble — Phase C.5 + Tranche 2 / M3.
 
 import { describe, it, expect } from "vitest";
 import {
@@ -7,6 +7,7 @@ import {
   jaccardSimilarity,
   computeBayesianPosterior,
   composeEnsemble,
+  confidenceLabel,
 } from "../../src/core/confidence.js";
 
 // ---------------------------------------------------------------------------
@@ -189,5 +190,72 @@ describe("composeEnsemble", () => {
     expect(ens.cross_model).toBe(0.6);
     expect(ens.bayesian).toEqual(bayesian);
     expect(typeof ens.overall).toBe("number");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// confidence_label + structured signals (Tranche 2 / M3)
+// ---------------------------------------------------------------------------
+
+describe("confidenceLabel", () => {
+  it("maps the four bands using the documented thresholds", () => {
+    expect(confidenceLabel(1.0)).toBe("foundational");
+    expect(confidenceLabel(0.85)).toBe("foundational");
+    expect(confidenceLabel(0.84)).toBe("high");
+    expect(confidenceLabel(0.65)).toBe("high");
+    expect(confidenceLabel(0.64)).toBe("medium");
+    expect(confidenceLabel(0.40)).toBe("medium");
+    expect(confidenceLabel(0.39)).toBe("low");
+    expect(confidenceLabel(0.0)).toBe("low");
+  });
+});
+
+describe("composeEnsemble — structured signals + label", () => {
+  it("emits a categorical confidence_label aligned with overall", () => {
+    const ens = composeEnsemble({
+      verbalized: 0.95,
+      cross_model: 0.9,
+      bayesian: { mean: 0.9, ci_low: 0.85, ci_high: 0.95 },
+    });
+    expect(ens.overall).toBeGreaterThanOrEqual(0.85);
+    expect(ens.confidence_label).toBe("foundational");
+  });
+
+  it("returns three signals each with name + score + weight + present", () => {
+    const ens = composeEnsemble({
+      verbalized: 0.7,
+      cross_model: null,
+      bayesian: { mean: 0.5, ci_low: 0.3, ci_high: 0.7 },
+    });
+    expect(ens.signals).toHaveLength(3);
+
+    const names = ens.signals.map((s) => s.name).sort();
+    expect(names).toEqual(["bayesian", "cross_model", "verbalized"]);
+
+    const verbalized = ens.signals.find((s) => s.name === "verbalized")!;
+    expect(verbalized.score).toBe(0.7);
+    expect(verbalized.present).toBe(true);
+    expect(verbalized.weight).toBe(0.4);
+
+    const cross = ens.signals.find((s) => s.name === "cross_model")!;
+    expect(cross.score).toBeNull();
+    expect(cross.present).toBe(false);
+    expect(cross.weight).toBe(0.3);
+
+    const bayes = ens.signals.find((s) => s.name === "bayesian")!;
+    expect(bayes.score).toBe(0.5); // == bayesian.mean
+    expect(bayes.present).toBe(true);
+    expect(bayes.weight).toBe(0.3);
+  });
+
+  it("maps a no-signals ensemble to the medium label (overall=0.5)", () => {
+    const ens = composeEnsemble({
+      verbalized: null,
+      cross_model: null,
+      bayesian: null,
+    });
+    expect(ens.overall).toBe(0.5);
+    expect(ens.confidence_label).toBe("medium");
+    expect(ens.signals.every((s) => !s.present)).toBe(true);
   });
 });

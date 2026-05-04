@@ -35,8 +35,53 @@ export interface ConfidenceEnsemble {
   bayesian: BayesianPosterior | null;
   /** Weighted overall score (0–1). */
   overall: number;
+  /**
+   * Categorical label derived from `overall` so the LLM can reason about
+   * the confidence directly without re-deriving thresholds:
+   *   - 'foundational' (≥ 0.85): cite confidently, suitable for FOUNDATION outputs.
+   *   - 'high'         (≥ 0.65): supportable, defaults to WORKING tier.
+   *   - 'medium'       (≥ 0.40): exploratory, hedge.
+   *   - 'low'          (<  0.40): treat as a working hypothesis, not a claim.
+   * Tranche 2 / M3.
+   */
+  confidence_label: ConfidenceLabel;
+  /**
+   * Structured per-signal record. Same data as the top-level fields, but
+   * shaped so a downstream renderer (or the LLM) can iterate and surface
+   * each signal independently — replaces "flatten into prose" reads where
+   * the agent loses the per-signal provenance. Tranche 2 / M3.
+   */
+  signals: ConfidenceSignal[];
   /** Estimated Brier score if calibration data is available. */
   brier_estimate?: number;
+}
+
+export type ConfidenceLabel = "foundational" | "high" | "medium" | "low";
+
+export interface ConfidenceSignal {
+  /** Human-readable signal name. */
+  name: "verbalized" | "cross_model" | "bayesian";
+  /** Numeric score on the [0,1] axis used by the ensemble, or null when unavailable. */
+  score: number | null;
+  /** Weight applied in the ensemble composition. */
+  weight: number;
+  /** Whether this signal contributed to the `overall` value. */
+  present: boolean;
+}
+
+/**
+ * Map a numeric ensemble score to its categorical confidence label.
+ *
+ * Thresholds chosen so the label aligns with the maturity tier convention
+ * (FOUNDATION / WORKING / EXPLORATORY): an ensemble in the foundational
+ * band should be safe to cite as a FOUNDATION artifact; the medium / low
+ * bands map to EXPLORATORY where the agent should hedge.
+ */
+export function confidenceLabel(overall: number): ConfidenceLabel {
+  if (overall >= 0.85) return "foundational";
+  if (overall >= 0.65) return "high";
+  if (overall >= 0.40) return "medium";
+  return "low";
 }
 
 // ---------------------------------------------------------------------------
@@ -231,26 +276,56 @@ export function composeEnsemble(opts: {
   bayesian: BayesianPosterior | null;
   brier_estimate?: number;
 }): ConfidenceEnsemble {
-  const signals: Array<[number, number]> = []; // [value, weight]
+  const VERBALIZED_WEIGHT = 0.4;
+  const CROSS_MODEL_WEIGHT = 0.3;
+  const BAYESIAN_WEIGHT = 0.3;
 
-  if (opts.verbalized !== null) signals.push([opts.verbalized, 0.4]);
-  if (opts.cross_model !== null) signals.push([opts.cross_model, 0.3]);
-  if (opts.bayesian !== null) signals.push([opts.bayesian.mean, 0.3]);
+  const weighted: Array<[number, number]> = []; // [value, weight]
+  if (opts.verbalized !== null) weighted.push([opts.verbalized, VERBALIZED_WEIGHT]);
+  if (opts.cross_model !== null) weighted.push([opts.cross_model, CROSS_MODEL_WEIGHT]);
+  if (opts.bayesian !== null) weighted.push([opts.bayesian.mean, BAYESIAN_WEIGHT]);
 
   let overall: number;
-  if (signals.length === 0) {
+  if (weighted.length === 0) {
     overall = 0.5; // no signals → mid-range neutral
   } else {
-    const totalWeight = signals.reduce((s, [, w]) => s + w, 0);
-    const weightedSum = signals.reduce((s, [v, w]) => s + v * w, 0);
+    const totalWeight = weighted.reduce((s, [, w]) => s + w, 0);
+    const weightedSum = weighted.reduce((s, [v, w]) => s + v * w, 0);
     overall = weightedSum / totalWeight;
   }
+
+  const roundedOverall = Math.round(overall * 1000) / 1000;
+
+  // Tranche 2 / M3: structured per-signal record so the LLM can reason about
+  // each signal independently rather than seeing flat JSON.
+  const signals: ConfidenceSignal[] = [
+    {
+      name: "verbalized",
+      score: opts.verbalized,
+      weight: VERBALIZED_WEIGHT,
+      present: opts.verbalized !== null,
+    },
+    {
+      name: "cross_model",
+      score: opts.cross_model,
+      weight: CROSS_MODEL_WEIGHT,
+      present: opts.cross_model !== null,
+    },
+    {
+      name: "bayesian",
+      score: opts.bayesian?.mean ?? null,
+      weight: BAYESIAN_WEIGHT,
+      present: opts.bayesian !== null,
+    },
+  ];
 
   return {
     verbalized: opts.verbalized,
     cross_model: opts.cross_model,
     bayesian: opts.bayesian,
-    overall: Math.round(overall * 1000) / 1000,
+    overall: roundedOverall,
+    confidence_label: confidenceLabel(roundedOverall),
+    signals,
     brier_estimate: opts.brier_estimate,
   };
 }

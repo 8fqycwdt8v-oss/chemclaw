@@ -15,7 +15,9 @@ import {
   extractVerbalizedConfidence,
   computeBayesianPosterior,
   composeEnsemble,
+  crossModelAgreement,
   type ConfidenceEnsemble,
+  type CrossModelLlmProvider,
   type KgPriorCounts,
 } from "../../core/confidence.js";
 
@@ -58,6 +60,17 @@ export const ComputeConfidenceEnsembleOut = z.object({
       })
       .nullable(),
     overall: z.number(),
+    // Tranche 2 / M3 — categorical label + structured per-signal record so
+    // the LLM can reason about each signal independently.
+    confidence_label: z.enum(["foundational", "high", "medium", "low"]),
+    signals: z.array(
+      z.object({
+        name: z.enum(["verbalized", "cross_model", "bayesian"]),
+        score: z.number().nullable(),
+        weight: z.number(),
+        present: z.boolean(),
+      }),
+    ),
     brier_estimate: z.number().optional(),
   }),
   persisted: z.boolean(),
@@ -69,13 +82,17 @@ export type ComputeConfidenceEnsembleOutput = z.infer<typeof ComputeConfidenceEn
 // Factory
 // ---------------------------------------------------------------------------
 
-export function buildComputeConfidenceEnsembleTool(pool: Pool) {
+export function buildComputeConfidenceEnsembleTool(
+  pool: Pool,
+  llm?: CrossModelLlmProvider,
+) {
   return defineTool({
     id: "compute_confidence_ensemble",
     description:
       "Compute a confidence ensemble (verbalized + Bayesian + cross-model signals) " +
       "for an artifact previously persisted this turn. Stores the result in " +
-      "artifacts.confidence_ensemble and returns the ensemble breakdown.",
+      "artifacts.confidence_ensemble and returns the ensemble breakdown plus a " +
+      "categorical confidence_label (foundational | high | medium | low).",
     inputSchema: ComputeConfidenceEnsembleIn,
     outputSchema: ComputeConfidenceEnsembleOut,
     execute: async (ctx, input) => {
@@ -97,14 +114,16 @@ export function buildComputeConfidenceEnsembleTool(pool: Pool) {
 
         // Signal 2: cross-model agreement.
         //
-        // The signal slot is wired through the ensemble composer but the
-        // second-model call is intentionally not invoked from this builtin —
-        // the GEPA optimizer (Phase E) drives cross-model evaluations on a
-        // batch-job cadence rather than on every confidence computation.
-        // Leaving cross_model=null here means the ensemble falls back to
-        // verbalized + bayesian, which is the documented runtime shape.
-        const cross_model: number | null = null;
-        void input.cross_model_enabled; // accepted for API stability
+        // Tranche 2 / M2: when an LlmProvider is wired AND the caller opts
+        // in, sample the judge model and use its agreement score. Without
+        // an LlmProvider (older callers, tests), fall through to null —
+        // the ensemble composer redistributes the weight to the remaining
+        // signals so the overall score stays sensible.
+        let cross_model: number | null = null;
+        if (input.cross_model_enabled && llm !== undefined) {
+          const text = JSON.stringify(row.payload).slice(0, 4_000);
+          cross_model = await crossModelAgreement(text, llm);
+        }
 
         // Signal 3: Bayesian posterior.
         let bayesian: ReturnType<typeof computeBayesianPosterior> | null = null;
