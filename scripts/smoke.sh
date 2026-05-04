@@ -74,7 +74,9 @@ for f in db/init/*.sql; do
 done
 docker compose exec -T postgres psql -U chemclaw -d chemclaw -v ON_ERROR_STOP=1 < db/seed/01_sample_data.sql >/dev/null
 docker compose exec -T postgres psql -U chemclaw -d chemclaw -v ON_ERROR_STOP=1 < db/seed/02_prompt_registry.sql >/dev/null
+docker compose exec -T postgres psql -U chemclaw -d chemclaw -v ON_ERROR_STOP=1 < db/seed/04_unified_system_prompt.sql >/dev/null
 docker compose exec -T postgres psql -U chemclaw -d chemclaw -v ON_ERROR_STOP=1 < db/seed/05_harness_tools.sql >/dev/null
+docker compose exec -T postgres psql -U chemclaw -d chemclaw -v ON_ERROR_STOP=1 < db/seed/06_kg_first_system_prompt.sql >/dev/null
 ok "schema + seeds applied"
 
 # --------------------------------------------------------------------------

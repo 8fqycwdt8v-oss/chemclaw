@@ -200,7 +200,19 @@ def build_query_at_time_cypher(req: QueryAtTimeRequest) -> tuple[str, dict[str, 
             "(r.t_valid_from <= $at_time) AND (r.t_valid_to IS NULL OR r.t_valid_to > $at_time)"
         )
     if not req.include_invalidated:
-        where_clauses.append("r.invalidated_at IS NULL")
+        # Tranche 4 / H3 (M1 from PR #85 review): make the invalidation filter
+        # *time-aware* when the caller specified an as-of timestamp. A fact
+        # that was valid on at_time and only got invalidated later should be
+        # surfaced — that's the snapshot the agent on at_time would have
+        # seen. With at_time absent (current-state query), the filter
+        # collapses to `r.invalidated_at IS NULL`, identical to the
+        # pre-Tranche-4 behaviour.
+        if req.at_time is not None:
+            where_clauses.append(
+                "(r.invalidated_at IS NULL OR r.invalidated_at > $at_time)"
+            )
+        else:
+            where_clauses.append("r.invalidated_at IS NULL")
     where = "WHERE " + " AND ".join(where_clauses)
 
     query = f"""

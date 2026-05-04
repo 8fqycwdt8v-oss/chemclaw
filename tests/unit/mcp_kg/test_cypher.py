@@ -145,6 +145,33 @@ class TestQueryAtTimeCypher:
         q, _ = build_query_at_time_cypher(req)
         assert "invalidated_at IS NULL" not in q
 
+    def test_invalidation_filter_is_time_aware_when_at_time_supplied(self) -> None:
+        # Tranche 4 / H3 — fix for the include_invalidated semantics.
+        # A fact that was valid on at_time and got invalidated *later* should
+        # still surface. The cypher uses the time-aware OR clause when
+        # at_time is present.
+        req = QueryAtTimeRequest(
+            entity=EntityRef(label="Compound", id_property="inchikey", id_value="K"),
+            at_time=datetime(2025, 9, 1, tzinfo=timezone.utc),
+            include_invalidated=False,
+        )
+        q, _ = build_query_at_time_cypher(req)
+        assert (
+            "r.invalidated_at IS NULL OR r.invalidated_at > $at_time" in q
+        ), "time-aware invalidation filter must be present when at_time is set"
+
+    def test_invalidation_filter_collapses_to_current_state_without_at_time(self) -> None:
+        # When at_time is not supplied, the filter is the simpler
+        # `r.invalidated_at IS NULL` (current-state semantics) — matching
+        # the pre-Tranche-4 query_kg behaviour for backwards compat.
+        req = QueryAtTimeRequest(
+            entity=EntityRef(label="Compound", id_property="inchikey", id_value="K"),
+            include_invalidated=False,
+        )
+        q, _ = build_query_at_time_cypher(req)
+        assert "r.invalidated_at IS NULL" in q
+        assert "r.invalidated_at > $at_time" not in q
+
 
 class TestInvalidateFactCypher:
     def test_cypher_shape(self) -> None:
