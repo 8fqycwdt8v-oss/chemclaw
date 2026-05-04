@@ -82,6 +82,7 @@ jobs:
           python3 -m pip install -r services/projectors/kg_source_cache/requirements.txt
           python3 -m pip install -r services/projectors/kg_experiments/requirements.txt
           python3 -m pip install -r services/projectors/kg_hypotheses/requirements.txt
+          python3 -m pip install -r services/projectors/kg_documents/requirements.txt
           python3 -m pip install -r services/mcp_tools/mcp_kg/requirements.txt
           python3 -m pip install -r services/optimizer/session_reanimator/requirements.txt
           python3 -m pip install -r services/optimizer/session_purger/requirements.txt
@@ -103,6 +104,7 @@ jobs:
             tests/unit/projectors/ \
             services/mcp_tools/common/tests/ \
             services/projectors/kg_source_cache/tests/ \
+            services/projectors/kg_documents/tests/ \
             services/projectors/conditions_normalizer/tests/ \
             services/mcp_tools/mcp_applicability_domain/tests/ \
             services/mcp_tools/mcp_green_chemistry/tests/
