@@ -41,8 +41,9 @@ class KGClient:
         fact_id: str | None = None,
         confidence_tier: str = "multi_source_llm",
         confidence_score: float = 0.75,
+        group_id: str | None = None,
     ) -> dict[str, Any]:
-        payload = {
+        payload: dict[str, Any] = {
             "subject": {
                 "label": subject_label,
                 "id_property": subject_id_property,
@@ -66,6 +67,11 @@ class KGClient:
         }
         if fact_id is not None:
             payload["fact_id"] = fact_id
+        # Tranche 1 / C6: pass tenant scope when the projector has it. mcp-kg
+        # defaults to "__system__" when omitted, so leaving group_id unset
+        # preserves the pre-tenancy behaviour for projectors not yet adapted.
+        if group_id is not None:
+            payload["group_id"] = group_id
 
         r = await self._client.post("/tools/write_fact", json=payload)
         r.raise_for_status()

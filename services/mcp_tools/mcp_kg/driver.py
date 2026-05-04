@@ -156,6 +156,7 @@ class KGDriver:
                 build_invalidate_fact_cypher(),
                 {
                     "fact_id": str(req.fact_id),
+                    "group_id": req.group_id,
                     "t_valid_to": t_valid_to,
                     "invalidated_at": now,
                     "reason": req.reason,
@@ -215,6 +216,7 @@ class KGDriver:
                         if k
                         not in {
                             "fact_id",
+                            "group_id",
                             "t_valid_from",
                             "t_valid_to",
                             "recorded_at",

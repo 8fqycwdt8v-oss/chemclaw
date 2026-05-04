@@ -31,12 +31,23 @@ const Predicate = z
   .max(80)
   .regex(/^[A-Z][A-Z0-9_]*$/);
 
+// Tenant scope identifier. mcp-kg now requires every fact to carry a
+// group_id; the server defaults this to "__system__" when the field is
+// omitted, matching the Pydantic default. Production callers should pass
+// the canonical project id so cross-tenant fact access stays gated by RLS.
+const GroupId = z
+  .string()
+  .min(1)
+  .max(80)
+  .regex(/^[A-Za-z0-9_\-]+$/);
+
 export const QueryKgIn = z.object({
   entity: EntityRef,
   predicate: Predicate.optional(),
   direction: z.enum(["in", "out", "both"]).default("both"),
   at_time: z.string().datetime({ offset: true }).optional(),
   include_invalidated: z.boolean().default(false),
+  group_id: GroupId.optional(),
 });
 export type QueryKgInput = z.infer<typeof QueryKgIn>;
 

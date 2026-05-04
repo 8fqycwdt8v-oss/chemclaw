@@ -172,6 +172,10 @@ class KGExperimentsProjector(BaseProjector):
             return
 
         prov_source_id = bundle["eln_entry_id"] or f"experiment:{source_row_id}"
+        # Tranche 1 / C6: every fact carries the canonical project UUID as
+        # tenant scope so cross-project KG reads are filtered out at the
+        # mcp-kg layer (mirrors Postgres RLS for the Neo4j layer).
+        scope_group_id: str = bundle["project_id"]
 
         # 1. Project + step
         await self._kg.write_fact(
@@ -200,6 +204,7 @@ class KGExperimentsProjector(BaseProjector):
             ),
             confidence_tier="expert_validated",
             confidence_score=1.0,
+            group_id=scope_group_id,
         )
 
         # 2. Experiment → step
@@ -226,6 +231,7 @@ class KGExperimentsProjector(BaseProjector):
             ),
             confidence_tier="expert_validated",
             confidence_score=1.0,
+            group_id=scope_group_id,
         )
 
         # 3. Researcher (optional)
@@ -246,6 +252,7 @@ class KGExperimentsProjector(BaseProjector):
                 fact_id=_deterministic_fact_id(
                     "PERFORMED_BY", bundle["experiment_id"], bundle["operator_entra_id"]
                 ),
+                group_id=scope_group_id,
             )
 
         # 4. Reactions and reagents/products
@@ -318,6 +325,7 @@ class KGExperimentsProjector(BaseProjector):
                     ),
                     confidence_tier="multi_source_llm",
                     confidence_score=0.85 if smiles else 0.5,
+                    group_id=scope_group_id,
                 )
 
         log.info(

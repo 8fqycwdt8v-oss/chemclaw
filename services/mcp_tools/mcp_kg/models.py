@@ -50,6 +50,28 @@ PredicateStr = Annotated[
     ),
 ]
 
+#: Tenant-scope identifier for KG facts. Postgres has RLS scoped by
+#: `app.current_user_entra_id`; the Neo4j layer mirrors that via a `group_id`
+#: edge property on every fact. Existing callers that aren't yet aware of
+#: tenant scoping default to the `'__system__'` sentinel (matching the
+#: Postgres SYSTEM_USER_ENTRA_ID convention) so the rollout is non-breaking;
+#: a dedicated `__legacy__` value is reserved for backfilled rows where the
+#: original tenant is unknown. Never accept an unbounded string here — it
+#: ends up interpolated as a property value, so size + charset must be
+#: constrained to keep audit and indexing predictable.
+GroupIdStr = Annotated[
+    str,
+    StringConstraints(
+        min_length=1, max_length=80, pattern=r"^[A-Za-z0-9_\-]+$"
+    ),
+]
+
+#: Sentinel used by callers that haven't yet adopted explicit tenant scoping.
+#: Treated as a single shared tenant; production callers MUST switch to a
+#: real project / org identifier (Tranche 2 of the KG refactor closes the
+#: remaining direct-Neo4j writers to ensure no caller defaults to this).
+SYSTEM_GROUP_ID: str = "__system__"
+
 
 class Provenance(BaseModel):
     """Required provenance on every fact."""
@@ -94,6 +116,12 @@ class WriteFactRequest(BaseModel):
     subject: EntityRef
     object: EntityRef
     predicate: PredicateStr
+
+    # Tenant scope. Defaults to SYSTEM_GROUP_ID for backward compatibility
+    # during the Tranche 1 rollout; new callers should pass the canonical
+    # project / org identifier so reads from other tenants don't surface the
+    # fact.
+    group_id: GroupIdStr = SYSTEM_GROUP_ID
 
     # Optional free-form properties on nodes (only applied on CREATE; we
     # never overwrite existing node properties via write_fact — corrections
@@ -155,6 +183,11 @@ class InvalidateFactRequest(BaseModel):
     t_valid_to: AwareDatetime | None = None  # defaults to "now"
     new_confidence_tier: ConfidenceTier = ConfidenceTier.INVALIDATED
 
+    # Tenant scope. The lookup MATCHes the fact_id and additionally enforces
+    # that the caller's tenant matches; cross-tenant invalidation is denied
+    # at the query layer rather than the application layer.
+    group_id: GroupIdStr = SYSTEM_GROUP_ID
+
 
 class InvalidateFactResponse(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -170,6 +203,12 @@ class QueryAtTimeRequest(BaseModel):
     direction: Literal["out", "in", "both"] = "both"
     at_time: AwareDatetime | None = None  # None = "now"
     include_invalidated: bool = False
+
+    # Tenant scope. The query filters edges to those carrying a matching
+    # `group_id`; without this filter a user with access to project A would
+    # see facts written by project B (Postgres RLS is enforced upstream, but
+    # Neo4j has no equivalent — this property closes that gap).
+    group_id: GroupIdStr = SYSTEM_GROUP_ID
 
 
 class QueriedFact(BaseModel):
