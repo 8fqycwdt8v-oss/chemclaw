@@ -248,7 +248,7 @@ class KgHypothesesProjector(BaseProjector):
         )
 
 
-def main() -> None:
+def main() -> None:  # pragma: no cover — process entrypoint
     settings = ProjectorSettings()
     from services.mcp_tools.common.logging import configure_logging
     configure_logging(settings.projector_log_level, service="kg_hypotheses")

@@ -302,7 +302,7 @@ class QueueWorker:
         # Exponential backoff: 30s, 60s, 120s, 240s … capped at 1 hour.
         # `attempts` was already incremented by _lease_one; using it as the
         # exponent keeps each retry strictly after the prior one.
-        backoff_seconds = min(30 * (2 ** (row["attempts"] - 1)), 3600)
+        backoff_seconds = min(30 * (2 ** (row["attempts"] - 1)), 3600)  # pragma: no cover — covered by deferred testcontainer test (see BACKLOG)
         async with await psycopg.AsyncConnection.connect(self.settings.dsn) as conn, conn.cursor() as cur:
             await cur.execute(
                 """

@@ -118,9 +118,9 @@ def _encode_drfp_batch(rxn_smiles_list: list[str]) -> list[list[float]]:
     the receiving service accepts the unsigned request when its own
     MCP_AUTH_DEV_MODE is true. See services/mcp_tools/common/mcp_token_cache.py.
     """
-    from services.mcp_tools.common.mcp_token_cache import auth_headers
+    from services.mcp_tools.common.mcp_token_cache import auth_headers  # pragma: no cover — fan-out path mocked at the function boundary in tests
 
-    with httpx.Client(timeout=30.0) as client:
+    with httpx.Client(timeout=30.0) as client:  # pragma: no cover
         resp = client.post(
             f"{_drfp_url()}/tools/compute_drfp",
             json={
@@ -140,9 +140,9 @@ def _call_chemprop_batch(rxn_smiles_list: list[str]) -> list[tuple[float, float]
 
     See _encode_drfp_batch for the McpTokenCache rationale.
     """
-    from services.mcp_tools.common.mcp_token_cache import auth_headers
+    from services.mcp_tools.common.mcp_token_cache import auth_headers  # pragma: no cover — fan-out path mocked at the function boundary in tests
 
-    with httpx.Client(timeout=60.0) as client:
+    with httpx.Client(timeout=60.0) as client:  # pragma: no cover
         resp = client.post(
             f"{_chemprop_url()}/predict_yield",
             json={"rxn_smiles_list": rxn_smiles_list},

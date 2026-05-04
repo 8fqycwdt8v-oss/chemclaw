@@ -217,7 +217,7 @@ async def resume_session(
 # ---------------------------------------------------------------------------
 
 
-async def amain() -> None:
+async def amain() -> None:  # pragma: no cover — process entrypoint
     settings = Settings()
     from services.mcp_tools.common.logging import configure_logging
     configure_logging(settings.log_level, service="session_reanimator")
