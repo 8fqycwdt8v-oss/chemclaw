@@ -58,6 +58,14 @@ class KgHypothesesProjector(BaseProjector):
         # Unknown: BaseProjector acks; no action.
 
     async def _load_hypothesis(self, hid: str) -> dict[str, Any] | None:
+        # Bi-temporal carve-out: this projector reads the *full* row state on
+        # purpose, including refuted/archived hypotheses. Its job is to
+        # project every state transition (proposal → refuted → archived) into
+        # Neo4j; if we filtered `WHERE refuted_at IS NULL` here we would
+        # silently drop the proposal projection on replay after a later
+        # refutation. The read-time bi-temporal filter rule is for *consumer*
+        # code (agent tools, projectors that read derived state); recording
+        # projectors are exempt by design.
         async with await psycopg.AsyncConnection.connect(
             self.settings.postgres_dsn
         ) as conn, conn.cursor() as cur:
@@ -133,6 +141,10 @@ class KgHypothesesProjector(BaseProjector):
         hid = payload.get("hypothesis_id") or source_row_id
         if not hid:
             return
+        # Bi-temporal carve-out (same rationale as `_load_hypothesis` above):
+        # this read explicitly NEEDS to see status='refuted' rows — that is
+        # exactly the state we are projecting. Filtering would no-op the
+        # refutation handler.
         async with await psycopg.AsyncConnection.connect(
             self.settings.postgres_dsn
         ) as conn, conn.cursor() as cur:

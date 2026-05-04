@@ -80,9 +80,11 @@ export function buildComputeConfidenceEnsembleTool(pool: Pool) {
     outputSchema: ComputeConfidenceEnsembleOut,
     execute: async (ctx, input) => {
       return await withUserContext(pool, ctx.userEntraId, async (client) => {
-        // Fetch the artifact payload.
+        // Fetch the artifact payload. Bi-temporal: refuse to score
+        // superseded artifacts so the agent doesn't compound staleness
+        // by attaching a fresh ensemble to a retracted record.
         const { rows } = await client.query<{ id: string; payload: unknown }>(
-          "SELECT id::text AS id, payload FROM artifacts WHERE id = $1::uuid",
+          "SELECT id::text AS id, payload FROM artifacts WHERE id = $1::uuid AND superseded_at IS NULL",
           [input.artifact_id],
         );
         const row = rows[0];
