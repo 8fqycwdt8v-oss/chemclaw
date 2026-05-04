@@ -73,6 +73,7 @@ import { buildExtractParetoFrontTool } from "../tools/builtins/extract_pareto_fr
 import { buildQueryKgTool } from "../tools/builtins/query_kg.js";
 import { buildQueryKgAtTimeTool } from "../tools/builtins/query_kg_at_time.js";
 import { buildQueryProvenanceTool } from "../tools/builtins/query_provenance.js";
+import { buildQuerySourceCacheTool } from "../tools/builtins/query_source_cache.js";
 import { buildRetrieveRelatedTool } from "../tools/builtins/retrieve_related.js";
 import { buildProposeRetrosynthesisTool } from "../tools/builtins/propose_retrosynthesis.js";
 import { buildElucidateMechanismTool } from "../tools/builtins/elucidate_mechanism.js";
@@ -251,6 +252,9 @@ function registerBuiltinTools(
   );
   registry.registerBuiltin("query_provenance", () =>
     asTool(buildQueryProvenanceTool(cfg.MCP_KG_URL)),
+  );
+  registry.registerBuiltin("query_source_cache", () =>
+    asTool(buildQuerySourceCacheTool(cfg.MCP_KG_URL)),
   );
   // Tranche 3 / H1: hybrid KG+vector retrieval. Constructs its arm tools
   // fresh per request — the underlying factories are cheap and reuse the
