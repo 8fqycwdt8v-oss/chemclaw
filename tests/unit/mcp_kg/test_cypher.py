@@ -17,6 +17,7 @@ from services.mcp_tools.mcp_kg.cypher import (
     _safe_label,
     _safe_predicate,
     bootstrap_cyphers,
+    build_get_fact_provenance_cypher,
     build_invalidate_fact_cypher,
     build_query_at_time_cypher,
     build_write_fact_cypher,
@@ -191,6 +192,16 @@ class TestGroupIdTenantScope:
         # MATCH requires the calling tenant.
         q = build_invalidate_fact_cypher()
         assert "{ fact_id: $fact_id, group_id: $group_id }" in q
+
+    def test_get_fact_provenance_filters_by_group_id(self) -> None:
+        # Tranche 3 / H4: cross-tenant fact_id traversal returns no rows
+        # (mapped to 404 at the route layer) because the MATCH requires
+        # the calling tenant just like invalidate_fact does.
+        q = build_get_fact_provenance_cypher()
+        assert "{ fact_id: $fact_id, group_id: $group_id }" in q
+        assert "r.provenance" in q
+        assert "r.t_valid_from" in q
+        assert "r.invalidated_at" in q
 
     def test_bootstrap_creates_group_id_index(self) -> None:
         stmts = bootstrap_cyphers()

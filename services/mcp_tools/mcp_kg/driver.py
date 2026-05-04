@@ -22,6 +22,7 @@ from neo4j.time import DateTime as Neo4jDateTime
 
 from services.mcp_tools.mcp_kg.cypher import (
     bootstrap_cyphers,
+    build_get_fact_provenance_cypher,
     build_invalidate_fact_cypher,
     build_query_at_time_cypher,
     build_write_fact_cypher,
@@ -29,6 +30,8 @@ from services.mcp_tools.mcp_kg.cypher import (
 from services.mcp_tools.mcp_kg.models import (
     ConfidenceTier,
     EntityRef,
+    GetFactProvenanceRequest,
+    GetFactProvenanceResponse,
     InvalidateFactRequest,
     InvalidateFactResponse,
     Provenance,
@@ -172,6 +175,58 @@ class KGDriver:
                 invalidated_at=_n4j_to_py(row["invalidated_at"]),
                 was_already_invalid=bool(row["was_already_invalid"]),
             )
+
+    # ----- PROVENANCE ----------------------------------------------------
+    async def get_fact_provenance(
+        self, req: GetFactProvenanceRequest,
+    ) -> GetFactProvenanceResponse:
+        """Tranche 3 / H4 — return the structured provenance for a fact_id.
+
+        Cross-tenant lookups return LookupError so the agent's
+        `query_provenance` tool can map them to a 404 the same way
+        `invalidate_fact` does.
+        """
+        async with self._driver.session() as session:
+            res = await session.run(
+                build_get_fact_provenance_cypher(),
+                {
+                    "fact_id": str(req.fact_id),
+                    "group_id": req.group_id,
+                },
+            )
+            row = await res.single()
+            if row is None:
+                raise LookupError(f"fact_id {req.fact_id} not found")
+
+        s_labels: list[str] = row["s_labels"] or []
+        o_labels: list[str] = row["o_labels"] or []
+        s_props = _n4j_to_py(dict(row["s_props"]))
+        o_props = _n4j_to_py(dict(row["o_props"]))
+        s_key, s_val = _derive_id_property_from_node(s_props)
+        o_key, o_val = _derive_id_property_from_node(o_props)
+
+        return GetFactProvenanceResponse(
+            fact_id=req.fact_id,
+            subject=EntityRef(
+                label=s_labels[0] if s_labels else "Unknown",
+                id_property=s_key,
+                id_value=s_val,
+            ),
+            predicate=str(row["predicate"]),
+            object=EntityRef(
+                label=o_labels[0] if o_labels else "Unknown",
+                id_property=o_key,
+                id_value=o_val,
+            ),
+            provenance=_load_provenance(row["provenance"]),
+            confidence_tier=ConfidenceTier(row["confidence_tier"]),
+            confidence_score=float(row["confidence_score"]),
+            t_valid_from=_n4j_to_py(row["t_valid_from"]),
+            t_valid_to=_n4j_to_py(row["t_valid_to"]) if row["t_valid_to"] is not None else None,
+            recorded_at=_n4j_to_py(row["recorded_at"]),
+            invalidated_at=_n4j_to_py(row["invalidated_at"]) if row["invalidated_at"] is not None else None,
+            invalidation_reason=row["invalidation_reason"] if row["invalidation_reason"] is not None else None,
+        )
 
     # ----- QUERY ---------------------------------------------------------
     async def query_at_time(self, req: QueryAtTimeRequest) -> QueryAtTimeResponse:

@@ -222,3 +222,36 @@ def build_query_at_time_cypher(req: QueryAtTimeRequest) -> tuple[str, dict[str, 
         "at_time": req.at_time,
         "group_id": req.group_id,
     }
+
+
+# ---------------------------------------------------------------------------
+# Tranche 3 / H4 — provenance lookup
+# ---------------------------------------------------------------------------
+def build_get_fact_provenance_cypher() -> str:
+    """Lookup a fact_id and return its bi-temporal + provenance envelope.
+
+    Tenant scope: the MATCH includes `group_id: $group_id` so cross-tenant
+    fact_id traversal returns LookupError, mirroring invalidate_fact's
+    semantics. The relationship index `rel_fact_id_lookup` and
+    `rel_group_id_lookup` cover this access pattern.
+
+    Returns one row when the fact exists in the caller's tenant, zero rows
+    otherwise.
+    """
+    return """
+    MATCH (s)-[r { fact_id: $fact_id, group_id: $group_id }]->(o)
+    RETURN type(r) AS predicate,
+           labels(s) AS s_labels,
+           labels(o) AS o_labels,
+           s AS s_props,
+           o AS o_props,
+           r.t_valid_from        AS t_valid_from,
+           r.t_valid_to          AS t_valid_to,
+           r.recorded_at         AS recorded_at,
+           r.invalidated_at      AS invalidated_at,
+           r.invalidation_reason AS invalidation_reason,
+           r.confidence_tier     AS confidence_tier,
+           r.confidence_score    AS confidence_score,
+           r.provenance          AS provenance
+    LIMIT 1
+    """
