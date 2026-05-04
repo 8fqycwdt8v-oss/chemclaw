@@ -92,6 +92,20 @@ def build_write_fact_cypher(req: WriteFactRequest) -> tuple[str, dict[str, Any]]
         never overwrite a fact once written.
       - `created` in the RETURN tells the caller whether this call created the
         edge (true) or simply matched an existing one (false).
+
+    Cross-tenant fact_id collisions (deliberate behaviour):
+      The MERGE matches on `fact_id` only, NOT `(fact_id, group_id)`. This
+      means if tenant A writes a fact_id that already exists from tenant B,
+      the MERGE matches B's edge, ON CREATE does not fire, and A's group_id
+      is silently dropped. The response's `created: false` flag is the only
+      signal — and a subsequent query for the same fact_id under tenant A's
+      group_id will return zero rows because read paths filter by group_id.
+      This is a per-fact_id idempotency guarantee that wins over per-tenant
+      attribution: shared canonical facts (e.g. "compound X has InChIKey Y")
+      stay deduplicated globally rather than fanning out across tenants.
+      Callers that need tenant-scoped uniqueness MUST construct fact_ids that
+      include the group_id (the kg_experiments deterministic_fact_id helper
+      should be extended in a later tranche if this becomes a hot path).
     """
     s_label = _safe_label(req.subject.label)
     o_label = _safe_label(req.object.label)

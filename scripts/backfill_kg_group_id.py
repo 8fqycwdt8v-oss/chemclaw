@@ -65,7 +65,11 @@ async def _resolve_group_id(
         return LEGACY_SENTINEL
     src_type = provenance.get("source_type")
     src_id = provenance.get("source_id")
-    if not src_id:
+    # Guard against malformed pre-existing edges where provenance.source_id
+    # was written as a non-string (e.g. an int from a buggy historical writer).
+    # Pydantic's SafeStr enforces string-ness on new writes, but this is a
+    # backfill against unknown legacy state.
+    if not isinstance(src_id, str) or not src_id:
         return LEGACY_SENTINEL
 
     if src_type == "ELN":
