@@ -71,6 +71,7 @@ import { buildRecommendNextBatchTool } from "../tools/builtins/recommend_next_ba
 import { buildIngestCampaignResultsTool } from "../tools/builtins/ingest_campaign_results.js";
 import { buildExtractParetoFrontTool } from "../tools/builtins/extract_pareto_front.js";
 import { buildQueryKgTool } from "../tools/builtins/query_kg.js";
+import { buildQueryKgAtTimeTool } from "../tools/builtins/query_kg_at_time.js";
 import { buildQueryProvenanceTool } from "../tools/builtins/query_provenance.js";
 import { buildRetrieveRelatedTool } from "../tools/builtins/retrieve_related.js";
 import { buildProposeRetrosynthesisTool } from "../tools/builtins/propose_retrosynthesis.js";
@@ -245,6 +246,9 @@ function registerBuiltinTools(
     asTool(buildExtractParetoFrontTool(pool, cfg.MCP_REACTION_OPTIMIZER_URL)),
   );
   registry.registerBuiltin("query_kg", () => asTool(buildQueryKgTool(cfg.MCP_KG_URL)));
+  registry.registerBuiltin("query_kg_at_time", () =>
+    asTool(buildQueryKgAtTimeTool(cfg.MCP_KG_URL)),
+  );
   registry.registerBuiltin("query_provenance", () =>
     asTool(buildQueryProvenanceTool(cfg.MCP_KG_URL)),
   );
