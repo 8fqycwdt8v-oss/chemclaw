@@ -84,6 +84,22 @@ projectors:
   kgHypotheses:
     enabled: true
     image: chemclaw/kg-hypotheses:latest
+  compoundFingerprinter:
+    enabled: true
+    image: chemclaw/compound-fingerprinter:latest
+  compoundClassifier:
+    enabled: true
+    image: chemclaw/compound-classifier:latest
+  conditionsNormalizer:
+    enabled: true
+    image: chemclaw/conditions-normalizer:latest
+  qmKg:
+    enabled: true
+    image: chemclaw/qm-kg:latest
+  contextualChunker:
+    # LLM-context chunk-prefix projector. Requires LITELLM_BASE_URL.
+    enabled: true
+    image: chemclaw/contextual-chunker:latest
 
 # ── Profile: chemistry ────────────────────────────────────────────────────────
 # Enable with: --set chemistry.enabled=true
@@ -131,10 +147,56 @@ chemistry:
     image: chemclaw/mcp-xtb:latest
     port: 8010
     replicas: 1
+  mcpSynthegyMech:
+    image: chemclaw/mcp-synthegy-mech:latest
+    port: 8011
+    replicas: 1
   mcpSirius:
     image: chemclaw/mcp-sirius:latest
     port: 8012
     replicas: 1
+  mcpCrest:
+    image: chemclaw/mcp-crest:latest
+    port: 8014
+    replicas: 1
+  mcpYieldBaseline:
+    image: chemclaw/mcp-yield-baseline:latest
+    port: 8015
+    replicas: 1
+  mcpApplicabilityDomain:
+    image: chemclaw/mcp-applicability-domain:latest
+    port: 8017
+    replicas: 1
+  mcpReactionOptimizer:
+    image: chemclaw/mcp-reaction-optimizer:latest
+    port: 8018
+    replicas: 1
+  mcpGreenChemistry:
+    image: chemclaw/mcp-green-chemistry:latest
+    port: 8019
+    replicas: 1
+  mcpPlateDesigner:
+    image: chemclaw/mcp-plate-designer:latest
+    port: 8020
+    replicas: 1
+  mcpOrdIo:
+    image: chemclaw/mcp-ord-io:latest
+    port: 8021
+    replicas: 1
+  mcpGenchem:
+    image: chemclaw/mcp-genchem:latest
+    port: 8023
+    replicas: 1
+  # Long-running plumbing services on the chemistry profile (no exposed port).
+  workflowEngine:
+    image: chemclaw/workflow-engine:latest
+    replicas: 1
+  queueWorker:
+    image: chemclaw/queue-worker:latest
+    replicas: 1
+    concurrency: 4
+    leaseSeconds: 300
+    tasks: "qm,genchem,classifier"
 
 # ── Profile: sources ──────────────────────────────────────────────────────────
 # Source-system MCP adapters bundled here: mcp-logs-sciy (LOGS-by-SciY adapter
@@ -197,6 +259,12 @@ optimizer:
     pollIntervalSeconds: 3600
     batchSize: 1000
     minAgeHours: 1
+  # audit-partition-maintainer keeps audit_log monthly partitions ahead
+  # of the clock so audit-trigger writes don't hit a missing partition.
+  auditPartitionMaintainer:
+    image: chemclaw/audit-partition-maintainer:latest
+    monthsAhead: 3
+    pollIntervalSeconds: 86400
 
 # ── Profile: observability ───────────────────────────────────────────────────
 # Enable with: --set observability.enabled=true
