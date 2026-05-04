@@ -366,13 +366,19 @@ async function insertSourceFacts(
   // rejected, dropping every source fact on the floor.
   await withUserContext(pool, userEntraId, async (client) => {
     for (const fact of facts) {
+      // ingestion_events.source_row_id is typed UUID; the projector reads
+      // everything it needs (source_system_id, subject_id, predicate,
+      // object_value, …) from the payload column, so we pass NULL for the
+      // ID column and keep the colon-joined identifier inside payload.
+      // The previous code passed `<sys>:<subject>` here which Postgres
+      // rejects with `invalid input syntax for type uuid`; a unit test
+      // mocked the DB so the schema mismatch never surfaced in CI.
       await client.query(
         `INSERT INTO ingestion_events (event_type, source_table, source_row_id, payload)
-         VALUES ($1, $2, $3, $4::jsonb)`,
+         VALUES ($1, $2, NULL, $3::jsonb)`,
         [
           "source_fact_observed",
           "source_cache_hook",
-          `${fact.source_system_id}:${fact.subject_id}`,
           JSON.stringify(fact),
         ],
       );

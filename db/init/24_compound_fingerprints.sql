@@ -24,22 +24,17 @@ ALTER TABLE compounds
   ADD COLUMN IF NOT EXISTS fp_version         TEXT,
   ADD COLUMN IF NOT EXISTS fp_computed_at     TIMESTAMPTZ;
 
--- pgvector indices: ivfflat (cosine) for the 2048-dim families. Lists chosen
--- as sqrt(N) heuristic; tune in a follow-up after corpus reaches stable size.
-CREATE INDEX IF NOT EXISTS idx_compounds_morgan_r2
-  ON compounds USING ivfflat (morgan_r2 vector_cosine_ops)
-  WITH (lists = 50);
-
-CREATE INDEX IF NOT EXISTS idx_compounds_morgan_r3
-  ON compounds USING ivfflat (morgan_r3 vector_cosine_ops)
-  WITH (lists = 50);
-
-CREATE INDEX IF NOT EXISTS idx_compounds_atompair
-  ON compounds USING ivfflat (atompair vector_cosine_ops)
-  WITH (lists = 50);
-
--- MACCS is small enough that a HNSW or a sequential scan is fine for the
--- corpus sizes we care about; default to ivfflat with small lists.
+-- pgvector indices for fingerprint similarity.
+--
+-- The 2048-dim families (morgan_r2, morgan_r3, atompair) cannot be indexed
+-- with ivfflat or hnsw on pgvector 0.8 (both cap at 2000 dims). We leave
+-- them un-indexed at the canonical-table layer; nearest-neighbour search
+-- on these columns goes through the projector-built collections that
+-- store halfvec(2048) (which has a 4000-dim cap). Sequential scan on
+-- `compounds.morgan_*` is acceptable because lookups are project-scoped
+-- via RLS and bounded by the candidate-set size.
+--
+-- MACCS is 167-dim and well within both index limits.
 CREATE INDEX IF NOT EXISTS idx_compounds_maccs
   ON compounds USING ivfflat (maccs vector_cosine_ops)
   WITH (lists = 20);

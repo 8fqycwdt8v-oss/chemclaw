@@ -185,6 +185,10 @@ export async function spawnSubAgent(
       budget,
       lifecycle,
       ctx: subCtx,
+      // Sub-agents inherit the same DB-backed permission policies as the
+      // parent. A sub-agent dispatched by an enforced parent must not
+      // silently get an unenforced harness.
+      permissions: { permissionMode: "enforce" },
     });
   } catch (err) {
     // Sub-agent budget exceeded or other error — return partial result.

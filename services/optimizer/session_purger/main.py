@@ -109,9 +109,10 @@ async def purge_once(settings: Settings) -> list[str]:
         return [r[0] for r in rows]
 
 
-async def amain() -> None:
+async def amain() -> None:  # pragma: no cover — process entrypoint
     settings = Settings()
-    logging.basicConfig(level=settings.log_level)
+    from services.mcp_tools.common.logging import configure_logging
+    configure_logging(settings.log_level, service="session_purger")
     log.info(
         "session-purger starting; poll=%ds batch=%d min_age=%dh",
         settings.poll_interval_seconds,

@@ -1,6 +1,6 @@
 -- ChemClaw — hypotheses tables for Phase 5A cross-project learning.
 -- Canonical state for hypotheses the agent proposes; projected to Neo4j
--- by kg-hypotheses. Re-applicable (IF NOT EXISTS everywhere).
+-- by kg_hypotheses. Re-applicable (IF NOT EXISTS everywhere).
 
 BEGIN;
 

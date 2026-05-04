@@ -45,7 +45,11 @@ async function captureFacts(
   vi.mocked(ucModule.withUserContext).mockImplementation(async (_p, _u, fn) => {
     const client = {
       query: vi.fn().mockImplementation(async (_sql: string, params: unknown[]) => {
-        captured.push(JSON.parse(params[3] as string) as SourceFactPayload);
+        // After the 2026-05-03 UUID-cast fix, the INSERT passes NULL for
+        // source_row_id and the payload is the third bind ($3 / params[2]).
+        // The colon-joined source-system identifier is preserved inside the
+        // JSON payload itself.
+        captured.push(JSON.parse(params[2] as string) as SourceFactPayload);
         return { rows: [] };
       }),
     };

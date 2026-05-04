@@ -217,9 +217,10 @@ async def resume_session(
 # ---------------------------------------------------------------------------
 
 
-async def amain() -> None:
+async def amain() -> None:  # pragma: no cover — process entrypoint
     settings = Settings()
-    logging.basicConfig(level=settings.log_level)
+    from services.mcp_tools.common.logging import configure_logging
+    configure_logging(settings.log_level, service="session_reanimator")
     # Hard-fail in production-mode if no signing key — see Settings docstring.
     settings.assert_production_safe()
     log.info(

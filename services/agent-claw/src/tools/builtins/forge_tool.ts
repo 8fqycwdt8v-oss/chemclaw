@@ -230,6 +230,17 @@ export function buildForgeToolTool(
         );
       }
 
+      // Name allowlist — must match `[a-z][a-z0-9_]{0,62}`. Rejects path
+      // traversal (`../etc/passwd`), spaces, mixed case, and overlong names
+      // that could collide with the harness's tool registry keys. The
+      // tool registry is keyed on `id` so a slipping `../foo` would be
+      // accepted by the Map but break audit / discovery downstream.
+      if (!/^[a-z][a-z0-9_]{0,62}$/.test(input.name)) {
+        throw new Error(
+          `forge_tool: invalid name ${JSON.stringify(input.name)} — names must match [a-z][a-z0-9_]{0,62} (snake_case, no path separators).`,
+        );
+      }
+
       // Validate schemas.
       try {
         validateJsonSchema(input.input_schema_json);

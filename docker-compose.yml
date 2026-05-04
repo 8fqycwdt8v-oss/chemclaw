@@ -343,7 +343,7 @@ services:
       POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
       MCP_XTB_URL: http://mcp-xtb:8010
       MCP_CREST_URL: http://mcp-crest:8014
-      MCP_GENCHEM_URL: http://mcp-genchem:8015
+      MCP_GENCHEM_URL: http://mcp-genchem:8023
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     security_opt:
       - no-new-privileges:true
@@ -375,7 +375,7 @@ services:
       QUEUE_TASKS: ${QUEUE_TASKS:-qm,genchem,classifier}
       MCP_XTB_URL: http://mcp-xtb:8010
       MCP_CREST_URL: http://mcp-crest:8014
-      MCP_GENCHEM_URL: http://mcp-genchem:8015
+      MCP_GENCHEM_URL: http://mcp-genchem:8023
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     security_opt:
       - no-new-privileges:true
@@ -944,6 +944,34 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # -------------------------------------------------------------
+  # audit_partition_maintainer — keeps the next N months of
+  # audit_log monthly partitions ahead of the wall clock.
+  # Without it, audit rows after ~90 days hit the trigger's
+  # EXCEPTION WHEN OTHERS handler and are silently dropped.
+  # -------------------------------------------------------------
+  audit-partition-maintainer:
+    build:
+      context: .
+      dockerfile: services/optimizer/audit_partition_maintainer/Dockerfile
+    container_name: chemclaw-audit-partition-maintainer
+    restart: unless-stopped
+    profiles: ["optimizer"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      MONTHS_AHEAD: ${AUDIT_PARTITION_MONTHS_AHEAD:-3}
+      POLL_INTERVAL_SECONDS: ${AUDIT_PARTITION_POLL_SECONDS:-86400}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
   # =============================================================
   # Chemistry MCP services — profile: chemistry
   # Start with: docker compose --profile chemistry up
@@ -993,7 +1021,16 @@ services:
     ports:
       - "8019:8019"
     environment:
-      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:?required}
+      # MCP_AUTH_SIGNING_KEY default-empty (was `:?required` until 2026-05-04).
+      # The strict gate blocked read-only commands like `docker compose ps`
+      # and `compose logs` whenever the env var was unset, even for services
+      # the operator wasn't querying. Production safety lives in helm
+      # (secret-mount required at deploy) and at runtime via
+      # `services/mcp_tools/common/app.py` which fails-closed when
+      # MCP_AUTH_REQUIRED=true and no key is presented.
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:-}
+      MCP_AUTH_REQUIRED: ${MCP_AUTH_REQUIRED:-}
+      MCP_AUTH_DEV_MODE: ${MCP_AUTH_DEV_MODE:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8019/readyz',timeout=5).status==200 else 1)\""]
@@ -1016,7 +1053,16 @@ services:
     ports:
       - "8017:8017"
     environment:
-      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:?required}
+      # MCP_AUTH_SIGNING_KEY default-empty (was `:?required` until 2026-05-04).
+      # The strict gate blocked read-only commands like `docker compose ps`
+      # and `compose logs` whenever the env var was unset, even for services
+      # the operator wasn't querying. Production safety lives in helm
+      # (secret-mount required at deploy) and at runtime via
+      # `services/mcp_tools/common/app.py` which fails-closed when
+      # MCP_AUTH_REQUIRED=true and no key is presented.
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:-}
+      MCP_AUTH_REQUIRED: ${MCP_AUTH_REQUIRED:-}
+      MCP_AUTH_DEV_MODE: ${MCP_AUTH_DEV_MODE:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8017/readyz',timeout=5).status==200 else 1)\""]
@@ -1097,7 +1143,16 @@ services:
     ports:
       - "8015:8015"
     environment:
-      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:?required}
+      # MCP_AUTH_SIGNING_KEY default-empty (was `:?required` until 2026-05-04).
+      # The strict gate blocked read-only commands like `docker compose ps`
+      # and `compose logs` whenever the env var was unset, even for services
+      # the operator wasn't querying. Production safety lives in helm
+      # (secret-mount required at deploy) and at runtime via
+      # `services/mcp_tools/common/app.py` which fails-closed when
+      # MCP_AUTH_REQUIRED=true and no key is presented.
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:-}
+      MCP_AUTH_REQUIRED: ${MCP_AUTH_REQUIRED:-}
+      MCP_AUTH_DEV_MODE: ${MCP_AUTH_DEV_MODE:-}
       MCP_DRFP_URL: http://mcp-drfp:8002
       MCP_CHEMPROP_URL: http://mcp-chemprop:8009
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
@@ -1122,7 +1177,16 @@ services:
     ports:
       - "8018:8018"
     environment:
-      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:?required}
+      # MCP_AUTH_SIGNING_KEY default-empty (was `:?required` until 2026-05-04).
+      # The strict gate blocked read-only commands like `docker compose ps`
+      # and `compose logs` whenever the env var was unset, even for services
+      # the operator wasn't querying. Production safety lives in helm
+      # (secret-mount required at deploy) and at runtime via
+      # `services/mcp_tools/common/app.py` which fails-closed when
+      # MCP_AUTH_REQUIRED=true and no key is presented.
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:-}
+      MCP_AUTH_REQUIRED: ${MCP_AUTH_REQUIRED:-}
+      MCP_AUTH_DEV_MODE: ${MCP_AUTH_DEV_MODE:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8018/readyz',timeout=5).status==200 else 1)\""]
@@ -1145,7 +1209,16 @@ services:
     ports:
       - "8020:8020"
     environment:
-      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:?required}
+      # MCP_AUTH_SIGNING_KEY default-empty (was `:?required` until 2026-05-04).
+      # The strict gate blocked read-only commands like `docker compose ps`
+      # and `compose logs` whenever the env var was unset, even for services
+      # the operator wasn't querying. Production safety lives in helm
+      # (secret-mount required at deploy) and at runtime via
+      # `services/mcp_tools/common/app.py` which fails-closed when
+      # MCP_AUTH_REQUIRED=true and no key is presented.
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:-}
+      MCP_AUTH_REQUIRED: ${MCP_AUTH_REQUIRED:-}
+      MCP_AUTH_DEV_MODE: ${MCP_AUTH_DEV_MODE:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8020/readyz',timeout=5).status==200 else 1)\""]
@@ -1168,7 +1241,16 @@ services:
     ports:
       - "8021:8021"
     environment:
-      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:?required}
+      # MCP_AUTH_SIGNING_KEY default-empty (was `:?required` until 2026-05-04).
+      # The strict gate blocked read-only commands like `docker compose ps`
+      # and `compose logs` whenever the env var was unset, even for services
+      # the operator wasn't querying. Production safety lives in helm
+      # (secret-mount required at deploy) and at runtime via
+      # `services/mcp_tools/common/app.py` which fails-closed when
+      # MCP_AUTH_REQUIRED=true and no key is presented.
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:-}
+      MCP_AUTH_REQUIRED: ${MCP_AUTH_REQUIRED:-}
+      MCP_AUTH_DEV_MODE: ${MCP_AUTH_DEV_MODE:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8021/readyz',timeout=5).status==200 else 1)\""]
@@ -1211,9 +1293,11 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
-  # mcp-genchem — focused chemical-space generation (port 8015)
+  # mcp-genchem — focused chemical-space generation (port 8023)
   # Scaffold-decorate, R-group enumerate, MMP search, bioisostere replace,
   # fragment grow / link. Uses RDKit only — no DFT, no GPU.
+  # Port 8023 (not 8015) avoids collision with mcp-yield-baseline; matches
+  # the MCP_GENCHEM_URL default in services/agent-claw/src/config.ts.
   # -------------------------------------------------------------
   mcp-genchem:
     build:
@@ -1223,7 +1307,7 @@ services:
     restart: unless-stopped
     profiles: ["chemistry"]
     ports:
-      - "8015:8015"
+      - "8023:8023"
     environment:
       POSTGRES_HOST: postgres
       POSTGRES_PORT: 5432
@@ -1234,7 +1318,7 @@ services:
       MCP_AUTH_REQUIRED: ${MCP_AUTH_REQUIRED:-}
       MCP_AUTH_DEV_MODE: ${MCP_AUTH_DEV_MODE:-}
     healthcheck:
-      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8015/readyz',timeout=5).status==200 else 1)\""]
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8023/readyz',timeout=5).status==200 else 1)\""]
       interval: 30s
       timeout: 10s
       retries: 5
@@ -1353,6 +1437,12 @@ services:
     environment:
       MOCK_ELN_DSN: ${MOCK_ELN_DSN:-postgresql://chemclaw_mock_eln_reader:chemclaw_mock_eln_reader_dev_password_change_me@postgres:5432/chemclaw}
       MOCK_ELN_ENABLED: ${MOCK_ELN_ENABLED:-true}
+      # MCP auth env (matches every other create_app() service). Without these
+      # the middleware in services/mcp_tools/common/app.py rejects every
+      # signed request from agent-claw with 401 in any non-dev deploy.
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:-}
+      MCP_AUTH_REQUIRED: ${MCP_AUTH_REQUIRED:-}
+      MCP_AUTH_DEV_MODE: ${MCP_AUTH_DEV_MODE:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8013/readyz',timeout=5).status==200 else 1)\""]
@@ -1389,6 +1479,12 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
       POSTGRES_USER: ${MOCK_ELN_READER_USER:-chemclaw_mock_eln_reader}
       POSTGRES_PASSWORD: ${MOCK_ELN_READER_PASSWORD:-chemclaw_mock_eln_reader_dev_password_change_me}
+      # MCP auth env — see comment under mcp-eln-local. Without these the
+      # six instrument/SDMS builtins (query_instrument_*, fetch_instrument_*)
+      # 401 in any deploy with MCP_AUTH_SIGNING_KEY set.
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:-}
+      MCP_AUTH_REQUIRED: ${MCP_AUTH_REQUIRED:-}
+      MCP_AUTH_DEV_MODE: ${MCP_AUTH_DEV_MODE:-}
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8016/readyz',timeout=5).status==200 else 1)\""]
@@ -1410,6 +1506,8 @@ services:
     profiles: ["sources"]
     depends_on:
       postgres:
+        condition: service_healthy
+      mcp-kg:
         condition: service_healthy
     environment:
       POSTGRES_HOST: postgres

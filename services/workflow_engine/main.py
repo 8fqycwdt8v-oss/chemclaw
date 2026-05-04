@@ -116,6 +116,13 @@ class WorkflowEngine:
         return notify.payload or ""
 
     async def _sweep(self, work_conn: psycopg.AsyncConnection) -> None:
+        # FOR UPDATE SKIP LOCKED on workflow_runs: when two engine replicas
+        # both poll the queue, each claims a disjoint subset of running rows.
+        # Without it, both replicas race on the same workflow_state UPDATE
+        # and the second-write wins, potentially clobbering the first
+        # replica's cursor advance. The lock is held for the duration of
+        # this sweep iteration; _advance_run completes its commit before
+        # the cursor's transaction releases.
         async with work_conn.cursor() as cur:
             await cur.execute(
                 """
@@ -128,6 +135,7 @@ class WorkflowEngine:
                   LEFT JOIN workflow_state s ON s.run_id = r.id
                  WHERE r.status = 'running'
                  LIMIT 100
+                   FOR UPDATE OF r SKIP LOCKED
                 """
             )
             runs = await cur.fetchall()
@@ -169,11 +177,11 @@ class WorkflowEngine:
             await cur.execute(
                 """
                 UPDATE workflow_state
-                   SET current_step = $1::text,
-                       scope = $2::jsonb,
-                       cursor = $3::jsonb,
+                   SET current_step = %s::text,
+                       scope = %s::jsonb,
+                       cursor = %s::jsonb,
                        updated_at = NOW()
-                 WHERE run_id = $4::uuid
+                 WHERE run_id = %s::uuid
                 """,
                 (step_id, json.dumps(scope), json.dumps(cursor), run_id),
             )
@@ -188,8 +196,15 @@ class WorkflowEngine:
         if kind == "wait":
             return await self._exec_wait(step, scope)
         if kind in ("conditional", "loop", "parallel", "sub_agent"):
-            log.info("[workflow_engine] step kind=%r executed as no-op (MVP)", kind)
-            return {"note": f"kind={kind} not yet executed; returning empty result"}
+            # MVP guard: these step kinds are accepted by the agent-side Zod
+            # validator but the engine has no implementation yet. The previous
+            # behaviour returned a no-op success which let workflows that
+            # use them silently produce wrong results. Now we fail the run
+            # explicitly so the agent / operator sees the gap.
+            raise NotImplementedError(
+                f"workflow step kind {kind!r} is not yet implemented in the engine; "
+                f"add an _exec_{kind} handler before defining workflows that use it"
+            )
         raise ValueError(f"unknown step kind: {kind!r}")
 
     async def _exec_tool_call(self, step: dict[str, Any], scope: dict[str, Any]) -> Any:
@@ -267,7 +282,7 @@ class WorkflowEngine:
             "qm_fukui":         os.environ.get("MCP_XTB_URL", "http://mcp-xtb:8010") + "/fukui",
             "qm_redox_potential": os.environ.get("MCP_XTB_URL", "http://mcp-xtb:8010") + "/redox",
             "qm_crest_screen":  os.environ.get("MCP_CREST_URL", "http://mcp-crest:8014") + "/conformers",
-            "generate_focused_library": os.environ.get("MCP_GENCHEM_URL", "http://mcp-genchem:8015") + "/scaffold_decorate",
+            "generate_focused_library": os.environ.get("MCP_GENCHEM_URL", "http://mcp-genchem:8023") + "/scaffold_decorate",
         }
         if tool not in urls:
             raise ValueError(f"workflow_engine has no URL mapping for tool {tool!r}")
@@ -301,10 +316,10 @@ class WorkflowEngine:
             await cur.execute(
                 """
                 UPDATE workflow_runs
-                   SET status = $1,
+                   SET status = %s,
                        finished_at = NOW(),
-                       output = $2::jsonb
-                 WHERE id = $3::uuid
+                       output = %s::jsonb
+                 WHERE id = %s::uuid
                 """,
                 (status, json.dumps(outputs), run_id),
             )

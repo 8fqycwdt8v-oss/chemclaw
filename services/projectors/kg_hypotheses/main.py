@@ -20,14 +20,14 @@ from services.projectors.common.base import (
     ProjectorSettings,
 )
 
-log = logging.getLogger("kg-hypotheses")
+log = logging.getLogger("kg_hypotheses")
 
 NAMESPACE_HYPOTHESIS = uuid.UUID("7b1d1d6a-1c2d-4e55-9c82-0a1e5e9a7f01")
 NAMESPACE_CITES = uuid.UUID("5b8fbd8a-66f9-4b23-9a1c-1f6a0e6bb2a3")
 
 
 class KgHypothesesProjector(BaseProjector):
-    name = "kg-hypotheses"
+    name = "kg_hypotheses"
     interested_event_types = ("hypothesis_proposed", "hypothesis_status_changed")
 
     def __init__(self, settings: ProjectorSettings) -> None:
@@ -248,9 +248,10 @@ class KgHypothesesProjector(BaseProjector):
         )
 
 
-def main() -> None:
+def main() -> None:  # pragma: no cover — process entrypoint
     settings = ProjectorSettings()
-    logging.basicConfig(level=settings.projector_log_level)
+    from services.mcp_tools.common.logging import configure_logging
+    configure_logging(settings.projector_log_level, service="kg_hypotheses")
     proj = KgHypothesesProjector(settings)
     try:
         asyncio.run(proj.run())

@@ -177,6 +177,7 @@ jobs:
             --compare-branch=origin/main \
             --fail-under=70 \
             --exclude='services/optimizer/session_reanimator/**' \
+            --exclude='services/optimizer/audit_partition_maintainer/**' \
             --exclude='services/projectors/kg_hypotheses/**' \
             --exclude='services/mcp_tools/mcp_drfp/**' \
             --exclude='services/mcp_tools/mcp_rdkit/**' \

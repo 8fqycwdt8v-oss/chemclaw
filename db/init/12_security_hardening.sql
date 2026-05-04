@@ -13,7 +13,7 @@
 --      notifications, prompt_registry). Each gets a policy here.
 --
 --   3. The `chemclaw_service` role was created NOLOGIN, which broke the
---      kg-hypotheses docker-compose entry that tried to connect as it
+--      kg_hypotheses docker-compose entry that tried to connect as it
 --      directly. It is promoted to LOGIN here; projectors and ingestion
 --      workers should connect as chemclaw_service to bypass RLS.
 --

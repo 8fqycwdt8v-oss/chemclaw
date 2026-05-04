@@ -211,6 +211,7 @@ async function _runChainedHarnessInner(
         lifecycle,
         ctx,
         signal: opts.signal,
+        permissions: { permissionMode: "enforce" },
       });
       totalSteps += r.stepsUsed;
       finalFinishReason = r.finishReason;

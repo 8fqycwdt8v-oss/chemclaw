@@ -1,4 +1,4 @@
-"""mcp-genchem — focused chemical-space generation (port 8015).
+"""mcp-genchem — focused chemical-space generation (port 8023).
 
 Endpoints:
   POST /scaffold_decorate    — enumerate over attachment points with R-groups

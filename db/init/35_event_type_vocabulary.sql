@@ -47,12 +47,12 @@ INSERT INTO ingestion_event_catalog (event_type, description, emitted_by, consum
   ('hypothesis_proposed',
    'Agent persisted a new hypothesis row.',
    'services/agent-claw/src/tools/builtins/propose_hypothesis.ts',
-   ARRAY['kg-hypotheses']),
+   ARRAY['kg_hypotheses']),
   ('hypothesis_status_changed',
    'A hypotheses.status transitioned (e.g. proposed -> refuted -> archived). '
    'Emitted defensively by trigger on UPDATE so direct-SQL writes also reach the projector.',
    'db/init/35_event_type_vocabulary.sql (trigger trg_hypotheses_status_event)',
-   ARRAY['kg-hypotheses']),
+   ARRAY['kg_hypotheses']),
   ('source_fact_observed',
    'Post-tool hook captured a structured fact from a source-system tool '
    '(query_eln_*, fetch_eln_*, fetch_instrument_*) and forwarded it for KG caching.',
@@ -105,7 +105,7 @@ END $$;
 --
 --    Idempotency: WHEN clause filters no-op updates, so re-running the same
 --    UPDATE statement (which Postgres allows) does not double-emit. The
---    target projector (kg-hypotheses) is also idempotent via MERGE.
+--    target projector (kg_hypotheses) is also idempotent via MERGE.
 -- ---------------------------------------------------------------------------
 CREATE OR REPLACE FUNCTION emit_hypothesis_status_changed()
 RETURNS TRIGGER
