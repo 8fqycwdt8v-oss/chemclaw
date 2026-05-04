@@ -47,7 +47,7 @@ function makeFact(id: string): QueryKgOutput["facts"][number] {
 function makeMockSearchKnowledge(
   chunkIds: string[],
 ): Tool<SearchKnowledgeInput, SearchKnowledgeOutput> {
-  return {
+  const tool: Tool<SearchKnowledgeInput, SearchKnowledgeOutput> = {
     id: "search_knowledge",
     description: "mock",
     inputSchema: { parse: (v) => v } as never,
@@ -56,19 +56,21 @@ function makeMockSearchKnowledge(
       mode: "hybrid",
       hits: chunkIds.map(makeChunk),
     })),
-  } as Tool<SearchKnowledgeInput, SearchKnowledgeOutput>;
+  };
+  return tool;
 }
 
 function makeMockQueryKg(
   factIds: string[],
 ): Tool<QueryKgInput, QueryKgOutput> {
-  return {
+  const tool: Tool<QueryKgInput, QueryKgOutput> = {
     id: "query_kg",
     description: "mock",
     inputSchema: { parse: (v) => v } as never,
     outputSchema: { parse: (v) => v } as never,
     execute: vi.fn(async () => ({ facts: factIds.map(makeFact) })),
-  } as Tool<QueryKgInput, QueryKgOutput>;
+  };
+  return tool;
 }
 
 const FACT_UUID_1 = "aaaaaaaa-bbbb-cccc-dddd-111111111111";
