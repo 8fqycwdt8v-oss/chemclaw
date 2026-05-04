@@ -71,6 +71,8 @@ import { buildRecommendNextBatchTool } from "../tools/builtins/recommend_next_ba
 import { buildIngestCampaignResultsTool } from "../tools/builtins/ingest_campaign_results.js";
 import { buildExtractParetoFrontTool } from "../tools/builtins/extract_pareto_front.js";
 import { buildQueryKgTool } from "../tools/builtins/query_kg.js";
+import { buildQueryProvenanceTool } from "../tools/builtins/query_provenance.js";
+import { buildRetrieveRelatedTool } from "../tools/builtins/retrieve_related.js";
 import { buildProposeRetrosynthesisTool } from "../tools/builtins/propose_retrosynthesis.js";
 import { buildElucidateMechanismTool } from "../tools/builtins/elucidate_mechanism.js";
 import { buildRecommendConditionsTool } from "../tools/builtins/recommend_conditions.js";
@@ -243,6 +245,20 @@ function registerBuiltinTools(
     asTool(buildExtractParetoFrontTool(pool, cfg.MCP_REACTION_OPTIMIZER_URL)),
   );
   registry.registerBuiltin("query_kg", () => asTool(buildQueryKgTool(cfg.MCP_KG_URL)));
+  registry.registerBuiltin("query_provenance", () =>
+    asTool(buildQueryProvenanceTool(cfg.MCP_KG_URL)),
+  );
+  // Tranche 3 / H1: hybrid KG+vector retrieval. Constructs its arm tools
+  // fresh per request — the underlying factories are cheap and reuse the
+  // same Pool / mcp-token cache from the closure.
+  registry.registerBuiltin("retrieve_related", () =>
+    asTool(
+      buildRetrieveRelatedTool(
+        buildSearchKnowledgeTool(pool, cfg.MCP_EMBEDDER_URL),
+        buildQueryKgTool(cfg.MCP_KG_URL),
+      ),
+    ),
+  );
   registry.registerBuiltin("propose_retrosynthesis", () =>
     asTool(buildProposeRetrosynthesisTool(cfg.MCP_ASKCOS_URL, cfg.MCP_AIZYNTH_URL)),
   );
