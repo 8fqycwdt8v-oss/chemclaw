@@ -28,6 +28,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import re
 import uuid
 from typing import Any
 
@@ -51,12 +52,28 @@ _MAX_CHUNK_TEXT = 500
 
 # Tenant scope. Documents are shared across the org by design today;
 # project-scoped documents would land here as `metadata->>'group_id'` once
-# upstream ingestion adds that field.
+# upstream ingestion adds that field (BACKLOG: ingestion/doc_ingester).
 _DEFAULT_GROUP_ID = "__system__"
 
+# Defense-in-depth on the group_id (Tranche 1 convention). We don't import
+# the mcp-kg helper here because the projector connects to Neo4j directly,
+# not through mcp-kg.
+_GROUP_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,80}$")
 
-def _deterministic_fact_id(*parts: str) -> str:
-    return str(uuid.uuid5(NAMESPACE_HAS_CHUNK, "|".join(parts)))
+
+def _deterministic_fact_id(namespace: uuid.UUID, *parts: str) -> str:
+    """UUIDv5 from a joined key under the given namespace.
+
+    Mirrors `kg_experiments._deterministic_fact_id` so all three call
+    sites (Document, Chunk, HAS_CHUNK edge) flow through one helper.
+    """
+    return str(uuid.uuid5(namespace, "|".join(parts)))
+
+
+def _safe_group_id(group_id: str) -> str:
+    if not _GROUP_ID_RE.fullmatch(group_id):
+        raise ValueError(f"unsafe group_id: {group_id!r}")
+    return group_id
 
 
 class KgDocumentsProjector(BaseProjector):
@@ -105,7 +122,7 @@ class KgDocumentsProjector(BaseProjector):
             bundle.get("metadata_group_id") or _DEFAULT_GROUP_ID
         )
 
-        doc_fact_id = str(uuid.uuid5(NAMESPACE_DOCUMENT, bundle["id"]))
+        doc_fact_id = _deterministic_fact_id(NAMESPACE_DOCUMENT, bundle["id"])
         async with self._driver.session() as session:
             await session.run(
                 """
@@ -125,11 +142,11 @@ class KgDocumentsProjector(BaseProjector):
             )
 
             for chunk in bundle["chunks"]:
-                chunk_fact_id = str(
-                    uuid.uuid5(NAMESPACE_CHUNK, chunk["chunk_id"])
+                chunk_fact_id = _deterministic_fact_id(
+                    NAMESPACE_CHUNK, chunk["chunk_id"],
                 )
                 edge_fact_id = _deterministic_fact_id(
-                    "HAS_CHUNK", bundle["id"], chunk["chunk_id"],
+                    NAMESPACE_HAS_CHUNK, bundle["id"], chunk["chunk_id"],
                 )
                 preview = (chunk.get("text") or "")[:_MAX_CHUNK_TEXT]
 
@@ -224,20 +241,6 @@ class KgDocumentsProjector(BaseProjector):
             ]
         doc["chunks"] = chunks
         return doc
-
-
-# Defense-in-depth on the group_id (Tranche 1 convention). We don't import
-# the mcp-kg helper here because the projector connects to Neo4j directly,
-# not through mcp-kg.
-import re  # noqa: E402
-
-_GROUP_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,80}$")
-
-
-def _safe_group_id(group_id: str) -> str:
-    if not _GROUP_ID_RE.fullmatch(group_id):
-        raise ValueError(f"unsafe group_id: {group_id!r}")
-    return group_id
 
 
 def main() -> None:

@@ -159,6 +159,7 @@ jobs:
           mypy services/projectors/chunk_embedder
           mypy services/projectors/contextual_chunker
           mypy services/projectors/conditions_normalizer
+          mypy services/projectors/kg_documents
           mypy services/projectors/kg_experiments
           mypy services/projectors/kg_hypotheses
           mypy services/projectors/kg_source_cache
