@@ -227,14 +227,20 @@ class QmKgProjector(BaseProjector):
     async def _ack(
         self, work_conn: psycopg.AsyncConnection[dict[str, Any]], job_id: str
     ) -> None:
-        """Insert a synthetic ingestion_events row + projection_acks ack.
+        """Ack the QM job in `projection_acks`.
 
-        We need an `event_id` for `projection_acks` (FK to `ingestion_events`),
-        but we'd rather not write a separate event for every QM success — the
-        cache table itself is the durable record. Use a stable surrogate by
-        upserting an `ingestion_events` row whose `id` equals the job id.
+        Tranche 2 / C7: the trigger in `db/init/37_qm_ingestion_events.sql`
+        now writes a canonical `ingestion_events` row (id = job_id) when a
+        qm_job transitions to status='succeeded', so this method no longer
+        needs to fabricate a synthetic event row. The ON-CONFLICT INSERT here
+        is kept as a defensive fallback in case the trigger hasn't fired yet
+        (e.g. on legacy data being caught up before the migration runs); on
+        a properly-migrated DB it's a no-op.
         """
         async with work_conn.cursor() as cur:
+            # Defensive: if the trigger row isn't there yet, create it. On a
+            # post-migration DB this is a no-op because the trigger already
+            # inserted the row.
             await cur.execute(
                 """
                 INSERT INTO ingestion_events (id, event_type, source_table, source_row_id, payload)
@@ -274,19 +280,36 @@ class QmKgProjector(BaseProjector):
         with driver.session(database=self.qm_settings.neo4j_database) as sess:
             # Close any prior live calculation edges for the same (method,task)
             # pair so we keep one live calculation per pair per compound.
+            #
+            # Tranche 2 / C7: the original code did `SET edge.valid_to =
+            # datetime()` which advanced the timestamp on every projector
+            # replay. Now wrapped in `CASE WHEN edge.valid_to IS NULL` so
+            # the closure timestamp is set once and frozen — same idempotency
+            # contract kg_hypotheses already follows.
             sess.run(
                 """
                 MATCH (c:Compound {inchikey: $inchikey})
                   -[edge:HAS_CALCULATION {method: $method, task: $task}]->
                       (cr:CalculationResult)
                 WHERE edge.valid_to IS NULL AND cr.job_id <> $job_id
-                  SET edge.valid_to = datetime()
+                  SET edge.valid_to = CASE
+                        WHEN edge.valid_to IS NULL THEN datetime()
+                        ELSE edge.valid_to
+                      END
                 """,
                 inchikey=row["inchikey"] or "",
                 method=row["method"],
                 task=row["task"],
                 job_id=row["id"],
             )
+
+            # Tranche 2 / C7: every edge carries `group_id` so tenant-scoped
+            # reads via mcp-kg consume QM facts the same way they consume
+            # kg_experiments output. QM is shared across tenants by design
+            # (compound-level cache, no per-project ownership), so we use
+            # the SYSTEM_GROUP_ID sentinel — matches the mcp_kg server-side
+            # default and keeps the cache cross-project-visible.
+            qm_group_id = "__system__"
 
             sess.run(
                 """
@@ -307,7 +330,8 @@ class QmKgProjector(BaseProjector):
                     cr.version_xtb = $version_xtb,
                     cr.version_crest = $version_crest
                 MERGE (c)-[edge:HAS_CALCULATION {method: $method, task: $task, job_id: $job_id}]->(cr)
-                  ON CREATE SET edge.valid_from = datetime()
+                  ON CREATE SET edge.valid_from = datetime(),
+                                edge.group_id = $group_id
                 """,
                 inchikey=row["inchikey"] or "",
                 smiles=row["smiles_canonical"] or "",
@@ -323,6 +347,7 @@ class QmKgProjector(BaseProjector):
                 summary=row["summary_md"] or "",
                 version_xtb=row["version_xtb"] or "",
                 version_crest=row["version_crest"] or "",
+                group_id=qm_group_id,
             )
 
             for conf in conformers:
@@ -332,12 +357,14 @@ class QmKgProjector(BaseProjector):
                     MERGE (c:Conformer {job_id: $job_id, ensemble_index: $idx})
                       SET c.energy_hartree = $energy,
                           c.boltzmann_weight = $weight
-                    MERGE (cr)-[:HAS_CONFORMER]->(c)
+                    MERGE (cr)-[edge:HAS_CONFORMER]->(c)
+                      ON CREATE SET edge.group_id = $group_id
                     """,
                     job_id=row["id"],
                     idx=conf["ensemble_index"],
                     energy=conf["energy_hartree"],
                     weight=float(conf["boltzmann_weight"] or 0.0),
+                    group_id=qm_group_id,
                 )
 
     def close(self) -> None:
