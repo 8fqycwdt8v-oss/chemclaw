@@ -252,3 +252,57 @@ class TestPromptPromotionPass:
         events = run_prompt_promotion_pass(conn)
         assert events[0].event_type == "shadow_reject"
         assert events[0].reason == "no_shadow_runs_recorded"
+
+
+class TestApplyConfigOverrides:
+    """L8: promoter thresholds are now overridable via config_settings."""
+
+    def test_apply_config_overrides_mutates_module_constants(self, monkeypatch):
+        """When ConfigRegistry returns overrides, the module-level constants
+        are updated. Defaults restored at fixture teardown."""
+        from services.optimizer.skill_promoter import promoter
+        from services.common import config_registry
+
+        # Save originals to restore.
+        orig_promotion = promoter.PROMOTION_SUCCESS_RATE
+        orig_demotion = promoter.DEMOTION_SUCCESS_RATE
+        orig_min = promoter.MIN_RUNS
+
+        # Patch the registry to return tenant overrides.
+        class _FakeRegistry:
+            def __init__(self, dsn):  # noqa: ARG002
+                pass
+            def get_float(self, key, default, ctx=None):  # noqa: ARG002
+                return {
+                    "optimizer.promotion_success_rate": 0.70,
+                    "optimizer.demotion_success_rate": 0.30,
+                }[key]
+            def get_int(self, key, default, ctx=None):  # noqa: ARG002
+                return {"optimizer.min_runs": 50}[key]
+
+        monkeypatch.setattr(config_registry, "ConfigRegistry", _FakeRegistry)
+
+        try:
+            promoter.apply_config_overrides("dsn-ignored")
+            assert promoter.PROMOTION_SUCCESS_RATE == 0.70
+            assert promoter.DEMOTION_SUCCESS_RATE == 0.30
+            assert promoter.MIN_RUNS == 50
+        finally:
+            # Restore defaults so subsequent tests in the same process don't
+            # see leaked state. The promoter module mutates its own globals,
+            # so manual restoration is required.
+            promoter.PROMOTION_SUCCESS_RATE = orig_promotion
+            promoter.DEMOTION_SUCCESS_RATE = orig_demotion
+            promoter.MIN_RUNS = orig_min
+
+    def test_threshold_defaults_dict_preserves_originals(self):
+        """The _THRESHOLD_DEFAULTS dict is the canonical source for the
+        original values — used by `apply_config_overrides` as the fallback
+        passed to ConfigRegistry's `default` arg."""
+        from services.optimizer.skill_promoter.promoter import _THRESHOLD_DEFAULTS
+
+        assert _THRESHOLD_DEFAULTS == {
+            "PROMOTION_SUCCESS_RATE": 0.55,
+            "DEMOTION_SUCCESS_RATE": 0.40,
+            "MIN_RUNS": 30,
+        }
