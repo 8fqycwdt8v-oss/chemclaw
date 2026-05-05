@@ -182,6 +182,7 @@ jobs:
             --exclude='services/mcp_tools/mcp_drfp/**' \
             --exclude='services/mcp_tools/mcp_rdkit/**' \
             --exclude='services/queue/**' \
+            --exclude='services/workflow_engine/**' \
             --exclude='services/ingestion/eln_json_importer.legacy/**'
 
   schema:

@@ -87,7 +87,7 @@ export function buildExtractParetoFrontTool(pool: Pool, optimizerUrl: string) {
           if (!domainParsed.success) {
             throw new Error("bofire_domain_corrupt");
           }
-          const outputs = domainParsed.data["outputs"] as
+          const outputs = domainParsed.data.outputs as
             | { features?: Array<{ key: string; objective?: { type?: string } }> }
             | undefined;
           const features = outputs?.features ?? [];
