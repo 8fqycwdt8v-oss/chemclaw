@@ -249,3 +249,156 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
 {{- end }}
+
+{{- if .Values.projectors.compoundFingerprinter.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: compound-fingerprinter
+  labels:
+    app: compound-fingerprinter
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: compound-fingerprinter
+  template:
+    metadata:
+      labels:
+        app: compound-fingerprinter
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: compound-fingerprinter
+          image: {{ .Values.projectors.compoundFingerprinter.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+{{- end }}
+
+{{- if .Values.projectors.compoundClassifier.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: compound-classifier
+  labels:
+    app: compound-classifier
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: compound-classifier
+  template:
+    metadata:
+      labels:
+        app: compound-classifier
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: compound-classifier
+          image: {{ .Values.projectors.compoundClassifier.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+{{- end }}
+
+{{- if .Values.projectors.conditionsNormalizer.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: conditions-normalizer
+  labels:
+    app: conditions-normalizer
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: conditions-normalizer
+  template:
+    metadata:
+      labels:
+        app: conditions-normalizer
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: conditions-normalizer
+          image: {{ .Values.projectors.conditionsNormalizer.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+{{- end }}
+
+{{- if .Values.projectors.qmKg.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: qm-kg
+  labels:
+    app: qm-kg
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: qm-kg
+  template:
+    metadata:
+      labels:
+        app: qm-kg
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: qm-kg
+          image: {{ .Values.projectors.qmKg.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+{{- end }}
+
+{{- if .Values.projectors.contextualChunker.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: contextual-chunker
+  labels:
+    app: contextual-chunker
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: contextual-chunker
+  template:
+    metadata:
+      labels:
+        app: contextual-chunker
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: contextual-chunker
+          image: {{ .Values.projectors.contextualChunker.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          env:
+            - name: LITELLM_BASE_URL
+              value: {{ printf "http://litellm:%d" (int .Values.litellm.port) | quote }}
+{{- end }}
