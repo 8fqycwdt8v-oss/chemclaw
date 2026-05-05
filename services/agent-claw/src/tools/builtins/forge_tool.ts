@@ -27,6 +27,7 @@ import { defineTool } from "../tool.js";
 import type { LlmProvider, ModelRole } from "../../llm/provider.js";
 import type { SandboxClient } from "../../core/sandbox.js";
 import { wrapCode, parseOutputs } from "./run_program.js";
+import { withUserContext } from "../../db/with-user-context.js";
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -175,20 +176,24 @@ Write the Python implementation. The output variables must match the keys in the
 // DB helpers.
 // ---------------------------------------------------------------------------
 
-async function toolNameExists(pool: Pool, name: string): Promise<boolean> {
-  const { rows } = await pool.query<{ exists: boolean }>(
-    `SELECT EXISTS(SELECT 1 FROM tools WHERE name = $1) AS exists`,
-    [name],
-  );
-  return rows[0]?.exists ?? false;
+async function toolNameExists(pool: Pool, name: string, userEntraId: string): Promise<boolean> {
+  return await withUserContext(pool, userEntraId, async (client) => {
+    const { rows } = await client.query<{ exists: boolean }>(
+      `SELECT EXISTS(SELECT 1 FROM tools WHERE name = $1) AS exists`,
+      [name],
+    );
+    return rows[0]?.exists ?? false;
+  });
 }
 
-async function skillLibraryNameExists(pool: Pool, name: string): Promise<boolean> {
-  const { rows } = await pool.query<{ exists: boolean }>(
-    `SELECT EXISTS(SELECT 1 FROM skill_library WHERE name = $1) AS exists`,
-    [name],
-  );
-  return rows[0]?.exists ?? false;
+async function skillLibraryNameExists(pool: Pool, name: string, userEntraId: string): Promise<boolean> {
+  return await withUserContext(pool, userEntraId, async (client) => {
+    const { rows } = await client.query<{ exists: boolean }>(
+      `SELECT EXISTS(SELECT 1 FROM skill_library WHERE name = $1) AS exists`,
+      [name],
+    );
+    return rows[0]?.exists ?? false;
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -255,15 +260,17 @@ export function buildForgeToolTool(
       let parentCode: string | null = null;
 
       if (input.parent_tool_id) {
-        const { rows: parentRows } = await pool.query<{
-          id: string;
-          version: number;
-          scripts_path: string | null;
-        }>(
-          `SELECT id::text, version, scripts_path
-             FROM skill_library
-            WHERE id = $1::uuid AND kind = 'forged_tool'`,
-          [input.parent_tool_id],
+        const { rows: parentRows } = await withUserContext(pool, userEntraId, (client) =>
+          client.query<{
+            id: string;
+            version: number;
+            scripts_path: string | null;
+          }>(
+            `SELECT id::text, version, scripts_path
+               FROM skill_library
+              WHERE id = $1::uuid AND kind = 'forged_tool'`,
+            [input.parent_tool_id],
+          ),
         );
         const parent = parentRows[0];
         if (!parent) {
@@ -285,8 +292,8 @@ export function buildForgeToolTool(
       // Check name conflict only for NEW tools (forks share the same name + bump version).
       if (!input.parent_tool_id) {
         const [toolConflict, skillConflict] = await Promise.all([
-          toolNameExists(pool, input.name),
-          skillLibraryNameExists(pool, input.name),
+          toolNameExists(pool, input.name, userEntraId),
+          skillLibraryNameExists(pool, input.name, userEntraId),
         ]);
         if (toolConflict || skillConflict) {
           throw new Error(
@@ -418,54 +425,64 @@ export function buildForgeToolTool(
           required: (input.input_schema_json).required ?? [],
         };
 
-        // Insert skill_library row (Phase D.5: includes scope, forged_by_model/role, parent_tool_id, version).
-        // code_sha256 is verified at every call by the tool registry.
-        const skillResult = await pool.query<{ id: string }>(
-          `INSERT INTO skill_library
-             (name, prompt_md, scripts_path, kind, active, shadow_until,
-              proposed_by_user_entra_id, scope, forged_by_model, forged_by_role,
-              parent_tool_id, version, code_sha256)
-           VALUES ($1, $2, $3, 'forged_tool', false, NOW() + INTERVAL '14 days', $4,
-                   'private', $5, $6, $7, $8, $9)
-           RETURNING id::text AS id`,
-          [
-            input.name,
-            promptMd,
-            scriptsPath,
-            userEntraId,
-            forgedByModel ?? null,
-            forgedByRole ?? null,
-            input.parent_tool_id ?? null,
-            newVersion,
-            codeSha256,
-          ],
-        );
-        skillLibraryRowId = skillResult.rows[0]?.id;
+        // All three persistence writes inside one withUserContext transaction:
+        // - Sets app.current_user_entra_id so RLS on skill_library / tools /
+        //   forged_tool_tests passes (production runs as `chemclaw_app` with
+        //   FORCE ROW LEVEL SECURITY, which would reject bare pool.query
+        //   inserts since no policy matches an empty user).
+        // - Atomic: all-or-nothing across the three INSERTs so a partial-fail
+        //   can't leave skill_library with no test rows / no tools row.
+        skillLibraryRowId = await withUserContext(pool, userEntraId, async (client) => {
+          // Insert skill_library row (Phase D.5: includes scope, forged_by_model/role, parent_tool_id, version).
+          // code_sha256 is verified at every call by the tool registry.
+          const skillResult = await client.query<{ id: string }>(
+            `INSERT INTO skill_library
+               (name, prompt_md, scripts_path, kind, active, shadow_until,
+                proposed_by_user_entra_id, scope, forged_by_model, forged_by_role,
+                parent_tool_id, version, code_sha256)
+             VALUES ($1, $2, $3, 'forged_tool', false, NOW() + INTERVAL '14 days', $4,
+                     'private', $5, $6, $7, $8, $9)
+             RETURNING id::text AS id`,
+            [
+              input.name,
+              promptMd,
+              scriptsPath,
+              userEntraId,
+              forgedByModel ?? null,
+              forgedByRole ?? null,
+              input.parent_tool_id ?? null,
+              newVersion,
+              codeSha256,
+            ],
+          );
+          const newSkillId = skillResult.rows[0]?.id;
 
-        // Insert tools table row (source='forged').
-        await pool.query(
-          `INSERT INTO tools (id, name, source, schema_json, description, enabled)
-           VALUES ($1::uuid, $2, 'forged', $3, $4, true)
-           ON CONFLICT (name) DO NOTHING`,
-          [toolId, input.name, JSON.stringify(schemaJson), input.description],
-        );
+          // Insert tools table row (source='forged').
+          await client.query(
+            `INSERT INTO tools (id, name, source, schema_json, description, enabled)
+             VALUES ($1::uuid, $2, 'forged', $3, $4, true)
+             ON CONFLICT (name) DO NOTHING`,
+            [toolId, input.name, JSON.stringify(schemaJson), input.description],
+          );
 
-        // Phase D.5: persist supplied test cases in forged_tool_tests.
-        if (skillLibraryRowId) {
-          for (const tc of input.test_cases) {
-            await pool.query(
-              `INSERT INTO forged_tool_tests
-                 (forged_tool_id, input_json, expected_output_json, tolerance_json, kind)
-               VALUES ($1::uuid, $2::jsonb, $3::jsonb, $4::jsonb, 'functional')`,
-              [
-                skillLibraryRowId,
-                JSON.stringify(tc.input),
-                JSON.stringify(tc.expected_output),
-                tc.tolerance !== undefined ? JSON.stringify({ _global: tc.tolerance }) : null,
-              ],
-            );
+          // Phase D.5: persist supplied test cases in forged_tool_tests.
+          if (newSkillId) {
+            for (const tc of input.test_cases) {
+              await client.query(
+                `INSERT INTO forged_tool_tests
+                   (forged_tool_id, input_json, expected_output_json, tolerance_json, kind)
+                 VALUES ($1::uuid, $2::jsonb, $3::jsonb, $4::jsonb, 'functional')`,
+                [
+                  newSkillId,
+                  JSON.stringify(tc.input),
+                  JSON.stringify(tc.expected_output),
+                  tc.tolerance !== undefined ? JSON.stringify({ _global: tc.tolerance }) : null,
+                ],
+              );
+            }
           }
-        }
+          return newSkillId;
+        });
 
         persisted = true;
       }

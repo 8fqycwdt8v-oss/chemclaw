@@ -12,6 +12,7 @@ import {
 } from "../../../src/tools/builtins/run_program.js";
 import type { SandboxClient, SandboxHandle } from "../../../src/core/sandbox.js";
 import { makeCtx } from "../../helpers/make-ctx.js";
+import { createMockPool } from "../../helpers/mock-pool.js";
 import type { Pool } from "pg";
 
 // ---------------------------------------------------------------------------
@@ -46,9 +47,12 @@ function makeMockSandboxClient(
 }
 
 function makeMockPool(rows: unknown[] = []): Pool {
-  return {
-    query: vi.fn().mockResolvedValue({ rows }),
-  } as unknown as Pool;
+  // run_program now wraps the mcp_tools catalog SELECT in withSystemContext;
+  // createMockPool transparently swallows BEGIN/COMMIT/set_config noise.
+  const { pool } = createMockPool({
+    dataHandler: async () => ({ rows, rowCount: rows.length, command: "SELECT", oid: 0, fields: [] }),
+  });
+  return pool;
 }
 
 const ctx = makeCtx();
