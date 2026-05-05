@@ -223,3 +223,126 @@ describe("ToolRegistry.loadFromDb()", () => {
     expect(registry.size).toBe(2);
   });
 });
+
+// ---------------------------------------------------------------------------
+// zodFromJsonSchema coverage — db/seed/05_harness_tools.sql carries 41+ rows
+// using `type:"integer"` / `enum` / `minimum`/`maximum` / `format` / `pattern`
+// / `additionalProperties`. Pre-PR these silently fell through to z.unknown(),
+// so agent-side validation was weaker than the catalog claimed.
+// ---------------------------------------------------------------------------
+
+describe("ToolRegistry.loadFromDb() — zodFromJsonSchema schema features", () => {
+  let registry: ToolRegistry;
+  beforeEach(() => {
+    registry = new ToolRegistry();
+  });
+
+  function loadWith(schema: object): Promise<void> {
+    registry.registerBuiltin("schema_tool", () => ({
+      ...echoBuiltin,
+      id: "schema_tool",
+      execute: async () => ({ out: "ok" }),
+    }));
+    const pool = buildFakePool([
+      {
+        name: "schema_tool",
+        source: "builtin",
+        schema_json: schema,
+        mcp_url: null,
+        mcp_endpoint: null,
+        description: "Schema feature test",
+        enabled: true,
+      },
+    ]);
+    return registry.loadFromDb(pool);
+  }
+
+  it("rejects non-integer values for type:'integer'", async () => {
+    await loadWith({
+      type: "object",
+      properties: { count: { type: "integer" } },
+      required: ["count"],
+    });
+    const tool = registry.getOrThrow("schema_tool");
+    expect(tool.inputSchema.safeParse({ count: 3 }).success).toBe(true);
+    expect(tool.inputSchema.safeParse({ count: 3.5 }).success).toBe(false);
+  });
+
+  it("enforces integer minimum/maximum bounds", async () => {
+    await loadWith({
+      type: "object",
+      properties: { n: { type: "integer", minimum: 1, maximum: 100 } },
+      required: ["n"],
+    });
+    const tool = registry.getOrThrow("schema_tool");
+    expect(tool.inputSchema.safeParse({ n: 50 }).success).toBe(true);
+    expect(tool.inputSchema.safeParse({ n: 0 }).success).toBe(false);
+    expect(tool.inputSchema.safeParse({ n: 101 }).success).toBe(false);
+  });
+
+  it("enforces number minimum/maximum bounds", async () => {
+    await loadWith({
+      type: "object",
+      properties: { temp: { type: "number", minimum: -273.15, maximum: 1000 } },
+      required: ["temp"],
+    });
+    const tool = registry.getOrThrow("schema_tool");
+    expect(tool.inputSchema.safeParse({ temp: 25 }).success).toBe(true);
+    expect(tool.inputSchema.safeParse({ temp: -300 }).success).toBe(false);
+  });
+
+  it("enforces string enum", async () => {
+    await loadWith({
+      type: "object",
+      properties: { mode: { type: "string", enum: ["fast", "slow", "auto"] } },
+      required: ["mode"],
+    });
+    const tool = registry.getOrThrow("schema_tool");
+    expect(tool.inputSchema.safeParse({ mode: "fast" }).success).toBe(true);
+    expect(tool.inputSchema.safeParse({ mode: "wrong" }).success).toBe(false);
+  });
+
+  it("enforces string pattern (regex)", async () => {
+    await loadWith({
+      type: "object",
+      properties: { id: { type: "string", pattern: "^[A-Z]{2}-[0-9]{4}$" } },
+      required: ["id"],
+    });
+    const tool = registry.getOrThrow("schema_tool");
+    expect(tool.inputSchema.safeParse({ id: "AB-1234" }).success).toBe(true);
+    expect(tool.inputSchema.safeParse({ id: "ab-1234" }).success).toBe(false);
+  });
+
+  it("enforces string format=uuid", async () => {
+    await loadWith({
+      type: "object",
+      properties: { ref: { type: "string", format: "uuid" } },
+      required: ["ref"],
+    });
+    const tool = registry.getOrThrow("schema_tool");
+    expect(tool.inputSchema.safeParse({ ref: "550e8400-e29b-41d4-a716-446655440000" }).success).toBe(true);
+    expect(tool.inputSchema.safeParse({ ref: "not-a-uuid" }).success).toBe(false);
+  });
+
+  it("rejects extra properties when additionalProperties:false", async () => {
+    await loadWith({
+      type: "object",
+      properties: { a: { type: "string" } },
+      required: ["a"],
+      additionalProperties: false,
+    });
+    const tool = registry.getOrThrow("schema_tool");
+    expect(tool.inputSchema.safeParse({ a: "x" }).success).toBe(true);
+    expect(tool.inputSchema.safeParse({ a: "x", surprise: 1 }).success).toBe(false);
+  });
+
+  it("permits extra properties by default (additionalProperties unset)", async () => {
+    await loadWith({
+      type: "object",
+      properties: { a: { type: "string" } },
+      required: ["a"],
+    });
+    const tool = registry.getOrThrow("schema_tool");
+    expect(tool.inputSchema.safeParse({ a: "x", extra: true }).success).toBe(true);
+  });
+});
