@@ -184,16 +184,15 @@ class KgDocumentsProjector(BaseProjector):
     async def _load_document_bundle(self, doc_id: str) -> dict[str, Any] | None:
         """Read the document + its chunks from Postgres in a single tx.
 
-        Bypasses RLS via SET LOCAL ROLE chemclaw_service (same pattern as
-        kg_experiments / kg_hypotheses); the projector is a system worker
-        and needs cross-project visibility to project a document. Tenant
-        scope is re-asserted on the way out via the group_id property on
-        every Neo4j node + edge it writes.
+        Connects as `chemclaw_service` (BYPASSRLS — set as the
+        ProjectorSettings default in services/projectors/common/base.py).
+        The projector is a system worker and needs cross-project visibility
+        to project a document. Tenant scope is re-asserted on the way out
+        via the group_id property on every Neo4j node + edge it writes.
         """
         async with await psycopg.AsyncConnection.connect(
             self.settings.postgres_dsn
         ) as conn, conn.cursor() as cur:
-            await cur.execute("SET LOCAL ROLE chemclaw_service")
             await cur.execute(
                 """
                 SELECT id::text                AS id,

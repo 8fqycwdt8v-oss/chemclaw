@@ -69,7 +69,6 @@ class KgHypothesesProjector(BaseProjector):
         async with await psycopg.AsyncConnection.connect(
             self.settings.postgres_dsn
         ) as conn, conn.cursor() as cur:
-            await cur.execute("SET LOCAL ROLE chemclaw_service")
             await cur.execute(
                 "SELECT id::text, hypothesis_text, confidence, confidence_tier, "
                 "       scope_nce_project_id::text, created_at "
@@ -148,7 +147,6 @@ class KgHypothesesProjector(BaseProjector):
         async with await psycopg.AsyncConnection.connect(
             self.settings.postgres_dsn
         ) as conn, conn.cursor() as cur:
-            await cur.execute("SET LOCAL ROLE chemclaw_service")
             await cur.execute("SELECT status FROM hypotheses WHERE id = %s::uuid", (hid,))
             row = await cur.fetchone()
         if not row:
@@ -223,7 +221,6 @@ class KgHypothesesProjector(BaseProjector):
         async with await psycopg.AsyncConnection.connect(
             self.settings.postgres_dsn
         ) as conn, conn.cursor() as cur:
-            await cur.execute("SET LOCAL ROLE chemclaw_service")
             for r in rows:
                 payload_obj = {
                     "fact_id":             r.get("cited_fact_id"),
