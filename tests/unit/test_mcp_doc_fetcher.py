@@ -421,18 +421,77 @@ def test_ip_is_blocked_rejects_ipv4_mapped_rfc1918() -> None:
     assert _ip_is_blocked("::ffff:172.16.5.5") is True
 
 
-@pytest.mark.xfail(
-    reason="6to4 (2002::/16) IPv4-wrapping not yet normalised — see BACKLOG: "
-           "[mcp_doc_fetcher] 6to4 SSRF bypass: ip_is_blocked does not decode "
-           "2002:WWXX:YYZZ:: into the embedded IPv4 before checking BLOCKED_NETWORKS",
-    strict=True,
-)
 def test_ip_is_blocked_rejects_6to4_wrapping_loopback() -> None:
     """6to4 (2002::/16) carries an IPv4 address in the upper 32 bits.
     `2002:7f00:0001::` decodes to 127.0.0.1 and must be blocked."""
     from services.mcp_tools.mcp_doc_fetcher.validators import ip_is_blocked as _ip_is_blocked
 
     assert _ip_is_blocked("2002:7f00:0001::") is True
+
+
+def test_ip_is_blocked_rejects_6to4_wrapping_metadata() -> None:
+    """The headline SSRF case: 6to4-wrapped cloud metadata IP.
+    ``2002:a9fe:a9fe::`` decodes to 169.254.169.254."""
+    from services.mcp_tools.mcp_doc_fetcher.validators import ip_is_blocked as _ip_is_blocked
+
+    assert _ip_is_blocked("2002:a9fe:a9fe::") is True
+
+
+def test_ip_is_blocked_rejects_6to4_wrapping_rfc1918() -> None:
+    """6to4 must also block the three RFC1918 ranges."""
+    from services.mcp_tools.mcp_doc_fetcher.validators import ip_is_blocked as _ip_is_blocked
+
+    assert _ip_is_blocked("2002:0a00:0001::") is True   # 10.0.0.1
+    assert _ip_is_blocked("2002:c0a8:0101::") is True   # 192.168.1.1
+    assert _ip_is_blocked("2002:ac10:0505::") is True   # 172.16.5.5
+
+
+def test_ip_is_blocked_rejects_nat64_wrapping() -> None:
+    """NAT64 well-known prefix ``64:ff9b::/96`` carries IPv4 in the low 32 bits."""
+    from services.mcp_tools.mcp_doc_fetcher.validators import ip_is_blocked as _ip_is_blocked
+
+    assert _ip_is_blocked("64:ff9b::169.254.169.254") is True
+    assert _ip_is_blocked("64:ff9b::127.0.0.1") is True
+    assert _ip_is_blocked("64:ff9b::a9fe:a9fe") is True   # same as ::169.254.169.254
+
+
+def test_ip_is_blocked_rejects_teredo_wrapping_loopback() -> None:
+    """Teredo (``2001::/32``) tunnels IPv4 in bits 96-128 (XOR-obfuscated).
+    ``ipaddress.IPv6Address.teredo`` returns ``(server, client)``; the client
+    IPv4 must be checked. Constructed example: server 0.0.0.0, client 127.0.0.1
+    obfuscated as 0xFFFFFFFF ^ 0x7F000001 = 0x80FFFFFE."""
+    from services.mcp_tools.mcp_doc_fetcher.validators import ip_is_blocked as _ip_is_blocked
+
+    # 2001:0000:<server-32>::<flags-16>:<port-16>:<obfuscated-client-32>
+    # server = 0.0.0.0; flags=0; port=0; client=127.0.0.1
+    assert _ip_is_blocked("2001:0000:0000:0000:0000:0000:80ff:fffe") is True
+
+
+def test_ip_is_blocked_rejects_cgnat() -> None:
+    """100.64.0.0/10 (RFC 6598 CGNAT) — internal ISP/cloud space."""
+    from services.mcp_tools.mcp_doc_fetcher.validators import ip_is_blocked as _ip_is_blocked
+
+    assert _ip_is_blocked("100.64.0.1") is True
+    assert _ip_is_blocked("100.127.255.254") is True
+
+
+def test_ip_is_blocked_rejects_multicast_and_broadcast() -> None:
+    """Defense-in-depth: multicast / broadcast / unspecified are not legit fetch targets."""
+    from services.mcp_tools.mcp_doc_fetcher.validators import ip_is_blocked as _ip_is_blocked
+
+    assert _ip_is_blocked("224.0.0.1") is True             # IPv4 multicast
+    assert _ip_is_blocked("239.255.255.255") is True       # IPv4 multicast
+    assert _ip_is_blocked("255.255.255.255") is True       # broadcast
+    assert _ip_is_blocked("ff02::1") is True               # IPv6 multicast
+    assert _ip_is_blocked("::") is True                    # IPv6 unspecified
+
+
+def test_ip_is_blocked_rejects_ietf_benchmarking() -> None:
+    """198.18.0.0/15 (RFC 2544) is sometimes reachable on internal lab networks."""
+    from services.mcp_tools.mcp_doc_fetcher.validators import ip_is_blocked as _ip_is_blocked
+
+    assert _ip_is_blocked("198.18.0.1") is True
+    assert _ip_is_blocked("198.19.255.254") is True
 
 
 def test_ip_is_blocked_allows_normal_public_ipv6() -> None:
