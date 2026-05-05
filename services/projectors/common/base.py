@@ -40,7 +40,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # `logging.getLogger(__name__).info(...)` produced un-correlated lines
 # that couldn't be tied back to the originating ingestion request.
 try:
-    from services.mcp_tools.common.log_context import log_context_scope  # type: ignore
+    from services.mcp_tools.common.log_context import log_context_scope
 except Exception:  # pragma: no cover — projector container without the dep
     log_context_scope = None  # type: ignore[assignment]
 

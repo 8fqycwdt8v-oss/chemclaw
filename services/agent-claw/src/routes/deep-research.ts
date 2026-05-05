@@ -164,7 +164,7 @@ async function handleDeepResearch(
   // Without the span, hook/tool spans show up as orphans of the request
   // and the `prompt:agent.system` Langfuse tag never lands on the trace.
   const rootSpan = startRootTurnSpan({
-    traceId: body.agent_trace_id ?? String(req.id || "deep_research"),
+    traceId: body.agent_trace_id ?? (req.id || "deep_research"),
     userEntraId: user,
     model: deps.config.AGENT_MODEL,
     promptName: "agent.system",
