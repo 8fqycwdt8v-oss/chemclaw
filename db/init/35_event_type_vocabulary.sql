@@ -81,6 +81,13 @@ INSERT INTO ingestion_event_catalog (event_type, description, emitted_by, consum
    'Reserved (Tranche 5). An artifact row was superseded with a correction; '
    'confidence ensemble + KG facts derived from it must be re-evaluated.',
    'reserved',
+   ARRAY['kg-experiments']),
+  ('workflow_run_succeeded',
+   'A workflow_runs row reached status=succeeded. Carries run_id + outputs '
+   'in payload; downstream KG projectors materialise the workflow''s named '
+   'outputs against the canonical state. Failed runs do NOT emit — they '
+   'surface only via workflow_events.kind=step_failed/finish.',
+   'services/workflow_engine/main.py:_finish',
    ARRAY['kg-experiments'])
 ON CONFLICT (event_type) DO UPDATE SET
   description = EXCLUDED.description,

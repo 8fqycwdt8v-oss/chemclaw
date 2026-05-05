@@ -30,6 +30,7 @@ import signal
 from typing import Any
 
 import httpx
+import jmespath
 import psycopg
 from psycopg.rows import dict_row
 from pydantic_settings import BaseSettings, SettingsConfigDict
@@ -249,7 +250,7 @@ class WorkflowEngine:
         spec = step.get("for", {})
         if "batch_id" in spec:
             # MVP: poll the batch row until total reached.
-            batch_id = self._resolve_dotted_path(spec["batch_id"], scope)
+            batch_id = self._resolve_jmespath(spec["batch_id"], scope)
             timeout = step.get("timeout_seconds", 3600)
             poll_conn = await self._get_poll_conn()
             # autocommit=True on poll_conn means each SELECT runs in its own
@@ -279,21 +280,21 @@ class WorkflowEngine:
         return self._poll_conn
 
     @staticmethod
-    def _resolve_dotted_path(expr: str, scope: dict[str, Any]) -> Any:
-        # Minimal dotted-path resolver against scope. Field name in the DSL
-        # documents this as a "JMESPath expression" but the implementation is
-        # intentionally a hand-rolled dotted-path walker — adding the jmespath
-        # dependency is BACKLOG'd. Keep behaviour identical: leading "scope."
-        # prefix is skipped, missing keys yield None.
-        node: Any = scope
-        for part in expr.split("."):
-            if part == "scope":
-                continue
-            if isinstance(node, dict):
-                node = node.get(part)
-            else:
-                return None
-        return node
+    def _resolve_jmespath(expr: str, scope: dict[str, Any]) -> Any:
+        # JMESPath against scope. The DSL field documents this as JMESPath
+        # since day one; pre-PR it was a hand-rolled dotted-path walker that
+        # silently mis-evaluated any selector with brackets / filters / pipes
+        # (e.g. `outputs[?status=='ok']` returned None instead of the matching
+        # row). Drop the leading `scope.` prefix to preserve the dotted-path
+        # call sites that legitimately rooted at scope; jmespath itself
+        # treats `scope.foo` as `scope` then `.foo`, so the prefix would
+        # always miss without a real `scope` key in the dict.
+        if expr.startswith("scope."):
+            expr = expr[len("scope."):]
+        try:
+            return jmespath.search(expr, scope)
+        except jmespath.exceptions.JMESPathError:
+            return None
 
     def _tool_url(self, tool: str) -> str:
         # Map tool id -> MCP HTTP endpoint. Extend as new tools land.
@@ -331,7 +332,7 @@ class WorkflowEngine:
         status: str, scope: dict[str, Any], output_template: dict[str, str],
     ) -> None:
         outputs = {
-            k: self._resolve_dotted_path(v, {"steps": scope.get("steps", {})})
+            k: self._resolve_jmespath(v, {"steps": scope.get("steps", {})})
             for k, v in output_template.items()
         }
         async with work_conn.cursor() as cur:
