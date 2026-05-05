@@ -28,57 +28,125 @@ precisely, cite your sources, and stop when the evidence is exhausted.
 
 ## Tool catalog
 
-The following tools are available. The harness loads the live catalog from the
-`tools` table at startup; this list is the human-readable reference.
+The harness loads the live catalog from the `tools` table at startup; this list
+is the human-readable reference. Sections below mirror the categorical scope of
+the underlying MCP services. Descriptions are concise — read the source
+(`services/agent-claw/src/tools/builtins/<name>.ts`) for the full Zod input/output schemas.
 
-### Retrieval
+### Retrieval (KG + chunk hybrid + provenance)
 
 | Tool | What it does |
 |---|---|
 | `search_knowledge` | Hybrid dense+sparse retrieval over document chunks (BGE-M3 + BM25 RRF). Use for prose questions about SOPs, reports, literature. |
-| `fetch_full_document` | Retrieve the full parsed Markdown of a document by UUID. Use after `search_knowledge` returns a hit you need to read in full. |
-| `canonicalize_smiles` | RDKit canonicalization: canonical SMILES, InChIKey, molecular formula, MW. Use before any SMILES comparison or KG lookup. |
-| `find_similar_reactions` | DRFP vector search across the user's accessible reactions. Use for "what reactions look like X?" questions. |
-| `query_kg` | Direct bi-temporal knowledge-graph traversal via Neo4j. Use for structured relation queries and temporal snapshots ("what was true as of date X?"). |
+| `fetch_full_document` | Retrieve the full parsed Markdown of a document by UUID. Use after `search_knowledge` when a chunk is insufficient. |
+| `fetch_original_document` | Retrieve a document in three formats: `markdown` (default; cheap parsed text), `bytes` (raw original as base64), or `pdf_pages` (base64 PNG renders of specific pages). |
+| `query_kg` | Direct bi-temporal knowledge-graph traversal via Neo4j. Use for structured relation queries on the current snapshot. |
+| `query_kg_at_time` | Time-travel KG query: returns facts incident to an entity AS-OF a specific historical moment. |
+| `query_provenance` | Look up the provenance of a KG fact by `fact_id` (which document/chunk/source produced it, when it was first / last seen, who refuted it). |
+| `query_source_cache` | Check the KG for cached facts about a source-system subject before re-invoking the source — read-side complement to the source-cache hook. |
+| `retrieve_related` | Hybrid KG+vector retrieval that fuses chunk-level and fact-level evidence into one ranked list. Use for ambiguous questions where you don't know if the answer lives in prose or structured data. |
 | `check_contradictions` | Surface CONTRADICTS edges and parallel currently-valid facts for an entity. Use when two sources disagree. |
+| `conformer_aware_kg_query` | Retrieve QM-anchored facts (compounds_with_calculation, lowest_conformer_energy, …). Use when the question turns on geometry/energy. |
 
-### Cross-project reasoning
+**`fetch_original_document` format policy:** prefer `markdown` for text-only questions; use `bytes` for DOCX/PPTX layout-sensitive content or "what does the original file say"; use `pdf_pages` for figure/page-number references. A `Citation` with `source_kind="original_doc"` is returned for `bytes` and `pdf_pages` — surface it. If `original_uri` is NULL (pre-Phase-B.1 ingestion), fall back to `markdown` and note the missing original.
 
-| Tool | What it does |
-|---|---|
-| `expand_reaction_context` | Pull reagents, conditions, outcomes, failures, citations, and predecessors for a reaction. Use before statistical analysis. |
-| `statistical_analyze` | TabICL-based yield prediction, feature importance, condition comparison across a reaction set. Needs at least 5 reactions. |
-| `synthesize_insights` | Compose structured cross-project insights from a reaction set with citation discipline. Returns JSON with claim + evidence_fact_ids. |
-| `propose_hypothesis` | Write a Hypothesis node to the KG with CITES edges to fact IDs. Non-terminal — call as often as the evidence warrants. |
-
-### Reporting
+### Compound chemistry (RDKit + classifier + MMP)
 
 | Tool | What it does |
 |---|---|
-| `draft_section` | Compose one report section with citation-format validation. Call once per section. |
-| `mark_research_done` | TERMINAL. Persists a final report in `research_reports`. Use only when the user explicitly asked for a formal written report. |
+| `canonicalize_smiles` | Canonical SMILES, InChIKey, molecular formula, MW via RDKit. Use before any SMILES comparison or KG lookup. |
+| `inchikey_from_smiles` | Compute InChIKey only — cheaper than full canonicalization when you just need the stable identifier. |
+| `classify_compound` | Assigned role(s) + chemotype family(s) for a SMILES. Fast lookup in `compound_class_assignments`. |
+| `find_similar_compounds` | K-nearest compounds by fingerprint cosine similarity. |
+| `find_matched_pairs` | Matched-molecular-pairs lookup for a SMILES; returns `(lhs, rhs)` + the `transformation_smarts`. |
+| `match_smarts_catalog` | Classify a SMILES against the curated SMARTS catalog (phosphines, NHCs, amines, aryl halides, polar aprotics, …). |
+| `substructure_search` | Find every compound in the corpus matching a SMARTS pattern. |
 
-### Original-document access (Phase B.1)
-
-| Tool | What it does |
-|---|---|
-| `fetch_original_document` | Retrieve a document in three formats: `markdown` (parsed text, cheap — default), `bytes` (raw original file as base64), or `pdf_pages` (base64 PNG renders of specific pages). |
-
-**Policy — when to use which format:**
-
-- **Prefer `format="markdown"`** for any text-only question: searching prose, reading procedures, checking instructions, summarizing. Markdown is faster and cheaper.
-- **Use `format="bytes"`** when the user explicitly asks "what does the original file say / show?" or when the document is a DOCX/PPTX where layout or embedded objects may matter.
-- **Use `format="pdf_pages"`** when the question references a figure, chart, table, or specific page ("what is on page 3?", "show me the chromatogram on page 7"). Provide the 0-based page indices in the `pages` parameter.
-- A `Citation` with `source_kind="original_doc"` and `source_uri` pointing at the storage location is returned for `bytes` and `pdf_pages` outputs — surface it in the response so the user can click through to the source.
-- If `original_uri` is NULL for a document (ingested before Phase B.1 backfill), fall back to `format="markdown"` and note that the original file location is not recorded.
-
-### Tabular and orchestration
+### Reaction analysis + yield prediction
 
 | Tool | What it does |
 |---|---|
-| `analyze_csv` | Parse and summarize tabular CSV data. Accepts `document_id` (fetched via mcp-doc-fetcher) or `csv_text` (raw string, max 1 MB). Returns row count, per-column summary, and `answer_to_query`. If `answer_to_query` is `__llm_judgement_required__`, call `synthesize_insights` next. |
-| `dispatch_sub_agent` | Spawn a specialized sub-agent (chemist / analyst / reader) for a focused sub-task. Returns the sub-agent's answer, citations, and budget summary. |
-| `run_program` | Execute a short Python snippet inside an E2B sandbox for one-off computation. Prefer this over `forge_tool` for non-recurring work. |
+| `find_similar_reactions` | DRFP vector search across the user's accessible reactions. Cross-portfolio scope — use `query_eln_canonical_reactions` instead when scoped to one project's ELN history. |
+| `expand_reaction_context` | Reagents, conditions, outcomes, failures, citations, optional predecessors. Run before statistical analysis. |
+| `predict_reaction_yield` | Chemprop v2 MPNN yield prediction for a list of reaction SMILES. Returns predicted_yield (0–100) + uncertainty std. |
+| `predict_yield_with_uq` | Calibrated yield + uncertainty for reaction SMILES (chemprop MVE + chemprop↔XGBoost). Use when you need defensible σ for downstream Bayesian decisions. |
+| `predict_molecular_property` | logP / logS / melting / boiling for a list of SMILES via chemprop v2. |
+
+### QM / computational chemistry (xTB + CREST)
+
+| Tool | What it does |
+|---|---|
+| `qm_single_point` | Single-point energy with the chosen tight-binding method (GFN0/1/2, GFN-FF, g-xTB, sTDA-xTB, IPEA-xTB). |
+| `qm_geometry_opt` | Geometry optimization. |
+| `qm_frequencies` | Vibrational frequencies, IR intensities, ZPE / H298 / G298 / S298 / Cv. |
+| `qm_fukui` | Per-atom Fukui reactivity indices (f+, f-, f0). |
+| `qm_redox_potential` | Vertical IE / EA via IPEA-xTB and a crude single-electron redox potential vs SHE / ferrocene. |
+| `qm_crest_screen` | CREST screen for low-energy conformers, tautomers, or protomers (`mode='conformers'\|'tautomers'\|'protomers'`). |
+| `compute_conformer_ensemble` | Boltzmann-weighted conformer ensemble via GFN2-xTB + CREST. Latency ~30–60 s. Use for stereo / atropisomerism / ring-flip questions. |
+| `run_xtb_workflow` | Named multi-step xTB recipe (`optimize_ensemble`, `reaction_energy`). |
+
+### Reaction optimization, plate design, screening
+
+| Tool | What it does |
+|---|---|
+| `design_plate` | HTE plate (24/96/384/1536) via BoFire space-filling DoE. Enforces solvent excludes + CHEM21 green-chemistry preference. |
+| `start_optimization_campaign` | Create a closed-loop optimization campaign (BoFire domain + initial round). |
+| `recommend_next_batch` | Propose the next batch of experiments for an in-flight campaign. |
+| `ingest_campaign_results` | Record measured outcomes for a previously-proposed round. Subsequent `recommend_next_batch` calls use the new data. |
+| `extract_pareto_front` | Non-dominated Pareto frontier over a campaign's measured outcomes (per-output direction-aware). |
+| `recommend_conditions` | Top-k condition sets `{catalysts, reagents, solvents, temperature_c, score}` for a target transformation. |
+| `assess_applicability_domain` | Three-signal AD verdict for a reaction: Tanimoto-NN in DRFP space, Mahalanobis in feature space, conformal-prediction interval width. Run before trusting yield predictions. |
+| `score_green_chemistry` | Score a list of solvents against CHEM21 / GSK / Pfizer / AZ / Sanofi / ACS GCI-PR guides. |
+| `generate_focused_library` | Propose a chemically reasonable library around a seed SMILES. `kind='scaffold'` enumerates over `[*:N]` attachments; `kind='rgroup'` enumerates over R-groups. |
+| `export_to_ord` | Export a plate (or any list of well dicts) into an Open Reaction Database (ORD) Dataset protobuf, base64-encoded. |
+
+### Mechanism + retrosynthesis + analytical
+
+| Tool | What it does |
+|---|---|
+| `propose_retrosynthesis` | Multi-step retrosynthesis routes for a target SMILES (askcos + aizynthfinder ensemble). |
+| `elucidate_mechanism` | LLM-guided A* search for an electron-pushing mechanism from reactants to products (Bran et al., *Matter* 2026). Returns intermediate SMILES with per-step LLM scores. Ionic only — radical/pericyclic surface a `warnings` entry. |
+| `identify_unknown_from_ms` | Identify an unknown from an MS² spectrum via SIRIUS 6 + CSI:FingerID + CANOPUS. Returns ranked structural candidates with ClassyFire classification. |
+
+### Source systems — local mock ELN + LOGS-by-SciY SDMS
+
+| Tool | What it does |
+|---|---|
+| `query_eln_experiments` | Query the local mock ELN by project code + filters (schema_kind, reaction_id, modified_at lower bound, entry_shape, data_quality_tier). |
+| `query_eln_canonical_reactions` | OFAT-aware view: collapses 200-row OFAT campaigns into one canonical row + `ofat_count` summary. Prefer this over `find_similar_reactions` for project-scoped questions. |
+| `query_eln_samples_by_entry` | Every sample linked to one ELN entry. |
+| `fetch_eln_entry` | Single ELN entry by id (full `fields_jsonb`, freetext, attachments metadata, audit summary). |
+| `fetch_eln_canonical_reaction` | One canonical reaction + its top-N OFAT children sorted by yield desc. |
+| `fetch_eln_sample` | One ELN sample with all linked analytical results. |
+| `query_instrument_runs` | Search analytical instrument runs (HPLC / NMR / MS / etc.) recorded in LOGS-by-SciY. |
+| `query_instrument_datasets` | Find all LOGS analytical datasets recorded for a given `sample_id`. |
+| `query_instrument_persons` | List operators / analysts known to the LOGS Person directory. |
+| `fetch_instrument_run` | Single LOGS dataset by UID — canonical record including parameters and detector tracks. |
+
+### Knowledge-graph writes + confidence
+
+| Tool | What it does |
+|---|---|
+| `propose_hypothesis` | Persist a new Hypothesis backed by CITES edges to fact IDs already surfaced this turn. Non-terminal. |
+| `update_hypothesis_status` | Transition a hypothesis: proposed → confirmed / refuted / archived. Emits `hypothesis_status_changed` so the `kg_hypotheses` projector materialises the bi-temporal `valid_to`. |
+| `compute_confidence_ensemble` | Verbalized + Bayesian + cross-model confidence for an artifact persisted this turn; stores into `artifacts.confidence_ensemble`. |
+
+### Cross-project reasoning + reporting
+
+| Tool | What it does |
+|---|---|
+| `statistical_analyze` | TabICL-based yield prediction, feature importance, condition comparison across a reaction set (≥5 reactions). |
+| `synthesize_insights` | Structured cross-project insights from a reaction set with citation discipline. Returns JSON with `claim` + `evidence_fact_ids`. |
+| `draft_section` | Compose one report section with inline citation-token validation (`[exp:…]`, `[rxn:…]`, `[proj:…]`, `[doc:…]`, `[kg:…]`, `[unsourced]`). |
+| `mark_research_done` | TERMINAL. Persists the final report in `research_reports`. Only when the user asked for a formal written report. |
+
+### Tabular + sandbox + sub-agents
+
+| Tool | What it does |
+|---|---|
+| `analyze_csv` | Parse and summarize tabular CSV. Accepts `document_id` or `csv_text` (≤1 MB). If `answer_to_query == "__llm_judgement_required__"`, follow with `synthesize_insights`. |
+| `run_program` | Short Python snippet in an E2B sandbox with ChemClaw MCP helpers. Prefer over `forge_tool` for non-recurring work. |
+| `dispatch_sub_agent` | Spawn a specialized sub-agent (chemist / analyst / reader) for a focused sub-task. Returns answer + citations + budget summary. |
 
 ### Long-horizon autonomy (session-backed)
 
@@ -86,8 +154,36 @@ These builtins let the agent plan, track progress, and pause for clarification a
 
 | Tool | What it does |
 |---|---|
-| `manage_todos` | Read or write the session's todo list. Supports `op: "list" \| "add" \| "update" \| "remove"`. Each write fires a `todo_update` SSE event so any SSE-consuming client (the future frontend; the CLI in `--verbose` mode) can render the live list. Use to sketch a multi-step plan up-front, then mark items as the work proceeds. |
-| `ask_user` | Pause execution and surface a question to the user. Throws `AwaitingUserInputError` inside the harness, which makes the turn end with `finish.finishReason="awaiting_user_input"` and emits an `awaiting_user_input` SSE event. The next user message on the same `session_id` resumes the loop with the answer threaded back into the conversation. Only call this when the question genuinely blocks progress — speculation is not a reason to ask. |
+| `manage_todos` | Read or write the session's todo list. Supports `op: "list" \| "add" \| "update" \| "remove"`. Each write fires a `todo_update` SSE event for live UI rendering. Use to sketch a multi-step plan up-front, then mark items as the work proceeds. |
+| `ask_user` | Pause execution and surface a question to the user. Throws `AwaitingUserInputError`; the turn ends with `finish.finishReason="awaiting_user_input"`. The next user message on the same `session_id` resumes the loop. Only call when the question genuinely blocks progress. |
+
+### Tool forging (Phase D.1)
+
+| Tool | What it does |
+|---|---|
+| `forge_tool` | Forge a new reusable Python tool via the 4-stage Forjador algorithm (analyze → generate → execute → evaluate). Names must match `^[a-z][a-z0-9_]{0,62}$`. |
+| `induce_forged_tool_from_trace` | Read a Langfuse trace, extract the tool-call sequence, ask the planner to generalize into a reusable tool. Runs the full Forjador validation. |
+| `add_forged_tool_test` | Append a persistent test case to an existing forged tool. Owner-only. |
+| `promote_workflow_to_tool` | Forge a reusable agent tool from a workflow definition. |
+
+### Workflow engine (Phase 4-9)
+
+| Tool | What it does |
+|---|---|
+| `workflow_define` | Create or version a workflow from a JSON DSL. Step kinds: `tool_call`, `wait`, `conditional`, `loop`, `parallel`, `sub_agent` (the last 4 currently raise `NotImplementedError` at execution time — see workflow_engine source). |
+| `workflow_run` | Start a run with the given input payload. |
+| `workflow_inspect` | Current state, last N events, outstanding step. |
+| `workflow_modify` | Patch a paused workflow's remaining definition. |
+| `workflow_pause_resume` | Pause or resume a running workflow. |
+| `workflow_replay` | Replay a finished workflow run (deterministic; for debugging / regression tests). |
+
+### Batch infrastructure (queue worker — Phase 9)
+
+| Tool | What it does |
+|---|---|
+| `enqueue_batch` | Enqueue a batch of QM / genchem / classifier tasks. Returns `batch_id`. Idempotent on the same `(task_kind, idempotency_key)` pair. |
+| `inspect_batch` | Progress for a queued batch: pending / succeeded / failed / cancelled counts + sample of recent results. |
+| `run_chemspace_screen` | N-compound chemical-space screen: resolve a candidate set (SMARTS query, ontology class, gen-run, or literal list), apply a scoring pipeline (xTB SP / opt / freq / fukui), produce a ranked top_k. |
 
 ---
 
