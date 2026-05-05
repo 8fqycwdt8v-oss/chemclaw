@@ -11,6 +11,7 @@
 import { z } from "zod";
 import type { Pool } from "pg";
 import { defineTool } from "../tool.js";
+import { withUserContext } from "../../db/with-user-context.js";
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -50,37 +51,42 @@ export function buildAddForgedToolTestTool(pool: Pool, userEntraId: string) {
     annotations: { readOnly: false },
 
     execute: async (_ctx, input) => {
-      // Verify tool ownership via RLS-aware query.
-      const { rows: ownerRows } = await pool.query<{ id: string }>(
-        `SELECT id::text
-           FROM skill_library
-          WHERE id = $1::uuid
-            AND kind = 'forged_tool'
-            AND proposed_by_user_entra_id = $2`,
-        [input.forged_tool_id, userEntraId],
-      );
-
-      if (ownerRows.length === 0) {
-        throw new Error(
-          `add_forged_tool_test: tool '${input.forged_tool_id}' not found or you are not the owner.`,
+      // Single transaction: ownership check + INSERT inside one
+      // withUserContext so RLS sees a non-empty caller. Production runs
+      // as `chemclaw_app` (FORCE RLS) — bare pool.query would fail the
+      // policy that gates on app.current_user_entra_id.
+      const testId = await withUserContext(pool, userEntraId, async (client) => {
+        const { rows: ownerRows } = await client.query<{ id: string }>(
+          `SELECT id::text
+             FROM skill_library
+            WHERE id = $1::uuid
+              AND kind = 'forged_tool'
+              AND proposed_by_user_entra_id = $2`,
+          [input.forged_tool_id, userEntraId],
         );
-      }
 
-      const { rows } = await pool.query<{ id: string }>(
-        `INSERT INTO forged_tool_tests
-           (forged_tool_id, input_json, expected_output_json, tolerance_json, kind)
-         VALUES ($1::uuid, $2::jsonb, $3::jsonb, $4::jsonb, $5)
-         RETURNING id::text`,
-        [
-          input.forged_tool_id,
-          JSON.stringify(input.input_json),
-          JSON.stringify(input.expected_output_json),
-          input.tolerance_json ? JSON.stringify(input.tolerance_json) : null,
-          input.kind,
-        ],
-      );
+        if (ownerRows.length === 0) {
+          throw new Error(
+            `add_forged_tool_test: tool '${input.forged_tool_id}' not found or you are not the owner.`,
+          );
+        }
 
-      const testId = rows[0]?.id;
+        const { rows } = await client.query<{ id: string }>(
+          `INSERT INTO forged_tool_tests
+             (forged_tool_id, input_json, expected_output_json, tolerance_json, kind)
+           VALUES ($1::uuid, $2::jsonb, $3::jsonb, $4::jsonb, $5)
+           RETURNING id::text`,
+          [
+            input.forged_tool_id,
+            JSON.stringify(input.input_json),
+            JSON.stringify(input.expected_output_json),
+            input.tolerance_json ? JSON.stringify(input.tolerance_json) : null,
+            input.kind,
+          ],
+        );
+        return rows[0]?.id;
+      });
+
       if (!testId) {
         throw new Error("add_forged_tool_test: insert did not return an id.");
       }

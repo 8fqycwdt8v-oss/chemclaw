@@ -16,6 +16,7 @@ import {
 import type { SandboxClient, SandboxHandle } from "../../../src/core/sandbox.js";
 import { StubLlmProvider } from "../../../src/llm/provider.js";
 import { makeCtx } from "../../helpers/make-ctx.js";
+import { createMockPool } from "../../helpers/mock-pool.js";
 import type { Pool } from "pg";
 
 // ---------------------------------------------------------------------------
@@ -26,21 +27,23 @@ function makeMockPool(
   existsResult = false,
   skillExistsResult = false,
 ): Pool {
-  return {
-    query: vi.fn().mockImplementation((sql: string) => {
+  // forge_tool now wraps every read + write in withUserContext; createMockPool
+  // swallows BEGIN/COMMIT/set_config and routes data SQL to the handler.
+  const { pool } = createMockPool({
+    dataHandler: async (sql: string) => {
       if (sql.includes("EXISTS") && sql.includes("skill_library")) {
-        return Promise.resolve({ rows: [{ exists: skillExistsResult }] });
+        return { rows: [{ exists: skillExistsResult }], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
       }
       if (sql.includes("EXISTS")) {
-        return Promise.resolve({ rows: [{ exists: existsResult }] });
+        return { rows: [{ exists: existsResult }], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
       }
-      // INSERT queries return a row id.
       if (sql.includes("INSERT INTO skill_library")) {
-        return Promise.resolve({ rows: [{ id: randomUUID() }] });
+        return { rows: [{ id: randomUUID() }], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
       }
-      return Promise.resolve({ rows: [] });
-    }),
-  } as unknown as Pool;
+      return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
+    },
+  });
+  return pool;
 }
 
 function makeMockSandboxClient(opts?: {

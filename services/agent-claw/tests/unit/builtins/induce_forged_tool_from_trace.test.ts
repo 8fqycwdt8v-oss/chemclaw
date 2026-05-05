@@ -12,6 +12,7 @@ import {
 } from "../../../src/tools/builtins/induce_forged_tool_from_trace.js";
 import { StubLlmProvider } from "../../../src/llm/provider.js";
 import { makeCtx } from "../../helpers/make-ctx.js";
+import { createMockPool } from "../../helpers/mock-pool.js";
 import type { Pool } from "pg";
 import type { SandboxClient, SandboxHandle } from "../../../src/core/sandbox.js";
 
@@ -20,23 +21,25 @@ import type { SandboxClient, SandboxHandle } from "../../../src/core/sandbox.js"
 // ---------------------------------------------------------------------------
 
 function makeMockPool(_existsOk = true): Pool {
-  return {
-    query: vi.fn().mockImplementation((sql: string) => {
+  // forge_tool reaches transitively from induce_forged_tool_from_trace; it
+  // now wraps reads + writes in withUserContext, so use createMockPool to
+  // swallow BEGIN/COMMIT/set_config noise.
+  const empty = { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
+  const { pool } = createMockPool({
+    dataHandler: async (sql: string) => {
       if (sql.includes("EXISTS") && sql.includes("tools")) {
-        return Promise.resolve({ rows: [{ exists: false }] });
+        return { rows: [{ exists: false }], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
       }
       if (sql.includes("EXISTS") && sql.includes("skill_library")) {
-        return Promise.resolve({ rows: [{ exists: false }] });
+        return { rows: [{ exists: false }], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
       }
       if (sql.includes("INSERT INTO skill_library")) {
-        return Promise.resolve({ rows: [{ id: randomUUID() }] });
+        return { rows: [{ id: randomUUID() }], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
       }
-      if (sql.includes("INSERT INTO forged_tool_tests")) {
-        return Promise.resolve({ rows: [] });
-      }
-      return Promise.resolve({ rows: [] });
-    }),
-  } as unknown as Pool;
+      return empty;
+    },
+  });
+  return pool;
 }
 
 function makeMockSandbox(stdout = '{"__chemclaw_output__": {"result": 42}}'): SandboxClient {

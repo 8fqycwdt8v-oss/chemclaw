@@ -11,6 +11,7 @@ import { promises as fsp } from "fs";
 import { buildForgeToolTool, buildGenerationPrompt } from "../../../src/tools/builtins/forge_tool.js";
 import { StubLlmProvider } from "../../../src/llm/provider.js";
 import { makeCtx } from "../../helpers/make-ctx.js";
+import { createMockPool } from "../../helpers/mock-pool.js";
 import type { Pool } from "pg";
 import type { SandboxClient, SandboxHandle } from "../../../src/core/sandbox.js";
 
@@ -28,32 +29,30 @@ const GOOD_CASES = [
 ];
 
 function makeMockPool(parentVersion = 1, parentScriptsPath?: string): Pool {
-  return {
-    query: vi.fn().mockImplementation((sql: string) => {
+  // forge_tool now wraps reads + writes in withUserContext / withSystemContext;
+  // createMockPool transparently handles BEGIN/COMMIT/set_config noise.
+  const empty = { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
+  const { pool } = createMockPool({
+    dataHandler: async (sql: string) => {
       if (sql.includes("parent_tool_id") || (sql.includes("kind = 'forged_tool'") && sql.includes("id = $1"))) {
-        // parent lookup
-        return Promise.resolve({
+        return {
           rows: [{ id: randomUUID(), version: parentVersion, scripts_path: parentScriptsPath ?? null }],
-        });
+          rowCount: 1, command: "SELECT", oid: 0, fields: [],
+        };
       }
       if (sql.includes("EXISTS") && sql.includes("tools")) {
-        return Promise.resolve({ rows: [{ exists: false }] });
+        return { rows: [{ exists: false }], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
       }
       if (sql.includes("EXISTS") && sql.includes("skill_library")) {
-        return Promise.resolve({ rows: [{ exists: false }] });
+        return { rows: [{ exists: false }], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
       }
       if (sql.includes("INSERT INTO skill_library")) {
-        return Promise.resolve({ rows: [{ id: randomUUID() }] });
+        return { rows: [{ id: randomUUID() }], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
       }
-      if (sql.includes("INSERT INTO forged_tool_tests")) {
-        return Promise.resolve({ rows: [] });
-      }
-      if (sql.includes("INSERT INTO tools")) {
-        return Promise.resolve({ rows: [] });
-      }
-      return Promise.resolve({ rows: [] });
-    }),
-  } as unknown as Pool;
+      return empty;
+    },
+  });
+  return pool;
 }
 
 function makeMockSandbox(): SandboxClient {
@@ -108,14 +107,14 @@ describe("forge_tool — parent_tool_id forking", () => {
   });
 
   it("throws when parent_tool_id is not found", async () => {
-    const pool: Pool = {
-      query: vi.fn().mockImplementation((sql: string) => {
+    const { pool } = createMockPool({
+      dataHandler: async (sql: string) => {
         if (sql.includes("kind = 'forged_tool'")) {
-          return Promise.resolve({ rows: [] }); // not found
+          return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] }; // not found
         }
-        return Promise.resolve({ rows: [{ exists: false }] });
-      }),
-    } as unknown as Pool;
+        return { rows: [{ exists: false }], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
+      },
+    });
 
     const llm = new StubLlmProvider();
     const tool = buildForgeToolTool(pool, makeMockSandbox(), llm, tmpDir, "user@test.com");
@@ -133,14 +132,13 @@ describe("forge_tool — parent_tool_id forking", () => {
   });
 
   it("new tool (no parent) has version 1", async () => {
-    const _pool = makeMockPool();
-    const pool2: Pool = {
-      query: vi.fn().mockImplementation((sql: string) => {
-        if (sql.includes("EXISTS")) return Promise.resolve({ rows: [{ exists: false }] });
-        if (sql.includes("INSERT INTO skill_library")) return Promise.resolve({ rows: [{ id: randomUUID() }] });
-        return Promise.resolve({ rows: [] });
-      }),
-    } as unknown as Pool;
+    const { pool: pool2 } = createMockPool({
+      dataHandler: async (sql: string) => {
+        if (sql.includes("EXISTS")) return { rows: [{ exists: false }], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
+        if (sql.includes("INSERT INTO skill_library")) return { rows: [{ id: randomUUID() }], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+        return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
+      },
+    });
 
     const llm = new StubLlmProvider();
     llm.enqueueJson({ python_code: "result = 42", explanation: "new" });
@@ -170,14 +168,14 @@ describe("forge_tool — forged_by_model / forged_by_role passed through", () =>
 
   it("persists forged_by_model and forged_by_role in the INSERT", async () => {
     const queries: string[] = [];
-    const pool: Pool = {
-      query: vi.fn().mockImplementation((sql: string, _params?: unknown[]) => {
+    const { pool } = createMockPool({
+      dataHandler: async (sql: string) => {
         queries.push(sql);
-        if (sql.includes("EXISTS")) return Promise.resolve({ rows: [{ exists: false }] });
-        if (sql.includes("INSERT INTO skill_library")) return Promise.resolve({ rows: [{ id: randomUUID() }] });
-        return Promise.resolve({ rows: [] });
-      }),
-    } as unknown as Pool;
+        if (sql.includes("EXISTS")) return { rows: [{ exists: false }], rowCount: 1, command: "SELECT", oid: 0, fields: [] };
+        if (sql.includes("INSERT INTO skill_library")) return { rows: [{ id: randomUUID() }], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
+        return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
+      },
+    });
 
     const llm = new StubLlmProvider();
     llm.enqueueJson({ python_code: "result = 42", explanation: "role test" });

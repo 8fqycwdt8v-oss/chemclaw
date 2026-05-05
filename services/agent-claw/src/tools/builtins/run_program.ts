@@ -26,6 +26,7 @@ import { z } from "zod";
 import type { Pool } from "pg";
 import { defineTool } from "../tool.js";
 import type { SandboxClient } from "../../core/sandbox.js";
+import { withSystemContext } from "../../db/with-user-context.js";
 // Citation subset used by run_program — only kg_fact and external_url are applicable
 // since the sandbox produces computed results, not document retrieval.
 interface RunProgramCitation {
@@ -265,10 +266,15 @@ export function buildRunProgramTool(
         );
       }
 
-      // Load MCP URLs from DB (cached in stub).
+      // Load MCP URLs from DB (cached in stub). `mcp_tools` is a
+      // system catalog; under FORCE RLS + chemclaw_app the policy gates on
+      // a non-empty caller, so wrap in withSystemContext (sentinel
+      // '__system__' user) — same pattern as routes/optimizer.ts.
       if (!_stubCache) {
-        const { rows } = await pool.query<McpToolRow>(
-          `SELECT service_name, base_url FROM mcp_tools WHERE enabled = true`,
+        const { rows } = await withSystemContext(pool, (client) =>
+          client.query<McpToolRow>(
+            `SELECT service_name, base_url FROM mcp_tools WHERE enabled = true`,
+          ),
         );
         const mcpUrls: Record<string, string> = {};
         for (const row of rows) {

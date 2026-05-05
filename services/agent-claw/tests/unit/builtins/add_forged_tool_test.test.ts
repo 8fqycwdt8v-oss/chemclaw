@@ -1,9 +1,10 @@
 // Tests for tools/builtins/add_forged_tool_test.ts — Phase D.5.
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect } from "vitest";
 import { randomUUID } from "crypto";
 import { buildAddForgedToolTestTool } from "../../../src/tools/builtins/add_forged_tool_test.js";
 import { makeCtx } from "../../helpers/make-ctx.js";
+import { createMockPool } from "../../helpers/mock-pool.js";
 import type { Pool } from "pg";
 
 const ctx = makeCtx();
@@ -15,21 +16,23 @@ function makeMockPool(opts?: {
   const insertId = opts?.insertId ?? randomUUID();
   const ownerFound = opts?.ownerFound ?? true;
 
-  return {
-    query: vi.fn().mockImplementation((sql: string) => {
+  // Production wraps the SELECT + INSERT in a single withUserContext
+  // transaction; createMockPool transparently swallows BEGIN/COMMIT/
+  // set_config and routes data SQL to the dataHandler below.
+  const { pool } = createMockPool({
+    dataHandler: async (sql: string) => {
       if (sql.includes("proposed_by_user_entra_id")) {
-        // Ownership check.
-        if (ownerFound) {
-          return Promise.resolve({ rows: [{ id: "tool-id" }] });
-        }
-        return Promise.resolve({ rows: [] });
+        return ownerFound
+          ? { rows: [{ id: "tool-id" }], rowCount: 1, command: "SELECT", oid: 0, fields: [] }
+          : { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
       }
       if (sql.includes("INSERT INTO forged_tool_tests")) {
-        return Promise.resolve({ rows: [{ id: insertId }] });
+        return { rows: [{ id: insertId }], rowCount: 1, command: "INSERT", oid: 0, fields: [] };
       }
-      return Promise.resolve({ rows: [] });
-    }),
-  } as unknown as Pool;
+      return { rows: [], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
+    },
+  });
+  return pool;
 }
 
 describe("buildAddForgedToolTestTool — happy path", () => {
