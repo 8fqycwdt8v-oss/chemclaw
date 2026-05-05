@@ -30,9 +30,44 @@ logger = logging.getLogger(__name__)
 # Gates
 # ---------------------------------------------------------------------------
 
+# Defaults — overridable per-deploy via `config_settings`. The
+# `apply_config_overrides()` helper below mutates these at run_once() startup
+# so a tenant can tune the gate without redeploying. The DEFAULTS dict
+# preserves the originals so a test can reset state cleanly.
 PROMOTION_SUCCESS_RATE = 0.55
 DEMOTION_SUCCESS_RATE = 0.40
 MIN_RUNS = 30
+
+_THRESHOLD_DEFAULTS = {
+    "PROMOTION_SUCCESS_RATE": PROMOTION_SUCCESS_RATE,
+    "DEMOTION_SUCCESS_RATE": DEMOTION_SUCCESS_RATE,
+    "MIN_RUNS": MIN_RUNS,
+}
+
+
+def apply_config_overrides(dsn: str) -> None:
+    """Pull overrides from `config_settings` and mutate the module-level
+    threshold constants. Called once per nightly run from `run_once()`.
+
+    Uses defaults on any DB error (the registry itself logs the cause)
+    so a config_settings outage can't block the promotion pass.
+    """
+    global PROMOTION_SUCCESS_RATE, DEMOTION_SUCCESS_RATE, MIN_RUNS
+    from services.common.config_registry import ConfigRegistry  # noqa: PLC0415
+    reg = ConfigRegistry(dsn=dsn)
+    PROMOTION_SUCCESS_RATE = reg.get_float(
+        "optimizer.promotion_success_rate", _THRESHOLD_DEFAULTS["PROMOTION_SUCCESS_RATE"],
+    )
+    DEMOTION_SUCCESS_RATE = reg.get_float(
+        "optimizer.demotion_success_rate", _THRESHOLD_DEFAULTS["DEMOTION_SUCCESS_RATE"],
+    )
+    MIN_RUNS = reg.get_int(
+        "optimizer.min_runs", _THRESHOLD_DEFAULTS["MIN_RUNS"],
+    )
+    logger.info(
+        "promoter thresholds: promotion=%.2f demotion=%.2f min_runs=%d",
+        PROMOTION_SUCCESS_RATE, DEMOTION_SUCCESS_RATE, MIN_RUNS,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -238,6 +273,7 @@ def run_once() -> None:
         f"user={os.environ.get('POSTGRES_USER', 'chemclaw')} "
         f"password={os.environ.get('POSTGRES_PASSWORD', '')}"
     )
+    apply_config_overrides(dsn)
     with psycopg.connect(dsn) as conn:
         events = run_promotion_pass(conn)
     logger.info("Promotion pass complete — %d events", len(events))

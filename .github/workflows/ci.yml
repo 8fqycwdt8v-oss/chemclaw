@@ -102,6 +102,7 @@ jobs:
             tests/unit/test_mcp_doc_fetcher.py \
             tests/unit/test_kg_first_system_prompt_seed.py \
             tests/unit/optimizer/test_session_purger.py \
+            tests/unit/optimizer/test_skill_promoter.py \
             tests/unit/mcp_kg/ \
             tests/unit/projectors/ \
             services/mcp_tools/common/tests/ \
