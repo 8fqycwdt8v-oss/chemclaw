@@ -111,4 +111,40 @@ spec:
             - name: MIN_AGE_HOURS
               value: {{ .Values.optimizer.sessionPurger.minAgeHours | quote }}
 
+# audit-partition-maintainer is a long-lived Deployment (continuous loop
+# with its own internal sleep) like session-purger — a CronJob would also
+# work here but keeping the daemon resident matches the existing pattern
+# for "tick once a day" optimizer plumbing and avoids cron-shape duplication.
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: audit-partition-maintainer
+  labels:
+    app: audit-partition-maintainer
+    profile: optimizer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: audit-partition-maintainer
+  template:
+    metadata:
+      labels:
+        app: audit-partition-maintainer
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: audit-partition-maintainer
+          image: {{ .Values.optimizer.auditPartitionMaintainer.image }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          env:
+            - name: MONTHS_AHEAD
+              value: {{ .Values.optimizer.auditPartitionMaintainer.monthsAhead | quote }}
+            - name: POLL_INTERVAL_SECONDS
+              value: {{ .Values.optimizer.auditPartitionMaintainer.pollIntervalSeconds | quote }}
+
 {{- end }}
