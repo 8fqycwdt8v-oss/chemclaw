@@ -303,14 +303,16 @@ To replay: `DELETE FROM projection_acks WHERE projector_name='<name>'` and resta
   - The `source-cache` post-tool hook + `kg_source_cache` projector pick both up via the unchanged regex `/^(query|fetch)_(eln|lims|instrument)_/`.
   - `eln_json_importer` retired from live path; preserved as `services/ingestion/eln_json_importer.legacy/` for one-shot bulk migrations.
   - Helm chart: `infra/helm/` with profile flags. `services/agent/` deleted; Streamlit `AGENT_BASE_URL` defaults to :3101. ADRs: `docs/adr/004-harness-engineering.md`, `005-data-layer-revision.md`. Runbook: `docs/runbooks/harness-rollback.md`.
+- **Wave-2 audit (2026-05-04 → 05)**: PRs #87–#96 closed the 2026-05-04 deep-review drift list (Wave 1: DRIFT-A/B/C/D/E/F/I/K) and the A02–A14 cluster from the design-rule sweep (Wave 2: configure_logging in projectors, redaction stack-frame leakage, harness verification, reanimator audience binding, env-var reconciliation, chemistry-tool input validation, workflow_engine ingestion-event emit + poll-conn reuse, dead-code sweep, DNS-rebinding TOCTOU + traceback redaction + ReDoS scanner + CORS null-origin, compound-catalog RLS gap via `db/init/39_compound_catalog_rls.sql`, compound_classifier per-inchikey advisory lock). New supporting modules: `services/agent-claw/src/observability/redact-string.ts` (length-bounded redaction primitive shared by Pino logger and the post_turn hook). Tier 5 verification report: `docs/review/2026-05-05/99-final-verification.md`.
 
 ## Test counts (current branch)
 
 ```
-services/agent-claw  npm test           → 772+ passed (146 files)
+services/agent-claw  npm test           → 1118 passed (153 files)
 services/agent-claw  npx tsc --noEmit   → ok
-services/paperclip   npm test           → 17 passed
-.venv/bin/pytest services/mcp_tools/common/tests/ -q  → 33 passed
+services/paperclip   npm test           → 23 passed
+.venv/bin/pytest services/mcp_tools/common/tests/ -q  → 87 passed
+.venv/bin/pytest services/queue/tests services/workflow_engine/tests services/paperclip/tests -q  → 18 passed
 npm audit (root)                         → 0 vulnerabilities
 ```
 
@@ -350,6 +352,6 @@ Adding a hook:
 2. YAML at `hooks/<name>.yaml` (declares the lifecycle phase).
 3. Add to `BUILTIN_REGISTRARS` in `core/hook-loader.ts`.
 4. Vitest under `services/agent-claw/tests/unit/`.
-5. Bump `MIN_EXPECTED_HOOKS` in `index.ts`.
+5. Bump `MIN_EXPECTED_HOOKS` in `services/agent-claw/src/bootstrap/start.ts`.
 
 The loader returns `HookLoadResult.skipped`, so YAML-without-registrar (or vice versa) surfaces at boot.

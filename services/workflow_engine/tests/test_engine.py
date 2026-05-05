@@ -3,15 +3,15 @@
 from services.workflow_engine.main import EngineSettings, WorkflowEngine
 
 
-def test_resolve_jmespath_dotted_path():
+def test_resolve_dotted_path():
     eng = WorkflowEngine(EngineSettings())
     scope = {"steps": {"first": {"output": {"energy_hartree": -5.123}}}}
-    assert eng._resolve_jmespath("steps.first.output.energy_hartree", scope) == -5.123
+    assert eng._resolve_dotted_path("steps.first.output.energy_hartree", scope) == -5.123
 
 
-def test_resolve_jmespath_missing_returns_none():
+def test_resolve_dotted_path_missing_returns_none():
     eng = WorkflowEngine(EngineSettings())
-    assert eng._resolve_jmespath("steps.missing.x", {"steps": {}}) is None
+    assert eng._resolve_dotted_path("steps.missing.x", {"steps": {}}) is None
 
 
 def test_tool_url_for_known_tools():
