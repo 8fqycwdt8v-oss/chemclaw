@@ -4,37 +4,20 @@
 // Returns GEPA run history from prompt_registry (gepa_metadata),
 // skill promotion events, shadow comparisons, and golden-set score history.
 //
-// AUTH: every route requires the caller's user to have role='admin' in any
-// project (or the special wildcard project_id 00000000-0000-0000-0000-000000000000
-// used by the seed for org-wide admin). Optimizer data includes prompt
-// versions and shadow scores derived from real chats — must not be exposed
-// to non-admin callers.
+// AUTH: every route requires the caller to be a global_admin per the canonical
+// admin_roles table (see middleware/require-admin.ts). Optimizer data
+// includes prompt versions and shadow scores derived from real chats — must
+// not be exposed to non-admin callers.
 
 import type { FastifyInstance, FastifyReply, FastifyRequest } from "fastify";
 import type { Pool } from "pg";
-import { withUserContext, withSystemContext } from "../db/with-user-context.js";
+import { withSystemContext } from "../db/with-user-context.js";
+import { isAdmin } from "../middleware/require-admin.js";
 
 interface OptimizerRouteDeps {
   pool: Pool;
   /** Resolves the calling user's Entra-ID. Throws (→ 401) if missing. */
   getUser: (req: FastifyRequest) => string;
-}
-
-async function requireAdmin(
-  pool: Pool,
-  user: string,
-): Promise<boolean> {
-  return await withUserContext(pool, user, async (client) => {
-    const r = await client.query<{ has_admin: boolean }>(
-      `SELECT EXISTS (
-         SELECT 1 FROM user_project_access
-          WHERE user_entra_id = $1
-            AND role = 'admin'
-       ) AS has_admin`,
-      [user],
-    );
-    return r.rows[0]?.has_admin === true;
-  });
 }
 
 async function gateAdmin(
@@ -44,11 +27,10 @@ async function gateAdmin(
   reply: FastifyReply,
 ): Promise<string | null> {
   const user = getUser(req);
-  const ok = await requireAdmin(pool, user);
-  if (!ok) {
+  if (!(await isAdmin(pool, user))) {
     reply.code(403).send({
       error: "forbidden",
-      detail: "optimizer routes require admin role on any project",
+      detail: "optimizer routes require global_admin",
     });
     return null;
   }

@@ -1,5 +1,5 @@
-// Tests for routes/optimizer.ts — the four read-only GETs gated by an
-// admin role on user_project_access.
+// Tests for routes/optimizer.ts — the four read-only GETs gated by the
+// canonical admin_roles check (middleware/require-admin.ts).
 //
 // BACKLOG-80 noted no `tests/unit/*-route.test.ts` covered the registered
 // endpoints; this file pins the admin gate (200 vs 403) and the basic
@@ -41,10 +41,11 @@ function makePool(opts: StubOpts): Pool {
           ) {
             return { rows: [] as T[], rowCount: 0, command: "SET", oid: 0, fields: [] };
           }
-          // Admin gate uses an EXISTS subquery on user_project_access.
-          if (trimmed.includes("user_project_access") && trimmed.includes("has_admin")) {
+          // Canonical admin gate calls SELECT current_user_is_admin($1, $2)
+          // (middleware/require-admin.ts → admin_roles via SECURITY DEFINER).
+          if (trimmed.includes("current_user_is_admin")) {
             return {
-              rows: [{ has_admin: opts.isAdmin }] as unknown as T[],
+              rows: [{ is_admin: opts.isAdmin }] as unknown as T[],
               rowCount: 1,
               command: "SELECT",
               oid: 0,

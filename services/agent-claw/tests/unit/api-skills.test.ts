@@ -26,8 +26,14 @@ function writeSkill(dir: string, id: string, tools: string[] = ["search_knowledg
 function buildAdminPool(): Pool {
   const { pool } = createMockPool({
     dataHandler: async (sql) => {
-      if (sql.includes("user_project_access") && sql.includes("admin")) {
-        return { rows: [{ has_admin: true }], rowCount: 1 } as never;
+      // Canonical admin gate (middleware/require-admin.ts) calls
+      // SELECT current_user_is_admin($1, $2). Audit log INSERT lands on
+      // admin_audit_log; return a fake id so RLS-success branch is taken.
+      if (sql.includes("current_user_is_admin")) {
+        return { rows: [{ is_admin: true }], rowCount: 1 } as never;
+      }
+      if (sql.includes("admin_audit_log")) {
+        return { rows: [{ id: "00000000-0000-0000-0000-000000000001" }], rowCount: 1 } as never;
       }
       return { rows: [], rowCount: 0 } as never;
     },
