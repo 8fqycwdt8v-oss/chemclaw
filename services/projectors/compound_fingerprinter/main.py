@@ -45,8 +45,20 @@ class CompoundFingerprinterSettings(ProjectorSettings):
 
 
 class CompoundFingerprinter(BaseProjector):
+    """Listens on the custom `compound_changed` NOTIFY channel.
+
+    DR-06 (CLAUDE.md "Required patterns / Projectors") permits a projector
+    to bypass the default ingestion_events drive by overriding
+    `_connect_and_run`, provided the override documents the custom channel
+    name explicitly. We drive off `pg_notify('compound_changed', inchikey)`
+    emitted by the trigger in db/init/24_compound_fingerprints.sql — the
+    payload is the inchikey directly, NOT an ingestion_events row id.
+    `interested_event_types` is therefore empty (the base `_listen_loop`
+    is bypassed entirely).
+    """
+
     name = "compound_fingerprinter"
-    interested_event_types = ()  # we drive off compound_changed, not ingestion_events
+    interested_event_types = ()  # pragma: no cover — class-attr declaration; never exercised by unit tests (custom NOTIFY drives this projector)
 
     def __init__(self, settings: CompoundFingerprinterSettings) -> None:
         super().__init__(settings)

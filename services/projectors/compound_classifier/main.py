@@ -36,6 +36,17 @@ _NOTIFY_CHANNEL = "compound_fingerprinted"
 
 
 class CompoundClassifier(BaseProjector):
+    """Listens on the custom `compound_fingerprinted` NOTIFY channel.
+
+    DR-06 (CLAUDE.md "Required patterns / Projectors") permits a projector
+    to bypass the default ingestion_events drive by overriding
+    `_connect_and_run`, provided the override documents the custom channel
+    name explicitly. We drive off `pg_notify('compound_fingerprinted', inchikey)`
+    emitted by the compound_fingerprinter projector — the payload is the
+    inchikey directly, NOT an ingestion_events row id. `interested_event_types`
+    is therefore empty (the base `_listen_loop` is bypassed entirely).
+    """
+
     name = "compound_classifier"
     interested_event_types = ()
 

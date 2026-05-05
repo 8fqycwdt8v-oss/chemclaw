@@ -81,6 +81,17 @@ class BaseProjector(ABC):
         event will still be acked).
       - Raise any other exception for transient failures (the event will be
         retried on the next NOTIFY).
+
+    Custom NOTIFY channels (DR-06): Two existing projectors
+    (compound_classifier, compound_fingerprinter) drive off custom
+    pg_notify channels (`compound_fingerprinted`, `compound_changed`)
+    where the payload is a domain key (inchikey) rather than an
+    ingestion_events row id. They override `_connect_and_run` and set
+    `interested_event_types = ()` so the default `_listen_loop` is
+    bypassed entirely. If you need this pattern, follow their template:
+    set the class docstring to name the channel + payload semantics
+    explicitly, and keep `interested_event_types` empty so a future
+    reader doesn't expect handle() to fire.
     """
 
     name: str = "base"
