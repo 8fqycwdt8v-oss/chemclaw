@@ -18,7 +18,10 @@ import { hydrateScratchpad } from "../core/session-state.js";
 import { lifecycle } from "../core/runtime.js";
 import { runWithRequestContext } from "../core/request-context.js";
 import { hashUser } from "../observability/user-hash.js";
+import { startRootTurnSpan, recordSpanError } from "../observability/spans.js";
+import { context as otelContext, trace } from "@opentelemetry/api";
 import { writeEvent, setupSse } from "../streaming/sse.js";
+import { isAbortLikeError } from "./chat-helpers.js";
 import type { ToolContext } from "../core/types.js";
 import type { Pool } from "pg";
 
@@ -87,12 +90,28 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     const conn: { closed: boolean } = { closed: false };
     req.raw.on("close", () => { conn.closed = true; });
 
+    // Open the OTel root span for the plan-approve turn so every hook
+    // and tool span emitted by `tracer.startActiveSpan` nests under it
+    // (mirrors /api/chat). Without the span Langfuse shows hook/tool
+    // spans as orphans and the `prompt:agent.system` tag never lands on
+    // the trace, so the GEPA runner's tag-filtered fetch misses these
+    // executions.
+    const rootSpan = startRootTurnSpan({
+      traceId: parsed.data.plan_id,
+      userEntraId: user,
+      model: deps.config.AGENT_MODEL,
+      promptName: "agent.system",
+    });
+    const turnCtx = trace.setSpan(otelContext.active(), rootSpan);
     try {
       writeEvent(reply, { type: "text_delta", delta: "Plan approved — executing…\n\n" });
 
       // Wrap in AsyncLocalStorage so outbound MCP calls inherit the user
       // and the upstream client's AbortSignal — a mid-stream disconnect
       // here cancels both LLM calls and any in-flight MCP fetches.
+      // The OTel `otelContext.with(turnCtx, …)` wrap parents hook + tool
+      // spans under rootSpan; ALS context manager threads it through
+      // the awaits inside runHarness.
       const result = await runWithRequestContext(
         {
           userEntraId: user,
@@ -101,19 +120,21 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
           userHash: hashUser(user),
         },
         () =>
-          runHarness({
-            messages: plan.messages,
-            tools,
-            llm: deps.llm,
-            budget,
-            lifecycle,
-            ctx,
-            signal: req.signal,
-            // Engage the permission resolver in enforce mode so DB-backed
-            // permission_policies fire on the plan/approve path as they do
-            // on /api/chat. Permissive default (allow when no policy matches).
-            permissions: { permissionMode: "enforce" },
-          }),
+          otelContext.with(turnCtx, () =>
+            runHarness({
+              messages: plan.messages,
+              tools,
+              llm: deps.llm,
+              budget,
+              lifecycle,
+              ctx,
+              signal: req.signal,
+              // Engage the permission resolver in enforce mode so DB-backed
+              // permission_policies fire on the plan/approve path as they do
+              // on /api/chat. Permissive default (allow when no policy matches).
+              permissions: { permissionMode: "enforce" },
+            }),
+          ),
       );
 
       if (!conn.closed) {
@@ -125,11 +146,32 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
         });
       }
     } catch (err) {
-      req.log.error({ err }, "plan/approve: harness failed");
-      if (!conn.closed) {
-        writeEvent(reply, { type: "error", error: "internal" });
+      try { recordSpanError(rootSpan, err); } catch { /* ignore */ }
+      // Distinguish a client-cancelled abort from a real failure: an
+      // AbortError (mid-stream disconnect / req.signal aborted) is not
+      // an "internal" error — emit the typed `cancelled` event instead
+      // so the SSE consumer (and DB last_finish_reason analytics) sees
+      // the cancellation as such rather than a server-side bug.
+      if (isAbortLikeError(err) || req.signal.aborted) {
+        req.log.info(
+          { err: err instanceof Error ? err.message : err },
+          "plan/approve: stream cancelled by client",
+        );
+        if (!conn.closed) {
+          try {
+            writeEvent(reply, { type: "cancelled" });
+          } catch {
+            // socket already gone
+          }
+        }
+      } else {
+        req.log.error({ err }, "plan/approve: harness failed");
+        if (!conn.closed) {
+          writeEvent(reply, { type: "error", error: "internal" });
+        }
       }
     } finally {
+      try { rootSpan.end(); } catch { /* OTel no-op or already ended */ }
       try { reply.raw.end(); } catch { /* already closed */ }
     }
   });

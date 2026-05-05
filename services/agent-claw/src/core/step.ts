@@ -117,6 +117,14 @@ async function _runOneTool(opts: {
   // legacy callers (sub-agents, deep-research, plan.ts) keep their prior
   // semantics — only the pre_tool hook chain gates execution.
   // ---------------------------------------------------------------------
+  // Track the resolver outcome so it can land on the tool span as
+  // `permission.decision` for Langfuse / OTLP. "skipped" means the route
+  // didn't pass `permissions:` (legacy callers); "allow"/"ask" mean the
+  // resolver admitted execution; "deny"/"defer" never reach withToolSpan
+  // because we short-circuit below.
+  let permissionDecisionTag: "allow" | "ask" | "deny" | "defer" | "skipped" =
+    "skipped";
+  let permissionReasonTag: string | undefined;
   if (permissions) {
     const permResult = await resolveDecision({
       tool,
@@ -125,6 +133,8 @@ async function _runOneTool(opts: {
       options: permissions,
       lifecycle,
     });
+    permissionDecisionTag = permResult.decision;
+    permissionReasonTag = permResult.reason;
 
     if (permResult.decision === "deny" || permResult.decision === "defer") {
       const denyOutput = {
@@ -196,6 +206,8 @@ async function _runOneTool(opts: {
         toolId,
         readOnly: tool.annotations?.readOnly,
         inBatch: opts.inBatch ?? false,
+        permissionDecision: permissionDecisionTag,
+        permissionReason: permissionReasonTag,
       },
       () => tool.execute(ctx, parsedInput),
     );

@@ -31,6 +31,8 @@ import { hydrateScratchpad, persistTurnState } from "./session-state.js";
 import { lifecycle } from "./runtime.js";
 import { runWithRequestContext } from "./request-context.js";
 import { hashUser } from "../observability/user-hash.js";
+import { startRootTurnSpan, recordSpanError } from "../observability/spans.js";
+import { context as otelContext, trace } from "@opentelemetry/api";
 import {
   PaperclipClient,
   PaperclipBudgetError,
@@ -203,16 +205,41 @@ async function _runChainedHarnessInner(
         },
       });
 
-      const r = await runHarness({
-        messages: currentMessages,
-        tools,
-        llm,
-        budget,
-        lifecycle,
-        ctx,
-        signal: opts.signal,
-        permissions: { permissionMode: "enforce" },
+      // Open a per-iteration OTel root span so every hook + tool span
+      // emitted via `tracer.startActiveSpan` nests under it and Langfuse
+      // shows the chain as a sequence of `chat_turn:<sessionId>` traces
+      // tagged `prompt:agent.system`. Without this wrap the spans are
+      // orphans of whatever context was active when runChainedHarness
+      // was called — request scope for plan/run + resume, no scope at
+      // all for the reanimator daemon.
+      const turnSpan = startRootTurnSpan({
+        traceId: `${sessionId}:turn-${autoTurns}`,
+        userEntraId: user,
+        model: cfg.AGENT_MODEL,
+        promptName: "agent.system",
+        sessionId,
       });
+      const turnCtx = trace.setSpan(otelContext.active(), turnSpan);
+      let r: Awaited<ReturnType<typeof runHarness>>;
+      try {
+        r = await otelContext.with(turnCtx, () =>
+          runHarness({
+            messages: currentMessages,
+            tools,
+            llm,
+            budget,
+            lifecycle,
+            ctx,
+            signal: opts.signal,
+            permissions: { permissionMode: "enforce" },
+          }),
+        );
+      } catch (err) {
+        try { recordSpanError(turnSpan, err); } catch { /* ignore */ }
+        throw err;
+      } finally {
+        try { turnSpan.end(); } catch { /* already ended / no-op */ }
+      }
       totalSteps += r.stepsUsed;
       finalFinishReason = r.finishReason;
 

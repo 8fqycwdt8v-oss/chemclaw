@@ -384,26 +384,36 @@ async function handleChat(
         : undefined,
     });
 
-    const result = await runHarness({
-      messages,
-      tools,
-      llm: deps.llm,
-      budget,
-      lifecycle,
-      ctx,
-      streamSink: sink,
-      sessionId: sessionId ?? undefined,
-      // Forward the upstream client's AbortSignal so a mid-stream disconnect
-      // (network drop, browser tab closed, curl --max-time) cancels LLM
-      // calls + MCP fetches instead of running them to completion.
-      signal: req.signal,
-      // Phase 3 of the configuration concept (Initiative 5):
-      // engage the permission resolver in 'enforce' mode so DB-backed
-      // permission_policies actually fire. Permissive default (allow when
-      // no policy matches) preserves current behaviour until an admin
-      // adds a deny rule via /api/admin/permission-policies.
-      permissions: { permissionMode: "enforce" },
-    });
+    // Wrap the harness call in `otelContext.with(turnCtx, …)` so every
+    // hook + tool span emitted via `tracer.startActiveSpan` nests under
+    // the rootSpan (same parenting as the non-streaming and plan-mode
+    // branches). Without this wrap, `startActiveSpan` opens spans against
+    // whatever context is active at call time — the request's auto-
+    // instrumented Fastify span, or the no-op root — and Langfuse shows
+    // hook/tool spans as orphans of the chat trace.
+    const turnBudget = budget;
+    const result = await otelContext.with(turnCtx, () =>
+      runHarness({
+        messages,
+        tools,
+        llm: deps.llm,
+        budget: turnBudget,
+        lifecycle,
+        ctx,
+        streamSink: sink,
+        sessionId: sessionId ?? undefined,
+        // Forward the upstream client's AbortSignal so a mid-stream disconnect
+        // (network drop, browser tab closed, curl --max-time) cancels LLM
+        // calls + MCP fetches instead of running them to completion.
+        signal: req.signal,
+        // Phase 3 of the configuration concept (Initiative 5):
+        // engage the permission resolver in 'enforce' mode so DB-backed
+        // permission_policies actually fire. Permissive default (allow when
+        // no policy matches) preserves current behaviour until an admin
+        // adds a deny rule via /api/admin/permission-policies.
+        permissions: { permissionMode: "enforce" },
+      }),
+    );
 
     // v1.2 collapse: the hand-rolled call()→streamCompletion()→pre_tool /
     // post_tool / todo_update wiring that previously lived here was deleted

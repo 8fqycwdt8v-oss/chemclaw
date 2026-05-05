@@ -16,6 +16,8 @@
 //
 // Output: ConfidenceEnsemble JSONB shape stored in artifacts.confidence_ensemble.
 
+import { getLogger } from "../observability/logger.js";
+
 // ---------------------------------------------------------------------------
 // Types
 // ---------------------------------------------------------------------------
@@ -146,7 +148,19 @@ export async function crossModelAgreement(
       if (score >= 0 && score <= 1) return Math.round(score * 1000) / 1000;
     }
     return null;
-  } catch {
+  } catch (err) {
+    // Surface the failure so operators see when judge calls degrade —
+    // a silent null was indistinguishable from "judge agreed at null"
+    // and hid LiteLLM outages, model rate-limits, or JSON-parse
+    // breakage from the dashboard.
+    getLogger("agent-claw.confidence").warn(
+      {
+        event: "cross_model_agreement_failed",
+        err_name: (err as Error).name,
+        err_msg: (err as Error).message,
+      },
+      "cross-model agreement check failed; returning null",
+    );
     return null;
   }
 }

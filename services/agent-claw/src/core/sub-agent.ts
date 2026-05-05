@@ -12,6 +12,8 @@
 
 import { runHarness } from "./harness.js";
 import { Budget } from "./budget.js";
+import { startRootTurnSpan, recordSpanError } from "../observability/spans.js";
+import { context as otelContext, trace } from "@opentelemetry/api";
 import type { Lifecycle } from "./lifecycle.js";
 import type {
   HarnessResult,
@@ -176,21 +178,44 @@ export async function spawnSubAgent(
   });
 
   // ── 7. Run the sub-harness. ────────────────────────────────────────────────
+  // Open a sub-agent root span so every hook + tool span emitted via
+  // `tracer.startActiveSpan` inside the sub-harness nests under it.
+  // Trace name encodes the sub-agent type so Langfuse / OTLP can split
+  // sub-agent traffic from parent traffic. The parent's active context
+  // carries the chat trace upward, so the sub-agent span becomes a
+  // child of the parent turn when one is active.
+  const subSpan = startRootTurnSpan({
+    traceId: `subagent:${type}`,
+    userEntraId: parentCtx.userEntraId,
+    promptName: "agent.system",
+  });
+  const subCtxOtel = trace.setSpan(otelContext.active(), subSpan);
   let result: HarnessResult;
   try {
-    result = await runHarness({
-      messages,
-      tools,
-      llm: deps.llm,
-      budget,
-      lifecycle,
-      ctx: subCtx,
-      // Sub-agents inherit the same DB-backed permission policies as the
-      // parent. A sub-agent dispatched by an enforced parent must not
-      // silently get an unenforced harness.
-      permissions: { permissionMode: "enforce" },
-    });
+    result = await otelContext.with(subCtxOtel, () =>
+      runHarness({
+        messages,
+        tools,
+        llm: deps.llm,
+        budget,
+        lifecycle,
+        ctx: subCtx,
+        // Propagate the parent's AbortSignal so an upstream client
+        // disconnect cancels the sub-agent's LLM call + in-flight MCP
+        // fetches alongside the parent's. Without this thread-through,
+        // a cancelled parent's sub-agent would run to completion (up to
+        // its own budget cap) burning tokens against an already-closed
+        // SSE stream.
+        signal: parentCtx.signal,
+        // Sub-agents inherit the same DB-backed permission policies as the
+        // parent. A sub-agent dispatched by an enforced parent must not
+        // silently get an unenforced harness.
+        permissions: { permissionMode: "enforce" },
+      }),
+    );
   } catch (err) {
+    try { recordSpanError(subSpan, err); } catch { /* ignore */ }
+    try { subSpan.end(); } catch { /* already ended / no-op */ }
     // Sub-agent budget exceeded or other error — return partial result.
     const errMsg = err instanceof Error ? err.message : String(err);
     const failed: SubAgentResult = {
@@ -210,6 +235,7 @@ export async function spawnSubAgent(
     });
     return failed;
   }
+  try { subSpan.end(); } catch { /* already ended / no-op */ }
 
   const finalResult: SubAgentResult = {
     text: result.text,

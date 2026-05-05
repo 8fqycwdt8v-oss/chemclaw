@@ -81,8 +81,14 @@ export function registerLearnRoute(
         typeof result.prompt_md === "string" && result.prompt_md.trim().length > 0
           ? result.prompt_md.trim()
           : `# ${title}\n\n${last_turn_text.slice(0, 600)}`;
-    } catch {
-      // Fallback: use a truncated version of the turn text.
+    } catch (err) {
+      // Fallback: use a truncated version of the turn text. Logging
+      // the cause so a persistent LLM failure path doesn't silently
+      // populate skill_library with raw transcripts.
+      req.log.warn(
+        { err, title },
+        "learn: skill distillation LLM call failed; using truncated transcript fallback",
+      );
       promptMd = `# ${title}\n\n${last_turn_text.slice(0, 600)}`;
     }
 

@@ -259,6 +259,25 @@ class QueueWorker:
         try:
             result = await handler(payload)
         except Exception as exc:  # noqa: BLE001
+            # Log every handler exception with full structure so
+            # operators see the per-task failure pattern (HTTP 5xx
+            # surge from one MCP, or a poison-pill payload that fails
+            # every attempt). Without this, the only signal was the DB
+            # row's transient/error JSONB — and only after the retry
+            # ladder exhausted.
+            log.warning(  # pragma: no cover — handler-failure path; covered by deferred testcontainer test
+                "queue handler raised; will retry or fail",
+                extra={
+                    "event": "queue_handler_failed",
+                    "error_code": "QUEUE_HANDLER_FAILED",
+                    "task_id": row["id"],
+                    "task_kind": task_kind,
+                    "attempt": row["attempts"],
+                    "max_attempts": row["max_attempts"],
+                    "err_type": type(exc).__name__,
+                    "err_msg": str(exc),
+                },
+            )
             await self._maybe_retry(row, str(exc))
             return
         await self._succeed(row, result)

@@ -27,6 +27,8 @@ import { Budget } from "../core/budget.js";
 import { PromptRegistry } from "../prompts/registry.js";
 import { runWithRequestContext } from "../core/request-context.js";
 import { hashUser } from "../observability/user-hash.js";
+import { startRootTurnSpan, recordSpanError } from "../observability/spans.js";
+import { context as otelContext, trace } from "@opentelemetry/api";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 import { hydrateScratchpad } from "../core/session-state.js";
 import { lifecycle } from "../core/runtime.js";
@@ -125,8 +127,8 @@ async function handleDeepResearch(
   try {
     const { template } = await deps.promptRegistry.getActive("agent.system");
     systemPrompt = template;
-  } catch {
-    req.log.warn("agent.system prompt not found; using minimal DR fallback");
+  } catch (err) {
+    req.log.warn({ err }, "agent.system prompt not found; using minimal DR fallback");
   }
   systemPrompt += DR_SUFFIX;
 
@@ -157,6 +159,18 @@ async function handleDeepResearch(
 
   req.log.info({ skill: "deep_research", maxSteps: drMaxSteps }, "DR mode active");
 
+  // Open the OTel root span for this DR turn so every hook + tool span
+  // emitted by `tracer.startActiveSpan` nests under it (mirrors /api/chat).
+  // Without the span, hook/tool spans show up as orphans of the request
+  // and the `prompt:agent.system` Langfuse tag never lands on the trace.
+  const rootSpan = startRootTurnSpan({
+    traceId: body.agent_trace_id ?? (req.id || "deep_research"),
+    userEntraId: user,
+    model: deps.config.AGENT_MODEL,
+    promptName: "agent.system",
+  });
+  const turnCtx = trace.setSpan(otelContext.active(), rootSpan);
+
   if (!doStream) {
     // Non-streaming path — delegated to runHarness (no streamSink).
     // Phase 2B: previously this was a hand-rolled single-step loop with
@@ -166,24 +180,41 @@ async function handleDeepResearch(
         maxSteps: drMaxSteps,
         maxPromptTokens: deps.config.AGENT_TOKEN_BUDGET,
       });
-      const result = await runHarness({
-        messages,
-        tools,
-        llm: deps.llm,
-        budget,
-        lifecycle,
-        ctx,
-        signal: req.signal,
-        permissions: { permissionMode: "enforce" },
-      });
+      const result = await otelContext.with(turnCtx, () =>
+        runHarness({
+          messages,
+          tools,
+          llm: deps.llm,
+          budget,
+          lifecycle,
+          ctx,
+          signal: req.signal,
+          permissions: { permissionMode: "enforce" },
+        }),
+      );
       return void reply.send({
         text: result.text,
         finishReason: result.finishReason,
         usage: result.usage,
       });
     } catch (err) {
+      try { recordSpanError(rootSpan, err); } catch { /* ignore */ }
+      // Distinguish client cancellation from a server-side failure so
+      // the response status reflects reality. A 500 on a cancelled
+      // request poisons SLOs and on-call dashboards.
+      if (_isAbortLikeError(err) || req.signal.aborted) {
+        req.log.info(
+          { err: err instanceof Error ? err.message : err },
+          "deep_research non-stream cancelled by client",
+        );
+        // 499 (client closed request) — Nginx convention; matches the
+        // "the client gave up" semantics better than 500.
+        return void reply.code(499).send({ error: "cancelled" });
+      }
       req.log.error({ err }, "deep_research generate failed");
       return void reply.code(500).send({ error: "internal" });
+    } finally {
+      try { rootSpan.end(); } catch { /* already ended / no-op */ }
     }
   }
 
@@ -218,17 +249,19 @@ async function handleDeepResearch(
       maxPromptTokens: deps.config.AGENT_TOKEN_BUDGET,
     });
 
-    await runHarness({
-      messages,
-      tools,
-      llm: deps.llm,
-      budget,
-      lifecycle,
-      ctx,
-      streamSink: sink,
-      signal: req.signal,
-      permissions: { permissionMode: "enforce" },
-    });
+    await otelContext.with(turnCtx, () =>
+      runHarness({
+        messages,
+        tools,
+        llm: deps.llm,
+        budget,
+        lifecycle,
+        ctx,
+        streamSink: sink,
+        signal: req.signal,
+        permissions: { permissionMode: "enforce" },
+      }),
+    );
   } catch (err) {
     if (err instanceof AwaitingUserInputError) {
       // ask_user fired; runHarness already notified the sink, so the
@@ -247,6 +280,7 @@ async function handleDeepResearch(
         }
       }
     } else {
+      try { recordSpanError(rootSpan, err); } catch { /* ignore */ }
       req.log.error({ err }, "deep_research stream failed");
       if (!conn.closed) {
         writeEvent(reply, { type: "error", error: "internal" });
@@ -257,6 +291,7 @@ async function handleDeepResearch(
     // route does not redispatch — that would double-fire redact-secrets.
     // The post-merge-fix concern (post_turn must fire even on error) is
     // now satisfied by runHarness itself.
+    try { rootSpan.end(); } catch { /* already ended / no-op */ }
     try {
       reply.raw.end();
     } catch {

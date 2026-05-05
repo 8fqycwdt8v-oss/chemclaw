@@ -14,6 +14,7 @@
 
 import type { LlmProvider } from "../llm/provider.js";
 import type { Message } from "./types.js";
+import { getLogger } from "../observability/logger.js";
 
 // ---------------------------------------------------------------------------
 // Synopsis shape returned by the LLM (structured JSON call).
@@ -141,8 +142,21 @@ export async function compact(
       typeof result.synopsis === "string" && result.synopsis.trim().length > 0
         ? result.synopsis.trim()
         : transcript.slice(0, 800); // safe fallback: truncate raw
-  } catch {
+  } catch (err) {
     // On LLM failure: truncate the raw transcript to a safe length.
+    // Logging the cause lets operators tell "compactor degraded due to
+    // a Haiku 5xx" from "compactor degraded because the prompt got
+    // pruned wrong" — both surface as the same fallback today, and
+    // both would otherwise be silent.
+    getLogger("agent-claw.compactor").warn(
+      {
+        event: "compactor_llm_failed",
+        err_name: (err as Error).name,
+        err_msg: (err as Error).message,
+        fallback_chars: 800,
+      },
+      "compactor LLM call failed; falling back to raw truncate",
+    );
     synopsis = transcript.slice(0, 800);
   }
 
