@@ -56,7 +56,13 @@ class ProjectorSettings(BaseSettings):
     postgres_host: str = "localhost"
     postgres_port: int = 5432
     postgres_db: str = "chemclaw"
-    postgres_user: str = "chemclaw"
+    # Projectors connect as `chemclaw_service` (BYPASSRLS explicit) per
+    # CLAUDE.md "Row-Level Security" — the table-owner `chemclaw` is reserved
+    # for db/init / migrations only. Defaulting to `chemclaw_service` removes
+    # the need for individual projectors (kg_hypotheses, kg_documents) to
+    # issue `SET LOCAL ROLE chemclaw_service` mid-connection as a workaround,
+    # and keeps pg_stat_activity / audit logs distinct from migration traffic.
+    postgres_user: str = "chemclaw_service"
     postgres_password: str = ""
     projector_log_level: str = "INFO"
 
