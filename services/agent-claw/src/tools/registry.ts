@@ -103,9 +103,12 @@ function buildPropertySchema(prop: JsonSchemaProperty): z.ZodTypeAny {
     prop.type !== "string"
   ) {
     const literals = prop.enum.map((v) => z.literal(v as string | number | boolean));
-    if (literals.length === 1) return literals[0];
+    if (literals.length === 1) {
+      return literals[0]!;  // length === 1 guard above
+    }
     if (literals.length >= 2) {
-      return z.union(literals as [z.ZodLiteral<unknown>, z.ZodLiteral<unknown>, ...z.ZodLiteral<unknown>[]]);
+      const [a, b, ...rest] = literals;
+      return z.union([a!, b!, ...rest]);
     }
   }
   switch (prop.type) {
