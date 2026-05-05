@@ -279,6 +279,8 @@ Read the relevant runbook BEFORE filing a feature that asks an admin to do anyth
 
 To replay: `DELETE FROM projection_acks WHERE projector_name='<name>'` and restart the container.
 
+**Custom NOTIFY channels (DR-06).** Two projectors (`compound_classifier`, `compound_fingerprinter`) bypass the default `ingestion_events` drive: they LISTEN on a custom channel where the payload is a domain key (e.g., inchikey) rather than an ingestion_events row id. The bypass is via overriding `_connect_and_run` and leaving `interested_event_types = ()` so the base `_listen_loop` is skipped entirely. If you need this pattern, EITHER set `interested_event_types` and inherit the base behaviour, OR override `_connect_and_run` AND give the class a docstring that names the channel + payload semantics explicitly. No silent divergence.
+
 ## Off-repo references
 
 - Architectural spec: `~/.claude/plans/chemos-knowledge-intelligence-tranquil-marshmallow.md`.
