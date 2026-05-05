@@ -58,6 +58,18 @@ export const QuerySourceCacheIn = z.object({
       "cached fact for the subject.",
   ),
   group_id: GroupId.optional(),
+  freshness_window_days: z
+    .number()
+    .int()
+    .min(1)
+    .max(365)
+    .optional()
+    .describe(
+      "Filter out facts whose `valid_until` is older than NOW() - N days. " +
+        "Without this filter the agent must inspect each fact's " +
+        "edge_properties.valid_until itself; the server-side filter prevents " +
+        "stale-cache reuse by oversight.",
+    ),
 });
 export type QuerySourceCacheInput = z.infer<typeof QuerySourceCacheIn>;
 
@@ -130,8 +142,21 @@ export function buildQuerySourceCacheTool(mcpKgUrl: string) {
         TIMEOUT_MS,
         "mcp-kg",
       );
+      // Server-side filter: drop facts whose valid_until is older than
+      // NOW() - freshness_window_days. valid_until lives on edge_properties
+      // as an ISO 8601 timestamp string per the source-cache hook's contract.
+      let facts = result.facts;
+      if (input.freshness_window_days !== undefined) {
+        const cutoff = Date.now() - input.freshness_window_days * 86_400_000;
+        facts = facts.filter((f) => {
+          const validUntil = f.edge_properties.valid_until;
+          if (typeof validUntil !== "string") return true; // no TTL → keep
+          const ts = Date.parse(validUntil);
+          return Number.isFinite(ts) && ts >= cutoff;
+        });
+      }
       return QuerySourceCacheOut.parse({
-        facts: result.facts,
+        facts,
         source_entity_id: sourceEntityId,
       });
     },

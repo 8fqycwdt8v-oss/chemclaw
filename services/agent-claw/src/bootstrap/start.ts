@@ -92,6 +92,25 @@ export async function startServer(
       app.log.warn({ err }, "DB skill loader failed — continuing without DB skills");
     }
 
+    // 4a. Audit skill→tool gaps. Pre-PR a SKILL.md `tools:` ref that
+    // didn't exist in the runtime registry was silently filtered at
+    // activation; the missing tool only surfaced mid-skill at runtime.
+    // Surfacing at startup makes catalog drift loud.
+    try {
+      const toolIds = new Set<string>(deps.registry.all().map((t) => t.id));
+      const gaps = deps.skillLoader.auditToolGaps(toolIds);
+      if (gaps.size > 0) {
+        for (const [skillId, missing] of gaps) {
+          app.log.warn(
+            { event: "skill_tool_gap", skill_id: skillId, missing_tools: missing },
+            `skill '${skillId}' references ${missing.length} unknown tool(s); will be filtered at activation`,
+          );
+        }
+      }
+    } catch (err) {
+      app.log.warn({ err }, "skill→tool gap audit failed — startup proceeds");
+    }
+
     // 5. Bind the server.
     await app.listen({ host: cfg.AGENT_HOST, port: cfg.AGENT_PORT });
     app.log.info({ llmProvider: cfg.AGENT_MODEL, port: cfg.AGENT_PORT }, "agent-claw started");
