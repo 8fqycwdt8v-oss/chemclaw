@@ -231,6 +231,12 @@ async function handleChat(
     lifecycle,
     maxSteps: effectiveMaxSteps,
     maxPromptTokens: deps.config.AGENT_TOKEN_BUDGET,
+    // Same permissionMode as the streaming `runHarness` call below
+    // (line ~414). Without this the non-streaming path lands in the
+    // resolver's "default" mode, which fail-closes on tools that lack
+    // a matching policy — making /api/chat with `stream: false`
+    // silently more restrictive than streaming.
+    permissions: { permissionMode: "enforce" },
   });
 
   // ------- Paperclip reservation (Phase D) — applies to BOTH streaming and
