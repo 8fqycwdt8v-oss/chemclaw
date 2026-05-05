@@ -71,7 +71,18 @@ const ROOT_REDACT_PATHS = [
  * special-cases Error and bypasses the serializer's return value. Same
  * convention used by `pino.stdSerializers.err`.
  */
-function serializeError(err: unknown): Record<string, unknown> {
+// Bound the cause-chain walk: enough to capture realistic Postgres + httpx
+// rewraps (typically ≤ 3 deep) without giving an attacker an unbounded
+// recursion target if they craft an Error with a self-referential `.cause`
+// (or any cycle: a → b → a). The cycle-detection WeakSet is the safety net;
+// this cap controls log volume.
+const MAX_CAUSE_DEPTH = 5;
+
+function serializeErrorAt(
+  err: unknown,
+  depth: number,
+  seen: WeakSet<object>,
+): Record<string, unknown> {
   if (err === null || err === undefined) {
     return { type: "unknown", message: "" };
   }
@@ -83,6 +94,10 @@ function serializeError(err: unknown): Record<string, unknown> {
       message: typeof err === "string" ? err : JSON.stringify(err),
     };
   }
+  if (seen.has(err)) {
+    return { type: "CycleDetected", message: "<cause cycle>" };
+  }
+  seen.add(err);
   const e = err as Error & {
     code?: unknown;
     statusCode?: unknown;
@@ -107,17 +122,31 @@ function serializeError(err: unknown): Record<string, unknown> {
   // through unchanged so the redaction censor (***) is what surfaces.
   if (e.detail !== undefined) out.detail = e.detail;
   if (e.cause !== undefined) {
-    // Recursively serialize cause chain; cap at one level so a malicious
-    // cause-loop can't blow the log shipper's stack.
-    out.cause =
-      e.cause instanceof Error
-        ? serializeError(e.cause)
-        : typeof e.cause === "string"
-          ? scrub(e.cause)
-          : e.cause;
+    if (depth >= MAX_CAUSE_DEPTH) {
+      out.cause = {
+        type: "TruncatedCause",
+        message: `<chain capped at depth ${MAX_CAUSE_DEPTH}>`,
+      };
+    } else if (e.cause instanceof Error) {
+      out.cause = serializeErrorAt(e.cause, depth + 1, seen);
+    } else if (typeof e.cause === "string") {
+      out.cause = scrub(e.cause);
+    } else {
+      out.cause = e.cause;
+    }
   }
   return out;
 }
+
+function serializeError(err: unknown): Record<string, unknown> {
+  return serializeErrorAt(err, 0, new WeakSet());
+}
+
+/** Test-only export so unit tests can exercise the depth cap and cycle
+ * detection without going through Pino's stdout transport. Production code
+ * MUST NOT import this — use `getLogger()`.
+ */
+export const __serializeErrorForTests = serializeError;
 
 let _root: Logger | null = null;
 

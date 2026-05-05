@@ -286,6 +286,15 @@ export interface AgentDeps {
   maxSteps: number;
   maxPromptTokens?: number;
   maxCompletionTokens?: number;
+  /**
+   * Permission policy threaded into `runHarness`. Callers SHOULD pass
+   * `{ permissionMode: "enforce" }` to engage the DB-backed permission
+   * resolver — matching the behaviour wired at the streaming `/api/chat`
+   * call site. Defaulting to undefined would silently put callers into
+   * the resolver's "default" mode, which fail-closes on every tool that
+   * lacks a matching policy. See ADR-009.
+   */
+  permissions?: HarnessOptions["permissions"];
 }
 
 export interface AgentCallOptions {
@@ -317,6 +326,7 @@ export function buildAgent(deps: AgentDeps) {
         lifecycle: deps.lifecycle,
         ctx: callOpts.ctx,
         signal: callOpts.signal,
+        permissions: deps.permissions,
       });
     },
   };
