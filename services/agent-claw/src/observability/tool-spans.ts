@@ -20,6 +20,15 @@ export interface ToolSpanAttributes {
   readOnly?: boolean;
   /** True when the call is part of a parallel read-only batch (Phase 5). */
   inBatch?: boolean;
+  /**
+   * Resolver decision that admitted this tool call (when the route engaged
+   * the permission resolver). One of "allow" / "ask" — "deny" / "defer"
+   * short-circuit before withToolSpan opens. When the resolver was not
+   * invoked (legacy callers without `permissions:`), this is "skipped".
+   */
+  permissionDecision?: "allow" | "ask" | "deny" | "defer" | "skipped";
+  /** Resolver-supplied reason string for the decision (when present). */
+  permissionReason?: string;
 }
 
 /**
@@ -41,6 +50,12 @@ export async function withToolSpan<T>(
       "tool.read_only": attrs.readOnly ?? false,
       "tool.in_batch": attrs.inBatch ?? false,
     });
+    if (attrs.permissionDecision) {
+      span.setAttribute("permission.decision", attrs.permissionDecision);
+      if (attrs.permissionReason) {
+        span.setAttribute("permission.reason", attrs.permissionReason);
+      }
+    }
     const start = Date.now();
     try {
       const result = await fn();

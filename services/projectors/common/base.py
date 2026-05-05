@@ -26,11 +26,23 @@ import json
 import logging
 import signal
 from abc import ABC, abstractmethod
+from contextlib import nullcontext
 from typing import Any
 
 import psycopg
 from psycopg.rows import dict_row
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Bind per-event correlation fields onto every log record emitted by the
+# projector AND any subclass logger that runs inside `handle()`. Without
+# this contextvar binding the previous LoggerAdapter only stamped fields
+# on records routed through `log_ctx.*` — a subclass that called
+# `logging.getLogger(__name__).info(...)` produced un-correlated lines
+# that couldn't be tied back to the originating ingestion request.
+try:
+    from services.mcp_tools.common.log_context import log_context_scope  # type: ignore
+except Exception:  # pragma: no cover — projector container without the dep
+    log_context_scope = None  # type: ignore[assignment]
 
 log = logging.getLogger("projector")
 
@@ -311,67 +323,87 @@ class BaseProjector(ABC):
             log,
             {"request_id": request_id, "event_id": event_id, "projector": self.name},
         )
+        # Bind the same correlation fields onto a contextvar so that any
+        # logger created inside the subclass `handle()` (e.g.
+        # `logging.getLogger(__name__).info(...)` from a nested helper)
+        # also stamps `request_id` / `event_id` / `projector` on its
+        # records via the LogContextFilter installed by configure_logging.
+        # nullcontext fallback covers the rare unit-test path where
+        # log_context_scope failed to import — the LoggerAdapter still
+        # produces correlated lines even there.
+        scope_fields: dict[str, str] = {
+            "event_id": str(event_id),
+            "projector": self.name,
+        }
+        if request_id:
+            scope_fields["request_id"] = str(request_id)
+        scope_cm = (
+            log_context_scope(**scope_fields)
+            if log_context_scope is not None
+            else nullcontext()
+        )
         should_ack = True
         started = _t.monotonic()
 
-        try:
-            if (
-                self.interested_event_types
-                and event_type not in self.interested_event_types
-            ):
-                # silent skip; still ack to stop scanning forever
-                pass
-            else:
-                await self.handle(
-                    event_id=event_id,
-                    event_type=event_type,
-                    source_table=row["source_table"],
-                    source_row_id=row["source_row_id"],
-                    payload=payload,
+        with scope_cm:
+            try:
+                if (
+                    self.interested_event_types
+                    and event_type not in self.interested_event_types
+                ):
+                    # silent skip; still ack to stop scanning forever
+                    pass
+                else:
+                    await self.handle(
+                        event_id=event_id,
+                        event_type=event_type,
+                        source_table=row["source_table"],
+                        source_row_id=row["source_row_id"],
+                        payload=payload,
+                    )
+            except PermanentHandlerError as exc:
+                log_ctx.warning(
+                    "permanent handler error on event %s: %s (acking to stop retries)",
+                    event_id, exc,
+                    extra={
+                        "event": "projector_handler_failed",
+                        "error_code": "PROJECTOR_HANDLER_FAILED_PERMANENT",
+                        "event_type": event_type,
+                        "duration_ms": int((_t.monotonic() - started) * 1000),
+                    },
                 )
-        except PermanentHandlerError as exc:
-            log_ctx.warning(
-                "permanent handler error on event %s: %s (acking to stop retries)",
-                event_id, exc,
+            except Exception:
+                log_ctx.exception(
+                    "transient handler error on event %s; NOT acking", event_id,
+                    extra={
+                        "event": "projector_handler_failed",
+                        "error_code": "PROJECTOR_HANDLER_FAILED_TRANSIENT",
+                        "event_type": event_type,
+                        "duration_ms": int((_t.monotonic() - started) * 1000),
+                    },
+                )
+                should_ack = False
+
+            if not should_ack:
+                return
+
+            async with work_conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    INSERT INTO projection_acks (event_id, projector_name)
+                    VALUES (%s::uuid, %s)
+                    ON CONFLICT DO NOTHING
+                    """,
+                    (event_id, self.name),
+                )
+            await work_conn.commit()
+            log_ctx.info(
+                "acked %s",
+                event_id,
                 extra={
-                    "event": "projector_handler_failed",
-                    "error_code": "PROJECTOR_HANDLER_FAILED_PERMANENT",
+                    "event": "projector_ack",
                     "event_type": event_type,
-                    "duration_ms": int((_t.monotonic() - started) * 1000),
+                    "handler_duration_ms": int((_t.monotonic() - started) * 1000),
+                    "ack_status": "ok",
                 },
             )
-        except Exception:
-            log_ctx.exception(
-                "transient handler error on event %s; NOT acking", event_id,
-                extra={
-                    "event": "projector_handler_failed",
-                    "error_code": "PROJECTOR_HANDLER_FAILED_TRANSIENT",
-                    "event_type": event_type,
-                    "duration_ms": int((_t.monotonic() - started) * 1000),
-                },
-            )
-            should_ack = False
-
-        if not should_ack:
-            return
-
-        async with work_conn.cursor() as cur:
-            await cur.execute(
-                """
-                INSERT INTO projection_acks (event_id, projector_name)
-                VALUES (%s::uuid, %s)
-                ON CONFLICT DO NOTHING
-                """,
-                (event_id, self.name),
-            )
-        await work_conn.commit()
-        log_ctx.info(
-            "acked %s",
-            event_id,
-            extra={
-                "event": "projector_ack",
-                "event_type": event_type,
-                "handler_duration_ms": int((_t.monotonic() - started) * 1000),
-                "ack_status": "ok",
-            },
-        )
