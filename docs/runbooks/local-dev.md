@@ -46,7 +46,7 @@ python3 -m venv .venv
 source .venv/bin/activate
 pip install -e ".[dev]"
 pip install -e tools/cli
-pip install -r services/ingestion/eln_json_importer/requirements.txt
+pip install -r services/ingestion/eln_json_importer.legacy/requirements.txt
 npm install
 ```
 

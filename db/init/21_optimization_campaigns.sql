@@ -151,4 +151,8 @@ INSERT INTO model_cards (
 )
 ON CONFLICT (service_name, model_version) DO NOTHING;
 
+INSERT INTO schema_version (filename, applied_at)
+  VALUES ('21_optimization_campaigns.sql', NOW())
+  ON CONFLICT (filename) DO NOTHING;
+
 COMMIT;

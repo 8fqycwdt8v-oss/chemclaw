@@ -89,6 +89,7 @@ jobs:
           python3 -m pip install -r services/projectors/conditions_normalizer/requirements.txt
           python3 -m pip install -r services/mcp_tools/mcp_applicability_domain/requirements.txt
           python3 -m pip install -r services/mcp_tools/mcp_green_chemistry/requirements.txt
+          python3 -m pip install -r services/mcp_tools/mcp_reaction_optimizer/requirements.txt
           python3 -m pip install pytest pytest-asyncio coverage \
             "mypy>=1.11" "ruff>=0.6,<0.7" "diff-cover>=9.0"
       - name: Ruff
@@ -108,7 +109,8 @@ jobs:
             services/projectors/kg_documents/tests/ \
             services/projectors/conditions_normalizer/tests/ \
             services/mcp_tools/mcp_applicability_domain/tests/ \
-            services/mcp_tools/mcp_green_chemistry/tests/
+            services/mcp_tools/mcp_green_chemistry/tests/ \
+            services/mcp_tools/mcp_reaction_optimizer/tests/
           coverage combine || true
           coverage xml -o coverage.xml
       - name: Parse-check Python services

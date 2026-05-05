@@ -136,3 +136,36 @@ def test_recommend_next_invalid_domain_returns_422(client):
     )
     assert r.status_code == 422
     assert "invalid_bofire_domain" in r.json().get("detail", "")
+
+
+def test_domain_load_uses_model_validate_round_trip(client):
+    """Direct unit-level coverage of `_domain_load` exercising the
+    `Domain.model_validate` path. Pins the round-trip equivalence so a
+    BoFire bump that breaks discriminated-union deserialization surfaces
+    here, not in production via /recommend_next."""
+    from services.mcp_tools.mcp_reaction_optimizer.main import (  # noqa: PLC0415
+        _domain_dump,
+        _domain_load,
+    )
+
+    # Build a domain via the production /build_domain endpoint so the
+    # payload shape matches what's stored in optimization_campaigns and
+    # later passed back into _domain_load by /recommend_next.
+    built = client.post(
+        "/build_domain",
+        json={
+            "factors": [
+                {"name": "t", "type": "continuous", "range": [25, 120]},
+            ],
+            "categorical_inputs": [],
+            "outputs": [{"name": "yield_pct", "direction": "maximize"}],
+        },
+    )
+    assert built.status_code == 200, built.text
+    payload = built.json()["bofire_domain"]
+
+    # Round-trip through _domain_load → _domain_dump.
+    reloaded = _domain_load(payload)
+    redumped = _domain_dump(reloaded)
+    assert redumped["inputs"] == payload["inputs"]
+    assert redumped["outputs"] == payload["outputs"]
