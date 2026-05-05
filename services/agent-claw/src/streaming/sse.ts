@@ -26,7 +26,7 @@
 // wire write. `writeEvent` does this once, here, instead of every caller
 // remembering to.
 
-import type { FastifyReply } from "fastify";
+import type { FastifyReply, FastifyRequest } from "fastify";
 import type { PlanStep } from "../core/plan-mode.js";
 
 import { getLogger } from "../observability/logger.js";
@@ -83,4 +83,25 @@ export function setupSse(reply: FastifyReply): void {
   reply.raw.setHeader("Connection", "keep-alive");
   reply.raw.setHeader("X-Accel-Buffering", "no");
   reply.hijack();
+}
+
+/**
+ * Track upstream disconnects so the streaming loop can short-circuit
+ * `writeEvent` calls after the client goes away.
+ *
+ * Listens on BOTH `close` and `aborted` — Node emits `aborted` for
+ * HTTP/1.0-style mid-stream resets that don't always trigger `close`.
+ * Three SSE routes (chat.ts, plan.ts, deep-research.ts) previously
+ * inlined the same handler shape; plan.ts in particular missed the
+ * `aborted` listener. Centralising here keeps the listener pair
+ * symmetric.
+ */
+export function trackConnection(req: FastifyRequest): { closed: boolean } {
+  const conn = { closed: false };
+  const onClose = () => {
+    conn.closed = true;
+  };
+  req.raw.on("close", onClose);
+  req.raw.on("aborted", onClose);
+  return conn;
 }

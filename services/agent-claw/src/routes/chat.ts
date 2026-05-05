@@ -37,7 +37,7 @@ import type {
   ToolContext,
 } from "../core/types.js";
 import { VERB_TO_SKILL } from "../core/skills.js";
-import { writeEvent, setupSse } from "../streaming/sse.js";
+import { writeEvent, setupSse, trackConnection } from "../streaming/sse.js";
 import { makeSseSink } from "../streaming/sse-sink.js";
 import { startRootTurnSpan, recordLlmUsage, recordSpanError } from "../observability/spans.js";
 import { context as otelContext, trace } from "@opentelemetry/api";
@@ -303,10 +303,9 @@ async function handleChat(
 
   // Boxed so the value can be mutated by the close-handler closure without
   // TS narrowing every subsequent read to the literal `false` initializer.
-  const conn: { closed: boolean } = { closed: false };
-  const onClose = () => { conn.closed = true; };
-  req.raw.on("close", onClose);
-  req.raw.on("aborted", onClose);
+  // trackConnection wires both `close` + `aborted` listeners — see
+  // streaming/sse.ts for why both are needed.
+  const conn = trackConnection(req);
 
   // finishReason and budget are hoisted out of the try block so the finally
   // can read them when the loop exits via error. Mirrors runHarness() in
