@@ -1,5 +1,12 @@
 // Validate a workflow definition before persisting.
 // Returns the parsed definition or throws a descriptive error.
+//
+// Note: this validator deliberately accepts step kinds (`conditional`,
+// `loop`, `parallel`, `sub_agent`) that the Python workflow_engine does not
+// yet execute — see types.ts for the full contract. Such workflows persist
+// fine but their runs will fail with NotImplementedError when the engine
+// reaches the unimplemented step. Tightening the schema is a future
+// migration; the comment + engine-side guard are the current source of truth.
 
 import { WorkflowDefinition, type Step } from "./types.js";
 

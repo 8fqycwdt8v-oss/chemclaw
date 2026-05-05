@@ -36,8 +36,14 @@ const McpOut = z.object({
   output_directions: z.record(z.string()),
 });
 
+// Shape sanity for bofire_domain. JSONB column on optimization_campaigns;
+// reject non-objects (corrupt rows) up front instead of surfacing opaque
+// downstream errors. The full BoFire Domain ABI is Python-side; we only
+// enforce that `outputs.features` is iterable here.
+const BofireDomainShape = z.record(z.unknown());
+
 interface CampaignRow {
-  bofire_domain: { outputs?: { features?: Array<{ key: string; objective?: { type?: string } }> } };
+  bofire_domain: unknown;
 }
 
 interface RoundRow {
@@ -77,7 +83,14 @@ export function buildExtractParetoFrontTool(pool: Pool, optimizerUrl: string) {
           if (c === undefined) {
             throw new Error("campaign_not_found");
           }
-          const features = c.bofire_domain.outputs?.features ?? [];
+          const domainParsed = BofireDomainShape.safeParse(c.bofire_domain);
+          if (!domainParsed.success) {
+            throw new Error("bofire_domain_corrupt");
+          }
+          const outputs = domainParsed.data.outputs as
+            | { features?: Array<{ key: string; objective?: { type?: string } }> }
+            | undefined;
+          const features = outputs?.features ?? [];
           const dirs: Record<string, string> = {};
           for (const f of features) {
             const objType = f.objective?.type ?? "";

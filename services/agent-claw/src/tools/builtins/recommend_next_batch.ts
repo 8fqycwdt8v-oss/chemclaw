@@ -38,6 +38,12 @@ const RecommendNextOut = z.object({
   used_bo: z.boolean(),
 });
 
+// Shape sanity for bofire_domain read from optimization_campaigns.bofire_domain.
+// Stored as JSONB; we don't validate against the BoFire Domain ABI (Python-side),
+// but rejecting non-objects (string/number/null/array) catches corrupt rows
+// before they surface as an opaque MCP 422.
+const BofireDomainShape = z.record(z.unknown());
+
 const TIMEOUT_MS = 120_000;
 
 interface CampaignRow {
@@ -103,8 +109,12 @@ export function buildRecommendNextBatchTool(pool: Pool, optimizerUrl: string) {
             (acc, r) => Math.max(acc, r.round_index),
             -1,
           );
+          const domainParsed = BofireDomainShape.safeParse(c.bofire_domain);
+          if (!domainParsed.success) {
+            throw new Error("bofire_domain_corrupt");
+          }
           return {
-            domain: c.bofire_domain,
+            domain: domainParsed.data,
             measured: allMeasured,
             nextIndex: maxIdx + 1,
           };

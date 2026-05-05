@@ -149,4 +149,26 @@ describe("buildDesignPlateTool", () => {
       }).success,
     ).toBe(false);
   });
+
+  it("inputSchema rejects n_wells > plate_format capacity", () => {
+    const tool = buildDesignPlateTool(PLATE_URL, YIELD_URL);
+    const result = tool.inputSchema.safeParse({
+      plate_format: "24",
+      n_wells: 100,
+    });
+    expect(result.success).toBe(false);
+    if (!result.success) {
+      expect(result.error.issues[0]?.message).toMatch(/exceeds plate_format=24 capacity 24/);
+    }
+  });
+
+  it("inputSchema accepts n_wells equal to plate_format capacity", () => {
+    const tool = buildDesignPlateTool(PLATE_URL, YIELD_URL);
+    expect(
+      tool.inputSchema.safeParse({
+        plate_format: "96",
+        n_wells: 96,
+      }).success,
+    ).toBe(true);
+  });
 });

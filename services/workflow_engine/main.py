@@ -69,6 +69,11 @@ class WorkflowEngine:
         self._shutdown = asyncio.Event()
         self._http: httpx.AsyncClient | None = None
         self._token_cache = McpTokenCache(default_subject="workflow-engine")
+        # Dedicated connection for `wait`-step polling. Kept distinct from
+        # `work_conn` so a long-running `_exec_wait` (timeouts up to 1h) does
+        # not hold an open transaction against the run-state cursor that
+        # `_advance_run` updates. Lazily opened on first `wait` step.
+        self._poll_conn: psycopg.AsyncConnection | None = None
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
@@ -108,6 +113,9 @@ class WorkflowEngine:
         finally:
             if self._http is not None:
                 await self._http.aclose()
+            if self._poll_conn is not None:
+                await self._poll_conn.close()
+                self._poll_conn = None
         log.info("[workflow_engine] stopped")
 
     async def _next_notify(self, conn: psycopg.AsyncConnection) -> str:
@@ -241,12 +249,15 @@ class WorkflowEngine:
         spec = step.get("for", {})
         if "batch_id" in spec:
             # MVP: poll the batch row until total reached.
-            batch_id = self._resolve_jmespath(spec["batch_id"], scope)
+            batch_id = self._resolve_dotted_path(spec["batch_id"], scope)
             timeout = step.get("timeout_seconds", 3600)
+            poll_conn = await self._get_poll_conn()
+            # autocommit=True on poll_conn means each SELECT runs in its own
+            # implicit transaction; the connection itself is reused across
+            # the whole timeout window instead of dialing a fresh socket
+            # every 5 s.
             for _ in range(timeout // 5):
-                async with await psycopg.AsyncConnection.connect(
-                    self.settings.dsn, row_factory=dict_row,
-                ) as conn, conn.cursor() as cur:
+                async with poll_conn.cursor() as cur:
                     await cur.execute(
                         "SELECT total, succeeded, failed, cancelled FROM task_batches WHERE id = %s::uuid",
                         (batch_id,),
@@ -260,9 +271,20 @@ class WorkflowEngine:
             raise TimeoutError(f"wait on batch {batch_id} timed out")
         raise ValueError("only batch_id wait is implemented in MVP")
 
+    async def _get_poll_conn(self) -> psycopg.AsyncConnection:
+        if self._poll_conn is None or self._poll_conn.closed:
+            self._poll_conn = await psycopg.AsyncConnection.connect(
+                self.settings.dsn, autocommit=True, row_factory=dict_row,
+            )
+        return self._poll_conn
+
     @staticmethod
-    def _resolve_jmespath(expr: str, scope: dict[str, Any]) -> Any:
-        # Minimal JMESPath subset: dotted path against scope.
+    def _resolve_dotted_path(expr: str, scope: dict[str, Any]) -> Any:
+        # Minimal dotted-path resolver against scope. Field name in the DSL
+        # documents this as a "JMESPath expression" but the implementation is
+        # intentionally a hand-rolled dotted-path walker — adding the jmespath
+        # dependency is BACKLOG'd. Keep behaviour identical: leading "scope."
+        # prefix is skipped, missing keys yield None.
         node: Any = scope
         for part in expr.split("."):
             if part == "scope":
@@ -309,7 +331,7 @@ class WorkflowEngine:
         status: str, scope: dict[str, Any], output_template: dict[str, str],
     ) -> None:
         outputs = {
-            k: self._resolve_jmespath(v, {"steps": scope.get("steps", {})})
+            k: self._resolve_dotted_path(v, {"steps": scope.get("steps", {})})
             for k, v in output_template.items()
         }
         async with work_conn.cursor() as cur:
@@ -323,6 +345,23 @@ class WorkflowEngine:
                 """,
                 (status, json.dumps(outputs), run_id),
             )
+            # Emit an ingestion_events row on success so KG projectors can
+            # materialise workflow outputs (BACKLOG: A-on-C completeness).
+            # Only succeeded runs emit; failures already surface via
+            # workflow_events.kind='step_failed'/'finish' for the engine
+            # observers, and we don't want failed runs to trigger downstream
+            # KG materialisation. source_row_id carries the run id; payload
+            # carries the run output for projector convenience.
+            if status == "succeeded":
+                await cur.execute(
+                    """
+                    INSERT INTO ingestion_events
+                        (event_type, source_table, source_row_id, payload)
+                    VALUES
+                        ('workflow_run_succeeded', 'workflow_runs', %s::uuid, %s::jsonb)
+                    """,
+                    (run_id, json.dumps({"run_id": run_id, "outputs": outputs})),
+                )
         await self._append_event(work_conn, run_id, "finish", None, {"status": status, "outputs": outputs})
 
 
