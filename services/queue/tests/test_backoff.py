@@ -49,8 +49,10 @@ def test_backoff_schedule(attempts: int, expected: int) -> None:
 def test_backoff_is_strictly_monotonic_until_clamp() -> None:
     """First few retries must be strictly increasing — a flat schedule
     would let a poison message hammer the upstream service every 30s."""
+    from itertools import pairwise
+
     series = [_backoff_seconds(a) for a in range(1, 8)]
-    for prev, nxt in zip(series, series[1:]):
+    for prev, nxt in pairwise(series):
         assert nxt > prev, f"backoff regressed: {series}"
 
 
