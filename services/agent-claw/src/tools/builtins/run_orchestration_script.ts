@@ -28,6 +28,7 @@
 //   next turn and adjusts. No automatic retry — that's the model's call.
 
 import { z } from "zod";
+import { randomUUID } from "node:crypto";
 import { trace } from "@opentelemetry/api";
 import { defineTool } from "../tool.js";
 import type { Lifecycle } from "../../core/lifecycle.js";
@@ -170,6 +171,40 @@ export function buildRunOrchestrationScriptTool(deps: RunOrchestrationScriptDeps
         };
       }
 
+      // Production tripwire: the runner's MONTY_RUNNER_ALLOW_UNSAFE_EXEC=1
+      // fallback is dev-only. If that variable is set in the agent process's
+      // environment AND we're not running with the explicit dev-mode opt-in
+      // (MCP_AUTH_DEV_MODE — already used to gate other "looser in dev"
+      // surfaces), refuse to spawn so a stray env-var copy from CI/dev can't
+      // silently run un-sandboxed LLM-authored Python in production.
+      // Operators who want the unsafe path in dev get it by setting BOTH.
+      const unsafeExec = process.env.MONTY_RUNNER_ALLOW_UNSAFE_EXEC === "1";
+      const devMode = process.env.MCP_AUTH_DEV_MODE === "true";
+      if (unsafeExec && !devMode) {
+        log.error(
+          {
+            event: "monty_unsafe_exec_in_production",
+            mcp_auth_dev_mode: devMode,
+          },
+          "MONTY_RUNNER_ALLOW_UNSAFE_EXEC=1 is set without MCP_AUTH_DEV_MODE=true — " +
+            "refusing to spawn the runner. Either install the `monty` Python package " +
+            "(production) or set MCP_AUTH_DEV_MODE=true (dev-only opt-in).",
+        );
+        return {
+          outputs: undefined,
+          stdout: "",
+          stderr: "",
+          duration_ms: Date.now() - startedAt,
+          external_calls: [],
+          outcome: "runtime_disabled" as const,
+          error:
+            "MONTY_RUNNER_ALLOW_UNSAFE_EXEC=1 is set without MCP_AUTH_DEV_MODE=true — " +
+            "this combination is treated as a production environment that must not " +
+            "fall back to un-sandboxed exec(). Install `monty` or set " +
+            "MCP_AUTH_DEV_MODE=true to opt into the dev path.",
+        };
+      }
+
       // Preflight 1: every entry in allowed_tools must exist in the registry.
       const dedupedAllowed = Array.from(new Set(input.allowed_tools));
       const missing: string[] = [];
@@ -279,7 +314,7 @@ export function buildRunOrchestrationScriptTool(deps: RunOrchestrationScriptDeps
         lifecycle: deps.lifecycle,
       });
 
-      const runId = `monty-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+      const runId = `monty-${randomUUID()}`;
       log.info(
         {
           event: "monty_run_start",
@@ -390,6 +425,15 @@ export function buildRunOrchestrationScriptTool(deps: RunOrchestrationScriptDeps
             outcome: "child_crashed" as const,
             error: `Monty child crashed (exit=${String(result.outcome.exitCode)}, signal=${String(result.outcome.signal)})`,
           };
+        default: {
+          // Compile-time exhaustiveness: a future RunOutcome variant lacking
+          // a case here surfaces as a TS error rather than a silent
+          // undefined return.
+          const _exhaustive: never = result.outcome;
+          throw new Error(
+            `unhandled Monty run outcome: ${JSON.stringify(_exhaustive)}`,
+          );
+        }
       }
     },
   });

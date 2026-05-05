@@ -155,12 +155,13 @@ export class SubprocessChildAdapter extends EventEmitter implements MontyChild {
     if (!stdin) {
       throw new Error("SubprocessChildAdapter.send: child stdin not piped");
     }
-    const ok = stdin.write(encodeFrame(frame));
-    if (!ok) {
-      // Backpressure — drain before next write. We surface the wait via
-      // the once("drain") hook so callers can stay synchronous.
-      stdin.once("drain", () => {});
-    }
+    // Frame size is small (a single Start + a stream of ExternalResponse
+    // frames, each well under 64 KiB), so Node's stdin buffer absorbs them
+    // without backpressure in practice. We deliberately don't queue or
+    // drain here — letting Node buffer is correct, and the runner reads
+    // serially anyway. If frame sizes grow (e.g. inputs with large JSON
+    // payloads), this is the place to introduce a write queue.
+    stdin.write(encodeFrame(frame));
   }
 
   kill(signal: NodeJS.Signals = "SIGKILL"): void {

@@ -134,6 +134,71 @@ describe("run_orchestration_script", () => {
     expect(out.error).toContain("disabled");
   });
 
+  it("returns runtime_disabled when MONTY_RUNNER_ALLOW_UNSAFE_EXEC=1 is set without MCP_AUTH_DEV_MODE=true (production tripwire)", async () => {
+    const oldUnsafe = process.env.MONTY_RUNNER_ALLOW_UNSAFE_EXEC;
+    const oldDev = process.env.MCP_AUTH_DEV_MODE;
+    process.env.MONTY_RUNNER_ALLOW_UNSAFE_EXEC = "1";
+    delete process.env.MCP_AUTH_DEV_MODE;
+    try {
+      const tool = buildRunOrchestrationScriptTool({
+        registry: buildRegistryWithEcho(),
+        configRegistry: fakeConfigRegistry(ENABLED_CONFIG),
+        lifecycle: new Lifecycle(),
+        childFactoryOverride: fakeFactory({}),
+      });
+      const out = await tool.execute(makeCtx(), {
+        python_code: "x = 1",
+        allowed_tools: ["echo"],
+        inputs: {},
+        expected_outputs: ["x"],
+        reason: "test",
+      });
+      expect(out.outcome).toBe("runtime_disabled");
+      expect(out.error).toContain("MONTY_RUNNER_ALLOW_UNSAFE_EXEC");
+      expect(out.error).toContain("MCP_AUTH_DEV_MODE");
+    } finally {
+      if (oldUnsafe === undefined) delete process.env.MONTY_RUNNER_ALLOW_UNSAFE_EXEC;
+      else process.env.MONTY_RUNNER_ALLOW_UNSAFE_EXEC = oldUnsafe;
+      if (oldDev === undefined) delete process.env.MCP_AUTH_DEV_MODE;
+      else process.env.MCP_AUTH_DEV_MODE = oldDev;
+    }
+  });
+
+  it("allows the unsafe-exec path when MCP_AUTH_DEV_MODE=true is also set", async () => {
+    const oldUnsafe = process.env.MONTY_RUNNER_ALLOW_UNSAFE_EXEC;
+    const oldDev = process.env.MCP_AUTH_DEV_MODE;
+    process.env.MONTY_RUNNER_ALLOW_UNSAFE_EXEC = "1";
+    process.env.MCP_AUTH_DEV_MODE = "true";
+    try {
+      const tool = buildRunOrchestrationScriptTool({
+        registry: buildRegistryWithEcho(),
+        configRegistry: fakeConfigRegistry(ENABLED_CONFIG),
+        lifecycle: new Lifecycle(),
+        childFactoryOverride: fakeFactory({
+          onStart: (emit) => emit({ type: "ready" }),
+          react: (frame, emit) => {
+            if (frame.type === "start") {
+              emit({ type: "result", run_id: "r1", outputs: { x: 1 } });
+            }
+          },
+        }),
+      });
+      const out = await tool.execute(makeCtx(), {
+        python_code: "x = 1",
+        allowed_tools: ["echo"],
+        inputs: {},
+        expected_outputs: ["x"],
+        reason: "test",
+      });
+      expect(out.outcome).toBe("ok");
+    } finally {
+      if (oldUnsafe === undefined) delete process.env.MONTY_RUNNER_ALLOW_UNSAFE_EXEC;
+      else process.env.MONTY_RUNNER_ALLOW_UNSAFE_EXEC = oldUnsafe;
+      if (oldDev === undefined) delete process.env.MCP_AUTH_DEV_MODE;
+      else process.env.MCP_AUTH_DEV_MODE = oldDev;
+    }
+  });
+
   it("returns runtime_disabled when binary_path is unset", async () => {
     const tool = buildRunOrchestrationScriptTool({
       registry: buildRegistryWithEcho(),
