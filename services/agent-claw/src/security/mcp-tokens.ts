@@ -115,7 +115,12 @@ export function signMcpToken(opts: {
  */
 export function verifyBearerHeader(
   authorization: string | undefined,
-  opts: { signingKey?: string; now?: number; requiredScope?: string } = {},
+  opts: {
+    signingKey?: string;
+    now?: number;
+    requiredScope?: string;
+    expectedAudience?: string;
+  } = {},
 ): McpTokenClaims | null {
   if (!authorization) return null;
   const parts = authorization.split(" ", 2);

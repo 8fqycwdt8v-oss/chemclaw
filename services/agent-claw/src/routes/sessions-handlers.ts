@@ -368,12 +368,18 @@ export async function handleInternalResume(
     return await reply.code(500).send({ error: "harness_deps_missing" });
   }
 
-  // Verify the JWT.
+  // Verify the JWT. expectedAudience binds the token to this agent service
+  // so a token minted for any other audience (e.g., a future "agent:summary"
+  // daemon target, or a reanimator → MCP-service token whose `aud` is the
+  // wrong service) cannot be replayed against the resume route. The
+  // reanimator side mints with audience="agent-claw" — keep both literals
+  // in sync.
   const authz = req.headers.authorization;
   let claimedUser: string;
   try {
     const claims = verifyBearerHeader(typeof authz === "string" ? authz : undefined, {
       requiredScope: "agent:resume",
+      expectedAudience: "agent-claw",
     });
     if (!claims) {
       return await reply.code(401).send({
