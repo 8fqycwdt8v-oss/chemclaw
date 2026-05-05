@@ -32,7 +32,16 @@ const ROLE_TIER: Record<ModelRole, number> = {
 
 // ---------------------------------------------------------------------------
 // Zod-from-JSON schema builder.
-// Supports: string, number, boolean, object (one level deep), array.
+// Supports: string (+ pattern, format, enum, min/maxLength), integer, number
+// (+ minimum/maximum), boolean, object (any depth, with required[] honored at
+// every level + additionalProperties), array (with items).
+//
+// Coverage matters at runtime: db/seed/05_harness_tools.sql carries 41+ rows
+// with `type:"integer"` / `enum` / `minimum` / `maximum` / `format` /
+// `pattern` / `additionalProperties:false`. Falling through to z.unknown()
+// would mean agent-side validation is weaker than the catalog claims — the
+// LLM-side tool-call schema still constrains, but agent-side acceptance of
+// bad arg shapes silently strips the constraint.
 // ---------------------------------------------------------------------------
 
 interface JsonSchemaProperty {
@@ -40,15 +49,22 @@ interface JsonSchemaProperty {
   description?: string;
   minLength?: number;
   maxLength?: number;
+  minimum?: number;
+  maximum?: number;
+  enum?: unknown[];
+  format?: string;
+  pattern?: string;
   properties?: Record<string, JsonSchemaProperty>;
   items?: JsonSchemaProperty;
   required?: string[];
+  additionalProperties?: boolean;
 }
 
 interface JsonSchema {
   type: string;
   properties?: Record<string, JsonSchemaProperty>;
   required?: string[];
+  additionalProperties?: boolean;
 }
 
 function zodFromJsonSchema(schema: JsonSchema): z.ZodTypeAny {
@@ -58,16 +74,60 @@ function zodFromJsonSchema(schema: JsonSchema): z.ZodTypeAny {
   return buildObjectSchema(schema);
 }
 
-function buildPropertySchema(prop: JsonSchemaProperty): z.ZodTypeAny {
-  switch (prop.type) {
-    case "string": {
-      let s = z.string();
-      if (prop.minLength !== undefined) s = s.min(prop.minLength);
-      if (prop.maxLength !== undefined) s = s.max(prop.maxLength);
-      return s;
+function buildStringSchema(prop: JsonSchemaProperty): z.ZodTypeAny {
+  // `enum` short-circuits to z.enum() — applicable to string fields with a
+  // closed set of values (the most common shape in 05_harness_tools.sql).
+  if (Array.isArray(prop.enum) && prop.enum.length > 0) {
+    const values = prop.enum.filter((v): v is string => typeof v === "string");
+    if (values.length === prop.enum.length && values.length > 0) {
+      return z.enum(values as [string, ...string[]]);
     }
-    case "number":
-      return z.number();
+  }
+  let s = z.string();
+  if (prop.minLength !== undefined) s = s.min(prop.minLength);
+  if (prop.maxLength !== undefined) s = s.max(prop.maxLength);
+  if (prop.pattern !== undefined) s = s.regex(new RegExp(prop.pattern));
+  if (prop.format === "uuid") return s.uuid();
+  if (prop.format === "email") return s.email();
+  if (prop.format === "uri" || prop.format === "url") return s.url();
+  if (prop.format === "date-time") return s.datetime();
+  return s;
+}
+
+function buildPropertySchema(prop: JsonSchemaProperty): z.ZodTypeAny {
+  // Generic enum on non-string (e.g. integer enum) — fall back to a union of
+  // literals. JSON Schema's `enum` is type-agnostic.
+  if (
+    Array.isArray(prop.enum) &&
+    prop.enum.length > 0 &&
+    prop.type !== "string"
+  ) {
+    const literals = prop.enum.map((v) => z.literal(v as string | number | boolean));
+    const [first, second, ...rest] = literals;
+    if (first === undefined) {
+      // unreachable — guarded by `prop.enum.length > 0` above
+      return z.unknown();
+    }
+    if (second === undefined) {
+      return first;
+    }
+    return z.union([first, second, ...rest]);
+  }
+  switch (prop.type) {
+    case "string":
+      return buildStringSchema(prop);
+    case "integer": {
+      let n = z.number().int();
+      if (prop.minimum !== undefined) n = n.min(prop.minimum);
+      if (prop.maximum !== undefined) n = n.max(prop.maximum);
+      return n;
+    }
+    case "number": {
+      let n = z.number();
+      if (prop.minimum !== undefined) n = n.min(prop.minimum);
+      if (prop.maximum !== undefined) n = n.max(prop.maximum);
+      return n;
+    }
     case "boolean":
       return z.boolean();
     case "object":
@@ -85,7 +145,7 @@ function buildPropertySchema(prop: JsonSchemaProperty): z.ZodTypeAny {
 
 function buildObjectSchema(
   schema: JsonSchemaProperty | JsonSchema,
-): z.ZodObject<z.ZodRawShape> {
+): z.ZodTypeAny {
   const shape: z.ZodRawShape = {};
   const required = new Set(schema.required ?? []);
   for (const [key, prop] of Object.entries(schema.properties ?? {})) {
@@ -95,7 +155,11 @@ function buildObjectSchema(
     }
     shape[key] = fieldSchema;
   }
-  return z.object(shape);
+  // `additionalProperties: false` → z.object().strict() rejects extra
+  // properties from the LLM's tool call. Default behaviour (key absent or
+  // true) leaves the object permissive.
+  const obj = z.object(shape);
+  return schema.additionalProperties === false ? obj.strict() : obj;
 }
 
 // ---------------------------------------------------------------------------
