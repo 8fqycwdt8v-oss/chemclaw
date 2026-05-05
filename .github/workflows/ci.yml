@@ -98,6 +98,7 @@ jobs:
           coverage erase
           coverage run --rcfile=pyproject.toml -m pytest -q \
             tests/unit/test_redactor.py \
+            tests/unit/test_mcp_doc_fetcher.py \
             tests/unit/test_kg_first_system_prompt_seed.py \
             tests/unit/optimizer/test_session_purger.py \
             tests/unit/mcp_kg/ \

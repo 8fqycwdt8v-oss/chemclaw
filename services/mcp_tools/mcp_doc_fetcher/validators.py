@@ -75,10 +75,23 @@ BLOCKED_NETWORKS = (
     ipaddress.ip_network("172.16.0.0/12"),      # RFC1918
     ipaddress.ip_network("192.168.0.0/16"),     # RFC1918
     ipaddress.ip_network("0.0.0.0/8"),          # "this network"
+    ipaddress.ip_network("100.64.0.0/10"),      # CGNAT / shared address space (RFC 6598)
+    ipaddress.ip_network("224.0.0.0/4"),        # IPv4 multicast (RFC 5771)
+    ipaddress.ip_network("255.255.255.255/32"), # broadcast
+    ipaddress.ip_network("198.18.0.0/15"),      # IETF benchmarking (RFC 2544)
+    ipaddress.ip_network("192.0.0.0/24"),       # IETF protocol assignments (RFC 6890)
     ipaddress.ip_network("::1/128"),            # IPv6 loopback
+    ipaddress.ip_network("::/128"),             # IPv6 unspecified
     ipaddress.ip_network("fe80::/10"),          # IPv6 link-local
     ipaddress.ip_network("fc00::/7"),           # IPv6 unique local
+    ipaddress.ip_network("ff00::/8"),           # IPv6 multicast
 )
+
+# IPv6 NAT64 well-known prefix (RFC 6052 §2.1). The lower 32 bits carry the
+# embedded IPv4 in the same way as ``::ffff:0:0/96``, but the stdlib
+# ``ipv4_mapped`` helper does not normalise it. ``ip_is_blocked`` extracts
+# the IPv4 explicitly for membership against ``BLOCKED_NETWORKS``.
+_NAT64_WELL_KNOWN = ipaddress.ip_network("64:ff9b::/96")
 
 
 # --------------------------------------------------------------------------
@@ -95,20 +108,51 @@ def is_under(p: Path, root: Path) -> bool:
         return False
 
 
+def _embedded_ipv4(addr: ipaddress.IPv6Address) -> ipaddress.IPv4Address | None:
+    """Return the IPv4 address tunnelled inside ``addr`` if any.
+
+    Covers four IPv4-in-IPv6 encodings that have all been used to bypass
+    SSRF allow/deny lists:
+
+    - IPv4-mapped (``::ffff:0:0/96``) via ``IPv6Address.ipv4_mapped``.
+    - 6to4 (``2002::/16`` — RFC 3056) via ``IPv6Address.sixtofour``.
+    - Teredo (``2001::/32`` — RFC 4380) via ``IPv6Address.teredo``;
+      the second tuple element is the client's IPv4.
+    - NAT64 well-known prefix (``64:ff9b::/96`` — RFC 6052) — extract
+      the lower 32 bits manually since the stdlib has no helper.
+    """
+    if addr.ipv4_mapped is not None:
+        return addr.ipv4_mapped
+    if addr.sixtofour is not None:
+        return addr.sixtofour
+    teredo = addr.teredo
+    if teredo is not None:
+        return teredo[1]
+    if addr in _NAT64_WELL_KNOWN:
+        return ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)
+    return None
+
+
 def ip_is_blocked(ip_str: str) -> bool:
     """True iff ``ip_str`` parses to an IP address inside ``BLOCKED_NETWORKS``.
 
-    Normalises IPv4-mapped IPv6 addresses (``::ffff:10.0.0.1``) to their
-    IPv4 form before the membership check so an attacker can't bypass
-    the RFC1918 block by tunnelling the IPv4 address through IPv6.
+    Normalises IPv4-mapped, 6to4, Teredo, and NAT64 IPv6 addresses to
+    their tunnelled IPv4 form before the membership check so an attacker
+    can't bypass the RFC1918 / loopback / metadata block by wrapping an
+    IPv4 destination inside one of those IPv6 transition mechanisms.
     """
     try:
         addr = ipaddress.ip_address(ip_str)
     except ValueError:
         return True  # not a valid IP — fail closed
-    # IPv4-mapped IPv6: normalise to IPv4 so RFC1918 networks match.
-    if isinstance(addr, ipaddress.IPv6Address) and addr.ipv4_mapped is not None:
-        addr = addr.ipv4_mapped
+    if isinstance(addr, ipaddress.IPv6Address):
+        v4 = _embedded_ipv4(addr)
+        if v4 is not None:
+            # Check the embedded IPv4 first (the actual destination once the
+            # OS unwraps the transition encoding) and the raw IPv6 second
+            # (so e.g. 2002::/16 itself can also be denied via BLOCKED_NETWORKS).
+            if any(v4 in net for net in BLOCKED_NETWORKS if isinstance(net, ipaddress.IPv4Network)):
+                return True
     return any(addr in net for net in BLOCKED_NETWORKS)
 
 
