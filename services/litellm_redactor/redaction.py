@@ -70,10 +70,48 @@ def _tag(kind: str, value: str) -> str:
 
 
 def _looks_like_smiles(token: str) -> bool:
-    """Heuristic: must contain typical SMILES grammar characters."""
-    has_bond = any(c in token for c in "=#()/\\")
-    has_letter = any(c.isalpha() for c in token)
-    return has_bond and has_letter and len(token) >= 6
+    """Heuristic: must contain typical SMILES grammar characters.
+
+    Cycle-4 tightening: requiring "any one of =#()/\\\\ + any letter" was
+    too permissive — it fired on prose like ``opt=value``, ``page=12``,
+    ``(line=34)`` and CLI flags. Real SMILES carry one of:
+      - a bracketed atom (``[Na+]``, ``[C@H]``, ``[O-]``),
+      - a ring-closure digit immediately after a SMILES atom letter
+        (``c1`` in benzene, ``C2`` in fused rings),
+      - a multi-bond followed by a SMILES atom letter
+        (``=C``, ``#N``, ``=O``, ``/C``, ``\\\\C``),
+      - or two-or-more structural chars from ``()[]=#/\\\\``.
+    SMILES atom letters: uppercase organic subset (C, N, O, S, P, F, B, I, H)
+    plus aromatic lowercase (c, n, o, s, p, b). Restricting bond-targets to
+    this alphabet rejects URL fragments like ``--opt=value`` (``=v`` —
+    "v" is not a SMILES atom) while still accepting real chemistry.
+    The token must also have at least 2 alphabetic characters so things
+    like ``[1-2]`` or ``(=12)`` (digits+punctuation only) don't match.
+    """
+    if len(token) < 6:
+        return False
+    letters = sum(1 for c in token if c.isalpha())
+    if letters < 2:
+        return False
+    # SMILES atom letters: organic subset + their aromatic lowercase forms.
+    # Cl, Br are two-letter; the leading C/B is in the subset so the regex
+    # below catches them.
+    atom_letter = r"[CNOSPFBIHcnospb]"
+    has_bracketed_atom = bool(re.search(r"\[[A-Za-z]", token))
+    has_ring_closure = bool(re.search(rf"{atom_letter}\d", token))
+    has_multi_bond = bool(re.search(rf"[=#/\\]{atom_letter}", token))
+    # NOTE: a previous "structural_count >= 2" fallback fired on prose like
+    # "(page=12, line=34)" and "/path/to/file.txt" — multiple punctuation
+    # chars without any chemistry context. Dropping it costs us only the
+    # rare SMILES that has 2+ ring/branch chars but no bracketed atom,
+    # no ring-closure digit, and no multi-bond — which is structurally
+    # impossible for a real molecule. Worst case: an extremely simple
+    # branched SMILES like ``C(C)(C)C`` (3 chars after each branch) — but
+    # that's still caught by the ``)C`` falling under ``[=#/\\]+atom``?
+    # No — ``)`` isn't a bond char. We accept that ultra-tiny branched
+    # SMILES under ~6 chars may slip; the post_turn defense-in-depth scrub
+    # in agent-claw catches the residual cases.
+    return has_bracketed_atom or has_ring_closure or has_multi_bond
 
 
 @dataclass

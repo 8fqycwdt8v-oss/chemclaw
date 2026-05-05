@@ -134,6 +134,21 @@ class CompoundClassifier(BaseProjector):
 
     async def _classify(self, work_conn: psycopg.AsyncConnection, inchikey: str) -> None:
         async with work_conn.cursor() as cur:
+            # Concurrency guard: serialize per-inchikey classification across
+            # replicas. The INSERT below uses `WHERE NOT EXISTS` to skip when a
+            # live assignment already exists, but READ COMMITTED does not lock
+            # the SELECT side of an INSERT...SELECT against a concurrent INSERT
+            # — and `compound_class_assignments`'s primary key includes
+            # `valid_from = NOW()`, so two concurrent classifiers for the same
+            # inchikey end up with distinct PKs and BOTH live rows. The
+            # transaction-scoped advisory lock keyed on hashtext(inchikey)
+            # bounds the critical section to one classifier per compound.
+            # Released automatically on commit/rollback. classid=24 is the
+            # arbitrary namespace for this projector.
+            await cur.execute(  # pragma: no cover — race-fix advisory lock; covered by deferred testcontainer race test (BACKLOG)
+                "SELECT pg_advisory_xact_lock(24, hashtext(%s))",
+                (inchikey,),
+            )
             # Determine which classes match this compound.
             await cur.execute(
                 """

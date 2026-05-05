@@ -5,114 +5,31 @@
 // which scrubs prompts going TO the model. This hook scrubs text going OUT —
 // the model's final response and (for streaming) each text_delta as it flows.
 //
+// The actual regex machinery lives in observability/redact-string.ts as a
+// leaf utility (no internal deps) so the Pino logger can import it without
+// pulling in core/* (which would create a circular-import risk against the
+// logger itself). This file owns the post_turn lifecycle binding only.
+//
 // Patterns are length-bounded to prevent catastrophic backtracking:
 //   1. Reaction SMILES  (\S{1,400}>\S{0,400}>\S{1,400})
 //   2. SMILES tokens    (length-bounded char class with bond grammar check)
 //   3. Email addresses  (each segment length-capped)
 //   4. NCE project IDs  (NCE-\d{1,6})
 //   5. Compound codes   (CMP-\d{4,8})
-//
-// API surface:
-//   - registerRedactSecretsHook(lc) wires the post_turn handler.
-//   - redactString(text, replacements) is exported so the SSE streamer can
-//     redact each text_delta in flight; the post_turn hook then provides a
-//     final pass on the buffered finalText to catch any cross-chunk patterns.
 
 import type { PostTurnPayload } from "../types.js";
 import type { Lifecycle } from "../lifecycle.js";
 import type { HookJSONOutput } from "../hook-output.js";
+import {
+  redactString,
+  type RedactReplacement,
+  MAX_REDACTION_INPUT_LEN,
+} from "../../observability/redact-string.js";
 
-// ---------------------------------------------------------------------------
-// Compiled patterns (length-bounded — no unbounded quantifiers).
-// ---------------------------------------------------------------------------
-
-// Defense against pathological input: real prompts are <100KB. Anything past
-// this cap is returned unmodified, bounding worst-case CPU. Even bounded
-// quantifiers do O(n*k) work — n in megabytes is enough to be a soft DoS.
-export const MAX_REDACTION_INPUT_LEN = 5 * 1024 * 1024;
-
-// Always pre-gated on a cheap >=2 '>' count: prose without reaction arrows
-// skips the bounded-quantifier scan entirely.
-const RXN_SMILES = /\S{1,400}>\S{0,400}>\S{1,400}/g;
-
-const SMILES_TOKEN = /(?<![A-Za-z0-9])[A-Za-z0-9@+\-[\]()=#/\\.]{6,200}(?![A-Za-z0-9])/g;
-
-const EMAIL = /[a-zA-Z0-9_.+-]{1,64}@[a-zA-Z0-9-]{1,253}\.[a-zA-Z0-9.-]{2,63}/g;
-
-const NCE_PROJECT = /\bNCE-\d{1,6}\b/gi;
-
-const COMPOUND_CODE = /\bCMP-\d{4,8}\b/gi;
-
-function looksLikeSmiles(token: string): boolean {
-  const hasBond = /[=#()/\\]/.test(token);
-  const hasLetter = /[A-Za-z]/.test(token);
-  return hasBond && hasLetter && token.length >= 6;
-}
-
-export interface RedactReplacement {
-  pattern: string;
-  original: string;
-}
-
-/**
- * Redact sensitive substrings in a single string value.
- * Returns the redacted string and appends each replacement to `replacements`.
- *
- * Exported because the SSE streamer in routes/chat.ts redacts each text_delta
- * chunk in flight, and the post_turn hook below uses the same machinery on
- * the buffered finalText.
- */
-export function redactString(
-  value: string,
-  replacements: RedactReplacement[],
-): string {
-  // Bound worst-case CPU: refuse pathologically large input rather than
-  // burn seconds in the regex engine.
-  if (!value || value.length > MAX_REDACTION_INPUT_LEN) {
-    return value;
-  }
-
-  let result = value;
-
-  // Pre-gate: RXN_SMILES requires two '>' chars; short-circuit with two
-  // O(1)-per-char indexOf calls before invoking the bounded-quantifier scan.
-  const firstArrow = value.indexOf(">");
-  const hasTwoArrows = firstArrow !== -1 && value.includes(">", firstArrow + 1);
-  if (hasTwoArrows) {
-    result = result.replace(RXN_SMILES, (match) => {
-      if (match.split(">").length - 1 >= 2) {
-        replacements.push({ pattern: "RXN_SMILES", original: match });
-        return "[REDACTED]";
-      }
-      return match;
-    });
-  }
-
-  result = result.replace(SMILES_TOKEN, (match) => {
-    if (looksLikeSmiles(match)) {
-      replacements.push({ pattern: "SMILES", original: match });
-      return "[REDACTED]";
-    }
-    return match;
-  });
-
-  result = result.replace(EMAIL, (match) => {
-    replacements.push({ pattern: "EMAIL", original: match });
-    return "[REDACTED]";
-  });
-
-  result = result.replace(NCE_PROJECT, (match) => {
-    replacements.push({ pattern: "NCE", original: match });
-    return "[REDACTED]";
-  });
-
-  result = result.replace(COMPOUND_CODE, (match) => {
-    replacements.push({ pattern: "CMP", original: match });
-    return "[REDACTED]";
-  });
-
-  return result;
-}
+// Re-export so existing callers that import { redactString } from this
+// module keep working. The single source of truth is observability/redact-string.ts.
+export { redactString, MAX_REDACTION_INPUT_LEN };
+export type { RedactReplacement };
 
 /**
  * post_turn handler: scrubs `payload.finalText` in place. Any replacements
