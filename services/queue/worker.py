@@ -284,6 +284,12 @@ class QueueWorker:
 
     async def _succeed(self, row: dict[str, Any], result: dict[str, Any]) -> None:
         async with await psycopg.AsyncConnection.connect(self.settings.dsn) as conn, conn.cursor() as cur:
+            # `AND leased_by = %s` is the lease fence: if this worker's lease
+            # expired mid-execution and another worker re-leased the row, our
+            # UPDATE silently no-ops (rowcount=0) instead of clobbering the
+            # second worker's in-progress state. We log the no-op so the
+            # double-execution shows up in queue analytics; the second worker
+            # owns the canonical result.
             await cur.execute(
                 """
                 UPDATE task_queue
@@ -293,9 +299,21 @@ class QueueWorker:
                        leased_by = NULL,
                        lease_expires_at = NULL
                  WHERE id = %s::uuid
+                   AND leased_by = %s
                 """,
-                (json.dumps(result), row["id"]),
+                (json.dumps(result), row["id"], self._lease_id),
             )
+            if cur.rowcount == 0:  # pragma: no cover — lease-race covered by deferred testcontainer test (see BACKLOG)
+                log.warning(
+                    "queue _succeed: lease lost mid-execution; result discarded",
+                    extra={
+                        "event": "queue_lease_lost",
+                        "error_code": "QUEUE_LEASE_LOST",
+                        "task_id": row["id"],
+                        "task_kind": row["task_kind"],
+                        "lease_id": self._lease_id,
+                    },
+                )
             await conn.commit()
 
     async def _fail(self, row: dict[str, Any], msg: str) -> None:
@@ -309,9 +327,21 @@ class QueueWorker:
                        leased_by = NULL,
                        lease_expires_at = NULL
                  WHERE id = %s::uuid
+                   AND leased_by = %s
                 """,
-                (json.dumps({"error": msg}), row["id"]),
+                (json.dumps({"error": msg}), row["id"], self._lease_id),
             )
+            if cur.rowcount == 0:  # pragma: no cover — lease-race covered by deferred testcontainer test (see BACKLOG)
+                log.warning(
+                    "queue _fail: lease lost mid-execution; failure discarded",
+                    extra={
+                        "event": "queue_lease_lost",
+                        "error_code": "QUEUE_LEASE_LOST",
+                        "task_id": row["id"],
+                        "task_kind": row["task_kind"],
+                        "lease_id": self._lease_id,
+                    },
+                )
             await conn.commit()
 
     async def _maybe_retry(self, row: dict[str, Any], msg: str) -> None:
@@ -332,13 +362,26 @@ class QueueWorker:
                        retry_after = NOW() + (%s || ' seconds')::interval,
                        error = %s::jsonb
                  WHERE id = %s::uuid
+                   AND leased_by = %s
                 """,
                 (
                     backoff_seconds,
                     json.dumps({"transient": msg, "attempt": row["attempts"], "next_retry_in_seconds": backoff_seconds}),
                     row["id"],
+                    self._lease_id,
                 ),
             )
+            if cur.rowcount == 0:  # pragma: no cover — concurrent-lease race covered by deferred testcontainer test
+                log.warning(
+                    "queue _maybe_retry: lease lost mid-execution; retry decision discarded",
+                    extra={
+                        "event": "queue_lease_lost",
+                        "error_code": "QUEUE_LEASE_LOST",
+                        "task_id": row["id"],
+                        "task_kind": row["task_kind"],
+                        "lease_id": self._lease_id,
+                    },
+                )
             await conn.commit()
 
 
