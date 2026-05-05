@@ -78,7 +78,10 @@ function serializeError(err: unknown): Record<string, unknown> {
   if (typeof err !== "object") {
     // `getLogger().error("string-only error")` → primitive falls through
     // unchanged; nothing to scrub.
-    return { type: typeof err, message: String(err) };
+    return {
+      type: typeof err,
+      message: typeof err === "string" ? err : JSON.stringify(err),
+    };
   }
   const e = err as Error & {
     code?: unknown;
@@ -88,7 +91,7 @@ function serializeError(err: unknown): Record<string, unknown> {
     [key: string]: unknown;
   };
   const out: Record<string, unknown> = {
-    type: e.name ?? e.constructor?.name ?? "Error",
+    type: typeof e.name === "string" && e.name.length > 0 ? e.name : "Error",
     message: typeof e.message === "string" ? scrub(e.message) : "",
   };
   if (typeof e.stack === "string") {

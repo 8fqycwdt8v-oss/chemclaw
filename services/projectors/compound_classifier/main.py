@@ -145,7 +145,7 @@ class CompoundClassifier(BaseProjector):
             # bounds the critical section to one classifier per compound.
             # Released automatically on commit/rollback. classid=24 is the
             # arbitrary namespace for this projector.
-            await cur.execute(
+            await cur.execute(  # pragma: no cover — race-fix advisory lock; covered by deferred testcontainer race test (BACKLOG)
                 "SELECT pg_advisory_xact_lock(24, hashtext(%s))",
                 (inchikey,),
             )
