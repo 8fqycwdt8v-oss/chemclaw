@@ -138,9 +138,15 @@ def _domain_dump(domain: Any) -> dict[str, Any]:
 
 
 def _domain_load(payload: dict[str, Any]) -> Any:
-    """Reconstruct a Domain from its JSON dump."""
+    """Reconstruct a Domain from its JSON dump.
+
+    Uses Pydantic-v2's ``model_validate`` instead of ``Domain(**payload)`` —
+    equivalent at runtime today but cleaner against future BoFire schema
+    changes (discriminated unions, alias generators) that don't survive
+    kwargs unpacking but do survive structured validation.
+    """
     from bofire.data_models.domain.api import Domain
-    return Domain(**payload)
+    return Domain.model_validate(payload)
 
 
 # ---------------------------------------------------------------------------
