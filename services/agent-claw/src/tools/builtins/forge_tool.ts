@@ -457,11 +457,19 @@ export function buildForgeToolTool(
           );
           const newSkillId = skillResult.rows[0]?.id;
 
-          // Insert tools table row (source='forged').
+          // Insert tools table row (source='forged'). NO `ON CONFLICT
+          // DO NOTHING` here — silent no-op on a unique-constraint
+          // collision would commit the surrounding `skill_library` row
+          // with no matching `tools` row, producing an orphan that the
+          // tool registry never sees. The TOCTOU window between
+          // `toolNameExists` (separate transaction above) and this
+          // INSERT is rare, but when it fires we want the unique
+          // violation to throw and roll back the entire withUserContext
+          // block, surfacing the conflict to the agent for retry under
+          // a fresh name.
           await client.query(
             `INSERT INTO tools (id, name, source, schema_json, description, enabled)
-             VALUES ($1::uuid, $2, 'forged', $3, $4, true)
-             ON CONFLICT (name) DO NOTHING`,
+             VALUES ($1::uuid, $2, 'forged', $3, $4, true)`,
             [toolId, input.name, JSON.stringify(schemaJson), input.description],
           );
 
