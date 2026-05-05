@@ -415,6 +415,36 @@ def create_app(
             headers={"x-request-id": getattr(request.state, "request_id", "")},
         )
 
+    @app.exception_handler(Exception)
+    async def handle_unhandled_exception(request: Request, exc: Exception) -> JSONResponse:
+        # Catch-all so unhandled exceptions return the same {error, detail}
+        # envelope the fleet's clients (agent-claw, queue/worker.py, and the
+        # /readyz prober) expect. Without this, Starlette's default handler
+        # writes a plain-text "Internal Server Error" body — every MCP
+        # client then has to special-case parsing it. The HTTPException
+        # handler above already covers the typed-status path; this one is
+        # for un-classified bugs (TypeError in a tool handler, an unguarded
+        # `await something_none`, etc.). The full traceback already lands
+        # on stderr via Starlette's exception logger, so we don't re-log
+        # the same exc_info — just emit a structured one-liner so a
+        # cross-service Loki search ties the response to the trace.
+        log.exception(
+            "unhandled exception",
+            extra={
+                "event": "mcp_unhandled_exception",
+                "error_code": "MCP_UNHANDLED_EXCEPTION",
+                "service": name,
+                "method": request.method,
+                "path": request.url.path,
+                "err_type": type(exc).__name__,
+            },
+        )
+        return JSONResponse(
+            status_code=500,
+            content={"error": "internal", "detail": "internal server error"},
+            headers={"x-request-id": getattr(request.state, "request_id", "")},
+        )
+
     @app.get("/healthz", tags=["internal"])
     async def healthz() -> dict[str, str]:
         return {"status": "ok", "service": name, "version": version}

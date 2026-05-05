@@ -6,6 +6,7 @@
 
 import type { Pool } from "pg";
 import { withUserContext } from "../db/with-user-context.js";
+import { getLogger } from "../observability/logger.js";
 
 export interface FlagContext {
   user?: string;
@@ -96,9 +97,21 @@ export class FeatureFlagRegistry {
         );
       });
       for (const r of result.rows) rows.set(r.key, r);
-    } catch {
+    } catch (err) {
       // DB unavailable; keep the prior cache if any so transient errors
-      // don't yank flags out from under live requests.
+      // don't yank flags out from under live requests. Log the failure
+      // so a long-running outage is visible to operators — repeated
+      // SELECTs failing for hours used to be silent, masking a stale
+      // flag set behind a healthy-looking process.
+      getLogger("agent-claw.feature-flags").warn(
+        {
+          event: "feature_flags_refresh_failed",
+          err_name: (err as Error).name,
+          err_msg: (err as Error).message,
+          using_stale_cache: this.cache !== null,
+        },
+        "feature_flags refresh failed; keeping prior cache",
+      );
       this.cache ??= { fetchedAt: now, rows: new Map() };
       return;
     }

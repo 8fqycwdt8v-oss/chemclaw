@@ -16,6 +16,7 @@ import type { Pool } from "pg";
 import type { LlmProvider } from "../llm/provider.js";
 import type { Message } from "../core/types.js";
 import type { PromptRegistry } from "./registry.js";
+import { getLogger } from "../observability/logger.js";
 
 // Re-export Message so consumers of ShadowEvalContext don't need to import from types.js.
 export type { Message };
@@ -129,8 +130,21 @@ export class ShadowEvaluator {
       await Promise.allSettled(
         shadows.map((shadow) => this._evalOne(shadow, ctx)),
       );
-    } catch {
-      // Silently swallow — shadow eval must never affect user responses.
+    } catch (err) {
+      // Shadow eval must never affect user responses, so we don't
+      // rethrow — but we DO log so the skill_promoter's "no shadow
+      // scores recorded for prompt X in 24h" alert has a breadcrumb
+      // pointing at the right cause (DB outage, getShadowPrompts query
+      // returning malformed rows, etc.).
+      getLogger("agent-claw.shadow-evaluator").warn(
+        {
+          event: "shadow_eval_failed",
+          prompt_name: ctx.promptName,
+          err_name: (err as Error).name,
+          err_msg: (err as Error).message,
+        },
+        "shadow eval failed; user response unaffected",
+      );
     }
   }
 

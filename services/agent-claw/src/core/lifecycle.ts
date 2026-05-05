@@ -27,6 +27,7 @@ import { mostRestrictive } from "./hook-output.js";
 import type { HookPayloadMap, HookPoint } from "./types.js";
 import { withHookSpan } from "../observability/hook-spans.js";
 import { getLogger } from "../observability/logger.js";
+import { getRequestContext } from "./request-context.js";
 
 // Internal: store each handler with a name + matcher + per-hook timeout.
 interface RegisteredHook<P> {
@@ -255,15 +256,24 @@ export class Lifecycle {
         }
         // Non-pre_tool hook failures are logged with full structure +
         // re-asserted on the OTel span. The hook chain continues so a
-        // single buggy hook doesn't take down the harness.
+        // single buggy hook doesn't take down the harness. The
+        // request_id pulled off the AsyncLocalStorage RequestContext
+        // lets a Loki search jump from a single hook_failed line to
+        // the originating HTTP request's full trail (route handler
+        // entry/exit, MCP postJson calls, post_turn redact-secrets
+        // fan-out).
+        const reqCtx = getRequestContext();
         getLogger("agent-claw.harness.lifecycle").warn(
           {
             event: "hook_failed",
             error_code: "AGENT_HOOK_FAILED",
             point,
             hook_name: hook.name,
+            matcher_target: opts.matcherTarget,
+            tool_use_id: opts.toolUseID,
             err_name: (err as Error).name,
             err_msg: (err as Error).message,
+            request_id: reqCtx?.requestId,
           },
           "non-pre_tool hook threw — continuing with remaining hooks",
         );
