@@ -19,24 +19,44 @@ const CategoricalInputSpec = z.object({
   values: z.array(z.string().min(1).max(200)).min(1).max(200),
 });
 
-export const DesignPlateIn = z.object({
-  plate_format: z.enum(["24", "96", "384", "1536"]),
-  reactants_smiles: z.string().min(1).max(MAX_RXN_SMILES_LEN).optional(),
-  product_smiles: z.string().min(1).max(MAX_SMILES_LEN).optional(),
-  factors: z.array(ContinuousFactor).max(10).default([]),
-  categorical_inputs: z.array(CategoricalInputSpec).max(10).default([]),
-  exclusions: z
-    .object({
-      solvents: z.array(z.string()).max(200).default([]),
-      reagents: z.array(z.string()).max(200).default([]),
-    })
-    .default({ solvents: [], reagents: [] }),
-  n_wells: z.number().int().min(1).max(1536),
-  seed: z.number().int().default(42),
-  annotate_yield: z.boolean().default(false),
-  project_internal_id: z.string().max(200).optional(),
-  disable_chem21_floor: z.boolean().default(false),
-});
+// Format → physical capacity. n_wells must not exceed the chosen format's
+// well count; the MCP enforces the same rule (designer.plate_capacity), but
+// we cross-validate locally so a misconfigured input fails fast with a
+// readable Zod error instead of an opaque upstream 422.
+type PlateFormat = "24" | "96" | "384" | "1536";
+const PLATE_CAPACITY: Record<PlateFormat, number> = {
+  "24": 24,
+  "96": 96,
+  "384": 384,
+  "1536": 1536,
+};
+
+export const DesignPlateIn = z
+  .object({
+    plate_format: z.enum(["24", "96", "384", "1536"]),
+    reactants_smiles: z.string().min(1).max(MAX_RXN_SMILES_LEN).optional(),
+    product_smiles: z.string().min(1).max(MAX_SMILES_LEN).optional(),
+    factors: z.array(ContinuousFactor).max(10).default([]),
+    categorical_inputs: z.array(CategoricalInputSpec).max(10).default([]),
+    exclusions: z
+      .object({
+        solvents: z.array(z.string()).max(200).default([]),
+        reagents: z.array(z.string()).max(200).default([]),
+      })
+      .default({ solvents: [], reagents: [] }),
+    n_wells: z.number().int().min(1).max(1536),
+    seed: z.number().int().default(42),
+    annotate_yield: z.boolean().default(false),
+    project_internal_id: z.string().max(200).optional(),
+    disable_chem21_floor: z.boolean().default(false),
+  })
+  .refine(
+    (v) => v.n_wells <= PLATE_CAPACITY[v.plate_format],
+    (v) => ({
+      message: `n_wells=${v.n_wells} exceeds plate_format=${v.plate_format} capacity ${PLATE_CAPACITY[v.plate_format]}`,
+      path: ["n_wells"],
+    }),
+  );
 export type DesignPlateInput = z.infer<typeof DesignPlateIn>;
 
 const Well = z.object({
