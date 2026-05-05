@@ -188,6 +188,51 @@ const ConfigSchema = z.object({
   AGENT_HOLDOUT_FIXTURE: z
     .string()
     .default("tests/golden/chem_qa_holdout_v1.fixture.jsonl"),
+
+  // ---------------------------------------------------------------------------
+  // Bootstrap admin allowlist (`global_admin` fallback only — primary store
+  // is `admin_roles`). Comma-separated lower-case Entra IDs.
+  // ---------------------------------------------------------------------------
+  AGENT_ADMIN_USERS: z.string().default(""),
+
+  // ---------------------------------------------------------------------------
+  // Per-user log-hash salt. Required outside dev mode (CHEMCLAW_DEV_MODE=true);
+  // services/agent-claw/src/observability/user-hash.ts throws at first use
+  // when unset. Generate via `openssl rand -hex 32`.
+  // ---------------------------------------------------------------------------
+  LOG_USER_SALT: z.string().default(""),
+
+  // ---------------------------------------------------------------------------
+  // MCP Bearer-token signing key (ADR 006 Layer 2). Empty string disables
+  // signed traffic — set MCP_AUTH_DEV_MODE=true on the MCP services to
+  // accept unsigned dev traffic. Production must mint via `openssl rand -hex 32`.
+  // ---------------------------------------------------------------------------
+  MCP_AUTH_SIGNING_KEY: z.string().default(""),
+
+  // ---------------------------------------------------------------------------
+  // OTLP traces endpoint. Falls back to LANGFUSE_HOST when unset.
+  // ---------------------------------------------------------------------------
+  OTEL_EXPORTER_OTLP_ENDPOINT: z.string().url().optional(),
+
+  // ---------------------------------------------------------------------------
+  // Slow-transaction warning threshold (ms). Logged by db/with-user-context.ts.
+  // ---------------------------------------------------------------------------
+  DB_SLOW_TXN_MS: z.coerce.number().int().nonnegative().default(200),
+
+  // ---------------------------------------------------------------------------
+  // E2B sandbox tunables (services/agent-claw/src/core/sandbox.ts).
+  // SANDBOX_ALLOW_NET_EGRESS / SANDBOX_MAX_NET_EGRESS are aliased — either
+  // set to "true" enables outbound HTTP for forged tools (default off).
+  // ---------------------------------------------------------------------------
+  SANDBOX_MAX_CPU_S: z.coerce.number().int().positive().default(30),
+  SANDBOX_ALLOW_NET_EGRESS: z
+    .string()
+    .optional()
+    .transform((v) => v === "true"),
+  SANDBOX_MAX_NET_EGRESS: z
+    .string()
+    .optional()
+    .transform((v) => v === "true"),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;
