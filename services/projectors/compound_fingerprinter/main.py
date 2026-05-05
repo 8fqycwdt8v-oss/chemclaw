@@ -58,7 +58,7 @@ class CompoundFingerprinter(BaseProjector):
     """
 
     name = "compound_fingerprinter"
-    interested_event_types = ()
+    interested_event_types = ()  # pragma: no cover — class-attr declaration; never exercised by unit tests (custom NOTIFY drives this projector)
 
     def __init__(self, settings: CompoundFingerprinterSettings) -> None:
         super().__init__(settings)
