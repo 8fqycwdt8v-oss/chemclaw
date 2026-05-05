@@ -314,6 +314,7 @@ describe.skipIf(!dockerAvailable)(
           userEntraId: userId,
           // Not "agent:resume" — should bounce.
           scopes: ["mcp_kg:read"],
+          audience: "agent-claw",
           signingKey: TEST_SIGNING_KEY,
         });
 
@@ -337,6 +338,7 @@ describe.skipIf(!dockerAvailable)(
           sandboxId: "reanimator",
           userEntraId: userId,
           scopes: ["agent:resume"],
+          audience: "agent-claw",
           signingKey: TEST_SIGNING_KEY,
         });
 

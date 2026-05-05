@@ -188,10 +188,16 @@ async def resume_session(
 
     if settings.mcp_auth_signing_key:
         try:
+            # audience="agent-claw" binds the token to the resume route
+            # specifically — the verifier rejects tokens with any other
+            # `aud` claim. Keep this literal in sync with
+            # `verifyBearerHeader({expectedAudience: "agent-claw"})` in
+            # services/agent-claw/src/routes/sessions-handlers.ts.
             token = sign_mcp_token(
                 sandbox_id="reanimator",
                 user_entra_id=user_entra_id,
                 scopes=["agent:resume"],
+                audience="agent-claw",
                 ttl_seconds=300,
                 signing_key=settings.mcp_auth_signing_key,
             )
