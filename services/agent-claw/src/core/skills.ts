@@ -317,6 +317,23 @@ export class SkillLoader {
   }
 
   /**
+   * Audit each loaded skill's `tools:` frontmatter against the runtime
+   * tool catalog. Returns the per-skill set of unknown tool ids — a
+   * caller can log or surface these. Pre-PR these gaps were silently
+   * filtered at activation, so a missing tool only surfaced mid-skill at
+   * runtime when the user enabled the skill and tried to invoke the
+   * tool. Surfacing at startup makes the catalog drift loud.
+   */
+  auditToolGaps(toolIds: ReadonlySet<string>): Map<string, string[]> {
+    const gaps = new Map<string, string[]>();
+    for (const skill of this._skills.values()) {
+      const missing = skill.tools.filter((t) => !toolIds.has(t));
+      if (missing.length > 0) gaps.set(skill.id, missing);
+    }
+    return gaps;
+  }
+
+  /**
    * Load active skills from the skill_library DB table (Phase C.3).
    *
    * Rules:
