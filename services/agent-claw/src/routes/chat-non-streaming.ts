@@ -51,6 +51,10 @@ export interface NonStreamingTurnInput {
    *  by the response flow. */
   cleanupSkillForTurn: (() => void) | undefined;
   signal: AbortSignal;
+  /** Originating session id — threaded into the plan-mode store so
+   * /api/chat/plan/approve can call persistTurnState on the same session
+   * (TS-H4). */
+  sessionId: string | null;
 }
 
 /**
@@ -104,7 +108,7 @@ export async function handleNonStreamingTurn(
           }),
       );
       const steps = parsePlanSteps(planJson);
-      const plan = createPlan(steps, input.messages, input.user);
+      const plan = createPlan(steps, input.messages, input.user, input.sessionId);
       planStore.save(plan);
       input.cleanupSkillForTurn?.();
       await closeTurn(0, 0);

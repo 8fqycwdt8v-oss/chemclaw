@@ -289,6 +289,7 @@ async function handleChat(
       paperclipHandle,
       cleanupSkillForTurn,
       signal: req.signal,
+      sessionId,
     });
     return;
   }

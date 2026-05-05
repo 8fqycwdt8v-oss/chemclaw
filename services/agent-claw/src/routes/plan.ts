@@ -14,7 +14,7 @@ import type { PromptRegistry } from "../prompts/registry.js";
 import { Budget } from "../core/budget.js";
 import { runHarness } from "../core/harness.js";
 import { planStore } from "../core/plan-mode.js";
-import { hydrateScratchpad } from "../core/session-state.js";
+import { hydrateScratchpad, persistTurnState } from "../core/session-state.js";
 import { lifecycle } from "../core/runtime.js";
 import { runWithRequestContext } from "../core/request-context.js";
 import { hashUser } from "../observability/user-hash.js";
@@ -145,6 +145,32 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
           finishReason: result.finishReason,
           usage: result.usage,
         });
+      }
+
+      // TS-H4 fix: when the plan was originally created inside a session,
+      // charge the approve turn's scratchpad audit + token usage back to it.
+      // Without this the post_turn redact-secrets log was silently dropped
+      // and the session row's message_count went stale.
+      if (plan.session_id) {
+        try {
+          await persistTurnState(
+            deps.pool,
+            user,
+            plan.session_id,
+            ctx,
+            budget,
+            result.finishReason,
+            {},
+          );
+        } catch (persistErr) {
+          // Non-fatal: the response is already sent. Log so a stuck session
+          // gets noticed via Loki, but don't fail the approve route on a
+          // session-row write hiccup.
+          req.log.warn(
+            { err: persistErr, session_id: plan.session_id },
+            "plan/approve: persistTurnState failed; turn output sent but session row not updated",
+          );
+        }
       }
     } catch (err) {
       try { recordSpanError(rootSpan, err); } catch { /* ignore */ }

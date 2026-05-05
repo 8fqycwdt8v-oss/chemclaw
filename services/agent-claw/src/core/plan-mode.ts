@@ -37,6 +37,12 @@ export interface Plan {
   /** Owner user-Entra-ID. /approve / /reject / GET refuse if the calling
    * user doesn't match. Closes cross-user plan hijack via leaked plan_id. */
   user_entra_id: string;
+  /** Originating session id, when the plan was created inside a tracked
+   * session. /approve threads this back into `persistTurnState` so the
+   * approve turn's scratchpad audit + token usage is charged against the
+   * session — without it the post_turn redact-secrets log was silently
+   * dropped and the session row's message_count went stale (TS-H4). */
+  session_id?: string;
   created_at: number;
 }
 
@@ -82,12 +88,14 @@ export function createPlan(
   steps: PlanStep[],
   messages: Message[],
   userEntraId: string,
+  sessionId?: string | null,
 ): Plan {
   return {
     plan_id: randomUUID(),
     steps,
     messages: messages.map((m) => ({ ...m })), // shallow clone
     user_entra_id: userEntraId,
+    session_id: sessionId ?? undefined,
     created_at: Date.now(),
   };
 }
