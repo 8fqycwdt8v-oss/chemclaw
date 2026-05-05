@@ -96,3 +96,19 @@ def test_redactor_failure_does_not_crash_logging(monkeypatch: pytest.MonkeyPatch
     logger, buf = _make_logger("redact.crash", "%(message)s")
     logger.info("plain text")
     assert "plain text" in buf.getvalue()
+
+
+def test_exc_text_traceback_is_redacted() -> None:
+    """DR-14: traceback strings (`exc_text`, `stack_info`) regularly carry
+    SMILES / compound codes embedded in psycopg "Failing row contains (...)"
+    error messages — they must be redacted on the same surface as `msg`."""
+    logger, buf = _make_logger("redact.exc", "%(message)s|%(exc_text)s")
+    try:
+        raise RuntimeError("Failing row contains CC(=O)Oc1ccccc1C(=O)O")
+    except RuntimeError:
+        logger.exception("upstream failure")
+    out = buf.getvalue()
+    # The exception message embeds the SMILES verbatim — the filter must
+    # redact `exc_text` (which the formatter renders into the line above).
+    assert "CC(=O)Oc1ccccc1C(=O)O" not in out
+    assert "<SMILES_" in out

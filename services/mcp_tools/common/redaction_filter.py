@@ -50,6 +50,11 @@ def _redact_value(value: Any) -> Any:
 
 # Fields the formatter must emit verbatim — stamping the redactor onto
 # them would corrupt structural JSON (timestamps, levels, ids).
+#
+# `exc_text` / `stack_info` are intentionally NOT in this set — they are
+# free-form string traceback payloads that regularly carry SMILES /
+# compound codes embedded in driver error strings (e.g., psycopg
+# "Failing row contains (...)"). DR-14 requires we redact them.
 _PASSTHROUGH_FIELDS = frozenset(
     {
         "name",
@@ -60,9 +65,7 @@ _PASSTHROUGH_FIELDS = frozenset(
         "pathname",
         "filename",
         "module",
-        "exc_info",
-        "exc_text",
-        "stack_info",
+        "exc_info",  # tuple type — handled separately below if needed
         "lineno",
         "funcName",
         "created",
@@ -99,10 +102,29 @@ class RedactionFilter(logging.Filter):
         # them — leaving them in causes %-formatting to run a second
         # time inside the formatter and emit "%s" placeholders.
         record.args = None
+        # DR-14: redact exception tracebacks before the formatter caches
+        # them in `record.exc_text`. Python's logging only populates
+        # `exc_text` during Formatter.format(); pre-materialise it here so
+        # our redactor sees the rendered traceback string.
+        if record.exc_info and record.exc_text is None:
+            import traceback
+
+            record.exc_text = _redact(
+                "".join(traceback.format_exception(*record.exc_info))
+            )
+            # Drop exc_info so the formatter doesn't re-render and overwrite
+            # our redacted exc_text on the way out.
+            record.exc_info = None
+        elif record.exc_text:
+            record.exc_text = _redact(record.exc_text)
+        if record.stack_info:
+            record.stack_info = _redact(record.stack_info)
         # Walk every extra attribute; redact strings / lists / dicts.
         for k, v in list(record.__dict__.items()):
             if k in _PASSTHROUGH_FIELDS or k.startswith("_"):
                 continue
+            if k in ("exc_text", "stack_info"):
+                continue  # already handled above
             redacted = _redact_value(v)
             if redacted is not v:
                 record.__dict__[k] = redacted
