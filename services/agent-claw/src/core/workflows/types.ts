@@ -2,6 +2,16 @@
 // them to workflow_define. The validator (validator.ts) round-trips Zod
 // before any DB write so a malformed definition fails fast with a
 // human-readable error.
+//
+// Runtime-rejection contract (services/workflow_engine/main.py):
+//   The engine currently implements only `tool_call` and `wait` step kinds.
+//   `conditional`, `loop`, `parallel`, and `sub_agent` are accepted by the
+//   Zod schema below (so agents can author and persist workflows that
+//   reference them, and so the catalog of WorkflowDefinitions is
+//   forward-compatible) but the engine raises NotImplementedError when it
+//   tries to advance such a step. Tightening Zod to reject them at define
+//   time would invalidate persisted workflows in the wild. If you add an
+//   _exec_<kind> handler in the engine, no change here is needed.
 
 import { z } from "zod";
 
