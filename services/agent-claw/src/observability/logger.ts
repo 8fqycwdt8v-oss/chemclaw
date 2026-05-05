@@ -139,7 +139,7 @@ function serializeErrorAt(
 }
 
 function serializeError(err: unknown): Record<string, unknown> {
-  return serializeErrorAt(err, 0, new WeakSet<object>());
+  return serializeErrorAt(err, 0, new WeakSet());
 }
 
 /** Test-only export so unit tests can exercise the depth cap and cycle
