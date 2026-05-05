@@ -108,8 +108,13 @@ class ChunkEmbedderProjector(BaseProjector):
                 async with conn.cursor() as cur:
                     for row, vec in zip(batch, vectors, strict=True):
                         literal = "[" + ",".join(f"{v:.8f}" for v in vec) + "]"
+                        # `AND embedding IS NULL` matches the contextual_chunker
+                        # pattern: deterministic embeddings make a race harmless
+                        # today (last-write-wins is the same vector) but the
+                        # explicit guard surfaces future divergences and
+                        # prevents redundant writes.
                         await cur.execute(
-                            "UPDATE document_chunks SET embedding = %s::vector WHERE id = %s::uuid",
+                            "UPDATE document_chunks SET embedding = %s::vector WHERE id = %s::uuid AND embedding IS NULL",
                             (literal, row["id"]),
                         )
                 await conn.commit()

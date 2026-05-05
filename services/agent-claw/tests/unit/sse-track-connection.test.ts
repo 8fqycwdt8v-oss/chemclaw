@@ -40,6 +40,16 @@ describe("trackConnection", () => {
     expect(conn.closed).toBe(true);
   });
 
+  it("flips closed=true on `error` (TCP reset / TLS failure)", () => {
+    // Regression: pre-PR the helper relied on Fastify's outer request
+    // error handler to catch the EventEmitter no-listener throw — works
+    // today but the harness loop continued spinning past the disconnect.
+    const { req, raw } = fakeReq();
+    const conn = trackConnection(req);
+    raw.emit("error", new Error("ECONNRESET"));
+    expect(conn.closed).toBe(true);
+  });
+
   it("idempotent: multiple events do not throw", () => {
     const { req, raw } = fakeReq();
     const conn = trackConnection(req);

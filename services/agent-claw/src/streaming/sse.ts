@@ -89,12 +89,14 @@ export function setupSse(reply: FastifyReply): void {
  * Track upstream disconnects so the streaming loop can short-circuit
  * `writeEvent` calls after the client goes away.
  *
- * Listens on BOTH `close` and `aborted` — Node emits `aborted` for
- * HTTP/1.0-style mid-stream resets that don't always trigger `close`.
- * Three SSE routes (chat.ts, plan.ts, deep-research.ts) previously
- * inlined the same handler shape; plan.ts in particular missed the
- * `aborted` listener. Centralising here keeps the listener pair
- * symmetric.
+ * Listens on `close`, `aborted`, AND `error` — Node emits `aborted` for
+ * HTTP/1.0-style mid-stream resets that don't always trigger `close`,
+ * and Node's EventEmitter throws an uncaught exception when `error`
+ * fires with no listener (mitigated today by Fastify's request error
+ * handling, but adding the listener here makes the helper self-
+ * contained — TCP reset / TLS failure flips conn.closed and the
+ * harness loop exits cleanly without depending on the outer error
+ * handler swallowing the throw).
  */
 export function trackConnection(req: FastifyRequest): { closed: boolean } {
   const conn = { closed: false };
@@ -103,5 +105,6 @@ export function trackConnection(req: FastifyRequest): { closed: boolean } {
   };
   req.raw.on("close", onClose);
   req.raw.on("aborted", onClose);
+  req.raw.on("error", onClose);
   return conn;
 }
