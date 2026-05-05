@@ -217,6 +217,7 @@ export function buildForgeToolTool(
       "Do NOT use this tool to forge forge_tool or run_program themselves.",
     inputSchema: ForgeToolIn,
     outputSchema: ForgeToolOut,
+    annotations: { readOnly: false },
 
     execute: async (_ctx, input) => {
       const toolId = randomUUID();

@@ -91,6 +91,7 @@ export function buildSynthesizeInsightsTool(
       "then drops any insight citing fact_ids not seen this turn (anti-fabrication).",
     inputSchema: SynthesizeInsightsIn,
     outputSchema: SynthesizeInsightsOut,
+    annotations: { readOnly: true },
 
     execute: async (ctx, input) => {
       // Read per-turn seenFactIds from scratchpad.

@@ -47,6 +47,7 @@ export function buildAddForgedToolTestTool(pool: Pool, userEntraId: string) {
       "kind must be one of: functional (default), contract, property.",
     inputSchema: AddForgedToolTestIn,
     outputSchema: AddForgedToolTestOut,
+    annotations: { readOnly: false },
 
     execute: async (_ctx, input) => {
       // Verify tool ownership via RLS-aware query.

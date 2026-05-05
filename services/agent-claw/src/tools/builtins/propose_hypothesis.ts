@@ -41,6 +41,7 @@ export function buildProposeHypothesisTool(pool: Pool, agentTraceId?: string) {
       "(anti-fabrication hard guard). Emits hypothesis_proposed ingestion event.",
     inputSchema: ProposeHypothesisIn,
     outputSchema: ProposeHypothesisOut,
+    annotations: { readOnly: false },
 
     execute: async (ctx, input) => {
       // ── Anti-fabrication HARD GUARD ────────────────────────────────────────

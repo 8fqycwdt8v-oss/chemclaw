@@ -108,6 +108,7 @@ export function buildMarkResearchDoneTool(deps: MarkResearchDoneToolDeps) {
       "Returns report_id and slug for the UI to link to.",
     inputSchema: MarkResearchDoneIn,
     outputSchema: MarkResearchDoneOut,
+    annotations: { readOnly: false },
 
     execute: async (ctx, input) => {
       // Normalise optional arrays with defaults (Zod parses defaults but TS

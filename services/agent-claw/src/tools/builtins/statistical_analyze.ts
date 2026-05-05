@@ -150,6 +150,7 @@ export function buildStatisticalAnalyzeTool(pool: Pool, mcpTabiclUrl: string) {
       "question=rank_feature_importance: TabICL permutation importance ranking.",
     inputSchema: StatisticalAnalyzeIn,
     outputSchema: StatisticalAnalyzeOut,
+    annotations: { readOnly: true },
 
     execute: async (ctx, input) => {
       const caveats: string[] = [];

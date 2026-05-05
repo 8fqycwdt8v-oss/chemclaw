@@ -126,6 +126,7 @@ export function buildInduceForgedToolFromTraceTool(
       "Provide the trace_id, a unique tool name (slug), and a description.",
     inputSchema: InduceFromTraceIn,
     outputSchema: InduceFromTraceOut,
+    annotations: { readOnly: false },
 
     execute: async (ctx, input) => {
       // Step 1: read the trace.

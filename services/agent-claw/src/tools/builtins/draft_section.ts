@@ -77,6 +77,7 @@ export function buildDraftSectionTool() {
       "Returns formatted markdown with audit trail of declared vs used citations.",
     inputSchema: DraftSectionIn,
     outputSchema: DraftSectionOut,
+    annotations: { readOnly: true },
 
     execute: async (_ctx, input) => draftSection(input),
   });

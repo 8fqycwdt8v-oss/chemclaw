@@ -57,6 +57,7 @@ export function buildUpdateHypothesisStatusTool(pool: Pool) {
       "projector picks it up. Caller must own the hypothesis.",
     inputSchema: UpdateHypothesisStatusIn,
     outputSchema: UpdateHypothesisStatusOut,
+    annotations: { readOnly: false },
 
     execute: async (ctx, input) => {
       const result = await withUserContext(pool, ctx.userEntraId, async (client) => {
