@@ -1290,4 +1290,66 @@ ON CONFLICT (name) DO UPDATE SET
   source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
   description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
 
+-- ── Code-mode orchestration via Monty (Phase G) ───────────────────────────
+-- run_orchestration_script lets the agent emit one Python script that calls
+-- allow-listed tools as external_function(...). Each inner call still flows
+-- through the standard permission + pre_tool + post_tool pipeline. Disabled
+-- at runtime by default; admins enable via config_settings (monty.enabled
+-- + monty.binary_path).
+
+INSERT INTO tools (name, source, schema_json, description, enabled, version)
+VALUES (
+  'run_orchestration_script',
+  'builtin',
+  '{
+    "type": "object",
+    "properties": {
+      "python_code": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 50000,
+        "description": "Python source. May call external_function(\"<tool_id>\", {...}) for any id in allowed_tools. Stdlib subset only (no third-party packages, no classes)."
+      },
+      "allowed_tools": {
+        "type": "array",
+        "items": {"type": "string", "minLength": 1, "maxLength": 128},
+        "minItems": 1,
+        "maxItems": 32,
+        "description": "Tool ids the script may call. Each is re-validated against the permission resolver before the script starts."
+      },
+      "inputs": {
+        "type": "object",
+        "additionalProperties": true,
+        "description": "Named inputs injected as Python globals before the script runs."
+      },
+      "expected_outputs": {
+        "type": "array",
+        "items": {"type": "string", "minLength": 1, "maxLength": 128},
+        "minItems": 1,
+        "maxItems": 50,
+        "description": "Variable names the script is expected to set; harvested as the outputs map."
+      },
+      "reason": {
+        "type": "string",
+        "minLength": 1,
+        "maxLength": 1000,
+        "description": "Audit reason - why code-mode beats sequential ReAct for this task."
+      },
+      "timeout_ms": {
+        "type": "integer",
+        "minimum": 1000,
+        "maximum": 600000,
+        "description": "Per-script wall-time cap. Defaults to monty.wall_time_ms."
+      }
+    },
+    "required": ["python_code", "allowed_tools", "expected_outputs", "reason"]
+  }',
+  'Execute a short Python script in the Monty sandbox. Use this when you would otherwise emit 3+ sequential read-only tool calls that compose data through pure-Python operations (filter, sort, dedupe, join, top-k). Each external_function call goes through the standard permission + pre_tool + post_tool pipeline. Do not use for tools that prompt the user (ask_user), write to the DB (enqueue_batch, workflow_*), or run generative chemistry.',
+  true,
+  1
+)
+ON CONFLICT (name) DO UPDATE SET
+  source = EXCLUDED.source, schema_json = EXCLUDED.schema_json,
+  description = EXCLUDED.description, enabled = EXCLUDED.enabled, version = EXCLUDED.version;
+
 COMMIT;

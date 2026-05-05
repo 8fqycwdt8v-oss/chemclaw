@@ -53,6 +53,7 @@ export interface ResolveDecisionResult {
 // chemclaw catalog today) would not belong here.
 const FILESYSTEM_TOUCHING_TOOL_IDS: ReadonlySet<string> = new Set([
   "run_program", // E2B sandbox can write within /sandbox during the run.
+  "run_orchestration_script", // Monty child runs LLM-authored Python; treat as write-side.
   // SDK-shape tool ids retained for parity tests / external callers.
   "Write",
   "Edit",

@@ -23,11 +23,10 @@ import type {
   ToolContext,
 } from "./types.js";
 import type { Tool } from "../tools/tool.js";
-import type { StreamSink, TodoSnapshot } from "./streaming-sink.js";
-import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
-import { resolveDecision } from "./permissions/resolver.js";
-import { withToolSpan } from "../observability/tool-spans.js";
-import { getLogger } from "../observability/logger.js";
+import type { StreamSink } from "./streaming-sink.js";
+import { runOneTool, type StepToolOutput } from "./run-one-tool.js";
+
+export type { StepToolOutput } from "./run-one-tool.js";
 
 export interface StepOnceOptions {
   llm: LlmProvider;
@@ -50,16 +49,6 @@ export interface StepOnceOptions {
   permissions?: PermissionOptions;
 }
 
-/**
- * One executed tool's contribution to the batch — what the harness needs
- * to push onto the message history.
- */
-export interface StepToolOutput {
-  toolId: string;
-  /** undefined if the tool was denied or otherwise skipped. */
-  output: unknown;
-}
-
 export interface StepOnceResult {
   step: StepResult;
   /**
@@ -69,193 +58,6 @@ export interface StepOnceResult {
    */
   toolOutputs: StepToolOutput[];
   usage: { promptTokens: number; completionTokens: number };
-}
-
-/**
- * Internal: handle one tool call (validate → pre_tool → execute → post_tool).
- * Used both for single-tool turns and as the per-tool body of a batch.
- *
- * Returns the post-hook output (or a synthetic deny payload). Throws on
- * AwaitingUserInputError or any other unhandled execution error so the
- * caller can decide whether to fail the whole batch.
- */
-async function _runOneTool(opts: {
-  tools: Tool[];
-  toolId: string;
-  input: unknown;
-  lifecycle: Lifecycle;
-  ctx: ToolContext;
-  streamSink?: StreamSink;
-  permissions?: PermissionOptions;
-  /**
-   * Phase 9: true when this call is a member of a parallel read-only batch
-   * (Phase 5). Set on the per-tool span as `tool.in_batch` so Langfuse can
-   * group sibling tool spans in a parallel run.
-   */
-  inBatch?: boolean;
-}): Promise<StepToolOutput> {
-  const { tools, toolId, input, lifecycle, ctx, streamSink, permissions } = opts;
-
-  const tool = tools.find((t) => t.id === toolId);
-  if (!tool) {
-    throw new Error(
-      `stepOnce: model requested unknown tool "${toolId}". ` +
-        `Available: [${tools.map((t) => t.id).join(", ")}]`,
-    );
-  }
-
-  // ---------------------------------------------------------------------
-  // Phase 6: route-level permission resolver.
-  //
-  // Runs BEFORE pre_tool dispatch. When permissions options are provided,
-  // the resolver consults permissionMode + allowedTools / disallowedTools,
-  // fires the permission_request hook (default mode), and falls back to
-  // permissionCallback. A deny or defer decision short-circuits tool
-  // execution with a synthetic rejection mirroring the pre_tool deny path.
-  //
-  // When `permissions` is undefined, the resolver is skipped entirely so
-  // legacy callers (sub-agents, deep-research, plan.ts) keep their prior
-  // semantics — only the pre_tool hook chain gates execution.
-  // ---------------------------------------------------------------------
-  // Track the resolver outcome so it can land on the tool span as
-  // `permission.decision` for Langfuse / OTLP. "skipped" means the route
-  // didn't pass `permissions:` (legacy callers); "allow"/"ask" mean the
-  // resolver admitted execution; "deny"/"defer" never reach withToolSpan
-  // because we short-circuit below.
-  let permissionDecisionTag: "allow" | "ask" | "deny" | "defer" | "skipped" =
-    "skipped";
-  let permissionReasonTag: string | undefined;
-  if (permissions) {
-    const permResult = await resolveDecision({
-      tool,
-      input,
-      ctx,
-      options: permissions,
-      lifecycle,
-    });
-    permissionDecisionTag = permResult.decision;
-    permissionReasonTag = permResult.reason;
-
-    if (permResult.decision === "deny" || permResult.decision === "defer") {
-      const denyOutput = {
-        error: `denied_by_permissions:${permResult.decision}`,
-        reason: permResult.reason ?? "",
-      };
-      streamSink?.onToolCall?.(toolId, input);
-      streamSink?.onToolResult?.(toolId, denyOutput);
-      return { toolId, output: denyOutput };
-    }
-    // "allow" / "ask" both proceed to pre_tool, which can downgrade to deny.
-  }
-
-  // pre_tool — hooks may throw to abort, mutate input via in-place writes,
-  // return permissionDecision, or return updatedInput to rewrite the call.
-  const prePayload = { ctx, toolId, input };
-  const preResult = await lifecycle.dispatch("pre_tool", prePayload, {
-    toolUseID: toolId,
-    matcherTarget: toolId,
-  });
-
-  // pre_tool deny — surface a synthetic rejection so the model sees it on
-  // the next step and can adjust.
-  if (preResult.decision === "deny") {
-    const denyOutput = {
-      error: "denied_by_hook",
-      reason: preResult.reason ?? "denied without reason",
-    };
-    streamSink?.onToolCall?.(toolId, prePayload.input);
-    streamSink?.onToolResult?.(toolId, denyOutput);
-    return { toolId, output: denyOutput };
-  }
-  // "ask" / "defer" require route-level handling; for now treat as allow.
-  // Phase 6 permissions: see docs/adr/009-permission-and-decision-contract.md
-  // and docs/adr/010-deferred-phases.md.
-  if (preResult.decision === "ask" || preResult.decision === "defer") {
-    getLogger("agent-claw.harness.step").warn(
-      {
-        event: "permission_decision_unhandled",
-        decision: preResult.decision,
-        tool_id: toolId,
-        reason: preResult.reason ?? "(none)",
-      },
-      "permission decision treated as allow (Phase 6 resolver pending)",
-    );
-  }
-
-  // updatedInput from a hook supersedes any in-place mutation.
-  const effectiveInput = preResult.updatedInput ?? prePayload.input;
-
-  // Validate input.
-  const parsedInput = tool.inputSchema.parse(effectiveInput);
-
-  // Notify the sink AFTER pre_tool so any input mutation is visible.
-  streamSink?.onToolCall?.(toolId, parsedInput);
-
-  // Execute. Catch errors so post_tool_failure fires before re-throw.
-  // AwaitingUserInputError is control-flow (not a failure) and propagates
-  // untouched.
-  //
-  // Phase 9: tool.execute is wrapped in withToolSpan so the OTel exporter
-  // sees one span per tool invocation with id, read-only annotation,
-  // in-batch flag, duration, and OK/ERROR status.
-  const toolStartMs = Date.now();
-  let rawOutput: unknown;
-  try {
-    rawOutput = await withToolSpan(
-      {
-        toolId,
-        readOnly: tool.annotations?.readOnly,
-        inBatch: opts.inBatch ?? false,
-        permissionDecision: permissionDecisionTag,
-        permissionReason: permissionReasonTag,
-      },
-      () => tool.execute(ctx, parsedInput),
-    );
-  } catch (err) {
-    if (err instanceof AwaitingUserInputError) {
-      throw err;
-    }
-    await lifecycle.dispatch("post_tool_failure", {
-      ctx,
-      toolId,
-      input: parsedInput,
-      error: err instanceof Error ? err : new Error(String(err)),
-      durationMs: Date.now() - toolStartMs,
-    });
-    throw err;
-  }
-
-  // Validate output.
-  const parsedOutput = tool.outputSchema.parse(rawOutput);
-
-  // post_tool.
-  const postPayload = { ctx, toolId, input: effectiveInput, output: parsedOutput };
-  await lifecycle.dispatch("post_tool", postPayload, {
-    toolUseID: toolId,
-    matcherTarget: toolId,
-  });
-  // Output may have been mutated by a hook.
-  const effectiveOutput = postPayload.output;
-
-  // Notify the sink with the (post-hook) output.
-  streamSink?.onToolResult?.(toolId, effectiveOutput);
-
-  // manage_todos special-case: surface the latest checklist via
-  // onTodoUpdate so the route can emit a `todo_update` SSE event.
-  if (
-    streamSink?.onTodoUpdate &&
-    toolId === "manage_todos" &&
-    effectiveOutput &&
-    typeof effectiveOutput === "object" &&
-    "todos" in effectiveOutput &&
-    Array.isArray((effectiveOutput).todos)
-  ) {
-    streamSink.onTodoUpdate(
-      (effectiveOutput as { todos: TodoSnapshot[] }).todos,
-    );
-  }
-
-  return { toolId, output: effectiveOutput };
 }
 
 /**
@@ -339,16 +141,16 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
 
   if (allReadOnly) {
     // 3a. Parallel batch: dispatch pre_tool / execute / post_tool for each
-    // tool. _runOneTool encapsulates the pre/exec/post sequence; we wrap
+    // tool. runOneTool encapsulates the pre/exec/post sequence; we wrap
     // them all in Promise.all so the wall-clock time is max(durations)
     // rather than sum(durations). Errors propagate via Promise.all's
     // fast-fail behaviour: the first rejection rejects the aggregate. Any
     // sibling tools that already completed have their results captured by
-    // _runOneTool's resolved promises but are then lost when we re-throw —
+    // runOneTool's resolved promises but are then lost when we re-throw —
     // acceptable per spec (the failure is the visible event).
     const settled = await Promise.all(
       calls.map((c) =>
-        _runOneTool({
+        runOneTool({
           tools,
           toolId: c.toolId,
           input: c.input,
@@ -366,7 +168,7 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
     // single-tool turn) runs serially. Tools see each other's side effects
     // in declared order, matching the pre-Phase-5 behaviour.
     for (const c of calls) {
-      const out = await _runOneTool({
+      const out = await runOneTool({
         tools,
         toolId: c.toolId,
         input: c.input,
