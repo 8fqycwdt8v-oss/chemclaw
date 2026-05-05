@@ -188,10 +188,11 @@ export class SubprocessChildAdapter extends EventEmitter implements MontyChild {
 }
 
 /**
- * Factory signature consumed by the pool / host so test code can inject a
- * fake adapter without subclassing.
+ * Factory signature consumed by the pool / host. Either synchronous (the
+ * default subprocess factory) or asynchronous (the pool's acquire path,
+ * which may need to wait for a child to become ready).
  */
-export type MontyChildFactory = () => MontyChild;
+export type MontyChildFactory = () => MontyChild | Promise<MontyChild>;
 
 /**
  * Default factory — builds a SubprocessChildAdapter from the host's options.

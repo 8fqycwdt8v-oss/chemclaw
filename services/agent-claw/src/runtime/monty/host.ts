@@ -76,7 +76,7 @@ export class MontyHost {
   async run(runOpts: RunOptions): Promise<RunResult> {
     const startedAt = Date.now();
     const log = getLogger("agent-claw.runtime.monty.host");
-    const child = this.opts.childFactory();
+    const child = await this.opts.childFactory();
 
     let stdoutBuf = "";
     let stderrBuf = "";
@@ -273,6 +273,7 @@ export class MontyHost {
       ctx: runOpts.ctx,
       lifecycle: this.opts.lifecycle,
       permissions: runOpts.permissions,
+      parentRunId: runOpts.runId,
     });
     externalCalls.push(trace);
     sendResponse(response);

@@ -10,6 +10,7 @@ import { defineTool } from "../../../src/tools/tool.js";
 import { Lifecycle } from "../../../src/core/lifecycle.js";
 import { ToolRegistry } from "../../../src/tools/registry.js";
 import { buildRunOrchestrationScriptTool } from "../../../src/tools/builtins/run_orchestration_script.js";
+import type { PermissionOptions } from "../../../src/core/types.js";
 import type {
   ChildToHostFrameT,
   HostToChildFrameT,
@@ -303,5 +304,75 @@ describe("run_orchestration_script", () => {
       ok: false,
       error: expect.stringContaining("not in allowed_tools"),
     });
+  });
+
+  it("preflight-denies allow-listed tools the outer permissions reject (ctx.permissions)", async () => {
+    const tool = buildRunOrchestrationScriptTool({
+      registry: buildRegistryWithEcho(),
+      configRegistry: fakeConfigRegistry(ENABLED_CONFIG),
+      lifecycle: new Lifecycle(),
+      childFactoryOverride: fakeFactory({}),
+    });
+    // dontAsk + empty allowedTools → resolver denies any tool not on
+    // the (empty) list. Builtin sees ctx.permissions and short-circuits.
+    const ctx = makeCtx();
+    ctx.permissions = {
+      permissionMode: "dontAsk",
+      allowedTools: [],
+    } satisfies PermissionOptions;
+
+    const out = await tool.execute(ctx, {
+      python_code: "noop",
+      allowed_tools: ["echo"],
+      inputs: {},
+      expected_outputs: ["x"],
+      reason: "test",
+    });
+
+    expect(out.outcome).toBe("preflight_denied");
+    expect(out.error).toMatch(/denied_by_permissions/);
+  });
+
+  it("threads ctx.permissions into the bridge so inner calls re-resolve", async () => {
+    const tool = buildRunOrchestrationScriptTool({
+      registry: buildRegistryWithEcho(),
+      configRegistry: fakeConfigRegistry(ENABLED_CONFIG),
+      lifecycle: new Lifecycle(),
+      childFactoryOverride: fakeFactory({
+        onStart: (emit) => emit({ type: "ready" }),
+        react: (frame, emit) => {
+          if (frame.type === "start") {
+            emit({
+              type: "external_call",
+              id: 1,
+              name: "echo",
+              args: { value: "x" },
+            });
+          } else if (frame.type === "external_response") {
+            emit({
+              type: "result",
+              run_id: "r1",
+              outputs: { ok: frame.ok },
+            });
+          }
+        },
+      }),
+    });
+    // bypassPermissions through ctx — inner call should succeed.
+    const ctx = makeCtx();
+    ctx.permissions = {
+      permissionMode: "bypassPermissions",
+    } satisfies PermissionOptions;
+
+    const out = await tool.execute(ctx, {
+      python_code: "noop",
+      allowed_tools: ["echo"],
+      inputs: {},
+      expected_outputs: ["ok"],
+      reason: "test",
+    });
+
+    expect(out.outcome).toBe("ok");
+    expect(out.outputs).toEqual({ ok: true });
   });
 });

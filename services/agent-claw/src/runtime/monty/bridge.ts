@@ -21,11 +21,14 @@
 //      enumerate the tools it intends to use; the LLM can read the deny
 //      message and adjust the next script.
 
+import { trace, SpanStatusCode } from "@opentelemetry/api";
 import type { Lifecycle } from "../../core/lifecycle.js";
 import type { PermissionOptions, ToolContext } from "../../core/types.js";
 import type { Tool } from "../../tools/tool.js";
 import { runOneTool } from "../../core/run-one-tool.js";
 import type { ExternalCallFrameT, ExternalResponseFrameT } from "./protocol.js";
+
+const tracer = trace.getTracer("agent-claw.runtime.monty");
 
 export interface BridgeRouteOptions {
   registry: { get(id: string): Tool | undefined };
@@ -35,6 +38,8 @@ export interface BridgeRouteOptions {
   lifecycle: Lifecycle;
   /** PermissionOptions cloned from the outer call. */
   permissions?: PermissionOptions;
+  /** Run id of the parent script — stamped on the per-call span so traces group cleanly. */
+  parentRunId?: string;
 }
 
 export interface BridgeCallTrace {
@@ -55,6 +60,38 @@ export interface BridgeCallTrace {
  * around external_function and decide what to do.
  */
 export async function routeExternalCall(
+  frame: ExternalCallFrameT,
+  opts: BridgeRouteOptions,
+): Promise<{ response: ExternalResponseFrameT; trace: BridgeCallTrace }> {
+  return await tracer.startActiveSpan("monty.external_call", async (span) => {
+    span.setAttribute("monty.external_call.tool_id", frame.name);
+    span.setAttribute("monty.external_call.id", frame.id);
+    if (opts.parentRunId) {
+      span.setAttribute("monty.parent_run_id", opts.parentRunId);
+    }
+    try {
+      const result = await _routeExternalCall(frame, opts);
+      span.setAttribute("monty.external_call.ok", result.trace.ok);
+      span.setAttribute(
+        "monty.external_call.duration_ms",
+        result.trace.durationMs,
+      );
+      if (!result.trace.ok && result.trace.errorMessage) {
+        span.setStatus({
+          code: SpanStatusCode.ERROR,
+          message: result.trace.errorMessage,
+        });
+      } else {
+        span.setStatus({ code: SpanStatusCode.OK });
+      }
+      return result;
+    } finally {
+      span.end();
+    }
+  });
+}
+
+async function _routeExternalCall(
   frame: ExternalCallFrameT,
   opts: BridgeRouteOptions,
 ): Promise<{ response: ExternalResponseFrameT; trace: BridgeCallTrace }> {

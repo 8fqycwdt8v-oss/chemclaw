@@ -28,6 +28,7 @@
 //   next turn and adjusts. No automatic retry — that's the model's call.
 
 import { z } from "zod";
+import { trace } from "@opentelemetry/api";
 import { defineTool } from "../tool.js";
 import type { Lifecycle } from "../../core/lifecycle.js";
 import type { ConfigRegistry } from "../../config/registry.js";
@@ -37,7 +38,9 @@ import {
   defaultChildFactory,
   type MontyChildFactory,
 } from "../../runtime/monty/child-adapter.js";
+import { WarmChildPool } from "../../runtime/monty/pool.js";
 import { loadMontyLimits } from "../../runtime/monty/limits.js";
+import { resolveDecision } from "../../core/permissions/resolver.js";
 import { getLogger } from "../../observability/logger.js";
 
 // ---------------------------------------------------------------------------
@@ -103,10 +106,18 @@ export interface RunOrchestrationScriptDeps {
   lifecycle: Lifecycle;
   /**
    * Optional override — tests and future in-proc bindings inject a fake
-   * child factory. When undefined, we derive a SubprocessChildAdapter
-   * factory from the resolved monty.binary_path at call time.
+   * child factory. When undefined AND no pool is provided, we derive a
+   * SubprocessChildAdapter factory from the resolved monty.binary_path
+   * at call time.
    */
   childFactoryOverride?: MontyChildFactory;
+  /**
+   * Optional warm pool. When provided, each script run pulls a
+   * pre-warmed child from the pool instead of spawning a fresh one in
+   * the request path. Pool ownership lives in dependencies.ts; the
+   * builtin only borrows.
+   */
+  pool?: WarmChildPool;
 }
 
 export function buildRunOrchestrationScriptTool(deps: RunOrchestrationScriptDeps) {
@@ -205,17 +216,45 @@ export function buildRunOrchestrationScriptTool(deps: RunOrchestrationScriptDeps
         };
       }
 
-      // We intentionally do NOT run a permission-resolver preflight for
-      // each allow-listed tool. The builtin doesn't have access to the
-      // outer call's `permissions` object (it's threaded through opts to
-      // step.ts but not to tool.execute), so calling resolveDecision with
-      // `options: undefined` would land in default mode → no callback →
-      // deny for every tool, blocking even legitimate runs. Per-call
-      // resolution still happens inside the bridge: runOneTool re-resolves
-      // each external_function call with the same permissions snapshot the
-      // outer call ran under, so policy rows still bite. If we later want
-      // a true preflight, thread `permissions` through ctx (a separate
-      // refactor) and re-add the check here.
+      // Preflight 3 (opt-in): if the outer route engaged the permission
+      // resolver (`runHarness({ permissions: ... })`), runHarness threads
+      // the snapshot onto ctx.permissions. We re-resolve every allow-list
+      // entry through it so a script that requests a tool the route would
+      // deny fails fast — no Monty spawn, no LLM round-trip wasted.
+      // Per-call resolution still happens inside the bridge for any
+      // policy with `argument_pattern` matching, so this preflight is
+      // strictly additive.
+      if (ctx.permissions) {
+        const denials: string[] = [];
+        for (const id of dedupedAllowed) {
+          const tool = deps.registry.get(id);
+          // Defensive — the missing-tools loop above already filtered
+          // these out, but the outer flow runs `if (missing.length > 0)`
+          // before reaching here.
+          if (!tool) continue;
+          const result = await resolveDecision({
+            tool,
+            input: {},
+            ctx,
+            options: ctx.permissions,
+            lifecycle: deps.lifecycle,
+          });
+          if (result.decision === "deny" || result.decision === "defer") {
+            denials.push(`${tool.id} (${result.decision}: ${result.reason ?? ""})`);
+          }
+        }
+        if (denials.length > 0) {
+          return {
+            outputs: undefined,
+            stdout: "",
+            stderr: "",
+            duration_ms: Date.now() - startedAt,
+            external_calls: [],
+            outcome: "preflight_denied" as const,
+            error: `denied_by_permissions: ${denials.join("; ")}`,
+          };
+        }
+      }
 
       // Build the host. Per-call wall-time clamps the configured cap.
       const wallTimeMs = Math.min(
@@ -223,9 +262,16 @@ export function buildRunOrchestrationScriptTool(deps: RunOrchestrationScriptDeps
         limits.wallTimeMs,
       );
 
-      const childFactory =
-        deps.childFactoryOverride ??
-        defaultChildFactory({ binaryPath: limits.binaryPath });
+      // Factory precedence: explicit override > warm pool > spawn-per-run.
+      let childFactory: MontyChildFactory;
+      if (deps.childFactoryOverride) {
+        childFactory = deps.childFactoryOverride;
+      } else if (deps.pool) {
+        const pool = deps.pool;
+        childFactory = () => pool.acquire();
+      } else {
+        childFactory = defaultChildFactory({ binaryPath: limits.binaryPath });
+      }
 
       const host = new MontyHost({
         childFactory,
@@ -253,12 +299,13 @@ export function buildRunOrchestrationScriptTool(deps: RunOrchestrationScriptDeps
         wallTimeMs,
         maxExternalCalls: limits.maxExternalCalls,
         ctx,
-        // The builtin doesn't carry the outer `permissions` object — the
-        // route's resolver already admitted us when it ran step.ts's
-        // permission gate against this builtin. Inner external_function
-        // calls re-run through runOneTool with options=undefined, which
-        // still triggers the default-mode permission_request hook.
-        permissions: undefined,
+        // Inherit the outer route's permissions snapshot so each
+        // external_function call inside Monty resolves through the same
+        // allowlist / denylist / mode the route set up. ctx.permissions
+        // is populated by runHarness; legacy callers without
+        // `permissions:` get undefined and the bridge skips the resolver
+        // (mirrors step.ts's no-permissions semantics).
+        permissions: ctx.permissions,
         signal: ctx.signal,
       });
 
@@ -268,6 +315,28 @@ export function buildRunOrchestrationScriptTool(deps: RunOrchestrationScriptDeps
         ok: c.ok,
         ...(c.errorMessage !== undefined ? { error_message: c.errorMessage } : {}),
       }));
+
+      // Stamp Monty-specific attributes onto the active OTel span (the
+      // outer tool.run_orchestration_script span opened by withToolSpan
+      // inside runOneTool). These light up Langfuse / OTLP filters for
+      // code-mode vs sequential ReAct comparisons. No-op in tests where
+      // the tracer provider is the default no-op.
+      const activeSpan = trace.getActiveSpan();
+      if (activeSpan) {
+        activeSpan.setAttribute("monty.run_id", runId);
+        activeSpan.setAttribute("monty.tool_count", dedupedAllowed.length);
+        activeSpan.setAttribute(
+          "monty.external_calls_count",
+          externalCallsOut.length,
+        );
+        activeSpan.setAttribute(
+          "monty.external_calls_failed",
+          externalCallsOut.filter((c) => !c.ok).length,
+        );
+        activeSpan.setAttribute("monty.wall_time_ms", result.durationMs);
+        activeSpan.setAttribute("monty.outcome", result.outcome.kind);
+        activeSpan.setAttribute("monty.script_chars", input.python_code.length);
+      }
 
       switch (result.outcome.kind) {
         case "ok":
