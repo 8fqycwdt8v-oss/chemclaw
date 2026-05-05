@@ -11,7 +11,8 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import type { Pool } from "pg";
 import { z } from "zod";
 import type { SkillLoader } from "../core/skills.js";
-import { withUserContext } from "../db/with-user-context.js";
+import { isAdmin } from "../middleware/require-admin.js";
+import { appendAudit } from "./admin/audit-log.js";
 
 export interface SkillsRouteDeps {
   loader: SkillLoader;
@@ -20,20 +21,6 @@ export interface SkillsRouteDeps {
 }
 
 const EnableDisableSchema = z.object({ id: z.string().min(1) });
-
-async function requireAdmin(pool: Pool, userEntraId: string): Promise<boolean> {
-  return await withUserContext(pool, userEntraId, async (client) => {
-    const r = await client.query<{ has_admin: boolean }>(
-      `SELECT EXISTS (
-         SELECT 1 FROM user_project_access
-          WHERE user_entra_id = $1
-            AND role = 'admin'
-       ) AS has_admin`,
-      [userEntraId],
-    );
-    return r.rows[0]?.has_admin === true;
-  });
-}
 
 export function registerSkillsRoutes(app: FastifyInstance, deps: SkillsRouteDeps): void {
   // GET /api/skills/list — auth-gated (read-only, available to any authenticated user).
@@ -54,7 +41,7 @@ export function registerSkillsRoutes(app: FastifyInstance, deps: SkillsRouteDeps
   // POST /api/skills/enable — admin-only (mutates process-global state).
   app.post("/api/skills/enable", async (req, reply) => {
     const user = deps.getUser(req);
-    if (!(await requireAdmin(deps.pool, user))) {
+    if (!(await isAdmin(deps.pool, user))) {
       return await reply.code(403).send({
         error: "forbidden",
         detail: "skill enable/disable requires admin role",
@@ -68,17 +55,25 @@ export function registerSkillsRoutes(app: FastifyInstance, deps: SkillsRouteDeps
     // fresh from config_settings(key='agent.max_active_skills') before
     // checking it. TTL-cached so this is a no-op the second time within 60s.
     await deps.loader.refreshLimits();
+    const wasActive = deps.loader.activeIds.has(parsed.data.id);
     const result = deps.loader.enable(parsed.data.id);
     if (!result.ok) {
       return await reply.code(400).send({ error: result.reason });
     }
+    await appendAudit(deps.pool, {
+      actor: user,
+      action: "skill.enable",
+      target: parsed.data.id,
+      beforeValue: { active: wasActive },
+      afterValue: { active: true },
+    });
     return await reply.send({ ok: true, active: [...deps.loader.activeIds] });
   });
 
   // POST /api/skills/disable — admin-only.
   app.post("/api/skills/disable", async (req, reply) => {
     const user = deps.getUser(req);
-    if (!(await requireAdmin(deps.pool, user))) {
+    if (!(await isAdmin(deps.pool, user))) {
       return await reply.code(403).send({
         error: "forbidden",
         detail: "skill enable/disable requires admin role",
@@ -88,10 +83,18 @@ export function registerSkillsRoutes(app: FastifyInstance, deps: SkillsRouteDeps
     if (!parsed.success) {
       return await reply.code(400).send({ error: "invalid_input", detail: parsed.error.issues });
     }
+    const wasActive = deps.loader.activeIds.has(parsed.data.id);
     const result = deps.loader.disable(parsed.data.id);
     if (!result.ok) {
       return await reply.code(400).send({ error: result.reason });
     }
+    await appendAudit(deps.pool, {
+      actor: user,
+      action: "skill.disable",
+      target: parsed.data.id,
+      beforeValue: { active: wasActive },
+      afterValue: { active: false },
+    });
     return await reply.send({ ok: true, active: [...deps.loader.activeIds] });
   });
 }

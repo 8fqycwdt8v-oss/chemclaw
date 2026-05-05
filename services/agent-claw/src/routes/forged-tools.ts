@@ -14,6 +14,7 @@ import { z } from "zod";
 import type { Pool } from "pg";
 import { withUserContext } from "../db/with-user-context.js";
 import { isAdmin } from "../middleware/require-admin.js";
+import { appendAudit } from "./admin/audit-log.js";
 import { promises as fsp } from "fs";
 
 // ---------------------------------------------------------------------------
@@ -173,8 +174,8 @@ export function registerForgedToolsRoutes(
 
     // Owner OR admin.
     const row = await withUserContext(pool, userEntraId, async (client) => {
-      const { rows } = await client.query<{ proposed_by_user_entra_id: string }>(
-        `SELECT proposed_by_user_entra_id FROM skill_library
+      const { rows } = await client.query<{ proposed_by_user_entra_id: string; scope: string }>(
+        `SELECT proposed_by_user_entra_id, scope FROM skill_library
          WHERE id = $1::uuid AND kind = 'forged_tool'`,
         [id],
       );
@@ -201,6 +202,14 @@ export function registerForgedToolsRoutes(
       );
     });
 
+    await appendAudit(pool, {
+      actor: userEntraId,
+      action: "forged_tool.scope_promote",
+      target: id,
+      beforeValue: { scope: row.scope },
+      afterValue: { scope },
+    });
+
     return await reply.send({ ok: true, scope });
   });
 
@@ -218,8 +227,8 @@ export function registerForgedToolsRoutes(
     }
 
     const row = await withUserContext(pool, userEntraId, async (client) => {
-      const { rows } = await client.query<{ proposed_by_user_entra_id: string }>(
-        `SELECT proposed_by_user_entra_id FROM skill_library
+      const { rows } = await client.query<{ proposed_by_user_entra_id: string; active: boolean }>(
+        `SELECT proposed_by_user_entra_id, active FROM skill_library
          WHERE id = $1::uuid AND kind = 'forged_tool'`,
         [id],
       );
@@ -242,6 +251,15 @@ export function registerForgedToolsRoutes(
         `UPDATE skill_library SET active = false WHERE id = $1::uuid`,
         [id],
       );
+    });
+
+    await appendAudit(pool, {
+      actor: userEntraId,
+      action: "forged_tool.disable",
+      target: id,
+      beforeValue: { active: row.active },
+      afterValue: { active: false },
+      reason: bodyParsed.data.reason,
     });
 
     return await reply.send({ ok: true, disabled: true });

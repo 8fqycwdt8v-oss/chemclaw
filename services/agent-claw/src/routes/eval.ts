@@ -19,6 +19,8 @@ import type { Config } from "../config.js";
 import type { PromptRegistry } from "../prompts/registry.js";
 import type { LlmProvider } from "../llm/provider.js";
 import { withSystemContext } from "../db/with-user-context.js";
+import { isAdmin } from "../middleware/require-admin.js";
+import { appendAudit } from "./admin/audit-log.js";
 import { parseEvalArgs } from "./eval-parser.js";
 
 // ---------------------------------------------------------------------------
@@ -72,25 +74,6 @@ const EvalBodySchema = z.object({
   args: z.string().min(1),
 });
 
-async function requireAdminEval(pool: Pool, userEntraId: string): Promise<boolean> {
-  return await withSystemContext(pool, async (client) => {
-    // Cross-project admin check: a user is admin if they have role='admin'
-    // on any project (consistent with optimizer.ts gateAdmin behavior).
-    // Done in withSystemContext so we don't depend on the calling user's
-    // own RLS scope; the user_entra_id is the parameter, not the session
-    // context. (We're already in admin-gating territory.)
-    const r = await client.query<{ has_admin: boolean }>(
-      `SELECT EXISTS (
-         SELECT 1 FROM user_project_access
-          WHERE user_entra_id = $1
-            AND role = 'admin'
-       ) AS has_admin`,
-      [userEntraId],
-    );
-    return r.rows[0]?.has_admin === true;
-  });
-}
-
 export function registerEvalRoute(
   app: FastifyInstance,
   deps: EvalRouteDeps,
@@ -98,12 +81,12 @@ export function registerEvalRoute(
   const { config, pool, promptRegistry, getUser } = deps;
   app.post("/api/eval", async (req, reply) => {
     // Auth gate — eval routes expose prompt versions + shadow scores
-    // derived from real chats. Mirror the optimizer-route admin gate.
+    // derived from real chats. Canonical admin_roles via isAdmin().
     const user = getUser(req);
-    if (!(await requireAdminEval(pool, user))) {
+    if (!(await isAdmin(pool, user))) {
       return await reply.code(403).send({
         error: "forbidden",
-        detail: "/api/eval requires admin role on any project",
+        detail: "/api/eval requires global_admin",
       });
     }
 
@@ -120,6 +103,13 @@ export function registerEvalRoute(
         detail: `Unknown /eval sub-command: "${(parsed as { raw: string }).raw}". Use "golden" or "shadow <prompt_name>".`,
       });
     }
+
+    // Audit the invocation — admin-only, low-volume (one row per /eval call).
+    await appendAudit(pool, {
+      actor: user,
+      action: `eval.${parsed.subVerb}`,
+      target: parsed.subVerb === "shadow" ? parsed.promptName : "golden",
+    });
 
     // -----------------------------------------------------------------------
     // /eval golden — score active prompts on held-out fixture
