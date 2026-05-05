@@ -85,6 +85,15 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
     ctx.signal = signal;
   }
 
+  // Phase 6++: thread the route's permissions onto ctx so tools that
+  // orchestrate inner tool calls (run_orchestration_script's Monty
+  // bridge) can re-resolve through the same allowlist / mode without
+  // having to re-derive them. Existing callers that constructed ctx
+  // with permissions already set keep that value.
+  if (permissions && !ctx.permissions) {
+    ctx.permissions = permissions;
+  }
+
   // -------------------------------------------------------------------------
   // onSession — fires once at the very start of a streamed turn, before any
   // hook runs, so the SSE adapter can write the `session` event before the

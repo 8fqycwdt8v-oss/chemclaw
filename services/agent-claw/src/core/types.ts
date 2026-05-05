@@ -48,6 +48,15 @@ export interface ToolContext {
    * the caller has no upstream signal (background tasks, tests).
    */
   signal?: AbortSignal;
+  /**
+   * Optional permission policy snapshot the outer harness was started
+   * with. Threaded onto ctx by runHarness so tools that orchestrate
+   * inner tool calls (today: run_orchestration_script's Monty bridge)
+   * can re-resolve through the same allowlist / denylist / mode the
+   * route set up. Undefined for legacy callers that don't pass
+   * `permissions:` to runHarness.
+   */
+  permissions?: PermissionOptions;
 }
 
 // ---------------------------------------------------------------------------

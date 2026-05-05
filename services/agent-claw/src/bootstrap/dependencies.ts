@@ -109,6 +109,9 @@ import { buildQueryInstrumentPersonsTool } from "../tools/builtins/query_instrum
 // Autonomy upgrade — Claude-Code-like plan mode.
 import { buildManageTodosTool } from "../tools/builtins/manage_todos.js";
 import { buildAskUserTool } from "../tools/builtins/ask_user.js";
+// Code-mode orchestration via the Monty runtime.
+import { buildRunOrchestrationScriptTool } from "../tools/builtins/run_orchestration_script.js";
+import { lifecycle as runtimeLifecycle } from "../core/runtime.js";
 
 export interface Deps {
   pool: Pool;
@@ -146,14 +149,16 @@ export function buildDependencies(cfg: Config): Deps {
   // prompts so the GEPA loop accumulates score data without affecting users.
   const shadowEvaluator = new ShadowEvaluator(promptRegistry, llmProvider, pool);
 
-  registerBuiltinTools(registry, cfg, pool, promptRegistry, llmProvider);
-
   // Phase 2 of the configuration concept — scoped key/value reader and
   // feature-flag catalog. Both are wired as process-wide singletons so any
   // call site (route, hook, sub-agent) can fetch via getConfigRegistry() /
-  // isFeatureEnabled() without threading them through Deps.
+  // isFeatureEnabled() without threading them through Deps. Constructed
+  // BEFORE registerBuiltinTools so factories that need it (run_orchestration_script)
+  // can capture it at registration time.
   const configRegistry = new ConfigRegistry(pool);
   setConfigRegistry(configRegistry);
+
+  registerBuiltinTools(registry, cfg, pool, promptRegistry, llmProvider, configRegistry);
   const featureFlags = new FeatureFlagRegistry(pool);
   setFeatureFlagRegistry(featureFlags);
 
@@ -186,6 +191,7 @@ function registerBuiltinTools(
   pool: Pool,
   promptRegistry: PromptRegistry,
   llmProvider: LiteLLMProvider,
+  configRegistry: ConfigRegistry,
 ): void {
   // Chemistry / KG (URL-only).
   registry.registerBuiltin("canonicalize_smiles", () => asTool(buildCanonicalizeSmilesTool(cfg.MCP_RDKIT_URL)));
@@ -364,4 +370,22 @@ function registerBuiltinTools(
   // ctx.scratchpad — which the chat route guarantees.
   registry.registerBuiltin("manage_todos", () => asTool(buildManageTodosTool(pool)));
   registry.registerBuiltin("ask_user", () => asTool(buildAskUserTool()));
+
+  // ── Code-mode orchestration (Monty) ──────────────────────────────────────
+  // run_orchestration_script lets the model emit a single Python script that
+  // calls allow-listed tools as external_function(...) — replacing 3+
+  // sequential ReAct turns with one turn for read-only retrieve/rank/filter
+  // glue. Each external call still flows through runOneTool, so permissions,
+  // pre/post_tool, RLS, and Langfuse spans behave exactly as if the LLM had
+  // emitted that tool_call directly. Disabled by default — admins enable
+  // via config_settings (monty.enabled + monty.binary_path).
+  registry.registerBuiltin("run_orchestration_script", () =>
+    asTool(
+      buildRunOrchestrationScriptTool({
+        registry,
+        configRegistry,
+        lifecycle: runtimeLifecycle,
+      }),
+    ),
+  );
 }
