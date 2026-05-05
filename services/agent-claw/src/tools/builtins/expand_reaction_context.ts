@@ -117,6 +117,7 @@ export function buildExpandReactionContextTool(pool: Pool, mcpKgUrl: string) {
       "Returns surfaced_fact_ids for anti-fabrication tracking.",
     inputSchema: ExpandReactionContextIn,
     outputSchema: ExpandReactionContextOut,
+    annotations: { readOnly: true },
 
     execute: async (ctx, input) => {
       const include = new Set(input.include);

@@ -95,6 +95,7 @@ export function buildComputeConfidenceEnsembleTool(
       "categorical confidence_label (foundational | high | medium | low).",
     inputSchema: ComputeConfidenceEnsembleIn,
     outputSchema: ComputeConfidenceEnsembleOut,
+    annotations: { readOnly: false },
     execute: async (ctx, input) => {
       return await withUserContext(pool, ctx.userEntraId, async (client) => {
         // Fetch the artifact payload. Bi-temporal: refuse to score

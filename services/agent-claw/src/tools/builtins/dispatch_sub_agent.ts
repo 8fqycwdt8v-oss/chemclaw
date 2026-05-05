@@ -62,6 +62,7 @@ export function buildDispatchSubAgentTool(allTools: Tool[], llm: LlmProvider) {
       "Sub-agents run with their own seenFactIds and a fresh step budget (max 20 steps).",
     inputSchema: DispatchSubAgentIn,
     outputSchema: DispatchSubAgentOut,
+    annotations: { readOnly: false },
 
     execute: async (ctx, input) => {
       const deps: SubAgentDeps = { allTools, llm, lifecycle };

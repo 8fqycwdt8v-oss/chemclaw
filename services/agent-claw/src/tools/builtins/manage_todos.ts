@@ -100,6 +100,7 @@ export function buildManageTodosTool(pool: Pool) {
     description: DESCRIPTION,
     inputSchema: ManageTodosIn,
     outputSchema: ManageTodosOut,
+    annotations: { readOnly: false },
 
     execute: async (ctx, input) => {
       const sessionId = ctx.scratchpad.get("session_id");

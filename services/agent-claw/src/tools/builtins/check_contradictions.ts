@@ -64,6 +64,7 @@ export function buildCheckContradictionsTool(mcpKgUrl: string) {
       "Does not resolve contradictions — use for deep research only.",
     inputSchema: CheckContradictionsIn,
     outputSchema: CheckContradictionsOut,
+    annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
       // Pull all currently-valid outbound facts.

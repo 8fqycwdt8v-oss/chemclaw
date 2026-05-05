@@ -67,6 +67,7 @@ export function buildAskUserTool() {
     ].join(" "),
     inputSchema: AskUserIn,
     outputSchema: AskUserOut,
+    annotations: { readOnly: false },
 
     execute: async (ctx, input) => {
       // Record the question in scratchpad so chat.ts's post-turn save

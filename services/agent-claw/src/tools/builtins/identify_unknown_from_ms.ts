@@ -74,6 +74,7 @@ export function buildIdentifyUnknownFromMsTool(mcpSiriusUrl: string) {
       "Use for unknown impurity identification from analytical data. Latency ~60-120 s.",
     inputSchema: IdentifyUnknownFromMsIn,
     outputSchema: IdentifyUnknownFromMsOut,
+    annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {
       const result = await postJson(

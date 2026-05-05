@@ -250,6 +250,7 @@ export function buildRunProgramTool(
       "chemclaw.canonicalize_smiles, chemclaw.embed_text, chemclaw.compute_drfp.",
     inputSchema: RunProgramIn,
     outputSchema: RunProgramOut,
+    annotations: { readOnly: false },
 
     execute: async (_ctx, input) => {
       const { python_code, expected_outputs, timeout_ms } = input;
