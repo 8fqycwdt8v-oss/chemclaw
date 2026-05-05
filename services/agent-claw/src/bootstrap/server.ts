@@ -41,14 +41,40 @@ export async function buildServer(cfg: Config): Promise<FastifyInstance> {
   });
 
   // CORS: explicit allowlist from config.
+  //
+  // Security: do NOT echo `Access-Control-Allow-Origin: *` or any wildcard
+  // when credentials are enabled, and reject `Origin: null`. The classic
+  // bypass: a sandboxed iframe (`<iframe sandbox="allow-scripts">`) or a
+  // file:// page sends `Origin: null`, and a permissive handler that
+  // returns `Allow-Origin: null` plus `Allow-Credentials: true` lets that
+  // attacker page read the user's authenticated responses (since cookies /
+  // x-user-entra-id are forwarded by the same browser). curl / server-to-
+  // server callers don't send an Origin header at all, so we still permit
+  // a missing-origin request — but a header that is literally the string
+  // "null" must be denied.
   const allowedOrigins = cfg.AGENT_CORS_ORIGINS.split(",")
     .map((s) => s.trim())
     .filter((s) => s.length > 0);
 
   await app.register(cors, {
     origin: (origin, cb) => {
-      if (!origin) { cb(null, true); return; } // curl / server-to-server
-      if (allowedOrigins.includes(origin)) { cb(null, true); return; }
+      // No Origin header at all → server-to-server / curl / health probe.
+      // Permitted; the browser would never reach this branch with credentials.
+      if (origin === undefined || origin === "") {
+        cb(null, true);
+        return;
+      }
+      // `Origin: null` is a real header value sent by sandboxed iframes,
+      // file:// pages, and some redirect chains. Do NOT echo it back with
+      // credentials — that's the documented null-origin CSRF bypass.
+      if (origin === "null") {
+        cb(new Error("origin not allowed"), false);
+        return;
+      }
+      if (allowedOrigins.includes(origin)) {
+        cb(null, true);
+        return;
+      }
       cb(new Error("origin not allowed"), false);
     },
     credentials: true,

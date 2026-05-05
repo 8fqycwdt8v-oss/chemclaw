@@ -112,7 +112,7 @@ def ip_is_blocked(ip_str: str) -> bool:
     return any(addr in net for net in BLOCKED_NETWORKS)
 
 
-def validate_network_host(host: str) -> None:
+def validate_network_host(host: str) -> list[str]:
     """Enforce allowlist + denylist + private-IP block on a hostname.
 
     Raises ``ValueError`` if the host is not safe to fetch from. If
@@ -120,6 +120,12 @@ def validate_network_host(host: str) -> None:
     checked against ``BLOCKED_NETWORKS`` — but if the host is explicitly
     allow-listed, we accept the resolution as intentional (e.g. internal
     ELN at 10.x).
+
+    Returns the list of validated IP strings (for the caller to pin the
+    actual TCP connect to one of these, closing the DNS-rebinding TOCTOU
+    where the resolver returns a public IP at validate time and a
+    private IP at connect time). Empty list when the host is itself a
+    literal IP and was accepted.
     """
     h = (host or "").lower()
     if not h:
@@ -136,7 +142,8 @@ def validate_network_host(host: str) -> None:
             if not in_allowlist or not ALLOW_HOSTS:
                 # Refuse: hostname looked like an IP and lands in a blocked range.
                 raise ValueError(f"host {host!r} resolves to a blocked network")
-        return
+        # Literal IP: caller can use it directly; nothing to pin.
+        return [host]
     except ValueError:
         pass  # not a literal IP; resolve below
 
@@ -146,6 +153,8 @@ def validate_network_host(host: str) -> None:
     except socket.gaierror as exc:
         raise ValueError(f"host {host!r} did not resolve: {exc}") from exc
 
+    validated: list[str] = []
+    seen: set[str] = set()
     for info in infos:
         addr = info[4][0]
         if ip_is_blocked(addr):
@@ -153,6 +162,10 @@ def validate_network_host(host: str) -> None:
                 raise ValueError(
                     f"host {host!r} resolves to blocked network {addr}"
                 )
+        if addr not in seen:
+            seen.add(addr)
+            validated.append(addr)
+    return validated
 
 
 def parse_and_validate_uri(uri: str) -> urllib.parse.ParseResult:

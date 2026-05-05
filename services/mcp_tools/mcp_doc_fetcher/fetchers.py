@@ -11,14 +11,29 @@ Validation lives in ``validators.py`` — every public entry point here
 calls ``parse_and_validate_uri`` / ``validate_network_host`` before any
 I/O.
 
+DNS rebinding (TOCTOU) defense:
+    A naive flow ``resolve(host) → validate IPs → httpx.get(host)`` is
+    exploitable: the attacker's DNS server returns 1.2.3.4 (public) at
+    validate-time and 169.254.169.254 (cloud metadata) at connect-time.
+    We close the window by capturing the validated IP list and pinning
+    every TCP connect made inside the request scope to that set via a
+    thread-local override of ``socket.getaddrinfo``. The override is
+    installed only for the duration of one fetch and reverted in a
+    ``finally`` so unrelated code paths (other threads, post-fetch
+    cleanup) see the unmodified resolver.
+
 Split from main.py during PR-7 (Python God-file split).
 """
 
 from __future__ import annotations
 
+import contextlib
 import logging
+import socket
+import threading
 import urllib.parse
 from pathlib import Path
+from typing import Iterator
 
 import httpx
 
@@ -33,6 +48,89 @@ from .validators import (
 
 
 log = logging.getLogger("mcp-doc-fetcher.fetchers")
+
+
+# --------------------------------------------------------------------------
+# DNS rebinding mitigation: pin getaddrinfo to a validated IP set
+# for the duration of a fetch. Thread-local so concurrent requests
+# in the same process don't trample each other's pin set.
+# --------------------------------------------------------------------------
+_PIN_LOCK = threading.Lock()
+_pin_state = threading.local()
+_ORIGINAL_GETADDRINFO = socket.getaddrinfo
+
+
+def _pinned_getaddrinfo(host, port, *args, **kwargs):  # type: ignore[no-untyped-def]
+    """Replacement for socket.getaddrinfo that returns ONLY validated IPs
+    when the calling thread has installed a pin via ``pin_resolution``.
+
+    For any host not in the pin map, falls through to the original
+    resolver — this matters because httpx may also resolve the proxy
+    host or do DNS for unrelated calls inside the same thread.
+    """
+    pinned: dict[str, list[str]] = getattr(_pin_state, "pinned", {}) or {}
+    addrs = pinned.get(host.lower() if isinstance(host, str) else host)
+    if not addrs:
+        return _ORIGINAL_GETADDRINFO(host, port, *args, **kwargs)
+    out: list[tuple] = []
+    for ip in addrs:
+        try:
+            ip_addr_info = _ORIGINAL_GETADDRINFO(
+                ip, port, *args, **kwargs,
+            )
+        except socket.gaierror:
+            continue
+        out.extend(ip_addr_info)
+    if not out:
+        # Fall closed: if the validated IPs no longer resolve as themselves
+        # (shouldn't happen — they're literal IPs), refuse rather than
+        # silently fall back to public DNS.
+        raise socket.gaierror(
+            f"pinned IPs {addrs} for host {host!r} did not yield a usable "
+            "addrinfo; refusing to fall back to public resolution"
+        )
+    return out
+
+
+@contextlib.contextmanager
+def pin_resolution(host: str, validated_ips: list[str]) -> Iterator[None]:
+    """Install a thread-local DNS pin for ``host`` → ``validated_ips``.
+
+    The pin is active for the duration of the ``with`` block. Inside,
+    every call to ``socket.getaddrinfo(host, ...)`` from this thread
+    returns only the validated IPs. The pin is removed on exit so other
+    code paths see the standard resolver again.
+
+    The first call also swaps the module-level ``socket.getaddrinfo``;
+    this is process-global so it has to be done under a lock to avoid
+    a benign race with another thread doing the same swap. The override
+    is idempotent — once installed it stays installed (cheap pass-through
+    when no pin is set on the calling thread).
+    """
+    if not validated_ips:
+        # Literal-IP path or unresolvable host: nothing to pin.
+        yield
+        return
+
+    # Install the override the first time we need it (process-global,
+    # but the wrapper is a no-op for unpinned threads / hosts).
+    with _PIN_LOCK:
+        if socket.getaddrinfo is not _pinned_getaddrinfo:
+            socket.getaddrinfo = _pinned_getaddrinfo  # type: ignore[assignment]
+
+    pinned: dict[str, list[str]] = getattr(_pin_state, "pinned", None) or {}
+    key = host.lower()
+    prev = pinned.get(key)
+    pinned[key] = list(validated_ips)
+    _pin_state.pinned = pinned
+    try:
+        yield
+    finally:
+        if prev is None:
+            pinned.pop(key, None)
+        else:
+            pinned[key] = prev
+        _pin_state.pinned = pinned
 
 
 # --------------------------------------------------------------------------
@@ -106,55 +204,76 @@ def fetch_https(
 
     Defenses:
       - SSRF: every hop is re-validated against the allow/deny/IP-block rules.
+      - DNS rebinding: each hop's host is resolved once, the IP set is
+        validated, and a thread-local pin forces httpx's underlying socket
+        connect to use ONLY those IPs. Without the pin, an attacker-controlled
+        DNS server can return a public IP at validate-time and a private/
+        loopback IP a few milliseconds later at connect-time — closing the
+        TOCTOU window between resolution and connect is the only structural
+        defence against rebinding (re-resolving alone doesn't help: a TTL=0
+        zone returns whatever the attacker wants on each query).
       - Redirect-loop bound: at most ``MAX_REDIRECTS`` hops.
       - Streaming with max_bytes guard.
     """
     headers: dict[str, str] = {"User-Agent": "ChemClaw-DocFetcher/0.1"}
     current_uri = uri
+    current_host = (parsed.hostname or "").lower()
+    # Resolve + validate the initial host. validate_network_host returns the
+    # IP list that survived the BLOCKED_NETWORKS / allow-list filter; we pin
+    # the socket layer to that set for every connect inside this fetch.
+    current_pin = validate_network_host(current_host)
     redirect_count = 0
     # follow_redirects=False — we walk redirects ourselves so each hop gets
     # the full validate_network_host treatment (an attacker-controlled
     # redirect to e.g. http://169.254.169.254/ would otherwise slip past).
     with httpx.Client(follow_redirects=False, timeout=30) as client:
         while True:
-            with client.stream("GET", current_uri, headers=headers) as response:
-                # Manual redirect handling.
-                if response.status_code in (301, 302, 303, 307, 308):
-                    redirect_count += 1
-                    if redirect_count > MAX_REDIRECTS:
-                        raise ValueError(
-                            f"too many redirects (>{MAX_REDIRECTS}) starting from {uri}"
-                        )
-                    location = response.headers.get("location")
-                    if not location:
-                        raise ValueError("redirect response missing Location header")
-                    next_uri = urllib.parse.urljoin(current_uri, location)
-                    next_parsed = urllib.parse.urlparse(next_uri)
-                    if next_parsed.scheme.lower() not in ("http", "https"):
-                        raise ValueError(
-                            f"refusing to follow redirect to non-HTTP scheme: {next_parsed.scheme}"
-                        )
-                    validate_network_host(next_parsed.hostname or "")
-                    current_uri = next_uri
-                    continue
+            with pin_resolution(current_host, current_pin):
+                with client.stream("GET", current_uri, headers=headers) as response:
+                    # Manual redirect handling.
+                    if response.status_code in (301, 302, 303, 307, 308):
+                        redirect_count += 1
+                        if redirect_count > MAX_REDIRECTS:
+                            raise ValueError(
+                                f"too many redirects (>{MAX_REDIRECTS}) starting from {uri}"
+                            )
+                        location = response.headers.get("location")
+                        if not location:
+                            raise ValueError("redirect response missing Location header")
+                        next_uri = urllib.parse.urljoin(current_uri, location)
+                        next_parsed = urllib.parse.urlparse(next_uri)
+                        if next_parsed.scheme.lower() not in ("http", "https"):
+                            raise ValueError(
+                                f"refusing to follow redirect to non-HTTP scheme: {next_parsed.scheme}"
+                            )
+                        next_host = (next_parsed.hostname or "").lower()
+                        # Re-validate AND re-resolve at every hop so the
+                        # next iteration's pin reflects the current resolver
+                        # state (the prior pin is dropped when the
+                        # contextmanager exits below).
+                        next_pin = validate_network_host(next_host)
+                        current_uri = next_uri
+                        current_host = next_host
+                        current_pin = next_pin
+                        continue
 
-                if response.status_code >= 400:
-                    raise ValueError(
-                        f"HTTP {response.status_code} fetching URI"
-                    )
-                content_type = response.headers.get("content-type", "application/octet-stream")
-                content_type = content_type.split(";")[0].strip()
-
-                chunks: list[bytes] = []
-                total = 0
-                for chunk in response.iter_bytes(chunk_size=65536):
-                    total += len(chunk)
-                    if total > max_bytes:
+                    if response.status_code >= 400:
                         raise ValueError(
-                            f"response size exceeds max_bytes limit {max_bytes}"
+                            f"HTTP {response.status_code} fetching URI"
                         )
-                    chunks.append(chunk)
-            return b"".join(chunks), content_type
+                    content_type = response.headers.get("content-type", "application/octet-stream")
+                    content_type = content_type.split(";")[0].strip()
+
+                    chunks: list[bytes] = []
+                    total = 0
+                    for chunk in response.iter_bytes(chunk_size=65536):
+                        total += len(chunk)
+                        if total > max_bytes:
+                            raise ValueError(
+                                f"response size exceeds max_bytes limit {max_bytes}"
+                            )
+                        chunks.append(chunk)
+                return b"".join(chunks), content_type
 
 
 # --------------------------------------------------------------------------

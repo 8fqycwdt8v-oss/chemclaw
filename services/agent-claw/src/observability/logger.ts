@@ -18,33 +18,30 @@
 // filtered. The level is controlled by `AGENT_LOG_LEVEL` (same env var the
 // Fastify logger reads) and defaults to `info` so production never silently
 // drops warnings. Tests can clear the cache with `__resetLoggerForTests`.
+//
+// Content-aware redaction (cycle 4): the Pino path-based redact list catches
+// known-shape fields by name, but Postgres/MCP errors carry SMILES + compound
+// codes embedded in driver-provided "Failing row contains (...)" strings
+// inside `err.message` and `err.stack`. Pino's `redact` does NOT regex over
+// values — only paths — so we install custom serializers that pass error
+// strings through `scrub()` (the same regex pipeline the post_turn hook uses)
+// before Pino formats them. This closes the BACKLOG cluster-6 finding without
+// leaking new state into the hot path: the regex set is length-bounded, and
+// the same input cap as the egress redactor (5 MB) bounds worst-case CPU.
 // ---------------------------------------------------------------------------
 
 import { pino, type Logger } from "pino";
 
 import { logContextFields } from "./log-context.js";
+import { scrub } from "./redact-string.js";
 
-// Defense-in-depth redaction. Pino's `redact` paths apply BEFORE the JSON
-// formatter, so secrets in known-shape fields are scrubbed even if a caller
-// accidentally logs a raw header object or tool input. The list expands the
-// original (Authorization / Cookie) with fields that frequently carry
-// chemistry-sensitive content (raw SMILES, prompts, tool input/output) so
-// they're at least filtered when they pass through the logger; the
-// LiteLLM-redactor backed log filter catches free-form prose.
 // Pino's redact-path syntax — fields scrubbed with "***" before serialization.
 //
-// The list is conservative: it covers fields that frequently carry
-// chemistry-sensitive content (SMILES strings, prompts, tool I/O) AND
-// the error-message channels where Postgres / MCP errors otherwise
-// leak SMILES + compound codes embedded in driver error strings ("invalid
-// input for type … near 'CMP-…'"). Without these, Pino's auth-only
-// redaction catches headers but leaves error payloads exposed.
-//
-// NOTE: Pino redact does NOT run regexes over field values — it only
-// scrubs known field paths. A full content-aware redactor (matching the
-// Python-side LiteLLM redactor) is a separate egress filter, deferred
-// to a follow-up. For now, the path-based list catches the
-// known-risky fields by name.
+// Conservative list: covers fields that frequently carry chemistry-sensitive
+// content (SMILES, prompts, tool I/O) AND error-detail channels (Postgres
+// "detail", upstream-error "detail"). The free-form err.message / err.stack
+// channels are scrubbed via the `err` serializer below — Pino's path
+// redaction can't run regex over values.
 const ROOT_REDACT_PATHS = [
   "req.headers.authorization",
   "req.headers.cookie",
@@ -59,18 +56,65 @@ const ROOT_REDACT_PATHS = [
   "messages[*].content",
   "prompt",
   "raw_user",
-  // Error-detail channels — Postgres errors carry "Failing row contains
-  // (...)" with column values literally embedded; UpstreamError.detail
-  // wraps the raw upstream response body. Both are reliable carriers of
-  // chemistry-sensitive content. We deliberately do NOT redact `err.message`
-  // / `err.stack` — those are diagnostic and an operator triaging a
-  // production incident needs them. The TS-side has no full LiteLLM
-  // redactor (H1 in the first audit, follow-up); content-aware redaction
-  // for free-form prose is a deferred follow-up. For now: scrub the
-  // known-risky fields by name and let messages through.
   "err.detail",
   "*.detail",
 ];
+
+/**
+ * Custom error serializer: replaces Pino's default by passing message and
+ * stack through `scrub()` so SMILES / compound-codes / emails / NCE-IDs
+ * embedded in driver error strings are masked before they hit the log
+ * shipper. Mirrors `pino.stdSerializers.err` for the rest of the shape so
+ * downstream Loki queries that key on `err.type` / `err.code` keep working.
+ *
+ * Returning a plain object (not the Error) is critical — Pino otherwise
+ * special-cases Error and bypasses the serializer's return value. Same
+ * convention used by `pino.stdSerializers.err`.
+ */
+function serializeError(err: unknown): Record<string, unknown> {
+  if (err === null || err === undefined) {
+    return { type: "unknown", message: "" };
+  }
+  if (typeof err !== "object") {
+    // `getLogger().error("string-only error")` → primitive falls through
+    // unchanged; nothing to scrub.
+    return { type: typeof err, message: String(err) };
+  }
+  const e = err as Error & {
+    code?: unknown;
+    statusCode?: unknown;
+    detail?: unknown;
+    cause?: unknown;
+    [key: string]: unknown;
+  };
+  const out: Record<string, unknown> = {
+    type: e.name ?? e.constructor?.name ?? "Error",
+    message: typeof e.message === "string" ? scrub(e.message) : "",
+  };
+  if (typeof e.stack === "string") {
+    // Stack frames frequently quote the offending value (e.g. inside a
+    // template literal in a route handler). Scrub the whole stack — frame
+    // pointers (file:line) survive because the regex set is length-bounded
+    // and only matches identifier-shaped tokens, never path segments.
+    out.stack = scrub(e.stack);
+  }
+  if (e.code !== undefined) out.code = e.code;
+  if (e.statusCode !== undefined) out.statusCode = e.statusCode;
+  // err.detail is already scrubbed by the path-redact list above; copy it
+  // through unchanged so the redaction censor (***) is what surfaces.
+  if (e.detail !== undefined) out.detail = e.detail;
+  if (e.cause !== undefined) {
+    // Recursively serialize cause chain; cap at one level so a malicious
+    // cause-loop can't blow the log shipper's stack.
+    out.cause =
+      e.cause instanceof Error
+        ? serializeError(e.cause)
+        : typeof e.cause === "string"
+          ? scrub(e.cause)
+          : e.cause;
+  }
+  return out;
+}
 
 let _root: Logger | null = null;
 
@@ -80,6 +124,16 @@ function buildRoot(): Logger {
     level,
     base: { service: "agent-claw" },
     redact: { paths: ROOT_REDACT_PATHS, censor: "***" },
+    serializers: {
+      // Replace the default Error serializer so message/stack are scrubbed
+      // before the JSON formatter runs. Pino calls this whenever a logged
+      // object has an `err` field of type Error (the common pattern is
+      // `log.error({ err }, "...")`).
+      err: serializeError,
+      // Same shape, different name — some call sites use `error` instead
+      // of `err` (e.g. legacy fastify reply context fields).
+      error: serializeError,
+    },
     timestamp: pino.stdTimeFunctions.isoTime,
     // Auto-enrich every record with correlation fields when an HTTP request
     // / OTel span is active. Returning {} when nothing is available is a

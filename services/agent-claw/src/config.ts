@@ -4,6 +4,7 @@
 import { z } from "zod";
 
 import { getLogger } from "./observability/logger.js";
+import { assertLogUserSaltConfigured } from "./observability/user-hash.js";
 
 const ConfigSchema = z.object({
   AGENT_HOST: z.string().default("0.0.0.0"),
@@ -247,6 +248,25 @@ export function loadConfig(): Config {
         field_errors: parsed.error.flatten().fieldErrors,
       },
       "invalid agent configuration — process exiting",
+    );
+    process.exit(1);
+  }
+  // Fail fast on missing LOG_USER_SALT outside dev mode. Without this,
+  // the resolver throws lazily on first `hashUser()` call — a deployment
+  // misconfiguration surfaces as request-time 500s instead of a clean
+  // boot failure rather than alerting on traffic. user-hash.ts is a leaf
+  // module (only imports node:crypto), so calling its assertion here can't
+  // trigger a circular dep.
+  try {
+    assertLogUserSaltConfigured();
+  } catch (err) {
+    getLogger("agent-claw.config").fatal(
+      {
+        event: "config_invalid",
+        error_code: "AGENT_CONFIG_INVALID",
+        err_msg: (err as Error).message,
+      },
+      "LOG_USER_SALT misconfigured — process exiting",
     );
     process.exit(1);
   }

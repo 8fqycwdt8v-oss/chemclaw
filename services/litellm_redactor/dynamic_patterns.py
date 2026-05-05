@@ -31,14 +31,6 @@ logger = logging.getLogger(__name__)
 _CACHE_TTL_SECONDS = 60.0
 _MAX_PATTERN_LEN = 200
 
-# Forbidden constructs — bounded version of catastrophic-backtracking guard.
-# We accept '.*?' lazy quantifier with a length-bounded follow (keeping it
-# simple for now) by REJECTING any '.*' or '.+' that's not immediately
-# followed by '?' AND a `{n,m}` upper bound. Same for `\S+` / `\w+` etc.
-_UNBOUNDED_QUANT = re.compile(
-    r"(?<!\\)(?:\.\*|\.\+|\\S\+|\\w\+|\\d\+|\\D\+|\\W\+)(?!\?\{)"
-)
-
 
 @dataclass(frozen=True)
 class DynamicPattern:
@@ -53,16 +45,75 @@ def is_pattern_safe(raw: str) -> tuple[bool, str | None]:
 
     Rejects pathological regexes — first defence is the DB CHECK on length;
     this is the second.
+
+    Cycle-4 audit tightening: the previous narrow check only matched a
+    fixed list of pre-quantified atoms (``.*``, ``.+``, ``\\S+`` …). It
+    accepted catastrophic-backtracking nests like ``(a+)+``, ``(a|a)*``,
+    and bare class quantifiers like ``[a-z]+`` because none of those
+    literal byte-sequences was on the deny list. The general defense
+    is "no unbounded quantifier of any shape" — every ``+`` or ``*``
+    becomes ``{n,m}`` with a bounded upper, and every ``{n,}`` form is
+    rejected. Anchors / lookarounds / ``?`` (0-or-1) remain allowed
+    because they can't backtrack catastrophically.
     """
     if len(raw) > _MAX_PATTERN_LEN:
         return False, f"pattern length {len(raw)} > {_MAX_PATTERN_LEN}"
-    if _UNBOUNDED_QUANT.search(raw):
-        return False, "unbounded quantifier (use bounded {n,m} form)"
+    why = _has_unbounded_quantifier(raw)
+    if why is not None:
+        return False, why
     try:
         re.compile(raw)
     except re.error as exc:
         return False, f"re.compile failed: {exc}"
     return True, None
+
+
+def _has_unbounded_quantifier(raw: str) -> str | None:
+    """Walk the raw regex and reject any ``+`` / ``*`` (greedy, lazy, or
+    possessive) and any ``{n,}`` form without an explicit upper bound.
+
+    Escape semantics: ``\\+`` and ``\\*`` are literal characters and
+    therefore safe; we skip the next character after every backslash.
+    Character classes (``[...]``) are walked through as a unit so a
+    literal ``+`` *inside* a class doesn't false-positive.
+    """
+    i = 0
+    n = len(raw)
+    while i < n:
+        c = raw[i]
+        if c == "\\":
+            # Skip the escape and its target. ``\\+`` / ``\\*`` are
+            # literal characters — never quantifiers.
+            i += 2
+            continue
+        if c == "[":
+            # Walk through the class body. ``[+*]`` is a literal class
+            # of two chars, never a quantifier; we need to find the
+            # matching ``]`` (skipping ``\\]`` inside).
+            i += 1
+            while i < n and raw[i] != "]":
+                if raw[i] == "\\" and i + 1 < n:
+                    i += 2
+                else:
+                    i += 1
+            i += 1  # past the closing ']'
+            continue
+        if c in "+*":
+            return f"unbounded quantifier {c!r} at offset {i} (use bounded {{n,m}} form)"
+        if c == "{":
+            close = raw.find("}", i)
+            if close != -1:
+                quant = raw[i + 1 : close]
+                # Reject {n,} (unbounded). Allow {n}, {n,m}.
+                if "," in quant:
+                    parts = quant.split(",", 1)
+                    if len(parts) == 2 and parts[1].strip() == "":
+                        return (
+                            "open-ended quantifier "
+                            f"{{...,}} at offset {i} (use bounded {{n,m}} form)"
+                        )
+        i += 1
+    return None
 
 
 class DynamicPatternLoader:

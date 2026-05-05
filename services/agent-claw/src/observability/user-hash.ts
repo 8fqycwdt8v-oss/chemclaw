@@ -70,6 +70,28 @@ export function hashUser(userEntraId: string | undefined | null): string {
     .slice(0, 16);
 }
 
+/**
+ * Boot-time assertion that the user-hash salt is configured.
+ *
+ * Why this exists: the lazy `salt()` resolver throws on first
+ * `hashUser()` call, which means a misconfigured production deploy
+ * boots successfully and only fails when an HTTP request first tries
+ * to log a user identifier. By that time alerting is gated on
+ * fail-only-on-traffic, and dashboards may show "service healthy".
+ *
+ * Calling this from `loadConfig()` / startup makes a misconfigured
+ * `LOG_USER_SALT` a hard boot failure (before app.listen), the same
+ * way the Zod schema makes a missing required env var a hard failure.
+ *
+ * Idempotent: subsequent calls are no-ops once the salt is resolved.
+ */
+export function assertLogUserSaltConfigured(): void {
+  // Triggers the same fail-closed check `hashUser` does, but at a
+  // controlled call site so the error stack points at the
+  // bootstrap path instead of an unrelated route handler.
+  salt();
+}
+
 /** Test-only — drop the cached salt so a subsequent hash picks up env changes. */
 export function __resetUserHashForTests(): void {
   _salt = null;
