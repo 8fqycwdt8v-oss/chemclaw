@@ -102,8 +102,15 @@ class ReactionVectorizerProjector(BaseProjector):
 
             async with conn.cursor() as cur:
                 for rxn_id, vec_literal in vectors:
+                    # `AND drfp_vector IS NULL` matches the contextual_chunker
+                    # pattern: two concurrent invocations on the same row are
+                    # already harmless because DRFP is deterministic
+                    # (last-write-wins is the same vector), but the explicit
+                    # guard prevents the redundant write and surfaces a future
+                    # divergence (e.g. DRFP version bump) instead of letting
+                    # races silently overwrite each other.
                     await cur.execute(
-                        "UPDATE reactions SET drfp_vector = %s::vector WHERE id = %s::uuid",
+                        "UPDATE reactions SET drfp_vector = %s::vector WHERE id = %s::uuid AND drfp_vector IS NULL",
                         (vec_literal, rxn_id),
                     )
             await conn.commit()
