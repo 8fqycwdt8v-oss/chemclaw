@@ -24,6 +24,7 @@ import psycopg
 from psycopg.rows import dict_row
 from pydantic_settings import SettingsConfigDict
 
+from services.mcp_tools.common.logging import configure_logging
 from services.projectors.common.base import BaseProjector, ProjectorSettings
 from services.projectors.kg_experiments.kg_client import KGClient
 
@@ -171,5 +172,6 @@ class KGSourceCacheProjector(BaseProjector):
 
 if __name__ == "__main__":
     settings = Settings()
+    configure_logging(settings.projector_log_level)
     projector = KGSourceCacheProjector(settings)
     asyncio.run(projector.run())

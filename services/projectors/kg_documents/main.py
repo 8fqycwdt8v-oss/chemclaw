@@ -35,6 +35,7 @@ from typing import Any
 import psycopg
 from neo4j import AsyncGraphDatabase
 
+from services.mcp_tools.common.logging import configure_logging
 from services.projectors.common.base import BaseProjector, ProjectorSettings
 
 
@@ -245,7 +246,7 @@ class KgDocumentsProjector(BaseProjector):
 
 def main() -> None:
     settings = ProjectorSettings()
-    logging.basicConfig(level=settings.projector_log_level)
+    configure_logging(settings.projector_log_level)
     proj = KgDocumentsProjector(settings)
     try:
         asyncio.run(proj.run())
