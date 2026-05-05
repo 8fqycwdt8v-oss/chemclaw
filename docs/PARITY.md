@@ -80,7 +80,7 @@ Pinned by:
 
 **Status (2026-05-05).** `core/hook-loader.ts` declares 16 valid lifecycle points in `VALID_HOOK_POINTS`. Of those:
 
-- **5 have built-in handlers** that ship in `BUILTIN_REGISTRARS` and are wired by `hooks/*.yaml`: `session_start` (`session-events`), `pre_turn` (`init-scratch`, `apply-skills`), `pre_tool` (`budget-guard`, `foundation-citation-guard`), `post_tool` (`anti-fabrication`, `tag-maturity`, `source-cache`), `pre_compact` (`compact-window`), `permission_request` (`permission`), `post_turn` (`redact-secrets`). [`MIN_EXPECTED_HOOKS = 11` in `bootstrap/start.ts`.]
+- **7 phases have built-in handlers** (11 total registrars) that ship in `BUILTIN_REGISTRARS` and are wired by `hooks/*.yaml`: `session_start` (`session-events`), `pre_turn` (`init-scratch`, `apply-skills`), `pre_tool` (`budget-guard`, `foundation-citation-guard`), `post_tool` (`anti-fabrication`, `tag-maturity`, `source-cache`), `pre_compact` (`compact-window`), `permission_request` (`permission`), `post_turn` (`redact-secrets`). [`MIN_EXPECTED_HOOKS = 11` in `bootstrap/start.ts`.]
 
 - **9 are dispatch-only.** The harness fires `lifecycle.dispatch("<point>", payload)` in production code (verifiable via `rg "lifecycle.dispatch" services/agent-claw/src` against the dispatch table below) but no built-in registrar exists, so the dispatch returns an empty decision aggregate (no-op). These are deliberate operator-attachable extension points — wiring infrastructure (timeout, AbortController, decision aggregation, span instrumentation) is fully in place; only the handler is missing.
 

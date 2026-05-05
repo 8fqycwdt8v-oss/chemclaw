@@ -81,12 +81,13 @@ make up.full   # all services + sources profile
 # "fetch HPLC run run_W001 and show purity"
 ```
 
-## Test counts (v1.0.0-claw)
+## Test counts (v1.0.0-claw, post-Wave-2 audit)
 
 ```
-cd services/agent-claw && npm test          → 634 passed
-python3 -m pytest services/mcp_tools/      → 47+ passed (chemistry) + 29 (new sources)
-python3 -m pytest services/projectors/kg_source_cache/tests/ → 7 passed
+cd services/agent-claw && npm test          → 1118 passed (153 files)
+.venv/bin/pytest services/mcp_tools/common/tests/ -q  → 87 passed
+.venv/bin/pytest services/queue/tests services/workflow_engine/tests services/paperclip/tests -q  → 18 passed
+cd services/paperclip && npm test            → 23 passed
 ```
 
 ## Further reading
