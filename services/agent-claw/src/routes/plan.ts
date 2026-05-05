@@ -20,7 +20,7 @@ import { runWithRequestContext } from "../core/request-context.js";
 import { hashUser } from "../observability/user-hash.js";
 import { startRootTurnSpan, recordSpanError } from "../observability/spans.js";
 import { context as otelContext, trace } from "@opentelemetry/api";
-import { writeEvent, setupSse } from "../streaming/sse.js";
+import { writeEvent, setupSse, trackConnection } from "../streaming/sse.js";
 import { isAbortLikeError } from "./chat-helpers.js";
 import type { ToolContext } from "../core/types.js";
 import type { Pool } from "pg";
@@ -85,10 +85,11 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
 
     // SSE streaming resume.
     setupSse(reply);
-    // Boxed so the value can be mutated by the close-handler closure without
-    // TS narrowing every subsequent read to the literal `false` initializer.
-    const conn: { closed: boolean } = { closed: false };
-    req.raw.on("close", () => { conn.closed = true; });
+    // trackConnection wires both `close` + `aborted` listeners. Pre-PR this
+    // route only listened on `close`, so an HTTP/1.0-style mid-stream abort
+    // would not flip `conn.closed` and subsequent writeEvent calls would
+    // throw past the `!conn.closed` guard.
+    const conn = trackConnection(req);
 
     // Open the OTel root span for the plan-approve turn so every hook
     // and tool span emitted by `tracer.startActiveSpan` nests under it

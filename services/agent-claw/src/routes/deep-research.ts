@@ -34,7 +34,7 @@ import { hydrateScratchpad } from "../core/session-state.js";
 import { lifecycle } from "../core/runtime.js";
 import { runHarness } from "../core/harness.js";
 import type { Message, ToolContext } from "../core/types.js";
-import { writeEvent, setupSse } from "../streaming/sse.js";
+import { writeEvent, setupSse, trackConnection } from "../streaming/sse.js";
 import { makeSseSink } from "../streaming/sse-sink.js";
 import type { RedactReplacement } from "../core/hooks/redact-secrets.js";
 
@@ -221,12 +221,10 @@ async function handleDeepResearch(
   // Streaming path — delegated to runHarness with an SSE sink.
   setupSse(reply);
 
-  // Boxed so the value can be mutated by the close-handler closure without
-  // TS narrowing every subsequent read to the literal `false` initializer.
-  const conn: { closed: boolean } = { closed: false };
-  const onClose = () => { conn.closed = true; };
-  req.raw.on("close", onClose);
-  req.raw.on("aborted", onClose);
+  // trackConnection wires both `close` + `aborted` listeners and returns
+  // the boxed flag so the close-handler closure can mutate it without TS
+  // narrowing.
+  const conn = trackConnection(req);
 
   // Stream redaction log: each text_delta passes through redactString in the
   // sink. The DR route is single-turn (no session) so this only feeds the
