@@ -265,7 +265,7 @@ class QueueWorker:
             # every attempt). Without this, the only signal was the DB
             # row's transient/error JSONB — and only after the retry
             # ladder exhausted.
-            log.warning(
+            log.warning(  # pragma: no cover — handler-failure path; covered by deferred testcontainer test
                 "queue handler raised; will retry or fail",
                 extra={
                     "event": "queue_handler_failed",
