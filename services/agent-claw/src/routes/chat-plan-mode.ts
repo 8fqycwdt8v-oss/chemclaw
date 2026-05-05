@@ -88,7 +88,10 @@ export async function runPlanModeStreaming(
     //      /api/chat/plan/approve and existing tests.
     //   2. The DB-backed agent_plans table — used by Phase E chained
     //      execution via /api/sessions/:id/plan/run.
-    const plan = createPlan(steps, input.messages, input.user);
+    // Pass sessionId so /api/chat/plan/approve can call persistTurnState
+    // against the originating session — without it the approve turn's
+    // scratchpad audit + token usage is silently dropped (TS-H4).
+    const plan = createPlan(steps, input.messages, input.user, input.sessionId);
     planStore.save(plan);
 
     // DB persistence requires a session id. If we couldn't create one
