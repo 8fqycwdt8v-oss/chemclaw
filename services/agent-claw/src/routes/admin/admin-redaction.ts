@@ -11,6 +11,7 @@ import type { Pool } from "pg";
 import { withUserContext } from "../../db/with-user-context.js";
 import { guardAdmin } from "../../middleware/require-admin.js";
 import { appendAudit } from "./audit-log.js";
+import { isPatternSafe } from "../../security/regex-safety.js";
 
 const CATEGORY_VALUES = [
   "SMILES", "RXN_SMILES", "EMAIL", "NCE",
@@ -45,74 +46,9 @@ interface PatternRow {
   created_by: string;
 }
 
-/**
- * Server-side regex safety check, mirroring services/litellm_redactor/
- * dynamic_patterns.py:is_pattern_safe. The DB CHECK already bounds length;
- * this catches unbounded quantifiers that would slip past the length cap.
- *
- * Cycle-4 audit: the previous narrow check only matched a fixed list of
- * pre-quantified atoms (``.*``, ``\\S+`` …) and accepted catastrophic-
- * backtracking patterns like ``(a+)+`` / ``(a|a)*`` / ``[a-z]+``. The
- * general rule is "no unbounded quantifier of any shape" — every ``+`` or
- * ``*`` becomes ``{n,m}`` with a bounded upper. Anchors, lookarounds, and
- * ``?`` (0-or-1) remain allowed.
- */
-function findUnboundedQuantifier(raw: string): string | null {
-  let i = 0;
-  const n = raw.length;
-  while (i < n) {
-    const c = raw[i];
-    if (c === "\\") {
-      // Skip the escape and its target — ``\+`` / ``\*`` are literals.
-      i += 2;
-      continue;
-    }
-    if (c === "[") {
-      // Walk through the class body; ``[+*]`` is a literal class.
-      i += 1;
-      while (i < n && raw[i] !== "]") {
-        if (raw[i] === "\\" && i + 1 < n) {
-          i += 2;
-        } else {
-          i += 1;
-        }
-      }
-      i += 1; // past the closing ']'
-      continue;
-    }
-    if (c === "+" || c === "*") {
-      return `unbounded quantifier '${c}' at offset ${i} (use bounded {n,m} form)`;
-    }
-    if (c === "{") {
-      const close = raw.indexOf("}", i);
-      if (close !== -1) {
-        const quant = raw.slice(i + 1, close);
-        if (quant.includes(",")) {
-          const parts = quant.split(",");
-          if (parts.length === 2 && parts[1]?.trim() === "") {
-            return `open-ended quantifier '{...,}' at offset ${i} (use bounded {n,m} form)`;
-          }
-        }
-      }
-    }
-    i += 1;
-  }
-  return null;
-}
-
-function isPatternSafe(raw: string): { ok: boolean; reason?: string } {
-  if (raw.length > 200) return { ok: false, reason: "pattern length > 200" };
-  const why = findUnboundedQuantifier(raw);
-  if (why !== null) {
-    return { ok: false, reason: why };
-  }
-  try {
-    new RegExp(raw);
-  } catch (e) {
-    return { ok: false, reason: `invalid regex: ${(e as Error).message}` };
-  }
-  return { ok: true };
-}
+// Pattern-safety helpers were extracted to security/regex-safety.ts
+// so admin-permissions and any future admin surface accepting an
+// operator-supplied regex inherits the same ReDoS gate.
 
 export function registerAdminRedactionRoutes(
   app: FastifyInstance,

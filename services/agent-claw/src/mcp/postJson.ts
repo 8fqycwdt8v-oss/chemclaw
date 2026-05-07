@@ -84,19 +84,51 @@ export interface RequestOptions {
  * natively, but the package targets 18+). The wrapper returned controls a
  * dedicated AbortController whose signal is what fetch() observes.
  */
+// Build an AbortError that withRetry's `isAbortError` will recognise so
+// a deliberate cancellation (timeout or upstream signal) is NOT retried.
+// `isAbortError` checks `err.name === "AbortError" || err.code === "ABORT_ERR"`;
+// a plain `new Error(...)` slips past both, which means a user disconnect
+// would still trigger 3 retries before exhaustion. DOMException with the
+// "AbortError" name matches the spec — same shape Node's fetch raises on
+// AbortController.abort().
+function abortError(message: string): Error {
+  // DOMException is global in Node 18+ as of 18.4 / always in Node 20+.
+  return typeof DOMException !== "undefined"
+    ? new DOMException(message, "AbortError")
+    : Object.assign(new Error(message), { name: "AbortError" });
+}
+
 function combineSignals(
   external: AbortSignal | undefined,
   timeoutMs: number,
 ): { signal: AbortSignal; cleanup: () => void } {
   const ctl = new AbortController();
-  const timer = setTimeout(() => { ctl.abort(new Error("mcp request timeout")); }, timeoutMs);
+  const timer = setTimeout(
+    () => { ctl.abort(abortError("mcp request timeout")); },
+    timeoutMs,
+  );
   let externalListener: (() => void) | undefined;
+  // Helper: prefer a real AbortError on the external signal; if the
+  // upstream `reason` is a DOMException("AbortError") (Node fetch does
+  // this) preserve it, otherwise wrap a generic reason in an AbortError
+  // so isAbortError downstream still matches.
+  const propagatedReason = (): unknown => {
+    const reason: unknown = external?.reason;
+    if (
+      reason instanceof Error &&
+      (reason.name === "AbortError" ||
+        (reason as { code?: unknown }).code === "ABORT_ERR")
+    ) {
+      return reason;
+    }
+    return abortError("aborted");
+  };
   if (external) {
     if (external.aborted) {
-      ctl.abort(external.reason ?? new Error("aborted"));
+      ctl.abort(propagatedReason());
     } else {
       externalListener = () => {
-        ctl.abort(external.reason ?? new Error("aborted"));
+        ctl.abort(propagatedReason());
       };
       external.addEventListener("abort", externalListener, { once: true });
     }

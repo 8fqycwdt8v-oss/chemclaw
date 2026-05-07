@@ -128,6 +128,29 @@ describe("WarmChildPool", () => {
     }
   });
 
+  it("PrewarmedChildWrapper replays ready even when non-frame listeners attach first", async () => {
+    // The earlier `listenerCount('frame') === 1` gate would skip the
+    // replay if any other event type's listener increased the wrapper's
+    // total listener count first. The host's actual ordering attaches
+    // stderr_line / exit / error BEFORE frame, so this is precisely
+    // the production sequence — covered here to catch a regression.
+    const pool = new WarmChildPool({ factory: fakeFactory(), size: 1 });
+    try {
+      await waitFor(() => pool.idleCount === 1);
+      const child = await pool.acquire();
+      // Mimic host.ts ordering: attach a non-frame listener first.
+      child.on("stderr_line", () => {});
+      let sawReady = false;
+      child.on("frame", (f) => {
+        if (f.type === "ready") sawReady = true;
+      });
+      await waitFor(() => sawReady, 1_000);
+      expect(sawReady).toBe(true);
+    } finally {
+      pool.shutdown();
+    }
+  });
+
   it("acquire() returns a wrapped child that replays ready when the host listens", async () => {
     const pool = new WarmChildPool({ factory: fakeFactory(), size: 1 });
     try {
