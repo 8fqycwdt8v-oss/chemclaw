@@ -17,6 +17,7 @@ import type { Deps } from "./dependencies.js";
 import { loadHooks } from "../core/hook-loader.js";
 import { lifecycle } from "../core/runtime.js";
 import { startMcpProbeLoop } from "./probes.js";
+import { auditAgentAdminUsersCasing } from "../middleware/require-admin.js";
 
 // Hard-fail startup if the minimum-expected number of hooks isn't loaded.
 // A misconfigured HOOKS_DIR otherwise produces a process that starts without
@@ -71,6 +72,27 @@ export async function startServer(
             `check HOOKS_DIR (skipped=${JSON.stringify(hookResult.skipped)})`,
         );
       }
+      // Tighten the gate against the specific "missing registrar"
+      // failure mode: a YAML file ADDED without a matching builtin
+      // registrar would otherwise boot green (registered stays at 11 ≥
+      // MIN_EXPECTED_HOOKS while the new file lands in `skipped` with
+      // a "no built-in registrar" reason). The documented invariant in
+      // CLAUDE.md is "every YAML in `hooks/` has a matching
+      // `BUILTIN_REGISTRARS` entry"; this assertion enforces it
+      // without breaking the legitimate skip reasons (enabled:false,
+      // condition:false, parse error, missing name) — those still
+      // surface in result.skipped at INFO above.
+      const missingRegistrar = hookResult.skipped.filter((s) =>
+        s.includes("no built-in registrar"),
+      );
+      if (missingRegistrar.length > 0) {
+        throw new Error(
+          `lifecycle hooks have YAML files with no matching BUILTIN_REGISTRARS entry: ` +
+            `${JSON.stringify(missingRegistrar)}. Every YAML in hooks/ must have a matching ` +
+            `registrar in core/hook-loader.ts (security-relevant hook silently disabled = boot-green disaster). ` +
+            `Either add the registrar or set enabled:false in the YAML.`,
+        );
+      }
     } catch (err) {
       app.log.error({ err }, "hook loader failed — refusing to start without lifecycle hooks");
       throw err;
@@ -109,6 +131,16 @@ export async function startServer(
       }
     } catch (err) {
       app.log.warn({ err }, "skill→tool gap audit failed — startup proceeds");
+    }
+
+    // 4d. AGENT_ADMIN_USERS casing audit. Boot-time WARN when any
+    // env-var entry differs only in case from an admin_roles row, so
+    // operator drift is visible before it produces an orphaned grant.
+    // Non-fatal — the env-var grant works regardless of case.
+    try {
+      await auditAgentAdminUsersCasing(deps.pool);
+    } catch (err) {
+      app.log.warn({ err }, "AGENT_ADMIN_USERS casing audit failed — startup proceeds");
     }
 
     // 5. Bind the server.

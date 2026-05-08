@@ -6,7 +6,9 @@
 // so a handler can't forge a row claiming to be someone else.
 
 import type { Pool } from "pg";
+import { trace } from "@opentelemetry/api";
 import { withUserContext } from "../../db/with-user-context.js";
+import { getRequestContext } from "../../core/request-context.js";
 
 export interface AuditEntry {
   /** entra_id of the caller. RLS check enforces actor === current_user. */
@@ -21,6 +23,17 @@ export interface AuditEntry {
   afterValue?: unknown;
   /** optional free-text justification surfaced in the audit UI. */
   reason?: string;
+  /**
+   * Override the request_id stamped on the row. Normally NOT supplied —
+   * appendAudit reads from the AsyncLocalStorage RequestContext that
+   * the route handler set at turn start.
+   */
+  requestId?: string;
+  /**
+   * Override the trace_id stamped on the row. Normally NOT supplied —
+   * appendAudit reads from the OTel active span.
+   */
+  traceId?: string;
 }
 
 /**
@@ -28,14 +41,32 @@ export interface AuditEntry {
  *
  * Returns the row id. Throws when the actor's RLS check fails — which only
  * happens when actor !== current user, i.e. handler bug.
+ *
+ * The request_id and trace_id are auto-populated from the active
+ * AsyncLocalStorage RequestContext + active OTel span so admin entries
+ * can be pivoted to Loki + Langfuse without callers having to thread
+ * the IDs through every helper. Pre-fix the audit_log schema only had
+ * {occurred_at, actor, action, target, before_value, after_value,
+ * reason} so an alert on "config.set on PROD secret bucket" couldn't
+ * be linked to its originating HTTP request.
  */
 export async function appendAudit(pool: Pool, entry: AuditEntry): Promise<string> {
   const { actor, action, target, beforeValue, afterValue, reason } = entry;
+  const requestId = entry.requestId ?? getRequestContext()?.requestId ?? null;
+  const activeSpan = trace.getActiveSpan();
+  const spanCtx = activeSpan?.spanContext();
+  const traceId =
+    entry.traceId ??
+    (spanCtx && spanCtx.traceId !== "00000000000000000000000000000000"
+      ? spanCtx.traceId
+      : null);
+
   const row = await withUserContext(pool, actor, async (client) => {
     const { rows } = await client.query<{ id: string }>(
       `INSERT INTO admin_audit_log
-         (actor, action, target, before_value, after_value, reason)
-       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6)
+         (actor, action, target, before_value, after_value, reason,
+          request_id, trace_id)
+       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6, $7, $8)
        RETURNING id::text`,
       [
         actor,
@@ -44,6 +75,8 @@ export async function appendAudit(pool: Pool, entry: AuditEntry): Promise<string
         beforeValue === undefined ? null : JSON.stringify(beforeValue),
         afterValue === undefined ? null : JSON.stringify(afterValue),
         reason ?? null,
+        requestId,
+        traceId,
       ],
     );
     return rows[0] ?? null;

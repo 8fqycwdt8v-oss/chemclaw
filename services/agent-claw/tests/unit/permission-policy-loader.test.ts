@@ -182,4 +182,35 @@ describe("PermissionPolicyLoader.refreshIfStale", () => {
     // got nuked by invalidate(). Behaviour: return [] not retain.
     expect(loader.match({ toolId: "Bash", inputJson: "{}" })).toBeNull();
   });
+
+  it("pre-compiles argument_pattern at refresh time and exposes broken-policy count", async () => {
+    state.rows = [
+      makeRow({
+        id: "00000000-0000-0000-0000-000000000001",
+        tool_pattern: "Bash",
+        argument_pattern: "a{1,4}", // valid bounded regex
+      }),
+      makeRow({
+        id: "00000000-0000-0000-0000-000000000002",
+        tool_pattern: "Edit",
+        argument_pattern: "[unterminated", // syntactically invalid
+      }),
+    ];
+    const loader = new PermissionPolicyLoader(pool, 60_000);
+    await loader.refreshIfStale();
+    expect(loader.brokenPolicyCount()).toBe(1);
+    expect(loader.brokenPolicyIds()).toEqual([
+      "00000000-0000-0000-0000-000000000002",
+    ]);
+    // The valid pattern still matches.
+    expect(loader.match({ toolId: "Bash", inputJson: "aaaa" })).not.toBeNull();
+    // The broken pattern row never matches (skipped silently in match).
+    expect(loader.match({ toolId: "Edit", inputJson: "anything" })).toBeNull();
+  });
+
+  it("brokenPolicyCount is 0 before the first refresh", () => {
+    const loader = new PermissionPolicyLoader(pool, 60_000);
+    expect(loader.brokenPolicyCount()).toBe(0);
+    expect(loader.brokenPolicyIds()).toEqual([]);
+  });
 });

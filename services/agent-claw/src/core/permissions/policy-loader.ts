@@ -8,6 +8,7 @@
 
 import type { Pool } from "pg";
 import { withSystemContext } from "../../db/with-user-context.js";
+import { getLogger } from "../../observability/logger.js";
 
 export type PolicyDecision = "allow" | "deny" | "ask";
 
@@ -20,6 +21,15 @@ export interface PolicyRow {
   argumentPattern: string | null;
   reason: string | null;
   enabled: boolean;
+  /**
+   * Pre-compiled argumentPattern. null = no argumentPattern OR compile
+   * failed at refreshIfStale time. The compiledBroken field below
+   * distinguishes the two; match() consults it to decide whether the
+   * row is dormant (no arg-pattern → fine) or actually broken.
+   */
+  compiledArgPattern: RegExp | null;
+  /** True when the row's argumentPattern was non-empty but failed to compile. */
+  compiledBroken: boolean;
 }
 
 const _CACHE_TTL_MS = 60_000;
@@ -68,16 +78,47 @@ export class PermissionPolicyLoader {
         );
         return r.rows;
       });
-      this.cache = rows.map((r) => ({
-        id: r.id,
-        scope: r.scope,
-        scopeId: r.scope_id,
-        decision: r.decision,
-        toolPattern: r.tool_pattern,
-        argumentPattern: r.argument_pattern,
-        reason: r.reason,
-        enabled: r.enabled,
-      }));
+      const log = getLogger("agent-claw.core.permissions.policy-loader");
+      this.cache = rows.map((r) => {
+        let compiled: RegExp | null = null;
+        let broken = false;
+        if (r.argument_pattern) {
+          try {
+            compiled = new RegExp(r.argument_pattern);
+          } catch (err) {
+            broken = true;
+            // Pre-compile failure surfaces as a structured WARN once per
+            // refresh cycle. Pre-fix the failure was caught silently per
+            // call inside match() and the policy was treated as "no
+            // match" — combined with the resolver's "no policy → allow"
+            // default in `enforce` mode, a typo'd deny rule fails OPEN.
+            // Operators now see the broken policy at the next refresh.
+            log.warn(
+              {
+                event: "permission_policy_argument_pattern_invalid",
+                policy_id: r.id,
+                tool_pattern: r.tool_pattern,
+                scope: r.scope,
+                scope_id: r.scope_id,
+                err: err instanceof Error ? err.message : String(err),
+              },
+              "permission policy argument_pattern failed to compile — row will not match any input",
+            );
+          }
+        }
+        return {
+          id: r.id,
+          scope: r.scope,
+          scopeId: r.scope_id,
+          decision: r.decision,
+          toolPattern: r.tool_pattern,
+          argumentPattern: r.argument_pattern,
+          reason: r.reason,
+          enabled: r.enabled,
+          compiledArgPattern: compiled,
+          compiledBroken: broken,
+        };
+      });
       this.cacheAt = now;
     } catch {
       // DB unavailable — keep prior cache to avoid mid-flight policy flips.
@@ -93,6 +134,24 @@ export class PermissionPolicyLoader {
   }
 
   /**
+   * Returns the count of currently-cached policies whose argument_pattern
+   * failed to compile. Surfaced via /api/admin/permission-policies?show_broken=1
+   * so operators can triage without grepping logs. Returns 0 before the
+   * first refresh.
+   */
+  brokenPolicyCount(): number {
+    return (this.cache ?? []).filter((p) => p.compiledBroken).length;
+  }
+
+  /**
+   * Returns the IDs of broken-pattern policies (for the admin show-broken
+   * query). Returns [] before the first refresh.
+   */
+  brokenPolicyIds(): string[] {
+    return (this.cache ?? []).filter((p) => p.compiledBroken).map((p) => p.id);
+  }
+
+  /**
    * Returns the strongest applicable decision under the deny>ask>allow
    * aggregator, or null when no policy matches. Caller decides what to do
    * with null (the lifecycle treats it as "no opinion" → resolver falls
@@ -104,10 +163,12 @@ export class PermissionPolicyLoader {
     const candidates = this.cache.filter((p) => {
       if (!patternMatches(p.toolPattern, ctx.toolId)) return false;
       if (p.argumentPattern) {
-        try {
-          if (!new RegExp(p.argumentPattern).test(ctx.inputJson)) return false;
-        } catch {
-          // Bad regex — skip the row rather than rejecting the call.
+        if (p.compiledBroken) {
+          // Pre-compile failed at refresh time and was logged then;
+          // skip silently here so the hot path doesn't re-log per call.
+          return false;
+        }
+        if (p.compiledArgPattern && !p.compiledArgPattern.test(ctx.inputJson)) {
           return false;
         }
       }
