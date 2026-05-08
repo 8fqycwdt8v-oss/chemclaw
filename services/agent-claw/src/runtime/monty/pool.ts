@@ -140,24 +140,76 @@ export class WarmChildPool {
     }
 
     // Slow path — wait for the next child to become ready, with a timeout
-    // fallback that spawns a fresh child synchronously.
+    // fallback that spawns a fresh child AND waits for IT to become ready
+    // before handing it back. Pre-fix the fallback returned the cold
+    // child immediately and the host's READY_TIMEOUT_MS = 5_000 fired on
+    // any spawn taking longer than 5s — exactly the load profile that
+    // exhausted the pool in the first place. Now both paths return an
+    // already-ready child wrapped in PrewarmedChildWrapper.
     const acquireTimeoutMs = this.opts.acquireTimeoutMs ?? 5_000;
+    const slowPathReadyTimeoutMs =
+      this.opts.readyTimeoutMs ?? 10_000;
     return await new Promise<MontyChild>((resolve, reject) => {
       let done = false;
       const timer = setTimeout(() => {
         if (done) return;
-        done = true;
         const idx = this.waitQueue.indexOf(resolver);
         if (idx !== -1) this.waitQueue.splice(idx, 1);
-        // Spawn one synchronously and wrap as a fresh (non-prewarmed)
-        // child — i.e. do NOT use PrewarmedChildWrapper, since this child
-        // hasn't emitted ready yet. Plain factory output suffices.
+        // Spawn one and attach a ready listener; resolve only when the
+        // ready frame arrives. Bounded by slowPathReadyTimeoutMs so a
+        // permanently-broken runner can't hang the request indefinitely.
+        let factoryResult: MontyChild | Promise<MontyChild>;
         try {
-          const fresh = this.opts.factory();
-          Promise.resolve(fresh).then(resolve, reject);
+          factoryResult = this.opts.factory();
         } catch (err) {
+          done = true;
           reject(err instanceof Error ? err : new Error(String(err)));
+          return;
         }
+        Promise.resolve(factoryResult)
+          .then((child) => {
+            if (done) {
+              try {
+                child.kill();
+              } catch {
+                // best effort
+              }
+              return;
+            }
+            const readyTimer = setTimeout(() => {
+              if (done) return;
+              done = true;
+              try {
+                child.kill();
+              } catch {
+                // best effort
+              }
+              reject(
+                new Error(
+                  `monty pool: slow-path child did not become ready within ${slowPathReadyTimeoutMs} ms`,
+                ),
+              );
+            }, slowPathReadyTimeoutMs);
+            const onFrame = (frame: ChildToHostFrameT): void => {
+              if (frame.type !== "ready" || done) return;
+              done = true;
+              clearTimeout(readyTimer);
+              child.off("frame", onFrame);
+              resolve(new PrewarmedChildWrapper(child));
+            };
+            child.on("frame", onFrame);
+            child.on("exit", () => {
+              if (done) return;
+              done = true;
+              clearTimeout(readyTimer);
+              reject(new Error("monty pool: slow-path child exited before ready"));
+            });
+          })
+          .catch((err: unknown) => {
+            if (done) return;
+            done = true;
+            reject(err instanceof Error ? err : new Error(String(err)));
+          });
       }, acquireTimeoutMs);
 
       const resolver = (child: MontyChild): void => {

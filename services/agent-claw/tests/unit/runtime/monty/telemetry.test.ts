@@ -62,10 +62,19 @@ describe("monty bridge spans", () => {
     expect(externalCallSpan).toBeDefined();
     if (externalCallSpan) {
       expect(externalCallSpan.attributes).toMatchObject({
+        // Canonical CLAUDE.md "Harness primitives" attributes — Langfuse
+        // dashboards keyed on `tool.id` now find Monty calls too without
+        // a Monty-specific filter clause.
+        "tool.id": "echo",
+        "tool.read_only": true,
+        "tool.in_batch": false,
+        // Monty-specific attributes for "code-mode only" filtering.
         "monty.external_call.tool_id": "echo",
         "monty.external_call.id": 7,
         "monty.external_call.ok": true,
         "monty.parent_run_id": "monty-run-abc",
+        "monty.run_id": "monty-run-abc",
+        "monty.outcome": "ok",
       });
       expect(typeof externalCallSpan.attributes["monty.external_call.duration_ms"]).toBe(
         "number",

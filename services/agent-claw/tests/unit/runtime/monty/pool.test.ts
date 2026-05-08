@@ -221,6 +221,64 @@ describe("WarmChildPool", () => {
     }
   });
 
+  it("acquire() slow-path returns a wrapped child that replays ready (so host's READY_TIMEOUT_MS isn't tripped on cold spawn)", async () => {
+    // Pre-fix: slow path returned the cold factory output without
+    // waiting for ready, so a slow runner spawn (>5s under load)
+    // tripped the host's READY_TIMEOUT_MS even though the pool itself
+    // had successfully produced a child. Now slow-path waits for ready
+    // and wraps in PrewarmedChildWrapper so the host's wait-for-ready
+    // protocol works unchanged.
+    let spawnCount = 0;
+    const factory: MontyChildFactory = () => {
+      spawnCount++;
+      if (spawnCount === 1) return new FakeChild({ neverReady: true });
+      // Fallback spawn: emits ready after a short delay; the slow path
+      // must wait for it before resolving.
+      return new FakeChild({ readyDelayMs: 30 });
+    };
+    const pool = new WarmChildPool({
+      factory,
+      size: 1,
+      acquireTimeoutMs: 50,
+      readyTimeoutMs: 1_000,
+    });
+    try {
+      const child = await pool.acquire();
+      // The wrapper replays ready when a frame listener attaches.
+      let sawReady = false;
+      child.on("frame", (f) => {
+        if (f.type === "ready") sawReady = true;
+      });
+      await waitFor(() => sawReady, 500);
+      expect(sawReady).toBe(true);
+    } finally {
+      pool.shutdown();
+    }
+  });
+
+  it("acquire() slow-path rejects if the fallback child never becomes ready", async () => {
+    // Defense-in-depth: a permanently-broken runner should fail-fast
+    // with a clear error rather than hang the request.
+    let spawnCount = 0;
+    const factory: MontyChildFactory = () => {
+      spawnCount++;
+      // Every call returns a never-ready child.
+      return new FakeChild({ neverReady: true });
+    };
+    const pool = new WarmChildPool({
+      factory,
+      size: 1,
+      acquireTimeoutMs: 30,
+      readyTimeoutMs: 100,
+    });
+    try {
+      await expect(pool.acquire()).rejects.toThrow(/did not become ready/);
+      expect(spawnCount).toBeGreaterThan(1);
+    } finally {
+      pool.shutdown();
+    }
+  });
+
   it("end-to-end: MontyHost runs against a pool-wrapped child and gets a result", async () => {
     const pool = new WarmChildPool({ factory: fakeFactory(), size: 1 });
     const lifecycle = new Lifecycle();

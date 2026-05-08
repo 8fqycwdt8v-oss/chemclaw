@@ -94,16 +94,32 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
     // the more complex stream-first approach.
     if (streamSink) {
       let streamed = "";
+      // Sum usage emitted in the `finish` chunk of the streamed call so
+      // the harness budget reflects BOTH the text-vs-tool-call detection
+      // call (line 87) AND the streamed text generation. Pre-fix the
+      // streamed completion's tokens were silently dropped, undercounting
+      // cross-turn budget by ~50% on every streaming text turn.
+      let streamPromptTokens = 0;
+      let streamCompletionTokens = 0;
       for await (const chunk of llm.streamCompletion(messages, tools, { signal })) {
         if (chunk.type === "text_delta") {
           streamSink.onTextDelta?.(chunk.delta);
           streamed += chunk.delta;
+        } else if (chunk.type === "finish") {
+          // Provider contract (see llm/provider.ts StreamChunk): the
+          // finish chunk carries the streamed call's usage tally.
+          streamPromptTokens += chunk.usage.promptTokens;
+          streamCompletionTokens += chunk.usage.completionTokens;
         }
-        // Other chunk types (tool_call, finish) are ignored — call() already
-        // told us this is a text step; the harness emits its own finish event.
+        // tool_call chunks are ignored — call() already classified this
+        // turn as text; the harness emits its own finish event.
       }
       const streamedStep: StepResult = { kind: "text", text: streamed };
-      return { step: streamedStep, toolOutputs: [], usage };
+      const totalUsage = {
+        promptTokens: usage.promptTokens + streamPromptTokens,
+        completionTokens: usage.completionTokens + streamCompletionTokens,
+      };
+      return { step: streamedStep, toolOutputs: [], usage: totalUsage };
     }
     return { step: result, toolOutputs: [], usage };
   }
@@ -139,16 +155,22 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
 
   const toolOutputs: StepToolOutput[] = [];
 
+  // Track the first rejection from a parallel batch so we can dispatch
+  // post_tool_batch BEFORE re-throwing. Pre-fix, Promise.all fast-failed
+  // and post_tool_batch never fired — the source-cache / anti-fabrication
+  // hooks lost the surviving siblings' inputs entirely. Now sibling
+  // outputs land in toolOutputs, the failed slot carries a synthetic
+  // `denied_by_*`-style error envelope (matching the existing pre_tool
+  // deny shape from runOneTool), post_tool_batch fires with the full
+  // picture, then we re-throw the first rejection so the harness's
+  // route-level catch sees the same surface as today.
+  let parallelBatchError: unknown = null;
+
   if (allReadOnly) {
     // 3a. Parallel batch: dispatch pre_tool / execute / post_tool for each
-    // tool. runOneTool encapsulates the pre/exec/post sequence; we wrap
-    // them all in Promise.all so the wall-clock time is max(durations)
-    // rather than sum(durations). Errors propagate via Promise.all's
-    // fast-fail behaviour: the first rejection rejects the aggregate. Any
-    // sibling tools that already completed have their results captured by
-    // runOneTool's resolved promises but are then lost when we re-throw —
-    // acceptable per spec (the failure is the visible event).
-    const settled = await Promise.all(
+    // tool via runOneTool, awaited concurrently. allSettled (vs Promise.all)
+    // means a single tool failure no longer eats sibling results.
+    const settled = await Promise.allSettled(
       calls.map((c) =>
         runOneTool({
           tools,
@@ -162,7 +184,25 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
         }),
       ),
     );
-    toolOutputs.push(...settled);
+    for (let i = 0; i < settled.length; i++) {
+      const r = settled[i];
+      const c = calls[i];
+      if (!r || !c) continue;
+      if (r.status === "fulfilled") {
+        toolOutputs.push(r.value);
+      } else {
+        // Surface a synthetic error envelope so post_tool_batch hooks
+        // see a consistent {toolId, output} shape. The first rejection
+        // is captured for the post-dispatch re-throw.
+        parallelBatchError ??= r.reason;
+        const errorMessage =
+          r.reason instanceof Error ? r.reason.message : String(r.reason);
+        toolOutputs.push({
+          toolId: c.toolId,
+          output: { error: "tool_execution_failed", reason: errorMessage },
+        });
+      }
+    }
   } else {
     // 3b. Sequential fallback: any state-mutating tool in the batch (or a
     // single-tool turn) runs serially. Tools see each other's side effects
@@ -184,7 +224,9 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
   // 4. post_tool_batch fires ONCE per batch with the multi-entry array.
   // Phase 4B preserved a single-entry shape so hook authors could register
   // before Phase 5 landed; today the entry count matches the actual batch
-  // size (1 for single-tool turns, N for multi-tool turns).
+  // size (1 for single-tool turns, N for multi-tool turns). When a parallel
+  // batch had a rejection (post-allSettled), the failed slot carries a
+  // `tool_execution_failed` envelope so hooks see consistent shape.
   await lifecycle.dispatch("post_tool_batch", {
     ctx,
     batch: toolOutputs.map((o, i) => {
@@ -201,6 +243,29 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
       };
     }),
   });
+
+  // Parallel-batch rejection re-throw. Done AFTER post_tool_batch so hooks
+  // observe the partial results before the route-level catch handles the
+  // failure. The harness sees the same exception surface as before; the
+  // change is purely "hooks fire even on partial failure."
+  if (parallelBatchError !== null) {
+    // ESLint only-throw-error: ensure we rethrow an Error instance even
+    // if a tool rejected with a non-Error value. Wrapping preserves the
+    // original via `cause` so downstream catches can still inspect it.
+    if (parallelBatchError instanceof Error) {
+      throw parallelBatchError;
+    }
+    let asString: string;
+    try {
+      asString = JSON.stringify(parallelBatchError);
+    } catch {
+      asString = "<unstringifiable>";
+    }
+    throw new Error(
+      `parallel batch tool rejected with non-Error value: ${asString}`,
+      { cause: parallelBatchError },
+    );
+  }
 
   return {
     step: result,

@@ -64,10 +64,24 @@ export async function routeExternalCall(
   opts: BridgeRouteOptions,
 ): Promise<{ response: ExternalResponseFrameT; trace: BridgeCallTrace }> {
   return await tracer.startActiveSpan("monty.external_call", async (span) => {
+    // Canonical tool.* attributes (from CLAUDE.md "Harness primitives")
+    // so Langfuse / OTLP filters that match `tool.id` find Monty's
+    // external calls at the parent-span level too — without these,
+    // dashboards have to special-case Monty traces. The Monty-specific
+    // attributes (monty.external_call.* / monty.parent_run_id) remain so
+    // operators can filter "code-mode only" runs.
+    const tool = opts.registry.get(frame.name);
+    span.setAttribute("tool.id", frame.name);
+    span.setAttribute("tool.read_only", tool?.annotations?.readOnly ?? false);
+    span.setAttribute("tool.in_batch", false);
     span.setAttribute("monty.external_call.tool_id", frame.name);
     span.setAttribute("monty.external_call.id", frame.id);
     if (opts.parentRunId) {
       span.setAttribute("monty.parent_run_id", opts.parentRunId);
+      // monty.run_id mirrors the outer-tool-span attribute name so a
+      // single trace query by run_id surfaces the parent script span +
+      // every external_call span underneath it.
+      span.setAttribute("monty.run_id", opts.parentRunId);
     }
     try {
       const result = await _routeExternalCall(frame, opts);
@@ -76,6 +90,7 @@ export async function routeExternalCall(
         "monty.external_call.duration_ms",
         result.trace.durationMs,
       );
+      span.setAttribute("monty.outcome", result.trace.ok ? "ok" : "error");
       if (!result.trace.ok && result.trace.errorMessage) {
         span.setStatus({
           code: SpanStatusCode.ERROR,

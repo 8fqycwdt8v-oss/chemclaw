@@ -273,4 +273,67 @@ describe("parallel batch execution", () => {
     expect(payload.toolId).toBe("ro_b_boom");
     expect(payload.error.message).toMatch(/boom from ro_b_boom/);
   });
+
+  it("allSettled batch: post_tool_batch fires with sibling outputs even when one tool throws", async () => {
+    // Pre-fix, Promise.all fast-failed and post_tool_batch never
+    // dispatched. Now allSettled lets sibling outputs reach post_tool_batch
+    // alongside a synthetic `tool_execution_failed` envelope for the
+    // failed slot, then re-throws the first rejection so the route still
+    // sees the failure.
+    const goodTool = defineTool({
+      id: "ro_good",
+      description: "ok",
+      inputSchema: z.object({}),
+      outputSchema: z.object({ x: z.number() }),
+      annotations: { readOnly: true },
+      execute: async () => ({ x: 42 }),
+    });
+    const badTool = defineTool({
+      id: "ro_bad",
+      description: "bad",
+      inputSchema: z.object({}),
+      outputSchema: z.object({}),
+      annotations: { readOnly: true },
+      execute: async () => {
+        throw new Error("boom from ro_bad");
+      },
+    });
+    const tools = [goodTool, badTool];
+    const llm = new StubLlmProvider();
+    llm.enqueueToolCalls([
+      { toolId: "ro_good", input: {} },
+      { toolId: "ro_bad", input: {} },
+    ]);
+
+    const lifecycle = new Lifecycle();
+    const dispatchSpy = vi.spyOn(lifecycle, "dispatch");
+
+    await expect(
+      runHarness({
+        messages: makeMessages(),
+        tools,
+        llm,
+        budget: new Budget({ maxSteps: 5 }),
+        lifecycle,
+        ctx: makeCtx(),
+      }),
+    ).rejects.toThrow(/boom from ro_bad/);
+
+    const batchCalls = dispatchSpy.mock.calls.filter(
+      (call) => call[0] === "post_tool_batch",
+    );
+    expect(batchCalls).toHaveLength(1);
+    const batchPayload = batchCalls[0]![1] as {
+      batch: Array<{ toolId: string; output: unknown }>;
+    };
+    expect(batchPayload.batch).toHaveLength(2);
+    // Good tool reached post_tool_batch with its real output.
+    const good = batchPayload.batch.find((b) => b.toolId === "ro_good");
+    expect(good?.output).toEqual({ x: 42 });
+    // Bad tool reached it too, but with a synthetic error envelope.
+    const bad = batchPayload.batch.find((b) => b.toolId === "ro_bad");
+    expect((bad?.output as { error: string }).error).toBe(
+      "tool_execution_failed",
+    );
+  });
 });

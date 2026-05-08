@@ -104,6 +104,12 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
       promptName: "agent.system",
     });
     const turnCtx = trace.setSpan(otelContext.active(), rootSpan);
+    // Hoisted so the finally block can charge persistTurnState whether
+    // runHarness succeeded, threw, or was cancelled. Pre-fix the persist
+    // sat in the success branch only — error/abort paths left the
+    // session row's message_count + last_finish_reason stale and dropped
+    // the post_turn redact-secrets audit. Mirrors chat.ts.
+    let finishReason = "error";
     try {
       writeEvent(reply, { type: "text_delta", delta: "Plan approved — executing…\n\n" });
 
@@ -147,31 +153,10 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
         });
       }
 
-      // TS-H4 fix: when the plan was originally created inside a session,
-      // charge the approve turn's scratchpad audit + token usage back to it.
-      // Without this the post_turn redact-secrets log was silently dropped
-      // and the session row's message_count went stale.
-      if (plan.session_id) {
-        try {
-          await persistTurnState(
-            deps.pool,
-            user,
-            plan.session_id,
-            ctx,
-            budget,
-            result.finishReason,
-            {},
-          );
-        } catch (persistErr) {
-          // Non-fatal: the response is already sent. Log so a stuck session
-          // gets noticed via Loki, but don't fail the approve route on a
-          // session-row write hiccup.
-          req.log.warn(
-            { err: persistErr, session_id: plan.session_id },
-            "plan/approve: persistTurnState failed; turn output sent but session row not updated",
-          );
-        }
-      }
+      // Capture the success-path finishReason so the finally block
+      // charges persistTurnState with the real outcome instead of the
+      // pre-init "error" default.
+      finishReason = result.finishReason;
     } catch (err) {
       try { recordSpanError(rootSpan, err); } catch { /* ignore */ }
       // Distinguish a client-cancelled abort from a real failure: an
@@ -184,6 +169,7 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
           { err: err instanceof Error ? err.message : err },
           "plan/approve: stream cancelled by client",
         );
+        finishReason = "cancelled";
         if (!conn.closed) {
           try {
             writeEvent(reply, { type: "cancelled" });
@@ -193,11 +179,34 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
         }
       } else {
         req.log.error({ err }, "plan/approve: harness failed");
+        finishReason = "error";
         if (!conn.closed) {
           writeEvent(reply, { type: "error", error: "internal" });
         }
       }
     } finally {
+      // Charge the session row regardless of success/error/cancellation.
+      // Pre-fix this only ran on the success path, leaving the session
+      // row's message_count + last_finish_reason stale and dropping the
+      // post_turn redact-secrets audit when the harness failed.
+      if (plan.session_id) {
+        try {
+          await persistTurnState(
+            deps.pool,
+            user,
+            plan.session_id,
+            ctx,
+            budget,
+            finishReason,
+            {},
+          );
+        } catch (persistErr) {
+          req.log.warn(
+            { err: persistErr, session_id: plan.session_id },
+            "plan/approve: persistTurnState failed; session row not updated",
+          );
+        }
+      }
       try { rootSpan.end(); } catch { /* OTel no-op or already ended */ }
       try { reply.raw.end(); } catch { /* already closed */ }
     }

@@ -1,14 +1,30 @@
 // Tests for POST /api/chat/plan/approve and POST /api/chat/plan/reject.
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, vi } from "vitest";
 import Fastify from "fastify";
+
+// Mock persistTurnState so we can spy on it across the success / error /
+// cancellation paths without standing up a real Postgres. Must be
+// hoisted ABOVE the registerPlanRoutes import via vi.mock (which Vitest
+// hoists automatically) so the route handler binds to the spy at module
+// load time.
+const persistTurnStateSpy = vi.fn().mockResolvedValue(undefined);
+vi.mock("../../src/core/session-state.js", async () => {
+  const actual = await vi.importActual<
+    typeof import("../../src/core/session-state.js")
+  >("../../src/core/session-state.js");
+  return {
+    ...actual,
+    persistTurnState: (...args: unknown[]) => persistTurnStateSpy(...args),
+  };
+});
+
 import { registerPlanRoutes } from "../../src/routes/plan.js";
 import { planStore, createPlan } from "../../src/core/plan-mode.js";
 import { StubLlmProvider } from "../../src/llm/provider.js";
 import { ToolRegistry } from "../../src/tools/registry.js";
 import type { PlanRouteDeps } from "../../src/routes/plan.js";
 import type { Pool } from "pg";
-import { vi } from "vitest";
 
 // Minimal config for plan route deps.
 const stubConfig = {
@@ -157,6 +173,49 @@ describe("POST /api/chat/plan/approve", () => {
     expect(planStore.get(plan.plan_id)).toBeUndefined();
     // The response is SSE (content-type: text/event-stream) and 200.
     expect(resp.statusCode).toBe(200);
+    await app.close();
+  });
+
+  it("calls persistTurnState in the finally block even when the harness throws (session-row charged on error path)", async () => {
+    // The cluster-A fix moved persistTurnState into a finally block so
+    // an in-session plan still charges message_count + last_finish_reason
+    // when runHarness errors. Pre-fix the persist sat in the success
+    // branch only, leaving the session row stale and dropping the
+    // post_turn redact-secrets audit.
+    persistTurnStateSpy.mockClear();
+
+    const sessionId = "00000000-0000-0000-0000-000000000077";
+    const plan = createPlan(
+      [
+        { step_number: 1, tool: "canonicalize_smiles", args: { smiles: "CCO" }, rationale: "x" },
+      ],
+      [{ role: "system", content: "sys" }, { role: "user", content: "go" }],
+      "test@example.com",
+      sessionId,
+    );
+    planStore.save(plan);
+
+    // LLM throws synchronously on the first call, so runHarness rejects.
+    const llm = new StubLlmProvider();
+    const callSpy = vi.spyOn(llm, "call").mockRejectedValue(new Error("upstream blew up"));
+    const app = await buildApp(llm);
+
+    await app.inject({
+      method: "POST",
+      url: "/api/chat/plan/approve",
+      payload: JSON.stringify({ plan_id: plan.plan_id }),
+      headers: { "content-type": "application/json" },
+    });
+
+    // The harness errored — but persistTurnState MUST still have been
+    // called so the session row reflects the failed turn.
+    expect(callSpy).toHaveBeenCalled();
+    expect(persistTurnStateSpy).toHaveBeenCalledTimes(1);
+    // Args: pool, user, sessionId, ctx, budget, finishReason, redactLog.
+    const args = persistTurnStateSpy.mock.calls[0]!;
+    expect(args[2]).toBe(sessionId);
+    expect(args[5]).toBe("error");
+
     await app.close();
   });
 });
