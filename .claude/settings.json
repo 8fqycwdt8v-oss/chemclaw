@@ -1,0 +1,32 @@
+{
+  "$schema": "https://json.schemastore.org/claude-code-settings.json",
+  "permissions": {
+    "allow": [
+      "Bash(bash scripts/resync-main.sh)",
+      "Bash(scripts/resync-main.sh)",
+      "Bash(git fetch origin *)",
+      "Bash(git fetch --quiet origin *)",
+      "Bash(git rev-parse *)",
+      "Bash(git symbolic-ref *)",
+      "Bash(git for-each-ref *)",
+      "Bash(git update-ref refs/heads/main *)",
+      "Bash(git branch -vv)",
+      "Bash(git branch -f main *)",
+      "Bash(git config branch.main.*)"
+    ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash scripts/resync-main.sh",
+            "timeout": 30,
+            "statusMessage": "Resyncing local main with origin/main..."
+          }
+        ]
+      }
+    ]
+  }
+}
