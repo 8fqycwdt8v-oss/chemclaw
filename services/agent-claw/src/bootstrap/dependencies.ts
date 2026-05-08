@@ -110,6 +110,13 @@ import { buildQueryInstrumentPersonsTool } from "../tools/builtins/query_instrum
 // Autonomy upgrade — Claude-Code-like plan mode.
 import { buildManageTodosTool } from "../tools/builtins/manage_todos.js";
 import { buildAskUserTool } from "../tools/builtins/ask_user.js";
+import { buildStartSynthesisCampaignTool } from "../tools/builtins/start_synthesis_campaign.js";
+import { buildListSynthesisCampaignsTool } from "../tools/builtins/list_synthesis_campaigns.js";
+import { buildGetSynthesisCampaignTool } from "../tools/builtins/get_synthesis_campaign.js";
+import { buildAddSynthesisCampaignStepTool } from "../tools/builtins/add_synthesis_campaign_step.js";
+import { buildUpdateSynthesisCampaignStepTool } from "../tools/builtins/update_synthesis_campaign_step.js";
+import { buildAdvanceSynthesisCampaignTool } from "../tools/builtins/advance_synthesis_campaign.js";
+import { buildRecordSynthesisCampaignOutcomeTool } from "../tools/builtins/record_synthesis_campaign_outcome.js";
 // Code-mode orchestration via the Monty runtime.
 import { buildRunOrchestrationScriptTool } from "../tools/builtins/run_orchestration_script.js";
 import { getOrCreateMontyPool } from "../runtime/monty/pool-singleton.js";
@@ -373,6 +380,26 @@ function registerBuiltinTools(
   // ctx.scratchpad — which the chat route guarantees.
   registry.registerBuiltin("manage_todos", () => asTool(buildManageTodosTool(pool)));
   registry.registerBuiltin("ask_user", () => asTool(buildAskUserTool()));
+
+  // ── Synthesis campaign orchestration ─────────────────────────────────────
+  // Umbrella state machine for autonomous synthesis planning across
+  // single_experiment / library_synthesis / screening / bo_campaign / bo_or_die.
+  // See db/init/51_synthesis_campaigns.sql and
+  // docs/adr/011-synthesis-campaign-orchestration.md.
+  registry.registerBuiltin("start_synthesis_campaign", () =>
+    asTool(buildStartSynthesisCampaignTool(pool)));
+  registry.registerBuiltin("list_synthesis_campaigns", () =>
+    asTool(buildListSynthesisCampaignsTool(pool)));
+  registry.registerBuiltin("get_synthesis_campaign", () =>
+    asTool(buildGetSynthesisCampaignTool(pool)));
+  registry.registerBuiltin("add_synthesis_campaign_step", () =>
+    asTool(buildAddSynthesisCampaignStepTool(pool)));
+  registry.registerBuiltin("update_synthesis_campaign_step", () =>
+    asTool(buildUpdateSynthesisCampaignStepTool(pool)));
+  registry.registerBuiltin("advance_synthesis_campaign", () =>
+    asTool(buildAdvanceSynthesisCampaignTool(pool)));
+  registry.registerBuiltin("record_synthesis_campaign_outcome", () =>
+    asTool(buildRecordSynthesisCampaignOutcomeTool(pool)));
 
   // ── Code-mode orchestration (Monty) ──────────────────────────────────────
   // run_orchestration_script lets the model emit a single Python script that
