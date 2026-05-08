@@ -45,6 +45,17 @@ import { registerCompactWindowHook } from "./hooks/compact-window.js";
 import { registerApplySkillsHook } from "./hooks/apply-skills.js";
 import { registerSessionEventsHook } from "./hooks/session-events.js";
 import { registerPermissionHook } from "./hooks/permission.js";
+import {
+  registerSessionEndHook,
+  registerUserPromptSubmitHook,
+  registerPostToolFailureHook,
+  registerPostToolBatchHook,
+  registerSubagentStartHook,
+  registerSubagentStopHook,
+  registerTaskCreatedHook,
+  registerTaskCompletedHook,
+  registerPostCompactHook,
+} from "./hooks/lifecycle-telemetry.js";
 
 // ---------------------------------------------------------------------------
 // YAML schema (validated at load time).
@@ -144,6 +155,28 @@ const BUILTIN_REGISTRARS = new Map<string, BuiltinRegistrar>([
   // before pre_tool, so a custom policy here gates tools BEFORE the
   // budget-guard / foundation-citation-guard pre_tool chain runs.
   ["permission", (lc) => { registerPermissionHook(lc); }],
+  // Cluster F: lifecycle-telemetry stubs for the 9 dispatched-but-
+  // unimplemented hook points. Each is a structured-log emit + return
+  // {} — operators swap the registrar for a Langfuse/OTel/Slack handler
+  // when they want richer behaviour. Adding these closes the parity gap
+  // where the start-up gate (Phase 1B) would have caught a missing
+  // registrar but the docs/PARITY.md table listed 9 names with no
+  // built-in coverage.
+  ["session-end-telemetry", (lc) => { registerSessionEndHook(lc); }],
+  [
+    "user-prompt-submit-telemetry",
+    (lc) => { registerUserPromptSubmitHook(lc); },
+  ],
+  [
+    "post-tool-failure-telemetry",
+    (lc) => { registerPostToolFailureHook(lc); },
+  ],
+  ["post-tool-batch-telemetry", (lc) => { registerPostToolBatchHook(lc); }],
+  ["subagent-start-telemetry", (lc) => { registerSubagentStartHook(lc); }],
+  ["subagent-stop-telemetry", (lc) => { registerSubagentStopHook(lc); }],
+  ["task-created-telemetry", (lc) => { registerTaskCreatedHook(lc); }],
+  ["task-completed-telemetry", (lc) => { registerTaskCompletedHook(lc); }],
+  ["post-compact-telemetry", (lc) => { registerPostCompactHook(lc); }],
 ]);
 
 // ---------------------------------------------------------------------------

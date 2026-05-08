@@ -1,0 +1,11 @@
+name: post-tool-failure-telemetry
+lifecycle: post_tool_failure
+enabled: true
+# Built-in TypeScript implementation:
+# services/agent-claw/src/core/hooks/lifecycle-telemetry.ts
+definition:
+  description: >
+    Default structured-log handler for post_tool_failure. Logs at warn so the
+    Loki query 'level=warn AND msg=post_tool_failure' charts tool failure
+    rates per service. The err field flows through logger.ts's err serializer
+    which scrubs SMILES + compound codes from message/stack. Returns {}.

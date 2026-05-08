@@ -325,21 +325,21 @@ The agent harness (`services/agent-claw/`) has 16 lifecycle hook points. **`load
 | Hook | When | Built-ins |
 |---|---|---|
 | `session_start` | Session creation | `session-events` (telemetry) |
-| `session_end` | Session finalisation | dispatched, no built-in handler † |
-| `user_prompt_submit` | Before a user turn | dispatched, no built-in handler † |
+| `session_end` | Session finalisation | `session-end-telemetry` ‡ |
+| `user_prompt_submit` | Before a user turn | `user-prompt-submit-telemetry` ‡ (length-only — never logs prompt body) |
 | `pre_turn` | Before LLM call | `init-scratch`, `apply-skills` |
 | `pre_tool` | Before a tool runs | `budget-guard`, `foundation-citation-guard` |
 | `post_tool` | After a tool returns | `anti-fabrication`, `tag-maturity`, `source-cache` |
-| `post_tool_failure` | After a tool throws | dispatched, no built-in handler † |
-| `post_tool_batch` | After a parallel readonly batch resolves | dispatched, no built-in handler † |
+| `post_tool_failure` | After a tool throws | `post-tool-failure-telemetry` ‡ (warn level) |
+| `post_tool_batch` | After a parallel readonly batch resolves | `post-tool-batch-telemetry` ‡ |
 | `permission_request` | Resolver in `core/permissions/resolver.ts` (Phase 6) | `permission` (no-op default). Resolver wired in `core/step.ts` and engaged on every harness call site (`chat.ts`, `chained-harness.ts`, `sub-agent.ts`, `deep-research.ts`, `plan.ts`) since the 2026-05-04 baseline. |
-| `subagent_start` / `subagent_stop` | Around sub-agent runHarness | dispatched, no built-in handler † |
-| `task_created` / `task_completed` | `manage_todos` mutations | dispatched, no built-in handler † |
+| `subagent_start` / `subagent_stop` | Around sub-agent runHarness | `subagent-start-telemetry` ‡ / `subagent-stop-telemetry` ‡ |
+| `task_created` / `task_completed` | `manage_todos` mutations | `task-created-telemetry` ‡ / `task-completed-telemetry` ‡ |
 | `pre_compact` | Context > 60% of budget | `compact-window` (Haiku compactor) |
-| `post_compact` | After compaction | dispatched, no built-in handler † |
+| `post_compact` | After compaction | `post-compact-telemetry` ‡ (logs shrinkRatio) |
 | `post_turn` | Loop exit; before SSE close — fires inside `runHarness`'s finally so scratchpad / redaction work runs before the route's reply ends | `redact-secrets` (defense-in-depth output scrub) |
 
-† **Dispatched, no built-in handler** means the lifecycle event fires in production code (`grep "lifecycle.dispatch" services/agent-claw/src`) but no built-in YAML/registrar pair exists — the dispatch returns an empty decision aggregate (no-op). This is intentional: these are operator-attachable extension points. To wire a handler, add `hooks/<name>.yaml` + a `BUILTIN_REGISTRARS` entry; the lifecycle infrastructure (timeout, AbortController, decision aggregation, span instrumentation) is already in place. See `docs/PARITY.md` "Hook lifecycle handler coverage" for the full decision rationale.
+‡ **Lifecycle-telemetry stub.** Cluster F (2026-05-08) added structured-log handlers for the 9 dispatched-but-previously-unimplemented lifecycle points. Each emits a single `info` (or `warn` for `post_tool_failure`) line bound to component `lifecycle-telemetry` and returns `{}` (no decision contribution). Source: `services/agent-claw/src/core/hooks/lifecycle-telemetry.ts` + `hooks/<point>-telemetry.yaml`. To replace with custom behaviour (Langfuse session emit, OTel span event, Slack notification, etc.), swap the entry in `BUILTIN_REGISTRARS` — the lifecycle.on() shape and YAML name stay identical. Adding a SECOND handler at the same point is additive (multiple registrars aggregate via `deny > defer > ask > allow`).
 
 **Lifecycle is a process-wide singleton** in `services/agent-claw/src/core/runtime.ts`. At startup `index.ts` calls `loadHooks(lifecycle, deps)`, which iterates `hooks/*.yaml` and registers each entry from `BUILTIN_REGISTRARS`. All harness call paths import the same singleton. `core/session-state.ts` exports `hydrateScratchpad` and `persistTurnState` for the shared rehydrate / save patterns.
 

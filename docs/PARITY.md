@@ -16,7 +16,7 @@ Legend:
 |---|---|---|---|
 | Single ReAct loop | `core/harness.ts` | implemented (Phase 2, ADR 008) | StreamSink callback pattern |
 | Hook lifecycle (5 core points) | `lifecycle.ts` + `hooks/*.yaml` | implemented (Phase 1, ADR 007) | `pre_turn`, `pre_tool`, `post_tool`, `pre_compact`, `post_turn`; snake_case names; same semantics |
-| Hook lifecycle (extended points) | `session_start`, `session_end`, `user_prompt_submit`, `post_tool_failure`, `post_tool_batch`, `permission_request` (declared), `subagent_start`, `subagent_stop`, `task_created`, `task_completed`, `post_compact` | implemented (Phase 4B) | All 11 valid in YAML `lifecycle:` field. **Decision (2026-05-05):** built-in handlers exist only for `session_start` (`session-events`), `permission_request` (`permission`), `pre_compact` (`compact-window`); the other 9 are *dispatch-only* — `lifecycle.dispatch` fires and returns an empty decision aggregate (no-op). They are operator-attachable extension points (add `hooks/<name>.yaml` + `BUILTIN_REGISTRARS` entry to wire a handler). Shipping no-op stubs would add ~18 boilerplate files with no behavioural change; the dispatch-only state is the minimum honest configuration. See "Hook lifecycle handler coverage" section below. |
+| Hook lifecycle (extended points) | `session_start`, `session_end`, `user_prompt_submit`, `post_tool_failure`, `post_tool_batch`, `permission_request`, `subagent_start`, `subagent_stop`, `task_created`, `task_completed`, `post_compact` | implemented (Phase 4B + cluster F) | All 11 extended points have built-in handlers. Phase 4B shipped `session-events` (session_start) and `permission` (permission_request). Cluster F (2026-05-08) added structured-log telemetry stubs for the remaining 9 (`<point>-telemetry.yaml` + `core/hooks/lifecycle-telemetry.ts`) — they emit one log line per dispatch and return `{}`. Operators replace the entry in `BUILTIN_REGISTRARS` to plug in custom Langfuse / OTel / Slack handlers without touching YAML. See "Hook lifecycle handler coverage" section below. |
 | Hook decision contract (allow/deny/ask/defer) | `core/hook-output.ts` | implemented (Phase 4A, ADR 009) | `deny>defer>ask>allow` precedence via `mostRestrictive` |
 | Hook matchers (regex) | `matcher` field on `Lifecycle.on(...)` | implemented (Phase 4A) | Mechanism is real; no built-in declares one today (they gate inside their handlers). Available for operator-authored YAML hooks. |
 | Hook async (fire-and-forget) | `{ async: true }` return | implemented (Phase 4A) | Dispatcher does not await |
@@ -78,24 +78,23 @@ Pinned by:
 
 ## Hook lifecycle handler coverage
 
-**Status (2026-05-05).** `core/hook-loader.ts` declares 16 valid lifecycle points in `VALID_HOOK_POINTS`. Of those:
+**Status (2026-05-08).** `core/hook-loader.ts` declares 16 valid lifecycle points in `VALID_HOOK_POINTS`. All 16 now have at least one built-in handler (20 total registrars):
 
-- **7 phases have built-in handlers** (11 total registrars) that ship in `BUILTIN_REGISTRARS` and are wired by `hooks/*.yaml`: `session_start` (`session-events`), `pre_turn` (`init-scratch`, `apply-skills`), `pre_tool` (`budget-guard`, `foundation-citation-guard`), `post_tool` (`anti-fabrication`, `tag-maturity`, `source-cache`), `pre_compact` (`compact-window`), `permission_request` (`permission`), `post_turn` (`redact-secrets`). [`MIN_EXPECTED_HOOKS = 11` in `bootstrap/start.ts`.]
+- **Original 11 (Phase 4B + Phase 6):** `session_start` (`session-events`), `pre_turn` (`init-scratch`, `apply-skills`), `pre_tool` (`budget-guard`, `foundation-citation-guard`), `post_tool` (`anti-fabrication`, `tag-maturity`, `source-cache`), `pre_compact` (`compact-window`), `permission_request` (`permission`), `post_turn` (`redact-secrets`).
+- **Cluster F additions (2026-05-08):** the 9 previously dispatch-only points each got a structured-log telemetry stub from `core/hooks/lifecycle-telemetry.ts` — wired to YAMLs `<point>-telemetry.yaml`. Stubs return `{}` (no decision contribution) and emit a single `info` (or `warn` for `post_tool_failure`) line bound to component `lifecycle-telemetry` so Loki/Grafana can chart frequency without code changes.
 
-- **9 are dispatch-only.** The harness fires `lifecycle.dispatch("<point>", payload)` in production code (verifiable via `rg "lifecycle.dispatch" services/agent-claw/src` against the dispatch table below) but no built-in registrar exists, so the dispatch returns an empty decision aggregate (no-op). These are deliberate operator-attachable extension points — wiring infrastructure (timeout, AbortController, decision aggregation, span instrumentation) is fully in place; only the handler is missing.
+[`MIN_EXPECTED_HOOKS = 20` in `bootstrap/start.ts`; the gate fires loud if any registrar fails to load.]
 
-| Point | Production dispatch site(s) |
-|---|---|
-| `session_end` | `chained-harness.ts:369`, `chat.ts:497` |
-| `user_prompt_submit` | `chat.ts:185` |
-| `post_tool_failure` | `step.ts:206` |
-| `post_tool_batch` | `step.ts:374` |
-| `subagent_start` | `sub-agent.ts:171` |
-| `subagent_stop` | `sub-agent.ts:205`, `:223` |
-| `task_created` | `manage_todos.ts:132` |
-| `task_completed` | `manage_todos.ts:163`, `:184` |
-| `post_compact` | `harness.ts:178`, `chat-compact.ts:44` |
+| Point | Production dispatch site(s) | Built-in handler |
+|---|---|---|
+| `session_end` | `chained-harness.ts:369`, `chat.ts:497` | `session-end-telemetry` |
+| `user_prompt_submit` | `chat.ts:185` | `user-prompt-submit-telemetry` (length-only — never logs the prompt body) |
+| `post_tool_failure` | `step.ts:206` | `post-tool-failure-telemetry` (warn level) |
+| `post_tool_batch` | `step.ts:374` | `post-tool-batch-telemetry` |
+| `subagent_start` | `sub-agent.ts:171` | `subagent-start-telemetry` |
+| `subagent_stop` | `sub-agent.ts:205`, `:223` | `subagent-stop-telemetry` |
+| `task_created` | `manage_todos.ts:132` | `task-created-telemetry` |
+| `task_completed` | `manage_todos.ts:163`, `:184` | `task-completed-telemetry` |
+| `post_compact` | `harness.ts:178`, `chat-compact.ts:44` | `post-compact-telemetry` (logs shrinkRatio = 1 - post/pre, null when pre=0) |
 
-**Why dispatch-only and not no-op stubs?** Shipping a `hooks/<name>.yaml` + `<name>.ts` no-op pair for each of the 9 would add ~18 boilerplate files with zero behavioural change (the dispatch already no-ops without registered handlers). The `BUILTIN_REGISTRARS` lookup gracefully returns `skipped` for any YAML without a registrar entry. Operators wiring custom policies must add both files plus a `BUILTIN_REGISTRARS` entry regardless — the boilerplate buys nothing.
-
-**Adding a handler later** is the same `Adding a hook` checklist in CLAUDE.md (implementation file + YAML + `BUILTIN_REGISTRARS` entry + test + bump `MIN_EXPECTED_HOOKS`). The dispatch site already exists; nothing else changes.
+**Replacing a stub with custom behaviour.** Swap the entry in `BUILTIN_REGISTRARS` for a registrar that constructs a Langfuse session emit / OTel span event / Slack notification handler. The lifecycle.on() call shape and the YAML name stay the same; the operator never sees the change. **Adding a new handler at an already-covered point** is additive — multiple registrars can attach to the same lifecycle point and the dispatcher aggregates their decisions.

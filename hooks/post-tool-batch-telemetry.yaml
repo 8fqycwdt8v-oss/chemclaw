@@ -1,0 +1,10 @@
+name: post-tool-batch-telemetry
+lifecycle: post_tool_batch
+enabled: true
+# Built-in TypeScript implementation:
+# services/agent-claw/src/core/hooks/lifecycle-telemetry.ts
+definition:
+  description: >
+    Default structured-log handler for post_tool_batch (parallel readonly
+    tool batches). Logs batchSize and the toolIds array so operators can
+    see which tools the LLM is grouping. Returns {}.

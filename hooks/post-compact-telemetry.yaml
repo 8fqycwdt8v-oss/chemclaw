@@ -1,0 +1,12 @@
+name: post-compact-telemetry
+lifecycle: post_compact
+enabled: true
+# Built-in TypeScript implementation:
+# services/agent-claw/src/core/hooks/lifecycle-telemetry.ts
+definition:
+  description: >
+    Default structured-log handler for post_compact. Logs trigger
+    (manual / auto), pre/post token counts, and shrinkRatio (1 - post/pre)
+    so operators can chart compactor effectiveness over time. shrinkRatio
+    is null when pre_tokens is 0 to avoid div-by-zero NaN in the log
+    output. Returns {}.

@@ -1,0 +1,11 @@
+name: task-created-telemetry
+lifecycle: task_created
+enabled: true
+# Built-in TypeScript implementation:
+# services/agent-claw/src/core/hooks/lifecycle-telemetry.ts
+definition:
+  description: >
+    Default structured-log handler for manage_todos.create's task_created
+    dispatch. Logs todoId + ordering. The content body is omitted because
+    it routinely carries chemistry / project identifiers that the centralised
+    redactor would scrub. Returns {}.

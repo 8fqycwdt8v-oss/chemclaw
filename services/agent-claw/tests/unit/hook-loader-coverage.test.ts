@@ -1,9 +1,11 @@
 // Phase 1A coverage test — guarantees that every YAML hook descriptor in
-// `hooks/` resolves to a registered built-in handler, and that the 11 known
+// `hooks/` resolves to a registered built-in handler, and that the 20 known
 // hook implementations register at the right lifecycle points.
 //
 // Phase 4B added the no-op session-events hook (10 total).
 // Phase 6 added the no-op permission hook on permission_request (11 total).
+// Cluster F added 9 lifecycle-telemetry stubs for the previously
+// dispatched-but-unimplemented points (20 total).
 //
 // This test is intentionally read-only against the on-disk `hooks/` directory
 // (the canonical source of truth). It locks in the invariant that adding a
@@ -31,7 +33,7 @@ describe("hook loader coverage", () => {
     expect(skipsForMissingRegistrar).toEqual([]);
   });
 
-  it("registers all 11 known hook implementations at the right points", async () => {
+  it("registers all 20 known hook implementations at the right points", async () => {
     const lc = new Lifecycle();
     await loadHooks(lc, mockHookDeps(), hooksDir);
     // Exact counts — `>=` would hide accidental double-registration.
@@ -42,19 +44,38 @@ describe("hook loader coverage", () => {
     expect(lc.count("post_turn")).toBe(1); // redact-secrets
     expect(lc.count("session_start")).toBe(1); // session-events (Phase 4B)
     expect(lc.count("permission_request")).toBe(1); // permission (Phase 6)
-    // Sanity sum: 2 + 2 + 3 + 1 + 1 + 1 + 1 = 11 hooks total.
+    // Cluster F: lifecycle-telemetry stubs (one each).
+    expect(lc.count("session_end")).toBe(1);
+    expect(lc.count("user_prompt_submit")).toBe(1);
+    expect(lc.count("post_tool_failure")).toBe(1);
+    expect(lc.count("post_tool_batch")).toBe(1);
+    expect(lc.count("subagent_start")).toBe(1);
+    expect(lc.count("subagent_stop")).toBe(1);
+    expect(lc.count("task_created")).toBe(1);
+    expect(lc.count("task_completed")).toBe(1);
+    expect(lc.count("post_compact")).toBe(1);
+    // Sanity sum: 2 + 2 + 3 + 1 + 1 + 1 + 1 + 9 = 20 hooks total.
     const totalRegistered = (
       [
         "pre_turn",
         "pre_tool",
         "post_tool",
         "pre_compact",
+        "post_compact",
         "post_turn",
         "session_start",
+        "session_end",
+        "user_prompt_submit",
+        "post_tool_failure",
+        "post_tool_batch",
         "permission_request",
+        "subagent_start",
+        "subagent_stop",
+        "task_created",
+        "task_completed",
       ] as const
     ).reduce((sum, p) => sum + lc.count(p), 0);
-    expect(totalRegistered).toBe(11);
+    expect(totalRegistered).toBe(20);
   });
 
   it("each YAML file's `name` field is non-empty", async () => {

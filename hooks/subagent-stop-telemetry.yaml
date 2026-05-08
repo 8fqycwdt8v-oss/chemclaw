@@ -1,0 +1,11 @@
+name: subagent-stop-telemetry
+lifecycle: subagent_stop
+enabled: true
+# Built-in TypeScript implementation:
+# services/agent-claw/src/core/hooks/lifecycle-telemetry.ts
+definition:
+  description: >
+    Default structured-log handler for subagent_stop. Logs type, finishReason,
+    stepsUsed, durationMs, and per-direction token usage so an operator can
+    chart sub-agent cost without parsing nested SubAgentResult objects from
+    the OTel span tree. Returns {}.

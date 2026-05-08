@@ -1,0 +1,12 @@
+name: user-prompt-submit-telemetry
+lifecycle: user_prompt_submit
+enabled: true
+# Built-in TypeScript implementation:
+# services/agent-claw/src/core/hooks/lifecycle-telemetry.ts
+definition:
+  description: >
+    Default structured-log handler for user_prompt_submit. Logs sessionId and
+    promptLength only — the prompt body is intentionally NOT logged to avoid
+    leaking SMILES / project names / experiment IDs into the log stream
+    (the centralised redactor would scrub them, but the hook stays
+    defense-in-depth). Returns {}.
