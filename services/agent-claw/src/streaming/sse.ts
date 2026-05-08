@@ -39,6 +39,13 @@ export type StreamEvent =
   | { type: "plan_ready"; plan_id: string; steps: PlanStep[]; created_at: number }
   | { type: "session"; session_id: string }
   | { type: "todo_update"; todos: Array<{ id: string; ordering: number; content: string; status: string }> }
+  | {
+      type: "tool_log";
+      toolId: string;
+      stream: "stdout" | "stderr";
+      line: string;
+      toolUseId?: string;
+    }
   | { type: "awaiting_user_input"; session_id: string; question: string }
   | { type: "cancelled"; session_id?: string }
   | { type: "finish"; finishReason: string; usage: { promptTokens: number; completionTokens: number } }

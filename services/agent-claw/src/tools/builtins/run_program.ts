@@ -26,7 +26,35 @@ import { z } from "zod";
 import type { Pool } from "pg";
 import { defineTool } from "../tool.js";
 import type { SandboxClient } from "../../core/sandbox.js";
+import type { ToolLogSink } from "../../core/types.js";
+import { acquireSessionSandbox } from "../../core/session-sandbox.js";
 import { withSystemContext } from "../../db/with-user-context.js";
+
+/** Splits buffered stdout/stderr into lines and forwards each to the sink. */
+function flushBufferedToSink(
+  sink: ToolLogSink,
+  toolId: string,
+  stdout: string,
+  stderr: string,
+): void {
+  const fire = (stream: "stdout" | "stderr", text: string): void => {
+    if (!text) return;
+    const lines = text.split("\n");
+    // Trailing newline → empty final element; skip it. Empty interior
+    // lines are preserved (a blank line in stdout is information the
+    // client should see).
+    if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+    for (const line of lines) {
+      try {
+        sink({ toolId, stream, line });
+      } catch {
+        // Sink failure is best-effort — never block the tool's primary work.
+      }
+    }
+  };
+  fire("stdout", stdout);
+  fire("stderr", stderr);
+}
 // Citation subset used by run_program — only kg_fact and external_url are applicable
 // since the sandbox produces computed results, not document retrieval.
 interface RunProgramCitation {
@@ -253,7 +281,7 @@ export function buildRunProgramTool(
     outputSchema: RunProgramOut,
     annotations: { readOnly: false },
 
-    execute: async (_ctx, input) => {
+    execute: async (ctx, input) => {
       const { python_code, expected_outputs, timeout_ms } = input;
       const inputs: Record<string, unknown> = input.inputs ?? {};
 
@@ -284,12 +312,19 @@ export function buildRunProgramTool(
       }
       const stubCode = _stubCache;
 
-      // Create sandbox.
-      const handle = await sandboxClient.createSandbox();
+      // Acquire sandbox — session-cached when the route opted in
+      // (chat/SSE), per-call otherwise. The lease tells us whether the
+      // chemclaw stub is already mounted from a prior call (skip)
+      // and whether we own the close (single-use fallback).
+      const lease = await acquireSessionSandbox(ctx, sandboxClient, "run_program_stub_v1");
+      const handle = lease.handle;
       try {
-        // Mount the chemclaw stub library.
-        const stubBuf = Buffer.from(stubCode, "utf-8");
-        await sandboxClient.mountReadOnlyFile(handle, stubBuf, "/sandbox/chemclaw/__init__.py");
+        // Mount the chemclaw stub library — skipped on cache hit.
+        if (lease.needsStubMount) {
+          const stubBuf = Buffer.from(stubCode, "utf-8");
+          await sandboxClient.mountReadOnlyFile(handle, stubBuf, "/sandbox/chemclaw/__init__.py");
+          lease.recordStubMounted("run_program_stub_v1");
+        }
 
         // Wrap user code to inject inputs + collect outputs.
         const wrappedCode = wrapCode(python_code, inputs, expected_outputs);
@@ -302,6 +337,16 @@ export function buildRunProgramTool(
           undefined,
           timeout_ms ?? 30_000,
         );
+
+        // Flush buffered stdout/stderr through the route's log sink, if
+        // any. The current E2B SDK call (`process.startAndWait`) buffers
+        // until completion, so this is end-of-call streaming — strictly
+        // better than nothing for SSE clients waiting on a long script,
+        // and the call site is ready to switch to true line-streaming
+        // when the SDK exposes it.
+        if (ctx.logSink) {
+          flushBufferedToSink(ctx.logSink, "run_program", result.stdout, result.stderr);
+        }
 
         // Parse outputs.
         const outputs = parseOutputs(result.stdout) ?? {};
@@ -337,7 +382,12 @@ export function buildRunProgramTool(
           citation,
         };
       } finally {
-        await sandboxClient.closeSandbox(handle);
+        // Only close on the per-call fallback path. Session-cached
+        // sandboxes survive until the session_end hook closes them so
+        // subsequent calls in the session reuse the same instance.
+        if (lease.callerOwnsLifecycle) {
+          await sandboxClient.closeSandbox(handle);
+        }
       }
     },
   });

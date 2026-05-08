@@ -297,6 +297,22 @@ async function handleChat(
   // ------- SSE streaming path -------
   setupSse(reply);
 
+  // Attach a logSink so tools that produce streamable stdout/stderr
+  // (run_program, run_orchestration_script, forged-tool dispatch)
+  // forward each line as a `tool_log` SSE event during execution.
+  // Non-streaming requests never reach this branch, so the sink stays
+  // undefined and tools fall back to including the full buffered
+  // stdout/stderr in their tool_result.
+  ctx.logSink = (event) => {
+    writeEvent(reply, {
+      type: "tool_log",
+      toolId: event.toolId,
+      stream: event.stream,
+      line: event.line,
+      ...(event.toolUseId ? { toolUseId: event.toolUseId } : {}),
+    });
+  };
+
   // NOTE: onSession fires BEFORE pre_turn (when both streamSink and
   // sessionId are set) — runHarness drives the `session` SSE event via the
   // sink. We do NOT emit it here directly — that would double-fire when

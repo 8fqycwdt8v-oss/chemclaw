@@ -57,7 +57,32 @@ export interface ToolContext {
    * `permissions:` to runHarness.
    */
   permissions?: PermissionOptions;
+  /**
+   * Optional log sink for tools that produce streamable stdout/stderr
+   * (run_program, run_orchestration_script, forged-tool dispatch). Routes
+   * that stream SSE attach a sink that forwards each line as a `tool_log`
+   * SSE event so the client sees output as it arrives instead of waiting
+   * for the tool to finish. Undefined when the route doesn't stream
+   * (HTTP non-streaming, background tasks, tests).
+   *
+   * Calls are best-effort: a sink that throws is logged and dropped — the
+   * tool's primary work must not depend on the sink succeeding.
+   */
+  logSink?: ToolLogSink;
 }
+
+export type ToolLogStream = "stdout" | "stderr";
+
+export interface ToolLogEvent {
+  toolId: string;
+  /** Stable per-tool-call id so the client can correlate lines to a call. */
+  toolUseId?: string;
+  stream: ToolLogStream;
+  /** Single line of output (no trailing newline). */
+  line: string;
+}
+
+export type ToolLogSink = (event: ToolLogEvent) => void;
 
 // ---------------------------------------------------------------------------
 // The typed result of one step (one LLM call).
