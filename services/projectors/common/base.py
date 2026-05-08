@@ -65,6 +65,19 @@ class ProjectorSettings(BaseSettings):
     postgres_user: str = "chemclaw_service"
     postgres_password: str = ""
     projector_log_level: str = "INFO"
+    # Belt-and-braces: refuse to start when the connected role lacks
+    # `rolbypassrls`. Pre-fix, a `POSTGRES_USER=chemclaw_app` misconfig
+    # (env-var override of the chemclaw_service default) lands the
+    # projector on a NOBYPASSRLS role; FORCE RLS silently drops every
+    # INSERT and the result is an empty KG / vector-store with no error
+    # trail. This check makes the misconfig loud at startup.
+    #
+    # The check is wrapped in try/except so any pg_roles query failure
+    # (restricted role, mocked psycopg in tests, etc.) downgrades to
+    # a WARN log rather than blocking startup. Set to false to skip
+    # entirely when running against a Postgres without pg_roles read
+    # access (rare; documented escape hatch).
+    enforce_bypass_rls_check: bool = True
 
     @property
     def postgres_dsn(self) -> str:
@@ -191,9 +204,65 @@ class BaseProjector(ABC):
                 self.settings.postgres_dsn,
                 row_factory=dict_row,
             ) as work_conn:
+                await self._assert_bypass_rls(work_conn)
                 await self._catch_up(work_conn)
                 log.info("[%s] catch-up complete", self.name)
                 await self._listen_loop(listen_conn, work_conn)
+
+    async def _assert_bypass_rls(
+        self,
+        work_conn: psycopg.AsyncConnection[dict[str, Any]],
+    ) -> None:
+        """Refuse to start when the connected role lacks BYPASSRLS.
+
+        Catches the env-var-override misconfig where POSTGRES_USER
+        accidentally lands on chemclaw_app instead of chemclaw_service.
+        FORCE RLS would then silently drop every projector INSERT
+        (because the projector reads system events but writes derived
+        rows owned by no one in particular under chemclaw_app's RLS
+        policy set), and the KG / vector-store would simply be empty
+        with no error trail.
+
+        Failure modes:
+          - rolbypassrls = False AND check enabled → RuntimeError
+          - rolbypassrls = True → log INFO and proceed
+          - check disabled via setting → no-op
+          - any DB error (restricted pg_roles read, mocked psycopg,
+            etc.) → log WARN and proceed (don't gate startup on a
+            check that the DB itself can't service)
+        """
+        if not self.settings.enforce_bypass_rls_check:
+            return
+        try:
+            async with work_conn.cursor() as cur:
+                await cur.execute(
+                    "SELECT rolbypassrls FROM pg_roles WHERE rolname = current_user"
+                )
+                row = await cur.fetchone()
+        except Exception as exc:  # noqa: BLE001 — must not block startup on probe failure
+            log.warning(
+                "[%s] BYPASSRLS self-check skipped: %s "
+                "(set enforce_bypass_rls_check=false to silence)",
+                self.name,
+                exc,
+            )
+            return
+        if row is None:
+            log.warning(
+                "[%s] BYPASSRLS self-check: pg_roles returned no row for current_user",
+                self.name,
+            )
+            return
+        rolbypassrls = bool(row.get("rolbypassrls", False))
+        if not rolbypassrls:
+            raise RuntimeError(
+                f"[{self.name}] connected as a NOBYPASSRLS role; "
+                f"projector writes would be silently dropped by FORCE RLS. "
+                f"Set POSTGRES_USER=chemclaw_service (BYPASSRLS) or, only "
+                f"when running against a non-RLS Postgres, set "
+                f"PROJECTOR_ENFORCE_BYPASS_RLS_CHECK=false."
+            )
+        log.info("[%s] BYPASSRLS self-check passed", self.name)
 
     # ----- catch-up --------------------------------------------------------
     async def _catch_up(self, work_conn: psycopg.AsyncConnection[dict[str, Any]]) -> None:
