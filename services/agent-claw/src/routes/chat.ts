@@ -28,6 +28,7 @@ import { buildAgent, runHarness } from "../core/harness.js";
 import { parseSlash } from "../core/slash.js";
 import type { RedactReplacement } from "../core/hooks/redact-secrets.js";
 import { hydrateScratchpad, persistTurnState } from "../core/session-state.js";
+import { enableSessionSandboxCache } from "../core/session-sandbox.js";
 import { lifecycle } from "../core/runtime.js";
 import { buildSystemPromptForTurn, resolveSession } from "./chat-setup.js";
 import { runWithRequestContext } from "../core/request-context.js";
@@ -296,6 +297,29 @@ async function handleChat(
 
   // ------- SSE streaming path -------
   setupSse(reply);
+
+  // Attach a logSink so tools that produce streamable stdout/stderr
+  // (run_program, run_orchestration_script, forged-tool dispatch)
+  // forward each line as a `tool_log` SSE event during execution.
+  // Non-streaming requests never reach this branch, so the sink stays
+  // undefined and tools fall back to including the full buffered
+  // stdout/stderr in their tool_result.
+  ctx.logSink = (event) => {
+    writeEvent(reply, {
+      type: "tool_log",
+      toolId: event.toolId,
+      stream: event.stream,
+      line: event.line,
+      ...(event.toolUseId ? { toolUseId: event.toolUseId } : {}),
+    });
+  };
+
+  // Opt the session into per-session E2B sandbox reuse — run_program
+  // and forged-tool dispatch will share one sandbox across the whole
+  // session and the session-sandbox-close hook closes it on
+  // session_end. Single-use callers (sub-agents, tests, non-streaming
+  // requests) skip this branch and fall through to per-call create+close.
+  enableSessionSandboxCache(ctx);
 
   // NOTE: onSession fires BEFORE pre_turn (when both streamSink and
   // sessionId are set) — runHarness drives the `session` SSE event via the

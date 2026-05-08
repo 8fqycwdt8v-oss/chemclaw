@@ -34,6 +34,8 @@ import type { HookPoint } from "./types.js";
 import type { LlmProvider } from "../llm/provider.js";
 import type { SkillLoader } from "./skills.js";
 import type { Tool } from "../tools/tool.js";
+import type { SandboxClient } from "./sandbox.js";
+import { registerSessionSandboxCloseHook } from "./hooks/session-sandbox-close.js";
 import { registerRedactSecretsHook } from "./hooks/redact-secrets.js";
 import { registerTagMaturityHook } from "./hooks/tag-maturity.js";
 import { registerBudgetGuardHook } from "./hooks/budget-guard.js";
@@ -121,6 +123,10 @@ export interface HookDeps {
   allTools: Tool[];
   /** AGENT_TOKEN_BUDGET — used by the compact-window pre_compact hook. */
   tokenBudget: number;
+  /** Optional sandbox client — passed to the session-sandbox-close
+   *  session_end hook. Null when forged tools / run_program are not
+   *  used; the hook is a no-op in that case. */
+  sandboxClient?: SandboxClient | null;
 }
 
 type BuiltinRegistrar = (lifecycle: Lifecycle, deps: HookDeps) => void;
@@ -177,6 +183,15 @@ const BUILTIN_REGISTRARS = new Map<string, BuiltinRegistrar>([
   ["task-created-telemetry", (lc) => { registerTaskCreatedHook(lc); }],
   ["task-completed-telemetry", (lc) => { registerTaskCompletedHook(lc); }],
   ["post-compact-telemetry", (lc) => { registerPostCompactHook(lc); }],
+  // E2B per-session sandbox cache cleanup. Closes any sandbox cached on
+  // the session scratchpad by acquireSessionSandbox; no-op when no
+  // sandbox client is wired (forged tools / run_program disabled).
+  [
+    "session-sandbox-close",
+    (lc, deps) => {
+      registerSessionSandboxCloseHook(lc, deps.sandboxClient ?? null);
+    },
+  ],
 ]);
 
 // ---------------------------------------------------------------------------

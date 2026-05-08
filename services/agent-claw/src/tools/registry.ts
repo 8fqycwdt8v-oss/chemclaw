@@ -16,6 +16,7 @@ import type { Tool } from "./tool.js";
 import type { ModelRole } from "../llm/provider.js";
 import { postJson } from "../mcp/postJson.js";
 import type { SandboxClient } from "../core/sandbox.js";
+import { acquireSessionSandbox } from "../core/session-sandbox.js";
 import { wrapCode, parseOutputs, buildStubLibrary } from "./builtins/run_program.js";
 import { getLogger } from "../observability/logger.js";
 
@@ -212,8 +213,21 @@ export class ToolRegistry {
   // Set via setSandboxClient() before loadFromDb() if forged tools are in use.
   private _sandboxClient: SandboxClient | null = null;
 
-  // In-process code cache for forged tools (read once per process startup).
+  // In-process code cache for forged tools, keyed by tool name. Used for the
+  // legacy-no-sha "first call warning" gate so the warning logs once per
+  // process per tool, not on every call.
   private readonly _forgedCodeCache = new Map<string, string>();
+
+  // Verified-source cache keyed by code_sha256. When a forged tool row carries
+  // a code_sha256 we read the file once, verify the hash, and cache the
+  // bytes. Subsequent calls hit the cache and skip both the disk read and the
+  // hash recomputation. Tamper safety is preserved because the cache key is
+  // the DB-stored expected hash — a tampered on-disk file would not change
+  // the cached entry, so the executed code remains the originally-validated
+  // one. (The cost is that a post-tamper warning to the operator is no
+  // longer surfaced; tamper of the on-disk file is detected only on the
+  // first call after process start.)
+  private readonly _forgedCodeBySha = new Map<string, string>();
 
   /**
    * Inject a SandboxClient so the registry can execute forged tools.
@@ -473,6 +487,7 @@ export class ToolRegistry {
       const name = row.name;
       const expectedSha256 = row.code_sha256 ?? null;
       const codeCache = this._forgedCodeCache;
+      const verifiedCodeBySha = this._forgedCodeBySha;
 
       // Build the stub library using default localhost URLs
       // (registry does not have DB access at call time; caller can inject URLs).
@@ -483,58 +498,100 @@ export class ToolRegistry {
         description: row.description,
         inputSchema,
         outputSchema,
-        execute: async (_ctx, input) => {
-          // Always re-read from disk and verify SHA-256. We do NOT cache the
-          // verified code — caching would let an attacker tamper with the
-          // file after the first call. The integrity check is cheap (one
-          // file read + one hash) compared to an E2B sandbox spin-up, so
-          // run it on every invocation.
-          let code: string;
-          try {
-            code = readFileSync(scriptsPath, "utf-8");
-          } catch (err) {
-            throw new Error(
-              `ToolRegistry: failed to read forged tool code from '${scriptsPath}': ${(err as Error).message}`,
-            );
+        execute: async (ctx, input) => {
+          // Fast path: a previous call for this tool already read disk and
+          // verified the SHA-256 against `expectedSha256`. The cache is keyed
+          // by the DB-stored hash, so a tampered on-disk file cannot
+          // poison the cache (we never re-read for cache writes; the
+          // entry that lives here was validated against the same expected
+          // hash on the first call after process start).
+          let code: string | undefined;
+          if (expectedSha256) {
+            code = verifiedCodeBySha.get(expectedSha256);
           }
 
-          if (expectedSha256) {
-            const actual = createHash("sha256").update(code, "utf-8").digest("hex");
-            if (actual !== expectedSha256) {
+          if (code === undefined) {
+            // Cold path: read disk, verify (when expectedSha256 is set),
+            // populate the cache.
+            try {
+              code = readFileSync(scriptsPath, "utf-8");
+            } catch (err) {
               throw new Error(
-                `forged tool '${name}': SHA-256 mismatch — refusing to execute. ` +
-                  `Expected ${expectedSha256.slice(0, 16)}…, got ${actual.slice(0, 16)}…. ` +
-                  `The on-disk file at '${scriptsPath}' has been modified since this tool was validated.`,
+                `ToolRegistry: failed to read forged tool code from '${scriptsPath}': ${(err as Error).message}`,
               );
             }
-          } else if (!codeCache.has(name)) {
-            // First call for a legacy tool with no stored hash. Log once.
-            getLogger("agent-claw.tools.registry").warn(
-              {
-                event: "forged_tool_legacy_no_sha",
-                tool_name: name,
-              },
-              "forged tool has no code_sha256 (legacy row); re-forge to enable integrity checking",
-            );
+
+            if (expectedSha256) {
+              const actual = createHash("sha256")
+                .update(code, "utf-8")
+                .digest("hex");
+              if (actual !== expectedSha256) {
+                throw new Error(
+                  `forged tool '${name}': SHA-256 mismatch — refusing to execute. ` +
+                    `Expected ${expectedSha256.slice(0, 16)}…, got ${actual.slice(0, 16)}…. ` +
+                    `The on-disk file at '${scriptsPath}' has been modified since this tool was validated.`,
+                );
+              }
+              verifiedCodeBySha.set(expectedSha256, code);
+            } else if (!codeCache.has(name)) {
+              // First call for a legacy tool with no stored hash. Log once.
+              getLogger("agent-claw.tools.registry").warn(
+                {
+                  event: "forged_tool_legacy_no_sha",
+                  tool_name: name,
+                },
+                "forged tool has no code_sha256 (legacy row); re-forge to enable integrity checking",
+              );
+            }
+            codeCache.set(name, code);
           }
-          codeCache.set(name, code);
 
           const inputRecord = input as Record<string, unknown>;
           const expectedOutputs = Object.keys(
             (row.schema_json as unknown as Record<string, unknown>).properties ?? {},
           );
 
-          const handle = await sandboxClient.createSandbox();
+          const lease = await acquireSessionSandbox(
+            ctx,
+            sandboxClient,
+            "forged_tool_default_stub_v1",
+          );
+          const handle = lease.handle;
           try {
-            // Mount stub.
-            await sandboxClient.mountReadOnlyFile(
-              handle,
-              Buffer.from(defaultStub, "utf-8"),
-              "/sandbox/chemclaw/__init__.py",
-            );
+            // Mount stub — skipped on session-cache hit.
+            if (lease.needsStubMount) {
+              await sandboxClient.mountReadOnlyFile(
+                handle,
+                Buffer.from(defaultStub, "utf-8"),
+                "/sandbox/chemclaw/__init__.py",
+              );
+              lease.recordStubMounted("forged_tool_default_stub_v1");
+            }
 
             const wrappedCode = wrapCode(code, inputRecord, expectedOutputs);
             const result = await sandboxClient.executePython(handle, wrappedCode, {});
+
+            // End-of-call flush of buffered stdout/stderr through the
+            // route's tool-log sink, if any. Same pattern as run_program.
+            if (ctx.logSink) {
+              const fire = (
+                stream: "stdout" | "stderr",
+                text: string,
+              ): void => {
+                if (!text) return;
+                const lines = text.split("\n");
+                if (lines.length > 0 && lines[lines.length - 1] === "") lines.pop();
+                for (const line of lines) {
+                  try {
+                    ctx.logSink?.({ toolId: name, stream, line });
+                  } catch {
+                    // best effort
+                  }
+                }
+              };
+              fire("stdout", result.stdout);
+              fire("stderr", result.stderr);
+            }
 
             if (result.exit_code !== 0) {
               throw new Error(
@@ -544,7 +601,11 @@ export class ToolRegistry {
 
             return parseOutputs(result.stdout) ?? {};
           } finally {
-            await sandboxClient.closeSandbox(handle);
+            // Single-use fallback path closes; session-cached sandboxes
+            // are closed by the session_end hook.
+            if (lease.callerOwnsLifecycle) {
+              await sandboxClient.closeSandbox(handle);
+            }
           }
         },
       };

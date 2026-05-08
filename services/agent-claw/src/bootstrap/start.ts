@@ -18,6 +18,10 @@ import { loadHooks } from "../core/hook-loader.js";
 import { lifecycle } from "../core/runtime.js";
 import { startMcpProbeLoop } from "./probes.js";
 import { auditAgentAdminUsersCasing } from "../middleware/require-admin.js";
+import {
+  getOrCreateMontyPool,
+  shutdownMontyPool,
+} from "../runtime/monty/pool-singleton.js";
 
 // Hard-fail startup if the minimum-expected number of hooks isn't loaded.
 // A misconfigured HOOKS_DIR otherwise produces a process that starts without
@@ -30,7 +34,7 @@ import { auditAgentAdminUsersCasing } from "../middleware/require-admin.js";
 // Bump every time BUILTIN_REGISTRARS gains an entry so a silent failure to
 // load a new hook trips the startup gate instead of quietly downgrading
 // the safety net.
-const MIN_EXPECTED_HOOKS = 20;
+const MIN_EXPECTED_HOOKS = 21;
 
 export async function startServer(
   app: FastifyInstance,
@@ -155,6 +159,15 @@ export async function startServer(
     // so SIGINT / SIGTERM during the probe loop runs through the
     // structured shutdown path.
     startMcpProbeLoop(app, deps.pool);
+
+    // 7. Eagerly initialize the Monty warm child pool in the background
+    // so the first run_orchestration_script call doesn't pay cold-start
+    // for both the children and the resolver lookup. The singleton
+    // returns undefined if monty.enabled / monty.binary_path / size=0
+    // gates aren't satisfied — no children are spawned in that case.
+    void getOrCreateMontyPool(deps.configRegistry).catch((err: unknown) => {
+      app.log.warn({ err }, "monty pool eager init failed — falls back to per-call spawn");
+    });
   } catch (err) {
     app.log.error(err);
     process.exit(1);
@@ -170,6 +183,7 @@ function registerProcessHandlers(app: FastifyInstance, deps: Deps): void {
     try {
       await app.close();
       await deps.pool.end();
+      shutdownMontyPool();
     } finally {
       process.exit(0);
     }

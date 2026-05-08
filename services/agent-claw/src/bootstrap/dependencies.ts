@@ -55,6 +55,7 @@ import { buildConformerAwareKgQueryTool } from "../tools/builtins/conformer_awar
 // Phase 8 — agent-controlled workflow engine.
 import { buildWorkflowDefineTool } from "../tools/builtins/workflow_define.js";
 import { buildWorkflowRunTool } from "../tools/builtins/workflow_run.js";
+import { buildKickWorkflowAndWaitTool } from "../tools/builtins/kick_workflow_and_wait.js";
 import { buildWorkflowInspectTool } from "../tools/builtins/workflow_inspect.js";
 import { buildWorkflowPauseResumeTool } from "../tools/builtins/workflow_pause_resume.js";
 import { buildWorkflowModifyTool } from "../tools/builtins/workflow_modify.js";
@@ -111,6 +112,7 @@ import { buildManageTodosTool } from "../tools/builtins/manage_todos.js";
 import { buildAskUserTool } from "../tools/builtins/ask_user.js";
 // Code-mode orchestration via the Monty runtime.
 import { buildRunOrchestrationScriptTool } from "../tools/builtins/run_orchestration_script.js";
+import { getOrCreateMontyPool } from "../runtime/monty/pool-singleton.js";
 import { lifecycle as runtimeLifecycle } from "../core/runtime.js";
 
 export interface Deps {
@@ -224,6 +226,7 @@ function registerBuiltinTools(
   // Phase 8 — agent-controlled workflow engine.
   registry.registerBuiltin("workflow_define",       () => asTool(buildWorkflowDefineTool(pool)));
   registry.registerBuiltin("workflow_run",          () => asTool(buildWorkflowRunTool(pool)));
+  registry.registerBuiltin("kick_workflow_and_wait", () => asTool(buildKickWorkflowAndWaitTool(pool)));
   registry.registerBuiltin("workflow_inspect",      () => asTool(buildWorkflowInspectTool(pool)));
   registry.registerBuiltin("workflow_pause_resume", () => asTool(buildWorkflowPauseResumeTool(pool)));
   registry.registerBuiltin("workflow_modify",       () => asTool(buildWorkflowModifyTool(pool)));
@@ -385,6 +388,11 @@ function registerBuiltinTools(
         registry,
         configRegistry,
         lifecycle: runtimeLifecycle,
+        // Lazy-resolve the process-wide WarmChildPool — created on first
+        // call when monty.enabled + monty.binary_path + warm_pool_size>0.
+        // Subsequent calls reuse the cached instance, so the pool only
+        // exists in agent processes that actually use code-mode.
+        getPool: () => getOrCreateMontyPool(configRegistry),
       }),
     ),
   );

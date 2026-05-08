@@ -1,0 +1,11 @@
+name: session-sandbox-close
+lifecycle: session_end
+enabled: true
+# Built-in TypeScript implementation:
+# services/agent-claw/src/core/hooks/session-sandbox-close.ts
+definition:
+  description: >
+    Closes any per-session E2B sandbox cached on the scratchpad by
+    acquireSessionSandbox so the slot is released as soon as the session
+    terminates (rather than at process exit). No-op when no SandboxClient
+    is wired (forged tools + run_program disabled in this deploy).

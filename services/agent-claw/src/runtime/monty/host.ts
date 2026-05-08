@@ -52,6 +52,14 @@ export interface RunOptions {
    * kills the child and surfaces a `cancelled` error.
    */
   signal?: AbortSignal;
+  /**
+   * Optional callback fired once per stdout/stderr line as it arrives
+   * from the child. Used by the SSE chat route to forward script logs
+   * to the client during execution rather than waiting for the run to
+   * finish. The host still buffers the full text in stdout/stderr for
+   * the final result either way.
+   */
+  onLogLine?: (stream: "stdout" | "stderr", line: string) => void;
 }
 
 export type RunOutcome =
@@ -133,9 +141,21 @@ export class MontyHost {
         );
       }
 
-      // Stderr passthrough — accumulate for the result.
+      // Stderr passthrough — accumulate for the result, and stream live to
+      // the optional onLogLine callback so a streaming route can forward
+      // each line to the client as it arrives.
       child.on("stderr_line", (line) => {
         stderrBuf += line + "\n";
+        if (runOpts.onLogLine) {
+          try {
+            runOpts.onLogLine("stderr", line);
+          } catch (err) {
+            log.warn(
+              { event: "monty_onlogline_threw", err: (err as Error).message },
+              "onLogLine callback threw — dropping",
+            );
+          }
+        }
       });
 
       // Child crash before we even kicked off counts as a child_crashed
@@ -187,6 +207,16 @@ export class MontyHost {
         if (frame.type === "log") {
           if (frame.stream === "stdout") stdoutBuf += frame.message + "\n";
           else stderrBuf += frame.message + "\n";
+          if (runOpts.onLogLine) {
+            try {
+              runOpts.onLogLine(frame.stream, frame.message);
+            } catch (err) {
+              log.warn(
+                { event: "monty_onlogline_threw", err: (err as Error).message },
+                "onLogLine callback threw — dropping",
+              );
+            }
+          }
           return;
         }
 

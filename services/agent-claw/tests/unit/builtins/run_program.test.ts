@@ -246,6 +246,43 @@ describe("buildRunProgramTool — happy path", () => {
     expect(closeFn).toHaveBeenCalledOnce();
   });
 
+  it("flushes buffered stdout/stderr through ctx.logSink line by line", async () => {
+    const pool = makeMockPool([]);
+    const sandbox = makeMockSandboxClient({
+      executePython: vi.fn().mockResolvedValue({
+        stdout: "first\nsecond\n__chemclaw_output__: {\"x\": 1}\n",
+        stderr: "warn1\nwarn2\n",
+        exit_code: 0,
+        files_created: [],
+        duration_ms: 10,
+      }),
+    });
+    const tool = buildRunProgramTool(pool, sandbox);
+
+    const events: Array<{ stream: string; line: string; toolId: string }> = [];
+    const sinkCtx = {
+      ...ctx,
+      logSink: (e: { stream: "stdout" | "stderr"; line: string; toolId: string }) => {
+        events.push({ stream: e.stream, line: e.line, toolId: e.toolId });
+      },
+    };
+
+    await tool.execute(sinkCtx, {
+      python_code: "x = 1",
+      inputs: {},
+      expected_outputs: ["x"],
+      reason: "test sink",
+    });
+
+    expect(events).toEqual([
+      { stream: "stdout", line: "first", toolId: "run_program" },
+      { stream: "stdout", line: "second", toolId: "run_program" },
+      { stream: "stdout", line: "__chemclaw_output__: {\"x\": 1}", toolId: "run_program" },
+      { stream: "stderr", line: "warn1", toolId: "run_program" },
+      { stream: "stderr", line: "warn2", toolId: "run_program" },
+    ]);
+  });
+
   it("calls closeSandbox even when executePython throws", async () => {
     const pool = makeMockPool([]);
     const closeFn = vi.fn().mockResolvedValue(undefined);

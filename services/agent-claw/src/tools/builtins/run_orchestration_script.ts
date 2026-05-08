@@ -119,6 +119,14 @@ export interface RunOrchestrationScriptDeps {
    * builtin only borrows.
    */
   pool?: WarmChildPool;
+  /**
+   * Optional async pool resolver. Used by the production wiring
+   * (dependencies.ts) so the singleton WarmChildPool is initialized
+   * lazily on first call rather than at boot — keeps disabled-by-default
+   * tenants from spawning runner children. If both `pool` and `getPool`
+   * are provided, `pool` wins.
+   */
+  getPool?: () => Promise<WarmChildPool | undefined>;
 }
 
 export function buildRunOrchestrationScriptTool(deps: RunOrchestrationScriptDeps) {
@@ -232,6 +240,7 @@ export function buildRunOrchestrationScriptTool(deps: RunOrchestrationScriptDeps
         "enqueue_batch",
         "workflow_define",
         "workflow_run",
+        "kick_workflow_and_wait",
         "workflow_pause_resume",
         "workflow_modify",
         "workflow_replay",
@@ -297,13 +306,20 @@ export function buildRunOrchestrationScriptTool(deps: RunOrchestrationScriptDeps
         limits.wallTimeMs,
       );
 
-      // Factory precedence: explicit override > warm pool > spawn-per-run.
+      // Factory precedence: explicit override > injected pool > getPool() > spawn-per-run.
       let childFactory: MontyChildFactory;
       if (deps.childFactoryOverride) {
         childFactory = deps.childFactoryOverride;
       } else if (deps.pool) {
         const pool = deps.pool;
         childFactory = () => pool.acquire();
+      } else if (deps.getPool) {
+        const resolved = await deps.getPool();
+        if (resolved) {
+          childFactory = () => resolved.acquire();
+        } else {
+          childFactory = defaultChildFactory({ binaryPath: limits.binaryPath });
+        }
       } else {
         childFactory = defaultChildFactory({ binaryPath: limits.binaryPath });
       }
@@ -342,6 +358,17 @@ export function buildRunOrchestrationScriptTool(deps: RunOrchestrationScriptDeps
         // (mirrors step.ts's no-permissions semantics).
         permissions: ctx.permissions,
         signal: ctx.signal,
+        // Forward each script log line to the route's tool-log sink, if
+        // any, so SSE callers see live output. The host still buffers
+        // the full text for the final result.
+        onLogLine: ctx.logSink
+          ? (stream, line) =>
+              ctx.logSink?.({
+                toolId: "run_orchestration_script",
+                stream,
+                line,
+              })
+          : undefined,
       });
 
       const externalCallsOut = result.externalCalls.map((c) => ({
