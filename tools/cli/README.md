@@ -34,14 +34,22 @@ Then:
 | `CHEMCLAW_AGENT_URL`  | `http://localhost:3101`  | Base URL of agent-claw                           |
 | `CHEMCLAW_CONFIG_DIR` | `~/.chemclaw`            | Where the per-user last-session file is written  |
 
+## Output streams
+
+- **stdout**: model text deltas and the `awaiting_user_input` question — i.e.
+  the content a script consumes. `chemclaw chat ... > out.txt` produces a
+  clean transcript.
+- **stderr**: diagnostics, errors, request-id lines, server response bodies on
+  4xx/5xx.
+
 ## Exit codes
 
-| Code | Meaning                                     |
-|------|---------------------------------------------|
-| 0    | Stream finished normally (`finish` event)   |
-| 1    | Server error (HTTP 5xx) or `error` event    |
-| 2    | Agent paused with `awaiting_user_input`     |
-| 3    | Could not connect to agent-claw             |
-| 4    | Auth rejected (HTTP 401/403)                |
-| 5    | `--resume` with no stored session for user  |
-| 130  | KeyboardInterrupt                           |
+| Code | Meaning                                                        |
+|------|----------------------------------------------------------------|
+| 0    | Stream finished normally (`finish` event)                      |
+| 1    | Server error (HTTP 5xx), `error` event, or stream ended without `finish` |
+| 2    | Agent paused with `awaiting_user_input`                        |
+| 3    | Could not connect to agent-claw                                |
+| 4    | Auth rejected (HTTP 401/403)                                   |
+| 5    | `--resume` with no stored session for user                     |
+| 130  | KeyboardInterrupt                                              |

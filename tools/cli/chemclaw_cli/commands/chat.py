@@ -20,7 +20,11 @@ EXIT_AWAITING_INPUT = 2
 EXIT_CONNECT_ERROR = 3
 EXIT_AUTH_REJECTED = 4
 EXIT_RESUME_NO_SESSION = 5
+EXIT_INTERRUPTED = 130
 
+# stdout carries content the user/script consumes (model text, the awaiting
+# question). Everything else — diagnostics, errors, status — goes to stderr
+# so `chemclaw chat ... > out.txt` produces a clean transcript.
 _stderr = Console(stderr=True)
 _stdout = Console()
 
@@ -54,7 +58,7 @@ def chat(
     if session_id is None and resume:
         session_id = store.read(cfg.user)
         if session_id is None:
-            _stdout.print(f'no saved session for user "{cfg.user}" — start a new chat first')
+            _stderr.print(f'no saved session for user "{cfg.user}" — start a new chat first')
             raise typer.Exit(code=EXIT_RESUME_NO_SESSION)
 
     body: dict = {"messages": [{"role": "user", "content": prompt}]}
@@ -78,9 +82,12 @@ def chat(
             with client.stream("POST", url, json=body, headers=headers) as response:
                 if response.status_code in (401, 403):
                     response.read()
-                    _stdout.print(
+                    _stderr.print(
                         f'auth rejected; check $CHEMCLAW_USER (currently "{cfg.user}")'
                     )
+                    snippet = response.text[:500].strip()
+                    if snippet:
+                        _stderr.print(snippet, markup=False, highlight=False)
                     raise typer.Exit(code=EXIT_AUTH_REJECTED)
                 if response.status_code >= 400:
                     response.read()
@@ -90,7 +97,7 @@ def chat(
                         _stderr.print(
                             f"[dim](server request_id: {rid} — include in bug reports)[/dim]"
                         )
-                    _stdout.print(snippet)
+                    _stderr.print(snippet, markup=False, highlight=False)
                     raise typer.Exit(code=EXIT_SERVER_ERROR)
 
                 if verbose:
@@ -101,13 +108,13 @@ def chat(
                 exit_code = _consume_stream(response, store=store, user=cfg.user, verbose=verbose)
                 raise typer.Exit(code=exit_code)
     except httpx.ConnectError:
-        _stdout.print(
+        _stderr.print(
             f'agent-claw not reachable at {cfg.agent_url}; is "make up" running?'
         )
         raise typer.Exit(code=EXIT_CONNECT_ERROR) from None
     except KeyboardInterrupt:
-        _stdout.print("[yellow][interrupted][/yellow]")
-        raise typer.Exit(code=130) from None
+        _stderr.print("[yellow][interrupted][/yellow]")
+        raise typer.Exit(code=EXIT_INTERRUPTED) from None
 
 
 def _consume_stream(
@@ -160,7 +167,7 @@ def _consume_stream(
             tid = event.get("trace_id")
             if saw_text:
                 _stdout.print()
-            _stdout.print(f"[red]{err}[/red]")
+            _stderr.print(f"[red]{err}[/red]")
             if rid or tid:
                 parts = []
                 if rid:
@@ -197,11 +204,13 @@ def _consume_stream(
             else:
                 _stderr.print(f"[dim]?? {etype}[/dim]")
 
-    # Stream ended without `finish`. Treat as success — the connection
-    # may have closed cleanly mid-emit on a fast small reply.
+    # Stream ended without `finish`. agent-claw's SSE contract always
+    # emits `finish` on success, so a missing terminator means the server
+    # disconnected mid-stream — surface it instead of masking as EXIT_OK.
     if saw_text:
         _stdout.print()
-    return EXIT_OK
+    _stderr.print("[red]stream ended without finish event (server disconnect?)[/red]")
+    return EXIT_SERVER_ERROR
 
 
 def _truncate(value: object, limit: int = 120) -> str:
