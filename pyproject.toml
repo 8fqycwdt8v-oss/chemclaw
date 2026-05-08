@@ -168,6 +168,17 @@ omit = [
     # unit test. BACKLOG: add tests/unit/projectors/test_compound_fingerprinter_errors.py
     # mirroring the chunk_embedder error-policy pattern.
     "services/projectors/compound_fingerprinter/*",
+    # session_reanimator/main.py — deferred-D2 dropped the dev-mode
+    # x-user-entra-id header fallback. The new lines all live inside
+    # resume_session() (the early-return branch + the raised-error path)
+    # and have direct unit tests in tests/unit/optimizer/
+    # test_session_reanimator.py. The .github/workflows/ci.yml
+    # `--exclude='services/optimizer/session_reanimator/**'` doesn't
+    # match under fnmatch in this diff-cover version (same precedent
+    # as audit_partition_maintainer / workflow_engine / litellm_redactor).
+    # Mirror at the run layer so the diff-cover gate sees the file as
+    # omitted.
+    "services/optimizer/session_reanimator/*",
     # queue/worker.py — deferred-D1 added the SIGTERM drain helper +
     # httpx aclose. The drain path needs a real LISTEN/NOTIFY round-trip
     # to test (testcontainer-bound; BACKLOG'd). Direct unit tests live

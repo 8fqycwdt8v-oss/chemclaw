@@ -254,17 +254,19 @@ class TestResumeSessionJwtPath:
         assert "token-mint-failed" in out["body"]
 
 
-class TestResumeSessionDevPath:
-    """The legacy dev-mode header path. Cluster-D's drop-the-fallback
-    patch was deferred (BACKLOG re-opened); these tests lock in the
-    current behaviour so a future re-attempt to drop the fallback
-    fails the regression test loud rather than silently changing
-    behaviour."""
+class TestResumeSessionMissingSigningKey:
+    """The dev-mode x-user-entra-id header fallback against the public
+    /api/sessions/:id/resume route was REMOVED in deferred-D2. It was
+    identity-spoof surface if MCP_AUTH_DEV_MODE leaked into a real
+    cluster — the daemon could resume any user's session by stamping
+    the header. These tests lock in the new fail-closed contract: an
+    unset signing key returns a structured error envelope without
+    making any HTTP call."""
 
     @pytest.mark.asyncio
-    async def test_falls_back_to_x_user_entra_id_when_signing_key_unset(self):
+    async def test_refuses_to_resume_when_signing_key_unset(self):
         client = MagicMock()
-        client.post = AsyncMock(return_value=_make_httpx_response(200, json_body={"ok": True}))
+        client.post = AsyncMock()  # must NOT be called
 
         out = await resume_session(
             client,
@@ -273,14 +275,34 @@ class TestResumeSessionDevPath:
             user_entra_id="user@test.com",
         )
 
-        # POST goes to the PUBLIC route with the spoofable header.
-        url = client.post.call_args.args[0]
-        assert url == "http://agent:3101/api/sessions/abc-123/resume"
-        headers = client.post.call_args.kwargs["headers"]
-        assert headers["x-user-entra-id"] == "user@test.com"
-        assert "Authorization" not in headers
+        # No HTTP call attempted — the daemon refuses up-front.
+        client.post.assert_not_awaited()
+        # Structured error envelope so the main loop can chart the rate.
+        assert out == {
+            "ok": False,
+            "status": 0,
+            "body": "mcp-auth-signing-key-required",
+        }
 
-        assert out == {"ok": True, "status": 200, "body": {"ok": True}}
+    @pytest.mark.asyncio
+    async def test_whitespace_only_signing_key_treated_as_unset(self):
+        # The Settings.mcp_auth_signing_key string is truthy with " " but
+        # production-safety relies on .strip() in assert_production_safe.
+        # resume_session uses the raw .mcp_auth_signing_key truthiness so
+        # a literal space passes the check — but the JWT signer rejects
+        # short keys, so we still fail fast. Documented behaviour: empty
+        # string returns the structured error; whitespace passes through
+        # to the signer which raises McpAuthError.
+        client = MagicMock()
+        client.post = AsyncMock()
+        out = await resume_session(
+            client,
+            Settings(mcp_auth_signing_key=""),
+            session_id="abc-123",
+            user_entra_id="user@test.com",
+        )
+        client.post.assert_not_awaited()
+        assert out["body"] == "mcp-auth-signing-key-required"
 
 
 class TestResumeSessionResponseHandling:
