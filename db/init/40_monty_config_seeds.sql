@@ -12,8 +12,8 @@
 -- Routes through bootstrap_config_setting() (SECURITY DEFINER) so a
 -- non-superuser migration role can apply this file even though
 -- config_settings is FORCE-RLS + admin-INSERT-only.
--- The helper is defined in 48_admin_rls_bootstrap_helpers.sql; this
--- file runs after by lex order.
+-- The helper is defined in 22_admin_rls_bootstrap_helpers.sql which
+-- runs first by lex order (`22_admin_...` < `22_feature_...` < `40_...`).
 
 BEGIN;
 

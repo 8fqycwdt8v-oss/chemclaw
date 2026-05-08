@@ -35,21 +35,37 @@ BEGIN
 END
 $$;
 
--- 2. Replace the INSERT path of the authn policy. The existing FOR ALL
--- policy stays for SELECT/UPDATE/DELETE; we add a separate INSERT
--- policy that gates WITH CHECK on the actor matching enqueued_by.
+-- 2. Tighten the INSERT path of the authn policy.
+--
+-- Subtle but critical: the existing `task_queue_authn` is `FOR ALL` with
+-- `USING (current_user IS NOT NULL/empty)` and no explicit WITH CHECK,
+-- which means WITH CHECK defaults to USING — i.e. the existing policy
+-- already admits any authenticated INSERT. Adding a *permissive*
+-- second policy (Postgres's default) would OR the two checks, leaving
+-- the loose existing policy as the de-facto gate.
+--
+-- Declaring the new policy `AS RESTRICTIVE` makes Postgres AND the two
+-- checks: a row is admitted only when BOTH the loose authn check AND
+-- the strict enqueued_by-matches-actor check pass. That actually
+-- tightens the gate.
+--
+-- chemclaw_service (BYPASSRLS) ignores both policies entirely, so the
+-- queue worker continues to write unaffected.
 DROP POLICY IF EXISTS task_queue_insert_self ON task_queue;
 CREATE POLICY task_queue_insert_self ON task_queue
+  AS RESTRICTIVE
   FOR INSERT
   WITH CHECK (
-    -- Either the row was self-enqueued by the current user (chemclaw_app
-    -- with the GUC set)…
-    (current_setting('app.current_user_entra_id', true) IS NOT NULL
-     AND current_setting('app.current_user_entra_id', true) <> ''
-     AND enqueued_by = current_setting('app.current_user_entra_id', true))
-    -- …or the inserter is a BYPASSRLS role (chemclaw_service) — they
-    -- bypass policy evaluation entirely, but the explicit branch
-    -- documents the intent.
+    current_setting('app.current_user_entra_id', true) IS NOT NULL
+    AND current_setting('app.current_user_entra_id', true) <> ''
+    AND enqueued_by = current_setting('app.current_user_entra_id', true)
   );
+
+-- Note for test fixtures: the new `enqueued_by NOT NULL DEFAULT
+-- current_setting(...)` column means a direct INSERT without an
+-- `app.current_user_entra_id` GUC set will fail with NOT NULL
+-- violation. Production paths set the GUC via withUserContext;
+-- system workers run as chemclaw_service (BYPASSRLS) and can pass an
+-- explicit enqueued_by value.
 
 COMMIT;
