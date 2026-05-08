@@ -425,6 +425,44 @@ export async function tryIncrementAutoResumeCount(
   });
 }
 
+/**
+ * Distinguish "actually at the auto-resume cap" from "another caller is
+ * mid-resume" when the atomic UPDATE in tryIncrementAutoResumeCount
+ * returns null.
+ *
+ * Pre-fix the loser of a concurrent client+reanimator race always
+ * surfaced as `auto_resume_cap_reached` because the UPDATE WHERE
+ * count<cap clause failed once the other caller had bumped the count.
+ * That conflated two distinct conditions:
+ *   - (a) genuine cap exhaustion (operator should bump cap or accept stop)
+ *   - (b) someone else is mid-resume RIGHT NOW (no operator action needed —
+ *         skip and try again next tick)
+ *
+ * Heuristic: if `updated_at` moved within the window seconds, the loss
+ * is much more likely concurrent activity than cap exhaustion. The
+ * window is conservative — production resumes finish in <30s typically;
+ * cap-exhausted sessions are dormant for minutes between attempts.
+ *
+ * Returns "in_progress" if the heuristic indicates concurrent activity,
+ * "cap_reached" otherwise. The caller surfaces a precise error code.
+ */
+export async function classifyAutoResumeFailure(
+  pool: Pool,
+  userEntraId: string,
+  sessionId: string,
+  windowSeconds: number = 30,
+): Promise<"in_progress" | "cap_reached"> {
+  return await withUserContext(pool, userEntraId, async (client) => {
+    const r = await client.query<{ recently_active: boolean }>(
+      `SELECT (NOW() - updated_at) < make_interval(secs => $2) AS recently_active
+         FROM agent_sessions
+        WHERE id = $1::uuid`,
+      [sessionId, windowSeconds],
+    );
+    return r.rows[0]?.recently_active ? "in_progress" : "cap_reached";
+  });
+}
+
 /** List all todos for a session, ordered. */
 export async function listTodos(
   pool: Pool,
