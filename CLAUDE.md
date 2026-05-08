@@ -244,11 +244,16 @@ DB-side audit: `error_events` (via `record_error_event`, `chemclaw_app` / `chemc
 ### Runbooks
 
 - `docs/runbooks/add-tenant.md`
-- `docs/runbooks/rotate-mcp-auth-key.md`
+- `docs/runbooks/autonomy-upgrade.md`
+- `docs/runbooks/backup-and-restore.md`
 - `docs/runbooks/change-llm-provider.md`
 - `docs/runbooks/disable-tool.md`
+- `docs/runbooks/harness-rollback.md`
+- `docs/runbooks/local-dev.md`
+- `docs/runbooks/monty-enable-and-rollback.md`
+- `docs/runbooks/post-v1.0.0-hardening.md`
 - `docs/runbooks/redaction-pattern-management.md`
-- `docs/runbooks/backup-and-restore.md`
+- `docs/runbooks/rotate-mcp-auth-key.md`
 
 Read the relevant runbook BEFORE filing a feature that asks an admin to do anything new.
 
