@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any
 
-import pytest
+import pytest  # noqa: F401  — kept for asyncio plugin auto-detection
 
 from services.projectors.common.base import BaseProjector
 
@@ -60,7 +60,6 @@ def _make_projector() -> _StubProjector:
     return p
 
 
-@pytest.mark.asyncio
 async def test_assert_bypass_rls_passes_when_role_has_bypass() -> None:
     p = _make_projector()
     conn = _FakeConn({"role": "chemclaw_service", "bypass": True})
@@ -68,7 +67,6 @@ async def test_assert_bypass_rls_passes_when_role_has_bypass() -> None:
     await p._assert_bypass_rls(conn)  # type: ignore[arg-type]
 
 
-@pytest.mark.asyncio
 async def test_assert_bypass_rls_refuses_when_role_lacks_bypass() -> None:
     p = _make_projector()
     conn = _FakeConn({"role": "chemclaw_app", "bypass": False})
@@ -76,7 +74,6 @@ async def test_assert_bypass_rls_refuses_when_role_lacks_bypass() -> None:
         await p._assert_bypass_rls(conn)  # type: ignore[arg-type]
 
 
-@pytest.mark.asyncio
 async def test_assert_bypass_rls_refuses_when_no_role_row_returned() -> None:
     # Defense-in-depth: if pg_roles returns no row for current_user
     # (effectively impossible but defensively-handled), refuse boot.
