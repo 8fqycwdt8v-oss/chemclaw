@@ -137,8 +137,19 @@ def redact(text: str) -> RedactionResult:
 
     # Bound the worst-case CPU cost. A 5 MB prompt is already 50× larger than
     # any real chat message; refuse outright rather than burn seconds on it.
+    #
+    # Pre-fix this branch returned the original text unredacted — fail-OPEN.
+    # That meant any caller crafting a >5 MB payload could exfiltrate raw
+    # SMILES / compound codes / emails through LiteLLM with the redactor
+    # silently passing them through. Now fail-CLOSED: return a single
+    # OVERSIZE placeholder so the LLM call gets a useless prompt and the
+    # operator can chart the rate via the `oversize` count metric.
+    # Defense-in-depth — the upstream caller should chunk-and-redact for
+    # legitimate large payloads (BACKLOG: redaction-chunking).
     if len(text) > _MAX_REDACTION_INPUT_LEN:
-        return RedactionResult(text=text)
+        result = RedactionResult(text="[REDACTED:OVERSIZE]")
+        result.bump("oversize")
+        return result
 
     result = RedactionResult(text=text)
 
