@@ -16,6 +16,7 @@ import type { LlmProvider } from "../llm/provider.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import type { PaperclipClient } from "../core/paperclip-client.js";
 import {
+  classifyAutoResumeFailure,
   loadSession,
   tryIncrementAutoResumeCount,
 } from "../core/session-store.js";
@@ -267,6 +268,20 @@ async function executeResume(
       return await reply.code(409).send({
         error: "awaiting_user_input",
         detail: "session is paused on a clarifying question; needs a real user reply",
+      });
+    }
+    // Distinguish genuine cap exhaustion from a concurrent-resume race.
+    // Pre-fix the loser of a concurrent client+reanimator race always
+    // surfaced `auto_resume_cap_reached` even when the real cause was
+    // "another caller is mid-resume" — operators saw spurious cap
+    // alerts and the reanimator's tick-summary lost the distinction.
+    const reason = await classifyAutoResumeFailure(pool, user, sessionId);
+    if (reason === "in_progress") {
+      return await reply.code(409).send({
+        error: "session_in_progress",
+        detail:
+          "another resume is currently running for this session; the loser "
+          + "should retry on the next reanimator tick",
       });
     }
     return await reply.code(409).send({
