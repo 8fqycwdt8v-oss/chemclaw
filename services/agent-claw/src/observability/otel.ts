@@ -23,6 +23,7 @@ import {
   type TracerProvider,
 } from "@opentelemetry/api";
 import { AsyncLocalStorageContextManager } from "@opentelemetry/context-async-hooks";
+import { getLogger } from "./logger.js";
 
 const SERVICE_NAME = "chemclaw-agent-claw";
 const SERVICE_VERSION = "0.0.1";
@@ -58,6 +59,28 @@ export function initTracer(opts?: {
   if (!endpoint) {
     // No OTLP endpoint configured — register a no-op provider.
     // getTracer() will return a no-op tracer.
+    //
+    // In production this means every span (the 16 lifecycle hook points,
+    // every per-tool withToolSpan, every Monty external_call, every
+    // turn-level chat_turn span) is silently dropped. Operators relying
+    // on Langfuse / vendor OTLP for incident triage see nothing. Emit
+    // a structured WARN so the gap surfaces in Loki at boot time
+    // instead of being discovered during a post-mortem.
+    //
+    // We treat CHEMCLAW_DEV_MODE=true as the explicit dev-side opt-in
+    // (mirrors the user-hash + Monty-runner gates). In dev, no OTLP is
+    // expected; the warn is silenced.
+    if (process.env.CHEMCLAW_DEV_MODE !== "true") {
+      getLogger("agent-claw.observability.otel").warn(
+        {
+          event: "otel_no_endpoint",
+          OTEL_EXPORTER_OTLP_ENDPOINT: process.env.OTEL_EXPORTER_OTLP_ENDPOINT ?? null,
+          LANGFUSE_HOST: process.env.LANGFUSE_HOST ?? null,
+        },
+        "OTel tracer initialised with no OTLP endpoint — every span is being silently dropped. " +
+          "Set OTEL_EXPORTER_OTLP_ENDPOINT or LANGFUSE_HOST in production, or set CHEMCLAW_DEV_MODE=true to silence this warning in dev.",
+      );
+    }
     return;
   }
 

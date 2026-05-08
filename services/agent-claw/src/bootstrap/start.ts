@@ -17,6 +17,7 @@ import type { Deps } from "./dependencies.js";
 import { loadHooks } from "../core/hook-loader.js";
 import { lifecycle } from "../core/runtime.js";
 import { startMcpProbeLoop } from "./probes.js";
+import { auditAgentAdminUsersCasing } from "../middleware/require-admin.js";
 
 // Hard-fail startup if the minimum-expected number of hooks isn't loaded.
 // A misconfigured HOOKS_DIR otherwise produces a process that starts without
@@ -71,6 +72,23 @@ export async function startServer(
             `check HOOKS_DIR (skipped=${JSON.stringify(hookResult.skipped)})`,
         );
       }
+      // Tighten the gate: a YAML file ADDED without a matching builtin
+      // registrar would otherwise boot green (registered stays at 11 ≥
+      // MIN_EXPECTED_HOOKS while the new file lands in `skipped`). The
+      // documented invariant in CLAUDE.md is "every YAML in `hooks/`
+      // has a matching `BUILTIN_REGISTRARS` entry"; this assertion
+      // enforces it. The reverse (registrar without YAML) doesn't
+      // appear in `skipped` but loadHooks won't register a hook
+      // without its YAML, so registered + skipped + (yamlFiles - both)
+      // would differ, but the simpler assertion here is "no skipped".
+      if (hookResult.skipped.length > 0) {
+        throw new Error(
+          `lifecycle hooks have unregistered YAML files: skipped=${JSON.stringify(hookResult.skipped)}. ` +
+            `Every YAML in hooks/ must have a matching BUILTIN_REGISTRARS entry in core/hook-loader.ts. ` +
+            `Either add the registrar (security-relevant hook silently disabled = boot-green disaster) ` +
+            `or set enabled:false in the YAML.`,
+        );
+      }
     } catch (err) {
       app.log.error({ err }, "hook loader failed — refusing to start without lifecycle hooks");
       throw err;
@@ -109,6 +127,16 @@ export async function startServer(
       }
     } catch (err) {
       app.log.warn({ err }, "skill→tool gap audit failed — startup proceeds");
+    }
+
+    // 4d. AGENT_ADMIN_USERS casing audit. Boot-time WARN when any
+    // env-var entry differs only in case from an admin_roles row, so
+    // operator drift is visible before it produces an orphaned grant.
+    // Non-fatal — the env-var grant works regardless of case.
+    try {
+      await auditAgentAdminUsersCasing(deps.pool);
+    } catch (err) {
+      app.log.warn({ err }, "AGENT_ADMIN_USERS casing audit failed — startup proceeds");
     }
 
     // 5. Bind the server.
