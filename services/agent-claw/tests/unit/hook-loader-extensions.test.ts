@@ -139,24 +139,30 @@ condition:
     expect(result.registered).toBe(1);
   });
 
-  it("registers a script hook with timeout_ms (no error)", async () => {
-    // The lifecycle's per-hook timeout isn't externally introspectable
-    // (private field), but we can assert that loadHooks accepts the YAML
-    // and the registration count rises. A future Lifecycle API would let
-    // us assert the actual timeout — see hookTimeouts() TODO.
+  it("registers a script hook with timeout_ms and threads it into Lifecycle.on", async () => {
     mkdirSync(join(tmpDir, "scripts"), { recursive: true });
     writeFileSync(join(tmpDir, "scripts", "slow.mjs"), "export default async () => ({});");
-    writeYaml("slow", `
+    writeFileSync(join(tmpDir, "scripts", "default.mjs"), "export default async () => ({});");
+    writeYaml("01-slow", `
 name: slow-hook
 lifecycle: post_turn
 timeout_ms: 5000
 script: scripts/slow.mjs
 `);
+    writeYaml("02-default", `
+name: default-hook
+lifecycle: post_turn
+script: scripts/default.mjs
+`);
 
     const lifecycle = new Lifecycle();
     const result = await loadHooks(lifecycle, fakeDeps, tmpDir);
-    expect(result.registered).toBe(1);
-    expect(lifecycle.hookNames("post_turn")).toEqual(["slow-hook"]);
+    expect(result.registered).toBe(2);
+    expect(lifecycle.hookNames("post_turn")).toEqual(["slow-hook", "default-hook"]);
+    // YAML timeout_ms flows through loadHooks → lifecycle.on({timeout}) →
+    // RegisteredHook.timeout. A hook without timeout_ms falls back to the
+    // 60s default.
+    expect(lifecycle.hookTimeouts("post_turn")).toEqual([5000, 60_000]);
   });
 
   it("logs timeout_ms as advisory for built-in hooks", async () => {
