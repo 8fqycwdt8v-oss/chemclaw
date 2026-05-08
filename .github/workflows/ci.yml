@@ -115,7 +115,8 @@ jobs:
             services/projectors/conditions_normalizer/tests/ \
             services/mcp_tools/mcp_applicability_domain/tests/ \
             services/mcp_tools/mcp_green_chemistry/tests/ \
-            services/mcp_tools/mcp_reaction_optimizer/tests/
+            services/mcp_tools/mcp_reaction_optimizer/tests/ \
+            services/mcp_tools/mcp_xtb/tests/test_gxtb_placeholder.py
           coverage combine || true
           coverage xml -o coverage.xml
       - name: Parse-check Python services
