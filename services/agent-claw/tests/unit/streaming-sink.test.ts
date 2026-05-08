@@ -107,4 +107,48 @@ describe("StreamSink", () => {
     expect(callSpy).toHaveBeenCalledTimes(1);
     expect(streamSpy).not.toHaveBeenCalled();
   });
+
+  it("streamed text path: budget includes streamCompletion usage from the finish chunk", async () => {
+    // Pre-fix, the streamed completion's usage was discarded entirely
+    // and only the call() usage was returned to the harness budget,
+    // halving the per-turn token charge for every streaming text turn.
+    const events: string[] = [];
+    const sink = {
+      onTextDelta: (delta: string) => events.push(`d:${delta}`),
+      onFinish: (reason: string, usage: { promptTokens: number; completionTokens: number }) =>
+        events.push(`f:${reason}:${usage.promptTokens}:${usage.completionTokens}`),
+    } as const;
+    const llm = new StubLlmProvider();
+    // call() reports 10/3 (the cheap text-vs-tool detection round-trip).
+    llm.enqueueText("answer", { promptTokens: 10, completionTokens: 3 });
+    // streamCompletion's finish chunk reports 50/40 (the real text turn).
+    llm.enqueueStream([
+      { type: "text_delta", delta: "an" },
+      { type: "text_delta", delta: "swer" },
+      {
+        type: "finish",
+        finishReason: "stop",
+        usage: { promptTokens: 50, completionTokens: 40 },
+      },
+    ]);
+    const ctx: ToolContext = {
+      userEntraId: "u",
+      scratchpad: new Map<string, unknown>(),
+      seenFactIds: new Set<string>(),
+    };
+    const result = await runHarness({
+      messages: [{ role: "user", content: "go" }],
+      tools: [],
+      llm,
+      budget: new Budget({ maxSteps: 3 }),
+      lifecycle: new Lifecycle(),
+      ctx,
+      streamSink: sink,
+      sessionId: "s",
+    });
+    expect(result.text).toBe("answer");
+    // 10 (call) + 50 (stream) = 60 prompt tokens; 3 + 40 = 43 completion.
+    expect(result.usage.promptTokens).toBe(60);
+    expect(result.usage.completionTokens).toBe(43);
+  });
 });
