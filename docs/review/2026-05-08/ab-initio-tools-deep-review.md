@@ -176,10 +176,20 @@ route. The agent must explicitly `query_kg` / `search_knowledge` and reconstruct
 
 ### 2.9 Permission and approval
 
-Every chemistry builtin is `readOnly: true`. There is **no default permission policy**
-gating any chemistry tool — `permission_policies` is admin-populated. An admin can add
-`('org', 'ask', 'qm_*')` to require approval, but the seed contains nothing of the
-kind. The aggregator default is allow.
+Every chemistry builtin is `readOnly: true`. There is **no chemistry-specific seed
+policy** — `permission_policies` is admin-populated and the seed contains no
+`qm_*` / `predict_*` / `propose_*` rules. The resolver default in `enforce` mode
+(used by `/api/chat`) was flipped from `allow` to `ask` in `0e9a4de` /
+`PR-123`, and `run_one_tool` short-circuits `deny | defer | ask` uniformly so an
+unmatched call in a sub-agent (no UI surface) effectively deny-by-default. The
+practical effect today: `/api/chat` runs chemistry tools because the user is
+present and `ask` resolves through the SSE prompt; sub-agents cannot reach
+chemistry tools regardless of profile because they have no `ask`-resolution
+channel. Admins can still add `('org', 'allow', 'qm_*')` or
+`('org', 'deny', 'predict_*')` for tighter control; the only chemistry policy
+worth seeding today would be a `deny` for the half-finished surfaces (xtb
+`/transition_state` without external GSM, doc-fetcher `s3://`/`smb://`/`sharepoint://`
+stubs).
 
 ### 2.10 Composition mechanism scorecard
 
