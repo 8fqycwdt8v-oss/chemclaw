@@ -344,7 +344,7 @@ export async function loadHooks(
     // registrars; advisories belong elsewhere.
     if (lifecycleOpts) {
       result.warnings.push(
-        `${file}: timeout_ms (${hook.timeout_ms}) ignored — built-in hooks use the 60s default`,
+        `${file}: timeout_ms (${String(hook.timeout_ms)}) ignored — built-in hooks use the 60s default`,
       );
     }
     registrar(lifecycle, deps);
