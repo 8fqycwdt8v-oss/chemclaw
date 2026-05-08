@@ -175,3 +175,76 @@ describe("ToolRegistry.loadFromDb — source='forged' registered with sandbox", 
     );
   });
 });
+
+describe("ToolRegistry — forged tool sha-keyed code cache", () => {
+  it("caches verified source by code_sha256 — second call skips disk read", async () => {
+    const { tmpdir } = await import("os");
+    const { join } = await import("path");
+    const { promises: fsp } = await import("fs");
+    const { createHash } = await import("crypto");
+
+    const dir = join(tmpdir(), `registry-cache-test-${Date.now()}`);
+    await fsp.mkdir(dir, { recursive: true });
+    const pyPath = join(dir, "cached.py");
+    const code = "value = 42\n";
+    await fsp.writeFile(pyPath, code, "utf-8");
+    const expectedSha = createHash("sha256").update(code, "utf-8").digest("hex");
+
+    const row = { ...makeForgedRow(pyPath), code_sha256: expectedSha };
+    const pool = {
+      query: vi.fn().mockResolvedValue({ rows: [row] }),
+    } as unknown as Pool;
+
+    const registry = new ToolRegistry();
+    registry.setSandboxClient(makeMockSandboxClient());
+    await registry.loadFromDb(pool);
+
+    const tool = registry.get("my_forged_tool")!;
+    await tool.execute(ctx, { input_val: 1 });
+
+    // After first call the file is cached. Replace the on-disk content with
+    // garbage — a re-read would either fail the SHA check or load wrong
+    // bytes. The cache hit path must skip both.
+    await fsp.writeFile(pyPath, "raise RuntimeError('tampered')\n", "utf-8");
+
+    // Second call should still succeed using the cached, verified code.
+    await expect(tool.execute(ctx, { input_val: 2 })).resolves.toBeDefined();
+
+    // Now delete the file entirely — cached path must still work.
+    await fsp.rm(pyPath);
+    await expect(tool.execute(ctx, { input_val: 3 })).resolves.toBeDefined();
+
+    await fsp.rm(dir, { recursive: true, force: true });
+  });
+
+  it("rejects with SHA-256 mismatch on first call when expectedSha doesn't match disk", async () => {
+    const { tmpdir } = await import("os");
+    const { join } = await import("path");
+    const { promises: fsp } = await import("fs");
+
+    const dir = join(tmpdir(), `registry-mismatch-test-${Date.now()}`);
+    await fsp.mkdir(dir, { recursive: true });
+    const pyPath = join(dir, "mismatch.py");
+    await fsp.writeFile(pyPath, "value = 1\n", "utf-8");
+
+    const row = {
+      ...makeForgedRow(pyPath),
+      code_sha256:
+        "0000000000000000000000000000000000000000000000000000000000000000",
+    };
+    const pool = {
+      query: vi.fn().mockResolvedValue({ rows: [row] }),
+    } as unknown as Pool;
+
+    const registry = new ToolRegistry();
+    registry.setSandboxClient(makeMockSandboxClient());
+    await registry.loadFromDb(pool);
+
+    const tool = registry.get("my_forged_tool")!;
+    await expect(tool.execute(ctx, { input_val: 1 })).rejects.toThrow(
+      /SHA-256 mismatch/,
+    );
+
+    await fsp.rm(dir, { recursive: true, force: true });
+  });
+});
