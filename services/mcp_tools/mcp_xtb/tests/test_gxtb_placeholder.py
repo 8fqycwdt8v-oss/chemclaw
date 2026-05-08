@@ -93,27 +93,16 @@ def test_gxtb_returns_501_not_implemented(client, path, body):
 
 
 def test_gxtb_passes_through_when_binary_present(client, monkeypatch):
-    """If a future image bundles a real `gxtb` binary, the 501 lifts.
+    """`_gxtb_available()` is the single switch that lifts the 501.
 
-    This locks in the `_gxtb_available()` toggle as the single switch
-    that flips behaviour. Without this test, someone wiring the binary
-    later would have to chase the 501 origin to discover the guard.
-
-    Even with the guard lifted, this build's `method_flags("g-xTB")`
-    still raises NotImplementedError — that surfaces as 400 from the
-    standard ValueError handler... actually as 500 because
-    NotImplementedError is not ValueError. So we mock the helper to
-    confirm the ONLY thing keeping g-xTB out is the guard, not the
-    flags map.
+    When a future image bundles the real `gxtb` binary the toggle flips
+    to True and the same request flows through to the cache layer. The
+    test mocks `_check_cache` to short-circuit at that point; we don't
+    need to drive the full xtb pipeline to assert the toggle contract.
     """
     from services.mcp_tools.mcp_xtb import main
 
     monkeypatch.setattr(main, "_gxtb_available", lambda: True)
-    # If the guard lifts, the request proceeds to the cache, hits the
-    # mock, and returns 200 from the cached path. We don't exercise the
-    # full xtb pipeline because the binary isn't actually present —
-    # this test only locks the contract that `_gxtb_available()` is
-    # the single switch.
     fake_cached = mock.MagicMock(
         job_id="00000000-0000-0000-0000-000000000000",
         method="g-xTB",

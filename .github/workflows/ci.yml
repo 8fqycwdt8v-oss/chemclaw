@@ -117,6 +117,12 @@ jobs:
             services/mcp_tools/mcp_green_chemistry/tests/ \
             services/mcp_tools/mcp_reaction_optimizer/tests/ \
             services/mcp_tools/mcp_xtb/tests/test_gxtb_placeholder.py
+          # NOTE: only the gxtb test is included here, not the whole
+          # mcp_xtb/tests/ dir, because the legacy test_mcp_xtb.py mocks
+          # the wrong helper (`_helpers.smiles_to_xyz`) for routes that
+          # call `_shared.smiles_to_canonical_and_xyz`, so it depends on
+          # rdkit being installed. Once that mock target is fixed,
+          # broaden this to `services/mcp_tools/mcp_xtb/tests/`.
           coverage combine || true
           coverage xml -o coverage.xml
       - name: Parse-check Python services

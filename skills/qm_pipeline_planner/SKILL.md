@@ -64,8 +64,9 @@ shape below and dispatch via `workflow_define` + `workflow_run`.
 - **GFN2 (default)**: workhorse for most main-group and TM-light molecules.
 - **g-xTB**: **currently returns 501 not_implemented** — the standalone
   `gxtb` binary is not bundled in the mcp-xtb image yet (see BACKLOG.md).
-  Don't pass `method="g-xTB"` until that lands; fall back to GFN2 and note
-  the limitation in the answer.
+  There is no auto-fallback. Choose GFN2 explicitly for hypervalent /
+  strained systems and note in the answer that g-xTB would have been
+  preferred but is not yet available.
 - **GFN-FF**: only for >300-atom systems when GFN2 is too slow; do not
   use for energy comparisons across different bonding patterns.
 - **sTDA-xTB**: excited states only.
