@@ -23,11 +23,14 @@ import { auditAgentAdminUsersCasing } from "../middleware/require-admin.js";
 // A misconfigured HOOKS_DIR otherwise produces a process that starts without
 // redact-secrets / budget-guard / etc., quietly letting compound codes
 // through LiteLLM and unbudgeted tool calls through every endpoint.
-// 11 = 9 pre-rebuild hooks + session-events (Phase 4B) + permission (Phase 6).
+// 20 = 9 pre-rebuild hooks + session-events (Phase 4B) + permission (Phase 6)
+// + 9 lifecycle-telemetry stubs (cluster F: session_end, user_prompt_submit,
+// post_tool_failure, post_tool_batch, subagent_start, subagent_stop,
+// task_created, task_completed, post_compact).
 // Bump every time BUILTIN_REGISTRARS gains an entry so a silent failure to
 // load a new hook trips the startup gate instead of quietly downgrading
 // the safety net.
-const MIN_EXPECTED_HOOKS = 11;
+const MIN_EXPECTED_HOOKS = 20;
 
 export async function startServer(
   app: FastifyInstance,

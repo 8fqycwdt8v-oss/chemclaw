@@ -1,0 +1,12 @@
+name: session-end-telemetry
+lifecycle: session_end
+enabled: true
+# Built-in TypeScript implementation:
+# services/agent-claw/src/core/hooks/lifecycle-telemetry.ts
+definition:
+  description: >
+    Default structured-log handler for session_end. Emits one info line per
+    session finalisation tagged with sessionId + finishReason; replace with a
+    Langfuse session.end emit / OTel span event / app-log shipper as needed.
+    The handler returns {} so it never contributes to the lifecycle decision
+    aggregate.

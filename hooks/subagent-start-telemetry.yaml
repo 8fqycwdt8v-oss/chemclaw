@@ -1,0 +1,9 @@
+name: subagent-start-telemetry
+lifecycle: subagent_start
+enabled: true
+# Built-in TypeScript implementation:
+# services/agent-claw/src/core/hooks/lifecycle-telemetry.ts
+definition:
+  description: >
+    Default structured-log handler for subagent_start. Logs sub-agent type
+    plus its budget overrides (max_steps, max_tokens). Returns {}.

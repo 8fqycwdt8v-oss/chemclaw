@@ -1,0 +1,10 @@
+name: task-completed-telemetry
+lifecycle: task_completed
+enabled: true
+# Built-in TypeScript implementation:
+# services/agent-claw/src/core/hooks/lifecycle-telemetry.ts
+definition:
+  description: >
+    Default structured-log handler for task_completed (manage_todos.complete
+    + manage_todos.update with status=completed). Logs todoId; content body
+    is omitted for the same reason as task-created-telemetry. Returns {}.
