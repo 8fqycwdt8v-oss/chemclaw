@@ -15,7 +15,6 @@ import type { StreamSink, TodoSnapshot } from "./streaming-sink.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
 import { resolveDecision } from "./permissions/resolver.js";
 import { withToolSpan } from "../observability/tool-spans.js";
-import { getLogger } from "../observability/logger.js";
 
 /**
  * One executed tool's contribution to a step batch — what the harness needs
@@ -75,8 +74,15 @@ export async function runOneTool(
   // Runs BEFORE pre_tool dispatch. When permissions options are provided,
   // the resolver consults permissionMode + allowedTools / disallowedTools,
   // fires the permission_request hook (default mode), and falls back to
-  // permissionCallback. A deny or defer decision short-circuits tool
+  // permissionCallback. A deny / defer / ask decision short-circuits tool
   // execution with a synthetic rejection mirroring the pre_tool deny path.
+  //
+  // `ask` is treated as fail-closed here because the harness has no
+  // interactive surface to resolve the question — routes that want to
+  // surface a confirmation dialog must gate BEFORE entering runHarness.
+  // Without this, an enforce-mode call with no matching policy (resolver
+  // returns ask) would silently execute, contradicting the resolver's
+  // own "fail closed" contract.
   // ---------------------------------------------------------------------
   let permissionDecisionTag: "allow" | "ask" | "deny" | "defer" | "skipped" =
     "skipped";
@@ -92,7 +98,11 @@ export async function runOneTool(
     permissionDecisionTag = permResult.decision;
     permissionReasonTag = permResult.reason;
 
-    if (permResult.decision === "deny" || permResult.decision === "defer") {
+    if (
+      permResult.decision === "deny" ||
+      permResult.decision === "defer" ||
+      permResult.decision === "ask"
+    ) {
       const denyOutput = {
         error: `denied_by_permissions:${permResult.decision}`,
         reason: permResult.reason ?? "",
@@ -111,25 +121,25 @@ export async function runOneTool(
     matcherTarget: toolId,
   });
 
-  if (preResult.decision === "deny") {
+  // Symmetric with the resolver block above: deny / defer / ask all
+  // short-circuit. A pre_tool hook returning ask or defer with no
+  // interactive surface means "don't run" — the previous warn-and-allow
+  // branch was a fail-open pre-Phase 6.
+  if (
+    preResult.decision === "deny" ||
+    preResult.decision === "defer" ||
+    preResult.decision === "ask"
+  ) {
     const denyOutput = {
-      error: "denied_by_hook",
+      error:
+        preResult.decision === "deny"
+          ? "denied_by_hook"
+          : `denied_by_hook:${preResult.decision}`,
       reason: preResult.reason ?? "denied without reason",
     };
     streamSink?.onToolCall?.(toolId, prePayload.input);
     streamSink?.onToolResult?.(toolId, denyOutput);
     return { toolId, output: denyOutput };
-  }
-  if (preResult.decision === "ask" || preResult.decision === "defer") {
-    getLogger("agent-claw.harness.run-one-tool").warn(
-      {
-        event: "permission_decision_unhandled",
-        decision: preResult.decision,
-        tool_id: toolId,
-        reason: preResult.reason ?? "(none)",
-      },
-      "permission decision treated as allow (Phase 6 resolver pending)",
-    );
   }
 
   const effectiveInput = preResult.updatedInput ?? prePayload.input;

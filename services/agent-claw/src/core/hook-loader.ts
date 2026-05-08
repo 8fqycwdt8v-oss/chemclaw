@@ -190,6 +190,13 @@ export interface HookLoadResult {
   registered: number;
   /** Hooks skipped due to disabled=true or invalid YAML. */
   skipped: string[];
+  /**
+   * Advisory messages for hooks that DID register but had a YAML field that
+   * the loader couldn't fully honour (e.g. `timeout_ms` on a built-in). Kept
+   * separate from `skipped` so the boot gate doesn't fail-close on what is
+   * effectively documentation drift.
+   */
+  warnings: string[];
 }
 
 /**
@@ -215,6 +222,7 @@ export async function loadHooks(
     filesFound: 0,
     registered: 0,
     skipped: [],
+    warnings: [],
   };
 
   let entries: string[];
@@ -328,11 +336,15 @@ export async function loadHooks(
     }
 
     // Built-in registrars don't currently expose a per-hook timeout knob;
-    // if a YAML sets timeout_ms for a built-in, we log it as advisory until
-    // the registrars are reworked to accept it (out of scope for Phase 4).
+    // if a YAML sets timeout_ms for a built-in, the registration runs with
+    // the 60s default. Surface the discrepancy as a structured warning so
+    // operators see it in `lifecycle hooks loaded` boot logs without
+    // double-reporting the hook in both `registered` and `skipped`. The
+    // boot gate in bootstrap/start.ts only filters skipped for missing
+    // registrars; advisories belong elsewhere.
     if (lifecycleOpts) {
-      result.skipped.push(
-        `${file}: timeout_ms ignored for built-in (advisory; track separately)`,
+      result.warnings.push(
+        `${file}: timeout_ms (${hook.timeout_ms}) ignored — built-in hooks use the 60s default`,
       );
     }
     registrar(lifecycle, deps);

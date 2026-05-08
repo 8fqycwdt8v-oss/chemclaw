@@ -152,22 +152,23 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
       budget.consumeStep(usage);
 
       // ---------------------------------------------------------------------
-      // Mid-turn compaction: when prompt usage crosses the configured
-      // threshold (default 60% of maxPromptTokens), dispatch pre_compact /
-      // post_compact. The compact-window hook MUTATES payload.messages in
-      // place; the harness reads from the same `messages` reference on the
-      // next iteration so the LLM sees the compacted window.
+      // Mid-turn compaction: when the latest LLM call's prompt size crosses
+      // the configured threshold (default 60% of maxPromptTokens), dispatch
+      // pre_compact / post_compact. The compact-window hook MUTATES
+      // payload.messages in place; the harness reads from the same
+      // `messages` reference on the next iteration so the LLM sees the
+      // compacted window.
       //
-      // Token math: pre_tokens / post_tokens are heuristic
-      // (estimateTokenCount, ~4 chars/token). The trigger itself is gated
-      // on budget.shouldCompact() which uses model-reported usage from
-      // consumeStep, so the heuristic only feeds telemetry — not the
-      // trigger decision. After compaction we resetPromptTokens() to the
-      // post-compact estimate so the next consumeStep doesn't re-trip
-      // shouldCompact() on the now-shrunk window.
+      // Token math: shouldCompact() and pre_tokens both read
+      // budget.currentPromptTokens (model-reported size of the active
+      // window), so the trigger and the telemetry are in the same units.
+      // post_tokens is the heuristic post-compaction estimate
+      // (estimateTokenCount, ~4 chars/token) which feeds resetPromptTokens
+      // so the next consumeStep doesn't re-trip shouldCompact() on the
+      // now-shrunk window.
       // ---------------------------------------------------------------------
       if (budget.shouldCompact()) {
-        const preTokens = budget.promptTokens;
+        const preTokens = budget.currentPromptTokens;
         const prePayload: PreCompactPayload = {
           ctx,
           messages,

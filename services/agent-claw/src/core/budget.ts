@@ -43,6 +43,14 @@ export class Budget {
   private _stepsUsed = 0;
   private _promptTokens = 0;
   private _completionTokens = 0;
+  // Latest LLM call's reported prompt-token count, i.e. an estimate of the
+  // current message-window size. Distinct from `_promptTokens` (which is
+  // cumulative across all steps for cost accounting) so the compaction
+  // trigger asks "is the active window getting too big?" rather than "have
+  // we spent a lot of prompt tokens this turn?". Without this split, a
+  // turn with many small steps would trip compaction on cumulative spend
+  // long before the actual window exceeded the threshold.
+  private _currentPromptTokens = 0;
   private readonly _session: SessionBudgetSnapshot | undefined;
 
   constructor(opts: BudgetOptions) {
@@ -70,6 +78,16 @@ export class Budget {
     return this._completionTokens;
   }
 
+  /**
+   * Latest call's reported prompt-token count — current window estimate.
+   * Exposed so the harness can report pre_tokens / post_tokens in the
+   * pre_compact / post_compact payloads in the same units the trigger
+   * decision uses (current window, not cumulative spend).
+   */
+  get currentPromptTokens(): number {
+    return this._currentPromptTokens;
+  }
+
   /** Updated session totals after this turn. Used by chat.ts to persist. */
   sessionTotals(): { inputTokens: number; outputTokens: number } | null {
     if (!this._session) return null;
@@ -88,6 +106,8 @@ export class Budget {
     this._stepsUsed += 1;
     this._promptTokens += usage.promptTokens;
     this._completionTokens += usage.completionTokens;
+    // Track the latest call's prompt size for shouldCompact() — see field doc.
+    this._currentPromptTokens = usage.promptTokens;
 
     if (this._promptTokens > this.maxPromptTokens) {
       throw new BudgetExceededError(
@@ -127,24 +147,27 @@ export class Budget {
   }
 
   /**
-   * Returns true when accumulated prompt tokens have reached the
-   * compaction threshold. Used by runHarness after each step to decide
-   * whether to dispatch pre_compact / post_compact. No-op when
-   * maxPromptTokens is not configured (we never compact unconditionally).
+   * Returns true when the latest LLM call's prompt size has reached the
+   * compaction threshold (current-window estimate, NOT cumulative spend).
+   * Used by runHarness after each step to decide whether to dispatch
+   * pre_compact / post_compact. No-op when maxPromptTokens is not
+   * configured (we never compact unconditionally).
    */
   shouldCompact(): boolean {
     if (!this.maxPromptTokens) return false;
-    return this._promptTokens >= this.compactionThreshold * this.maxPromptTokens;
+    return (
+      this._currentPromptTokens >= this.compactionThreshold * this.maxPromptTokens
+    );
   }
 
   /**
    * After compaction shrinks the message list, the harness re-estimates
-   * the new prompt-token count and resets the accumulator so the next
-   * step's consumeStep starts from the post-compaction baseline rather
-   * than the pre-compaction running total.
+   * the new prompt-token count. We update the current-window field so
+   * shouldCompact() reflects the post-compaction baseline; cumulative
+   * spend is unchanged because compaction doesn't refund prior calls.
    */
   resetPromptTokens(newCount: number): void {
-    this._promptTokens = Math.max(0, newCount);
+    this._currentPromptTokens = Math.max(0, newCount);
   }
 
   /** Summary for logging and HarnessResult.usage. */

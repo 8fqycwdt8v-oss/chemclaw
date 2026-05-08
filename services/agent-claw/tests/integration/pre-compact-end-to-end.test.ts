@@ -68,9 +68,12 @@ describe("pre_compact end-to-end (integration)", () => {
       execute: async () => ({ payload: "x".repeat(2_000) }),
     });
 
-    // Three steps: tool_call → tool_call → tool_call → text.
-    // Each LLM call reports promptTokens=2_000, so usage hits 6_000 after
-    // the third step (== 60% of 10_000) and pre_compact fires.
+    // Three steps: tool_call → tool_call → tool_call → text. Each call's
+    // reported promptTokens reflects the size of the prompt the LLM saw
+    // for THAT call (current-window semantics, not cumulative spend).
+    // The third call reports 13_000 — past 60% of the 20_000 cap — so
+    // shouldCompact trips and pre_compact / post_compact fire mid-turn.
+    // The cumulative (2k+4k+13k = 19k) stays under the 20k turn cap.
     llm
       .enqueueToolCall(
         "search_knowledge",
@@ -80,12 +83,12 @@ describe("pre_compact end-to-end (integration)", () => {
       .enqueueToolCall(
         "search_knowledge",
         { query: "b" },
-        { promptTokens: 2_000, completionTokens: 10 },
+        { promptTokens: 4_000, completionTokens: 10 },
       )
       .enqueueToolCall(
         "search_knowledge",
         { query: "c" },
-        { promptTokens: 2_000, completionTokens: 10 },
+        { promptTokens: 13_000, completionTokens: 10 },
       )
       .enqueueText("final answer", { promptTokens: 100, completionTokens: 10 });
 
@@ -102,7 +105,7 @@ describe("pre_compact end-to-end (integration)", () => {
 
     const budget = new Budget({
       maxSteps: 10,
-      maxPromptTokens: 10_000,
+      maxPromptTokens: 20_000,
       compactionThreshold: 0.6,
     });
 

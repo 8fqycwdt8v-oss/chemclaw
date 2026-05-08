@@ -165,9 +165,11 @@ script: scripts/default.mjs
     expect(lifecycle.hookTimeouts("post_turn")).toEqual([5000, 60_000]);
   });
 
-  it("logs timeout_ms as advisory for built-in hooks", async () => {
+  it("logs timeout_ms as a warning for built-in hooks (not skipped)", async () => {
     // Built-ins go through BUILTIN_REGISTRARS which doesn't accept a
-    // timeout knob today; the loader records the YAML key as advisory.
+    // timeout knob today; the loader records the YAML key as an advisory
+    // warning. Critically the hook IS registered — `skipped` would mean
+    // "did not register", which is wrong here.
     writeYaml("redact-secrets-with-timeout", `
 name: redact-secrets
 lifecycle: post_turn
@@ -177,6 +179,10 @@ timeout_ms: 30000
     const lifecycle = new Lifecycle();
     const fakeDepsWithPool: HookDeps = { ...fakeDeps };
     const result = await loadHooks(lifecycle, fakeDepsWithPool, tmpDir);
-    expect(result.skipped.some(s => s.includes("timeout_ms ignored"))).toBe(true);
+    expect(result.registered).toBe(1);
+    expect(result.skipped.some(s => s.includes("timeout_ms"))).toBe(false);
+    expect(result.warnings.some(s => s.includes("timeout_ms"))).toBe(true);
+    // And the registered hook still uses the 60s default.
+    expect(lifecycle.hookTimeouts("post_turn")).toEqual([60_000]);
   });
 });

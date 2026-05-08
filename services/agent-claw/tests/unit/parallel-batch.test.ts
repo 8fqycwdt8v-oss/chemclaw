@@ -336,4 +336,83 @@ describe("parallel batch execution", () => {
       "tool_execution_failed",
     );
   });
+
+  it("sequential batch: post_tool_batch fires with partial outputs when an inner tool throws", async () => {
+    // Asymmetry fix: the parallel branch always reaches post_tool_batch
+    // because allSettled collects rejections. The sequential branch used
+    // to bail on the first throw, so post-tool hooks (source-cache,
+    // anti-fabrication, tag-maturity) saw nothing for partial-success
+    // sequential batches. They now see the same {toolId, output} shape
+    // they get on the parallel path, with `tool_execution_failed` for
+    // the failed slot and `tool_skipped` for the not-yet-attempted ones.
+    //
+    // The state-mutating slot in the middle is what forces the
+    // sequential path; without it the batch would run via Promise.all.
+    const okFirst = defineTool({
+      id: "ok_first",
+      description: "ok",
+      inputSchema: z.object({}),
+      outputSchema: z.object({ x: z.number() }),
+      annotations: { readOnly: true },
+      execute: async () => ({ x: 1 }),
+    });
+    const writesAndThrows = defineTool({
+      id: "writes_and_throws",
+      description: "fails",
+      inputSchema: z.object({}),
+      outputSchema: z.object({}),
+      annotations: { readOnly: false },
+      execute: async () => {
+        throw new Error("boom from writes_and_throws");
+      },
+    });
+    const trailing = defineTool({
+      id: "trailing",
+      description: "never reached",
+      inputSchema: z.object({}),
+      outputSchema: z.object({}),
+      annotations: { readOnly: true },
+      execute: async () => ({ x: 99 }),
+    });
+
+    const llm = new StubLlmProvider().enqueueToolCalls([
+      { toolId: "ok_first", input: {} },
+      { toolId: "writes_and_throws", input: {} },
+      { toolId: "trailing", input: {} },
+    ]);
+
+    const lifecycle = new Lifecycle();
+    const dispatchSpy = vi.spyOn(lifecycle, "dispatch");
+
+    await expect(
+      runHarness({
+        messages: makeMessages(),
+        tools: [okFirst, writesAndThrows, trailing],
+        llm,
+        budget: new Budget({ maxSteps: 5 }),
+        lifecycle,
+        ctx: makeCtx(),
+      }),
+    ).rejects.toThrow(/boom from writes_and_throws/);
+
+    const batchCalls = dispatchSpy.mock.calls.filter(
+      (call) => call[0] === "post_tool_batch",
+    );
+    expect(batchCalls).toHaveLength(1);
+    const batchPayload = batchCalls[0]![1] as {
+      batch: Array<{ toolId: string; output: unknown }>;
+    };
+    expect(batchPayload.batch.map((b) => b.toolId)).toEqual([
+      "ok_first",
+      "writes_and_throws",
+      "trailing",
+    ]);
+    expect(batchPayload.batch[0]!.output).toEqual({ x: 1 });
+    expect((batchPayload.batch[1]!.output as { error: string }).error).toBe(
+      "tool_execution_failed",
+    );
+    expect((batchPayload.batch[2]!.output as { error: string }).error).toBe(
+      "tool_skipped",
+    );
+  });
 });

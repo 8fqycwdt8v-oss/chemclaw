@@ -210,7 +210,18 @@ export async function spawnSubAgent(
         // Sub-agents inherit the same DB-backed permission policies as the
         // parent. A sub-agent dispatched by an enforced parent must not
         // silently get an unenforced harness.
-        permissions: { permissionMode: "enforce" },
+        //
+        // SUB_AGENT_TOOL_SUBSETS is a hard-coded, in-process allowlist for
+        // the type — passing it as allowedTools means the resolver
+        // short-circuits with "allow" before consulting the DB, which is
+        // the correct semantic (the sub-agent's tool subset IS its
+        // permission grant) AND keeps sub-agents working when the
+        // permission_policies table is empty (otherwise the post-fix
+        // resolver would deny every call).
+        permissions: {
+          permissionMode: "enforce",
+          allowedTools: [...allowedTools],
+        },
       }),
     );
   } catch (err) {

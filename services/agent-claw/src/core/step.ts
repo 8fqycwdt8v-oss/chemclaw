@@ -207,17 +207,64 @@ export async function stepOnce(opts: StepOnceOptions): Promise<StepOnceResult> {
     // 3b. Sequential fallback: any state-mutating tool in the batch (or a
     // single-tool turn) runs serially. Tools see each other's side effects
     // in declared order, matching the pre-Phase-5 behaviour.
-    for (const c of calls) {
-      const out = await runOneTool({
-        tools,
-        toolId: c.toolId,
-        input: c.input,
-        lifecycle,
-        ctx,
-        streamSink,
-        permissions,
-      });
-      toolOutputs.push(out);
+    //
+    // If a tool throws mid-loop, we capture partial outputs the same way
+    // the parallel branch does and dispatch post_tool_batch ONCE before
+    // re-throwing — without this, source-cache / anti-fabrication /
+    // tag-maturity see partial parallel failures (allSettled feeds them
+    // every slot) but NOT partial sequential failures, which is an
+    // asymmetry hook authors shouldn't have to defend against.
+    try {
+      for (const c of calls) {
+        const out = await runOneTool({
+          tools,
+          toolId: c.toolId,
+          input: c.input,
+          lifecycle,
+          ctx,
+          streamSink,
+          permissions,
+        });
+        toolOutputs.push(out);
+      }
+    } catch (err) {
+      // Pad the remaining slots with a synthetic error envelope so
+      // post_tool_batch sees an entry for every requested tool — keeping
+      // batch.length === calls.length is what makes the calls[i] indexing
+      // safe in the dispatch below.
+      const failedAt = toolOutputs.length;
+      const errorMessage = err instanceof Error ? err.message : String(err);
+      for (let i = failedAt; i < calls.length; i++) {
+        const c = calls[i];
+        if (!c) continue;
+        toolOutputs.push({
+          toolId: c.toolId,
+          output:
+            i === failedAt
+              ? { error: "tool_execution_failed", reason: errorMessage }
+              : { error: "tool_skipped", reason: "earlier sibling threw" },
+        });
+      }
+      try {
+        await lifecycle.dispatch("post_tool_batch", {
+          ctx,
+          batch: toolOutputs.map((o, i) => {
+            const call = calls[i];
+            if (!call) {
+              throw new Error(`step: calls[${i}] missing for toolOutput ${o.toolId}`);
+            }
+            return {
+              toolId: o.toolId,
+              input: call.input,
+              output: o.output,
+            };
+          }),
+        });
+      } catch {
+        // Hook failure during the partial-failure path is best-effort;
+        // the original tool error must propagate.
+      }
+      throw err;
     }
   }
 
