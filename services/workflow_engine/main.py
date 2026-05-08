@@ -36,6 +36,7 @@ from psycopg.rows import dict_row
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 from services.common.config_registry import ConfigRegistry
+from services.mcp_tools.common.auth import McpAuthError, sign_mcp_token
 from services.mcp_tools.common.logging import configure_logging
 from services.mcp_tools.common.mcp_token_cache import McpTokenCache
 
@@ -261,17 +262,197 @@ class WorkflowEngine:
             return await self._exec_tool_call(step, scope)
         if kind == "wait":
             return await self._exec_wait(step, scope)
-        if kind in ("conditional", "loop", "parallel", "sub_agent"):
-            # MVP guard: these step kinds are accepted by the agent-side Zod
-            # validator but the engine has no implementation yet. The previous
-            # behaviour returned a no-op success which let workflows that
-            # use them silently produce wrong results. Now we fail the run
-            # explicitly so the agent / operator sees the gap.
+        if kind == "conditional":
+            return await self._exec_conditional(step, scope)
+        if kind == "parallel":
+            return await self._exec_parallel(step, scope)
+        if kind == "sub_agent":
+            return await self._exec_sub_agent(step, scope)
+        if kind == "loop":
+            # Still NotImplementedError for now — loop semantics interact with
+            # workflow_events bookkeeping (each iteration ought to emit its
+            # own step_started/step_succeeded), which deserves a separate
+            # change. Fail loudly so workflows using `loop` don't silently
+            # mis-execute.
             raise NotImplementedError(
-                f"workflow step kind {kind!r} is not yet implemented in the engine; "
-                f"add an _exec_{kind} handler before defining workflows that use it"
+                "workflow step kind 'loop' is not yet implemented; "
+                "express iteration via 'parallel' (fan-out) or call multiple "
+                "tool_call steps explicitly"
             )
         raise ValueError(f"unknown step kind: {kind!r}")
+
+    async def _exec_conditional(
+        self, step: dict[str, Any], scope: dict[str, Any],
+    ) -> Any:
+        """Branch step: evaluate `if` (JMESPath against scope) for truthiness;
+        execute either `then` or `else` substep. Both branches accept a single
+        nested step dict; absent branches are no-ops returning None.
+
+        Step shape:
+            {kind: 'conditional', if: '<jmespath>', then: <step>, else?: <step>}
+        """
+        expr = step.get("if")
+        if not isinstance(expr, str) or not expr:
+            raise ValueError("conditional step requires non-empty 'if' (JMESPath string)")
+        value = self._resolve_jmespath(expr, scope)
+        chosen = step.get("then") if value else step.get("else")
+        if chosen is None:
+            return {"branch": "then" if value else "else", "result": None}
+        if not isinstance(chosen, dict):
+            raise ValueError(
+                f"conditional 'then'/'else' must be a step dict, got {type(chosen).__name__}"
+            )
+        result = await self._execute_step(chosen, scope)
+        return {"branch": "then" if value else "else", "result": result}
+
+    async def _exec_parallel(
+        self, step: dict[str, Any], scope: dict[str, Any],
+    ) -> Any:
+        """Fan-out step: run all substeps concurrently via asyncio.gather.
+        Returns a list of substep results in input order. If any substep
+        raises, the whole parallel step fails — pre-PR loop / parallel
+        absence forced this serialization onto the agent loop.
+
+        Step shape:
+            {kind: 'parallel', steps: [<step>, ...], max_concurrency?: int}
+        """
+        substeps = step.get("steps")
+        if not isinstance(substeps, list) or not substeps:
+            raise ValueError("parallel step requires non-empty 'steps' list")
+        for i, sub in enumerate(substeps):
+            if not isinstance(sub, dict):
+                raise ValueError(
+                    f"parallel substep [{i}] must be a step dict, got {type(sub).__name__}"
+                )
+
+        # max_concurrency defaults to the substep count (no throttle). Cap
+        # via config so a runaway workflow can't open hundreds of HTTP
+        # sockets to a single MCP service.
+        config_cap = max(
+            1,
+            self._config.get_int("workflow_engine.parallel_max_concurrency", 16),
+        )
+        requested = step.get("max_concurrency")
+        if isinstance(requested, int) and requested > 0:
+            cap = min(requested, config_cap)
+        else:
+            cap = config_cap
+        cap = min(cap, len(substeps))
+
+        sem = asyncio.Semaphore(cap)
+
+        async def _run_one(sub: dict[str, Any]) -> Any:
+            async with sem:
+                return await self._execute_step(sub, scope)
+
+        results = await asyncio.gather(*(_run_one(s) for s in substeps))
+        return list(results)
+
+    async def _exec_sub_agent(
+        self, step: dict[str, Any], scope: dict[str, Any],
+    ) -> Any:
+        """Spawn an agent-claw sub-agent via the internal sub_agent endpoint.
+
+        Step shape:
+            {kind: 'sub_agent', goal: '<text>', user_entra_id: '<id>',
+             type?: 'chemist'|'analyst'|'reader',
+             max_steps?: int, timeout_seconds?: int}
+
+        The engine mints a service JWT (scopes=['agent:sub_agent']) and POSTs
+        to AGENT_INTERNAL_BASE_URL + '/api/internal/workflows/sub_agent'. The
+        endpoint runs the harness with a restricted tool subset and returns
+        the final assistant text + citations + step count.
+        """
+        # Argument validation runs first so malformed workflows surface as
+        # ValueError (workflow-author signal) rather than RuntimeError
+        # ("engine not initialised"), matching the other _exec_* handlers.
+        goal = step.get("goal")
+        if not isinstance(goal, str) or not goal.strip():
+            raise ValueError("sub_agent step requires non-empty 'goal' string")
+        # JMESPath substitution: if goal looks like '${expr}', resolve.
+        if goal.startswith("${") and goal.endswith("}"):
+            resolved = self._resolve_jmespath(goal[2:-1], scope)
+            if not isinstance(resolved, str) or not resolved.strip():
+                raise ValueError(
+                    f"sub_agent goal expression {goal!r} did not resolve to a non-empty string"
+                )
+            goal = resolved
+
+        user_entra_id = step.get("user_entra_id")
+        if not isinstance(user_entra_id, str) or not user_entra_id.strip():
+            raise ValueError(
+                "sub_agent step requires 'user_entra_id' (engine has no ambient "
+                "user context — workflow author must specify whose RLS scope to use)"
+            )
+
+        agent_type = step.get("type", "analyst")
+        if agent_type not in ("chemist", "analyst", "reader"):
+            raise ValueError(
+                f"sub_agent 'type' must be one of chemist/analyst/reader, got {agent_type!r}"
+            )
+
+        max_steps = step.get("max_steps", 10)
+        if not isinstance(max_steps, int) or max_steps < 1 or max_steps > 50:
+            raise ValueError("sub_agent 'max_steps' must be int in [1, 50]")
+
+        timeout_seconds = step.get(
+            "timeout_seconds",
+            self._config.get_int("workflow_engine.sub_agent_timeout_seconds", 300),
+        )
+
+        if self._http is None:
+            raise RuntimeError("http client not initialized")
+
+        base_url = os.environ.get(
+            "AGENT_INTERNAL_BASE_URL", "http://agent-claw:3101",
+        )
+        url = f"{base_url.rstrip('/')}/api/internal/workflows/sub_agent"
+
+        # Mint a sub_agent-scoped JWT keyed to the workflow author's user.
+        # The endpoint validates scope (`agent:sub_agent`) and audience
+        # (`agent-claw`); on success it uses claims.user as the RLS scope.
+        # In dev mode (no signing key) we fall back to x-user-entra-id, the
+        # same back-compat shim the reanimator uses.
+        signing_key = os.environ.get("MCP_AUTH_SIGNING_KEY", "").strip()
+        headers: dict[str, str] = {}
+        if signing_key:
+            try:
+                token = sign_mcp_token(
+                    sandbox_id="workflow-engine",
+                    user_entra_id=user_entra_id,
+                    scopes=["agent:sub_agent"],
+                    audience="agent-claw",
+                    ttl_seconds=300,
+                    signing_key=signing_key,
+                )
+            except McpAuthError as exc:
+                raise RuntimeError(
+                    f"sub_agent: failed to mint token: {exc}"
+                ) from exc
+            headers["Authorization"] = f"Bearer {token}"
+        else:
+            headers["x-user-entra-id"] = user_entra_id
+
+        payload = {
+            "goal": goal,
+            "user_entra_id": user_entra_id,
+            "type": agent_type,
+            "max_steps": max_steps,
+        }
+        try:
+            resp = await self._http.post(
+                url, json=payload, headers=headers, timeout=timeout_seconds,
+            )
+        except httpx.TimeoutException as exc:
+            raise TimeoutError(
+                f"sub_agent step timed out after {timeout_seconds}s"
+            ) from exc
+
+        if resp.status_code >= 400:
+            raise RuntimeError(
+                f"sub_agent → {resp.status_code}: {resp.text[:500]}"
+            )
+        return resp.json()
 
     async def _exec_tool_call(self, step: dict[str, Any], scope: dict[str, Any]) -> Any:
         if self._http is None:

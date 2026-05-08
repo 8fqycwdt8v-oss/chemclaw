@@ -21,6 +21,7 @@ import { registerOptimizerRoutes } from "../routes/optimizer.js";
 import { registerSessionsRoute } from "../routes/sessions.js";
 import { registerForgedToolsRoutes } from "../routes/forged-tools.js";
 import { registerAdminRoutes } from "../routes/admin/index.js";
+import { registerWorkflowSubAgentRoute } from "../routes/workflow-sub-agent.js";
 
 export function registerAllRoutes(
   app: FastifyInstance,
@@ -87,6 +88,16 @@ export function registerAllRoutes(
   // Phase D.5 — admin-gated forged-tool scope promotion + read-only listing.
   // Audit H4: file existed and was tested but never wired here in production.
   registerForgedToolsRoutes(app, deps.pool, getUser);
+
+  // workflow_engine sub_agent step → spawnSubAgent. JWT-authenticated
+  // (audience=agent-claw, scope=agent:sub_agent); the engine mints
+  // tokens via services/workflow_engine/main.py:_exec_sub_agent.
+  registerWorkflowSubAgentRoute(app, {
+    pool: deps.pool,
+    config: cfg,
+    llm: deps.llmProvider,
+    registry: deps.registry,
+  });
 
   // Phase 1 of the configuration concept (Initiatives 2 + 10):
   // /api/admin/users/:entra_id/admin-role[s] + /api/admin/audit.
