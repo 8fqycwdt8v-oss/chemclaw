@@ -48,6 +48,15 @@ class WorkerSettings(BaseSettings):
     queue_concurrency: int = 4
     queue_lease_seconds: int = 300
     queue_tasks: str = "qm,genchem,classifier"
+    # On SIGTERM, await in-flight handler tasks for at most this long
+    # before cancelling them. 30s leaves plenty of headroom for fast
+    # MCP calls (single_point ~5s, frequencies ~15s) but still meets a
+    # k8s default `terminationGracePeriodSeconds: 30` so the pod doesn't
+    # get SIGKILL'd mid-drain. Cancelled tasks release their lease via
+    # the per-task `_fail` cancellation path; the row reverts to
+    # 'pending' and the next replica picks it up immediately rather
+    # than waiting QUEUE_LEASE_SECONDS (default 300s) for expiry.
+    queue_drain_timeout_s: int = 30
     poll_interval_seconds: int = 30  # belt-and-suspenders: poll even if no NOTIFYs
 
     # MCP base URLs
@@ -69,7 +78,20 @@ class WorkerSettings(BaseSettings):
 # ---------------------------------------------------------------------------
 
 
-def _build_handlers(settings: WorkerSettings) -> dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]]:
+def _build_handlers(
+    settings: WorkerSettings,
+) -> tuple[
+    dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]],
+    Callable[[], Awaitable[None]],
+]:
+    """Build the task_kind → handler dispatch table.
+
+    Returns the handler dict AND an async close callback. The Worker
+    must call the close callback during shutdown so the shared httpx
+    client's connection pool gets closed cleanly — pre-fix this leaked
+    on every SIGTERM, eventually exhausting kernel TCP slots under
+    rolling restarts.
+    """
     client = httpx.AsyncClient(timeout=600.0)
     token_cache = McpTokenCache(default_subject="queue-worker")
 
@@ -110,7 +132,7 @@ def _build_handlers(settings: WorkerSettings) -> dict[str, Callable[[dict[str, A
     async def genchem_bioisostere(p: dict[str, Any]) -> dict[str, Any]:
         return await post("mcp-genchem", f"{settings.mcp_genchem_url}/bioisostere_replace", p)
 
-    return {
+    handlers: dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]] = {
         "qm_single_point":    qm_single_point,
         "qm_geometry_opt":    qm_geometry_opt,
         "qm_frequencies":     qm_frequencies,
@@ -119,6 +141,12 @@ def _build_handlers(settings: WorkerSettings) -> dict[str, Callable[[dict[str, A
         "genchem_scaffold":   genchem_scaffold,
         "genchem_bioisostere": genchem_bioisostere,
     }
+
+    async def aclose() -> None:
+        """Shutdown hook — close the shared httpx client's pool."""
+        await client.aclose()
+
+    return handlers, aclose
 
 
 # ---------------------------------------------------------------------------
@@ -130,12 +158,13 @@ class QueueWorker:
     def __init__(self, settings: WorkerSettings) -> None:
         self.settings = settings
         self._shutdown = asyncio.Event()
-        self._handlers = _build_handlers(settings)
+        self._handlers, self._handlers_aclose = _build_handlers(settings)
         self._task_kinds = [k.strip() for k in settings.queue_tasks.split(",") if k.strip()]
         self._sema = asyncio.Semaphore(settings.queue_concurrency)
         self._lease_id = f"{socket.gethostname()}/{os.getpid()}"
         # Hold strong refs to in-flight handler tasks so they don't get
-        # garbage-collected before completion (RUF006).
+        # garbage-collected before completion (RUF006). Also lets the
+        # SIGTERM drain in run() wait on them.
         self._inflight_tasks: set[asyncio.Task[None]] = set()
 
     async def run(self) -> None:
@@ -177,7 +206,57 @@ class QueueWorker:
                         break
                     await self._sweep_all(work_conn)
 
+            # Drain in-flight handler tasks before tearing down work_conn /
+            # listen_conn. Pre-fix the SIGTERM path exited the
+            # `async with work_conn` block while _handle_with_sema tasks
+            # were still running. Their leases lingered until
+            # QUEUE_LEASE_SECONDS expiry (default 300s); under k8s rolling
+            # restarts every replica deploy stalled in-flight QM jobs by
+            # 5 minutes minimum.
+            await self._drain_inflight()
+
+        # Close the shared httpx client's connection pool. Without this,
+        # SIGTERM leaked TCP slots — under high replica churn the pod
+        # could exhaust kernel ephemeral-port range before its grace
+        # period expired.
+        try:
+            await self._handlers_aclose()
+        except Exception:  # noqa: BLE001 — must not block shutdown
+            log.exception("[queue] handler aclose raised during shutdown")
+
         log.info("[queue] worker stopped")
+
+    async def _drain_inflight(self) -> None:
+        """Wait for in-flight handler tasks, bounded by drain timeout."""
+        if not self._inflight_tasks:
+            return
+        n = len(self._inflight_tasks)
+        log.info(
+            "[queue] draining %d in-flight task(s) (timeout=%ds)",
+            n,
+            self.settings.queue_drain_timeout_s,
+        )
+        try:
+            await asyncio.wait_for(
+                asyncio.gather(*self._inflight_tasks, return_exceptions=True),
+                timeout=self.settings.queue_drain_timeout_s,
+            )
+            log.info("[queue] drain completed cleanly")
+        except asyncio.TimeoutError:
+            # Cancel still-running tasks; their cancellation handlers
+            # (the _maybe_retry / _fail catch path inside
+            # _handle_with_sema) release the lease via UPDATE so the
+            # row reverts to 'pending' rather than waiting on lease
+            # expiry.
+            still_running = [t for t in self._inflight_tasks if not t.done()]
+            log.warning(
+                "[queue] drain timed out; cancelling %d task(s)",
+                len(still_running),
+            )
+            for t in still_running:
+                t.cancel()
+            # Wait briefly for cancellation handlers to release leases.
+            await asyncio.gather(*still_running, return_exceptions=True)
 
     async def _next_notify(self, listen_conn: psycopg.AsyncConnection) -> str:
         gen = listen_conn.notifies()
