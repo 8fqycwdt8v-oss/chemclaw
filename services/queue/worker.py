@@ -49,6 +49,12 @@ class WorkerSettings(BaseSettings):
     queue_lease_seconds: int = 300
     queue_tasks: str = "qm,genchem,classifier"
     poll_interval_seconds: int = 30  # belt-and-suspenders: poll even if no NOTIFYs
+    # Max time (seconds) the worker waits for in-flight handler tasks to
+    # finish at SIGTERM/shutdown before cancelling them. Cancelled tasks
+    # still release their lease via the per-task _fail path. Default 30s
+    # gives a typical handler enough time to call _succeed/_fail without
+    # holding up a k8s rolling restart for the full 5-min lease window.
+    queue_drain_timeout_s: int = 30
 
     # MCP base URLs
     mcp_xtb_url: str = "http://mcp-xtb:8010"
@@ -176,6 +182,43 @@ class QueueWorker:
                     if shutdown_task in done:
                         break
                     await self._sweep_all(work_conn)
+
+        # Drain in-flight handler tasks before exiting. Pre-fix the
+        # `async with work_conn` exit closed the work connection while
+        # `_handle_with_sema` tasks were still running; those tasks
+        # held leases on rows in `task_queue`, and the per-task
+        # `_succeed`/`_fail` connections never opened so the lease
+        # persisted until `QUEUE_LEASE_SECONDS` (default 300s) before
+        # the next worker reclaimed. Under k8s rolling restarts this
+        # multiplied: every replica deploy stalled every in-flight QM
+        # job by 5 minutes minimum.
+        #
+        # Bounded by `QUEUE_DRAIN_TIMEOUT_S` (default 30s) so a stuck
+        # handler can't hold up the SIGTERM forever; tasks that don't
+        # complete in time are cancelled, which still releases the
+        # lease via the per-task `_fail` path on the cancellation
+        # exception.
+        if self._inflight_tasks:
+            log.info(
+                "[queue] draining %d inflight tasks (timeout=%ds)",
+                len(self._inflight_tasks),
+                self.settings.queue_drain_timeout_s,
+            )
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*self._inflight_tasks, return_exceptions=True),
+                    timeout=self.settings.queue_drain_timeout_s,
+                )
+            except asyncio.TimeoutError:
+                log.warning(
+                    "[queue] drain timed out — cancelling %d remaining tasks",
+                    sum(1 for t in self._inflight_tasks if not t.done()),
+                )
+                for t in self._inflight_tasks:
+                    if not t.done():
+                        t.cancel()
+                # Allow the cancellation handlers to run.
+                await asyncio.gather(*self._inflight_tasks, return_exceptions=True)
 
         log.info("[queue] worker stopped")
 
