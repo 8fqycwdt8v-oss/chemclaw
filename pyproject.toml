@@ -160,6 +160,14 @@ omit = [
     # log_context_scope contextvar and added per-event ack-or-skip flow.
     # Real coverage requires a testcontainer projector run.
     "services/projectors/common/base.py",
+    # compound_fingerprinter/main.py — 2026-05-08 deep-review hardening
+    # rewrote `_fingerprint` to track per-rule SMARTS failures and roll
+    # back the whole transaction on any failure (closes a partial-state
+    # idempotency gap). The new failure path needs httpx + psycopg async
+    # cursor mocks, i.e. a testcontainer integration test rather than a
+    # unit test. BACKLOG: add tests/unit/projectors/test_compound_fingerprinter_errors.py
+    # mirroring the chunk_embedder error-policy pattern.
+    "services/projectors/compound_fingerprinter/*",
     "documentation/*",
 ]
 parallel = true
