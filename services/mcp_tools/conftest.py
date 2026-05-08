@@ -34,6 +34,13 @@ def _enable_dev_mode() -> None:
         os.environ["MCP_AUTH_DEV_MODE"] = "true"
     os.environ.setdefault("MOCK_ELN_ALLOW_DEV_PASSWORD", "true")
     os.environ.setdefault("LOGS_ALLOW_DEV_PASSWORD", "true")
+    # CHEMCLAW_DEV_MODE is the canonical dev signal for the user-hash
+    # salt resolver (services/mcp_tools/common/user_hash.py). The TS
+    # side honours only this var; the Python side now matches. Without
+    # this default, any test that imports user_hash + calls hash_user
+    # without LOG_USER_SALT set raises RuntimeError on the production
+    # fail-closed branch.
+    os.environ.setdefault("CHEMCLAW_DEV_MODE", "true")
 
 
 _enable_dev_mode()

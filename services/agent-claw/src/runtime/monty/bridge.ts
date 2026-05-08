@@ -100,6 +100,20 @@ export async function routeExternalCall(
         span.setStatus({ code: SpanStatusCode.OK });
       }
       return result;
+    } catch (err) {
+      // Defense-in-depth: if anything between the registry lookup and
+      // _routeExternalCall completion throws (registry get throwing,
+      // lifecycle dispatch rejecting outside _routeExternalCall's own
+      // try/catch, etc.), the host's outer catch translates it into a
+      // clean error outcome — but the SPAN was previously closed with
+      // no `monty.outcome` attribute, so post-mortem queries by run_id
+      // missed the failure entirely. Stamp monty.outcome="error" before
+      // rethrowing so the trace tree is complete.
+      const message = err instanceof Error ? err.message : String(err);
+      span.setAttribute("monty.outcome", "error");
+      span.setAttribute("monty.external_call.ok", false);
+      span.setStatus({ code: SpanStatusCode.ERROR, message });
+      throw err;
     } finally {
       span.end();
     }

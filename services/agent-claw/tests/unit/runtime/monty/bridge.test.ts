@@ -178,4 +178,34 @@ describe("routeExternalCall", () => {
     expect(response.error).toContain("not registered");
     expect(trace.ok).toBe(false);
   });
+
+  it("rethrows registry-layer failures so the host's span captures monty.outcome=error", async () => {
+    // Failure-mode coverage: if the registry's `get` throws (corrupt
+    // state, lookup mid-mutation, etc.), the bridge's outer try/catch
+    // stamps monty.outcome="error" on the span before rethrowing so the
+    // host's `monty_external_call_dispatch_failed` log line and the
+    // OTel trace tree both record the failure. Cluster-H follow-up:
+    // pre-fix, a registry throw closed the span with no monty.outcome
+    // attribute and a post-mortem trace query by run_id missed the
+    // failure entirely.
+    const lifecycle = new Lifecycle();
+    const failingRegistry = {
+      get: () => {
+        throw new Error("registry corrupt");
+      },
+    };
+
+    await expect(
+      routeExternalCall(
+        { type: "external_call", id: 7, name: "any", args: {} },
+        {
+          registry: failingRegistry,
+          allowedToolIds: new Set(["any"]),
+          ctx: makeCtx(),
+          lifecycle,
+          parentRunId: "run-abc",
+        },
+      ),
+    ).rejects.toThrow("registry corrupt");
+  });
 });

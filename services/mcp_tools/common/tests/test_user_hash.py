@@ -72,18 +72,35 @@ def test_default_dev_salt_used_without_env() -> None:
 def test_throws_when_salt_unset_and_no_dev_signal(monkeypatch: pytest.MonkeyPatch) -> None:
     """Mirror of the TS-side throw-path test.
 
-    Pytest sets PYTEST_CURRENT_TEST automatically — `is_dev` is True
-    inside any test by default. This case explicitly clears every
-    dev-mode signal so the production fail-closed path actually fires,
-    catching a future regression that flips the gate back to
-    fail-open.
+    The dev signal is now CHEMCLAW_DEV_MODE only (matching TS).
+    MCP_AUTH_DEV_MODE / PYTEST_CURRENT_TEST are no longer honoured by
+    the salt resolver — clearing CHEMCLAW_DEV_MODE alone is sufficient
+    to put the resolver into the production fail-closed branch.
     """
     monkeypatch.delenv("LOG_USER_SALT", raising=False)
     monkeypatch.delenv("CHEMCLAW_DEV_MODE", raising=False)
-    monkeypatch.delenv("MCP_AUTH_DEV_MODE", raising=False)
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     reset_user_hash_for_tests()
     with pytest.raises(RuntimeError, match=r"LOG_USER_SALT"):
+        hash_user("alice@example.com")
+
+
+def test_throws_even_when_only_mcp_auth_dev_mode_is_set(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Lock the cross-service-correlation invariant.
+
+    Pre-fix Python honoured MCP_AUTH_DEV_MODE as a fall-through to the
+    public dev salt; TS never did. A deploy with MCP_AUTH_DEV_MODE=true
+    and CHEMCLAW_DEV_MODE unset would have the TS side raise on first
+    hash call (no salt) and the Python side silently use the dev salt
+    — cross-service hashes mismatch silently. This test pins the new
+    behaviour: MCP_AUTH_DEV_MODE alone does NOT enable the dev salt.
+    """
+    monkeypatch.delenv("LOG_USER_SALT", raising=False)
+    monkeypatch.delenv("CHEMCLAW_DEV_MODE", raising=False)
+    monkeypatch.setenv("MCP_AUTH_DEV_MODE", "true")
+    reset_user_hash_for_tests()
+    with pytest.raises(RuntimeError, match=r"CHEMCLAW_DEV_MODE"):
         hash_user("alice@example.com")
 
 
@@ -91,7 +108,6 @@ def test_does_not_throw_when_dev_mode_true_and_salt_unset(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     monkeypatch.delenv("LOG_USER_SALT", raising=False)
-    monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
     monkeypatch.setenv("CHEMCLAW_DEV_MODE", "true")
     reset_user_hash_for_tests()
     # Falls back to the public dev salt — should produce a 16-hex hash
