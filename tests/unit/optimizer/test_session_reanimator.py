@@ -63,7 +63,14 @@ def _make_httpx_response(status: int, json_body: Any = None, text: str = "") -> 
 
 
 class TestSettings:
-    def test_defaults_match_documented_safe_values(self):
+    def test_defaults_match_documented_safe_values(self, monkeypatch):
+        # services/mcp_tools/conftest.py sets CHEMCLAW_DEV_MODE=true at
+        # collection time so the user-hash resolver doesn't raise during
+        # unrelated mcp_tools tests. That env var leaks into
+        # pydantic-settings, so we explicitly clear it here to assert
+        # the true documented default.
+        monkeypatch.delenv("CHEMCLAW_DEV_MODE", raising=False)
+        monkeypatch.delenv("MCP_AUTH_SIGNING_KEY", raising=False)
         s = Settings()
         assert s.poll_interval_seconds == 300  # 5 min
         assert s.batch_size == 10
@@ -95,14 +102,20 @@ class TestSettings:
         s = Settings(chemclaw_dev_mode=True)
         s.assert_production_safe()  # must not raise even with empty key
 
-    def test_assert_production_safe_refuses_when_signing_key_missing(self):
+    def test_assert_production_safe_refuses_when_signing_key_missing(self, monkeypatch):
+        # Same env-leak guard as test_defaults_match_documented_safe_values
+        # — services/mcp_tools/conftest.py sets CHEMCLAW_DEV_MODE=true at
+        # collection time, which would shortcut assert_production_safe().
+        monkeypatch.delenv("CHEMCLAW_DEV_MODE", raising=False)
+        monkeypatch.delenv("MCP_AUTH_SIGNING_KEY", raising=False)
         s = Settings()  # all defaults: empty key + dev_mode=False
         with pytest.raises(RuntimeError, match="mcp_auth_signing_key"):
             s.assert_production_safe()
 
-    def test_assert_production_safe_treats_whitespace_as_unset(self):
+    def test_assert_production_safe_treats_whitespace_as_unset(self, monkeypatch):
         # A misconfigured helm secret can land "   " in the env var.
         # The strip() guard catches it before silent downgrade.
+        monkeypatch.delenv("CHEMCLAW_DEV_MODE", raising=False)
         s = Settings(mcp_auth_signing_key="   ")
         with pytest.raises(RuntimeError):
             s.assert_production_safe()

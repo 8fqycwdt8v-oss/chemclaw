@@ -25,12 +25,22 @@ def _get_salt() -> str:
     """Resolve the salt with fail-closed semantics in production.
 
     When LOG_USER_SALT is unset:
-      - dev mode (CHEMCLAW_DEV_MODE=true OR no production indicator):
-        fall back to the public dev salt.
+      - dev mode (CHEMCLAW_DEV_MODE=true): fall back to the public dev salt.
       - production: raise. Without this, the hash is cryptographically
         useless — an attacker with log access can pre-compute
         sha256("chemclaw-dev-salt-not-secret:" + email) against any
         public email list and de-anonymise users in seconds.
+
+    The dev-mode signal is `CHEMCLAW_DEV_MODE` ONLY — symmetrical with
+    the TS-side `salt()` resolver in `services/agent-claw/src/
+    observability/user-hash.ts`. Pre-fix this Python module also
+    treated `MCP_AUTH_DEV_MODE` and `PYTEST_CURRENT_TEST` as
+    fall-back-to-dev-salt signals, but the TS side never honoured
+    them — so a deploy with MCP_AUTH_DEV_MODE=true and CHEMCLAW_DEV_MODE
+    unset would have the TS side raise on first hash call (no salt) and
+    the Python side silently fall through to the public dev salt.
+    Cross-service hash correlations would mismatch silently. Now both
+    sides agree.
     """
     global _salt
     if _salt is not None:
@@ -39,17 +49,12 @@ def _get_salt() -> str:
     if from_env:
         _salt = from_env
         return _salt
-    is_dev = (
-        os.getenv("CHEMCLAW_DEV_MODE", "").lower() == "true"
-        or os.getenv("MCP_AUTH_DEV_MODE", "").lower() == "true"
-        or os.getenv("PYTEST_CURRENT_TEST") is not None
-    )
+    is_dev = os.getenv("CHEMCLAW_DEV_MODE", "").lower() == "true"
     if not is_dev:
         raise RuntimeError(
-            "LOG_USER_SALT is required outside dev mode (set CHEMCLAW_DEV_MODE=true "
-            "for local dev, or supply a real salt in production). The default "
-            "salt is public — without a real salt the 16-hex-char hash "
-            "trivially de-anonymises users via rainbow-table lookup."
+            "LOG_USER_SALT is required when CHEMCLAW_DEV_MODE != true. "
+            "The default salt is public — without a real salt the 16-hex-char "
+            "hash trivially de-anonymises users via rainbow-table lookup."
         )
     _salt = DEFAULT_DEV_SALT
     return _salt
