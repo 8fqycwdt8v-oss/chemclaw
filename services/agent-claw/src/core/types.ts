@@ -316,9 +316,12 @@ export interface PostToolBatchPayload {
 
 // Phase 6 permissions: see docs/adr/009-permission-and-decision-contract.md
 // and docs/adr/010-deferred-phases.md. The type is declared so downstream
-// hook authors can register against it without a follow-up patch; the
-// resolver in core/permissions/resolver.ts only fires when a route passes
-// a `permissions` option to runHarness, which no production route does today.
+// hook authors can register against it; the resolver in
+// core/permissions/resolver.ts dispatches this point on every tool call,
+// because all six production harness call sites pass
+// `permissions: { permissionMode: "enforce" }` (chat.ts, plan.ts,
+// deep-research.ts ×2, sub-agent.ts, chained-harness.ts) — see PARITY.md
+// "Permission modes" row.
 export interface PermissionRequestPayload {
   ctx: ToolContext;
   toolId: string;

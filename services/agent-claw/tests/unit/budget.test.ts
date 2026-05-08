@@ -63,4 +63,37 @@ describe("Budget — token and step caps", () => {
     budget.consumeStep({ promptTokens: 10, completionTokens: 5 });
     expect(budget.stepsUsed).toBe(2);
   });
+
+  it("shouldCompact uses current window (latest call), not cumulative spend", () => {
+    // 10_000-token cap (ample headroom for cumulative), 0.06 threshold =
+    // compact when the LATEST call's prompt size >= 600. Three calls of
+    // 300, 300, 700 would cumulate to 1_300 — a cumulative-based trigger
+    // would fire after step 2 (cumulative 600 ≥ 600). The current-window
+    // trigger fires only when one call's prompt size crosses on its own.
+    const budget = new Budget({
+      maxSteps: 10,
+      maxPromptTokens: 10_000,
+      compactionThreshold: 0.06,
+    });
+    budget.consumeStep({ promptTokens: 300, completionTokens: 0 });
+    expect(budget.shouldCompact()).toBe(false);
+    budget.consumeStep({ promptTokens: 300, completionTokens: 0 });
+    // Pre-fix this would be true (cumulative 600 ≥ 600). Post-fix the
+    // latest call's window is 300 — under the threshold.
+    expect(budget.shouldCompact()).toBe(false);
+
+    // Single call crosses the threshold on its own.
+    budget.consumeStep({ promptTokens: 700, completionTokens: 0 });
+    expect(budget.shouldCompact()).toBe(true);
+    expect(budget.currentPromptTokens).toBe(700);
+
+    // Cumulative spend remains the sum across calls (used for cost).
+    expect(budget.summary().promptTokens).toBe(1_300);
+
+    // resetPromptTokens shrinks the current-window estimate without
+    // refunding cumulative spend.
+    budget.resetPromptTokens(100);
+    expect(budget.shouldCompact()).toBe(false);
+    expect(budget.summary().promptTokens).toBe(1_300);
+  });
 });
