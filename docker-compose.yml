@@ -703,8 +703,14 @@ services:
       LANGFUSE_INIT_PROJECT_NAME: ChemClaw
       LANGFUSE_INIT_PROJECT_PUBLIC_KEY: ${LANGFUSE_PUBLIC_KEY:-pk-lf-dev-change-me}
       LANGFUSE_INIT_PROJECT_SECRET_KEY: ${LANGFUSE_SECRET_KEY:-sk-lf-dev-change-me}
+    # Bind to 127.0.0.1 by default to match the CLAUDE.md observability
+    # promise ("Langfuse:3000 (bound to 127.0.0.1; LOKI_BIND/GRAFANA_BIND
+    # to expose)"). Operators expose by setting LANGFUSE_BIND=0.0.0.0
+    # explicitly when fronting with an SSO proxy. Pre-fix this was bound
+    # to all interfaces, leaking the dev API keys to anything reachable
+    # on the host network.
     ports:
-      - "3000:3000"
+      - "${LANGFUSE_BIND:-127.0.0.1}:${LANGFUSE_PORT:-3000}:3000"
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:3000/api/public/health || exit 1"]
       interval: 15s
