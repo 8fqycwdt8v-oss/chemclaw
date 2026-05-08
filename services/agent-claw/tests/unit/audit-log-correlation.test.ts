@@ -5,7 +5,7 @@
 // secret bucket" couldn't be linked to the originating HTTP request
 // without time-window grep.
 
-import { describe, it, expect, beforeAll, beforeEach, vi } from "vitest";
+import { describe, it, expect, beforeAll, beforeEach } from "vitest";
 import type { Pool, QueryResult } from "pg";
 import { NodeTracerProvider } from "@opentelemetry/sdk-trace-node";
 import {
@@ -152,8 +152,4 @@ describe("appendAudit correlation", () => {
     expect(params[6]).toBeNull();
     expect(params[7]).toBeNull();
   });
-
-  // Defensive: vi import isn't needed but keeps lint happy if the test
-  // is later expanded to spy on something.
-  void vi;
 });

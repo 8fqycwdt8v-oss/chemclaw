@@ -72,21 +72,25 @@ export async function startServer(
             `check HOOKS_DIR (skipped=${JSON.stringify(hookResult.skipped)})`,
         );
       }
-      // Tighten the gate: a YAML file ADDED without a matching builtin
+      // Tighten the gate against the specific "missing registrar"
+      // failure mode: a YAML file ADDED without a matching builtin
       // registrar would otherwise boot green (registered stays at 11 ≥
-      // MIN_EXPECTED_HOOKS while the new file lands in `skipped`). The
-      // documented invariant in CLAUDE.md is "every YAML in `hooks/`
-      // has a matching `BUILTIN_REGISTRARS` entry"; this assertion
-      // enforces it. The reverse (registrar without YAML) doesn't
-      // appear in `skipped` but loadHooks won't register a hook
-      // without its YAML, so registered + skipped + (yamlFiles - both)
-      // would differ, but the simpler assertion here is "no skipped".
-      if (hookResult.skipped.length > 0) {
+      // MIN_EXPECTED_HOOKS while the new file lands in `skipped` with
+      // a "no built-in registrar" reason). The documented invariant in
+      // CLAUDE.md is "every YAML in `hooks/` has a matching
+      // `BUILTIN_REGISTRARS` entry"; this assertion enforces it
+      // without breaking the legitimate skip reasons (enabled:false,
+      // condition:false, parse error, missing name) — those still
+      // surface in result.skipped at INFO above.
+      const missingRegistrar = hookResult.skipped.filter((s) =>
+        s.includes("no built-in registrar"),
+      );
+      if (missingRegistrar.length > 0) {
         throw new Error(
-          `lifecycle hooks have unregistered YAML files: skipped=${JSON.stringify(hookResult.skipped)}. ` +
-            `Every YAML in hooks/ must have a matching BUILTIN_REGISTRARS entry in core/hook-loader.ts. ` +
-            `Either add the registrar (security-relevant hook silently disabled = boot-green disaster) ` +
-            `or set enabled:false in the YAML.`,
+          `lifecycle hooks have YAML files with no matching BUILTIN_REGISTRARS entry: ` +
+            `${JSON.stringify(missingRegistrar)}. Every YAML in hooks/ must have a matching ` +
+            `registrar in core/hook-loader.ts (security-relevant hook silently disabled = boot-green disaster). ` +
+            `Either add the registrar or set enabled:false in the YAML.`,
         );
       }
     } catch (err) {

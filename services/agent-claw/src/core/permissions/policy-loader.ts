@@ -50,9 +50,6 @@ export interface PolicyMatchContext {
 export class PermissionPolicyLoader {
   private cache: PolicyRow[] | null = null;
   private cacheAt = 0;
-  // ID set of rows already logged as broken in the current cache window
-  // — keeps the WARN once-per-(row, refresh-cycle) instead of once-per-call.
-  private warnedBrokenIds = new Set<string>();
 
   constructor(
     private readonly pool: Pool,
@@ -81,7 +78,6 @@ export class PermissionPolicyLoader {
         );
         return r.rows;
       });
-      this.warnedBrokenIds = new Set();
       const log = getLogger("agent-claw.core.permissions.policy-loader");
       this.cache = rows.map((r) => {
         let compiled: RegExp | null = null;
@@ -108,7 +104,6 @@ export class PermissionPolicyLoader {
               },
               "permission policy argument_pattern failed to compile — row will not match any input",
             );
-            this.warnedBrokenIds.add(r.id);
           }
         }
         return {
