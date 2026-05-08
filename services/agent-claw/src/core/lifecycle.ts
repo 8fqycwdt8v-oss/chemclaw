@@ -130,6 +130,18 @@ export class Lifecycle {
   }
 
   /**
+   * Returns the per-hook timeouts (ms) at a given point, in registration
+   * order — parallel to `hookNames(point)`. Used by tests to assert that
+   * a YAML `timeout_ms:` actually flowed through `loadHooks` into the
+   * registered hook's `opts.timeout`. Hooks registered without an explicit
+   * timeout report `DEFAULT_HOOK_TIMEOUT_MS` (60_000).
+   */
+  hookTimeouts(point: HookPoint): number[] {
+    const arr = this._hooks.get(point) ?? [];
+    return arr.map((h) => h.timeout);
+  }
+
+  /**
    * Dispatch a lifecycle event. All registered handlers for the given point
    * are called sequentially (in registration order).
    *
