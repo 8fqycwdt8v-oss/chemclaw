@@ -40,6 +40,13 @@
 -- Pre-reqs.
 -- ---------------------------------------------------------------------------
 
+-- Wrap the whole file in a transaction so a partial failure mid-migration
+-- (extension grant rejected, partition month overflow, audit trigger
+-- creation conflicting with a concurrent migration) rolls back cleanly
+-- rather than leaving the schema half-applied. Matches every other init
+-- file's posture.
+BEGIN;
+
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 -- The salt used by `audit_row_change` to hash actor user-ids. Must
@@ -477,3 +484,5 @@ REVOKE EXECUTE ON FUNCTION enforce_user_context(TEXT) FROM PUBLIC;
 -- full relative path key (`db/init/19_observability.sql`). No embedded
 -- INSERT here — duplicating it produced a second row keyed by the
 -- basename and confused `SELECT * FROM schema_version` audits.
+
+COMMIT;

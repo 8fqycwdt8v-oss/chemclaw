@@ -136,4 +136,14 @@ describe("serializeError — cause-chain handling", () => {
     // the original token isn't present.
     expect(innerSer.message).not.toContain("CC(=O)Oc1ccccc1C(=O)O");
   });
+
+  it("scrubs SMILES when err is a primitive string (not an Error object)", () => {
+    // Call sites like `log.warn({ err: someErr.message }, "...")` pass
+    // a top-level string into the err serializer. Pre-fix, the serializer
+    // returned the string unchanged because the primitive branch
+    // bypassed scrub. Postgres / MCP error strings frequently embed
+    // SMILES inside "Failing row contains (...)" markers.
+    const out = serializeError("driver: failure on CC(=O)Oc1ccccc1C(=O)O");
+    expect(out.message).not.toContain("CC(=O)Oc1ccccc1C(=O)O");
+  });
 });

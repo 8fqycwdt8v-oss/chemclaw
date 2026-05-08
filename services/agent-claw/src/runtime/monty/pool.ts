@@ -65,13 +65,18 @@ class PrewarmedChildWrapper extends EventEmitter implements MontyChild {
     listener: MontyChildEvents[K],
   ): this {
     super.on(event, listener as (...args: unknown[]) => void);
-    // Replay ready exactly once, when the first frame listener attaches.
-    // setImmediate so the listener is fully registered before we emit.
-    if (
-      event === "frame" &&
-      !this.readyReplayed &&
-      this.listenerCount("frame") === 1
-    ) {
+    // Replay ready exactly once on the FIRST frame listener attach,
+    // regardless of how many other event types were attached before.
+    // The earlier `listenerCount("frame") === 1` gate was brittle: if
+    // any code path detached + reattached the frame listener (e.g.
+    // cancellation reordering), the gate could re-fire OR never fire.
+    // setImmediate so the listener Pino just attached is fully wired
+    // by the event loop before we emit — synchronous emit here would
+    // miss the listener if EventEmitter's internal arrays haven't
+    // settled (Node's behaviour is synchronous-emit, but staying on
+    // setImmediate matches the "fresh child emits ready async" path
+    // the host's frame handler is written for).
+    if (event === "frame" && !this.readyReplayed) {
       this.readyReplayed = true;
       setImmediate(() => this.emit("frame", { type: "ready" }));
     }

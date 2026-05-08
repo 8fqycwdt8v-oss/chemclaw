@@ -46,7 +46,11 @@ CREATE INDEX IF NOT EXISTS idx_gen_proposals_inchikey
 -- ────────────────────────────────────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS bioisostere_rules (
   id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  name         TEXT NOT NULL,
+  -- UNIQUE(name) makes the seed below idempotent. Existing deployments
+  -- created before this change run the dedupe + ALTER in
+  -- 43_bioisostere_rules_unique.sql, so both fresh and pre-existing DBs
+  -- end up at the same shape.
+  name         TEXT NOT NULL UNIQUE,
   lhs_smarts   TEXT NOT NULL,
   rhs_smiles   TEXT NOT NULL,
   source       TEXT,
@@ -105,7 +109,11 @@ INSERT INTO bioisostere_rules (name, lhs_smarts, rhs_smiles, source, weight, des
   ('CO2H→tetrazole',         '[CX3](=O)[OX2H1]',       'c1nn[nH]n1', 'patani_lavoie', 0.8, 'Carboxylic acid → tetrazole (acidic isostere).'),
   ('amide→sulfonamide',      '[NX3;H1][CX3](=O)[#6]',  'NS(=O)(=O)C', 'patani_lavoie', 0.65, 'Replace amide with sulfonamide.'),
   ('OH→NH2',                 '[OX2H1][CH2]',           'N',          'patani_lavoie', 0.5, 'Hydroxyl→amine.')
-ON CONFLICT DO NOTHING;
+ON CONFLICT (name) DO NOTHING;
+-- Note: the UNIQUE (name) constraint that makes this conflict target valid is
+-- added by 43_bioisostere_rules_unique.sql, which also dedupes existing
+-- duplicates on first apply. On a fresh DB the order init/26 → init/43 still
+-- yields the right state because 43 runs the DELETE+ALTER after 26's INSERT.
 
 -- ────────────────────────────────────────────────────────────────────────────
 -- 6. Feature flag + permission policy

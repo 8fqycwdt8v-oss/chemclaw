@@ -11,6 +11,7 @@ import { withUserContext } from "../../db/with-user-context.js";
 import { isAdmin, guardAdmin } from "../../middleware/require-admin.js";
 import { appendAudit } from "./audit-log.js";
 import { getPermissionPolicyLoader } from "../../core/permissions/policy-loader.js";
+import { isPatternSafe } from "../../security/regex-safety.js";
 
 const SCOPE_VALUES = ["global", "org", "project"] as const;
 const DECISION_VALUES = ["allow", "deny", "ask"] as const;
@@ -98,10 +99,18 @@ export function registerAdminPermissionRoutes(
     }
 
     if (argument_pattern) {
-      try {
-        new RegExp(argument_pattern);
-      } catch (e) {
-        return await reply.status(400).send({ error: `Invalid argument_pattern regex: ${(e as Error).message}` });
+      // Reuse the redaction-pattern ReDoS gate. The loader applies this
+      // regex to JSON.stringify(input) on every pre_tool dispatch — an
+      // unbounded quantifier (`(a+)+`, `[a-z]+` …) lets an admin DoS
+      // their own tenant's tool path. The DB CHECK
+      // (44_permission_policy_pattern_safety.sql) is a belt-and-braces
+      // backstop that mirrors the redaction_patterns_no_long_pattern /
+      // _no_nested_quantifier guards.
+      const safety = isPatternSafe(argument_pattern);
+      if (!safety.ok) {
+        return await reply.status(400).send({
+          error: `Invalid argument_pattern: ${safety.reason ?? "unsafe regex"}`,
+        });
       }
     }
 

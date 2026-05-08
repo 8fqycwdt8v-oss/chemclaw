@@ -8,9 +8,18 @@
 // All spans are opened via the OTel tracer from otel.ts.
 // When OTel is not configured, all operations are no-ops (the tracer returns
 // a no-op span that ignores setAttribute / end calls).
+//
+// PII handling: user identifiers are HASHED before they reach span
+// attributes. The `chemclaw.user` and `user.id` fields surface in OTLP
+// exporters (Langfuse UI, OTel collectors, vendor backends), and Langfuse
+// trace exports are routinely shared with vendor support — raw entra ids
+// (emails / GUIDs) are PII and must never land there. The salted-hash
+// pipeline in `user-hash.ts` is shared with Loki / Pino so cross-service
+// correlation still works on the hash.
 
 import { SpanStatusCode, type Span } from "@opentelemetry/api";
 import { getTracer } from "./otel.js";
+import { hashUser } from "./user-hash.js";
 
 // ---------------------------------------------------------------------------
 // Root span — one per chat turn
@@ -42,10 +51,16 @@ export function startRootTurnSpan(opts: RootSpanOptions): Span {
   const tracer = getTracer();
   const span = tracer.startSpan(`chat_turn:${opts.traceId}`);
   span.setAttribute("chemclaw.trace_id", opts.traceId);
-  span.setAttribute("chemclaw.user", opts.userEntraId);
+  // PII: emit only the salted hash of the user id. Span attributes are
+  // shipped via OTLP to Langfuse / external collectors and frequently
+  // shared with vendor support; raw entra ids (emails / GUIDs) never
+  // belong there. The same hash is used in Pino logs so cross-service
+  // correlation still works.
+  const userHash = hashUser(opts.userEntraId);
+  span.setAttribute("chemclaw.user", userHash);
   // Langfuse OTel ingestion conventions — surface user/session/tags so the
   // UI groups traces correctly and GEPA's tag filter actually returns rows.
-  span.setAttribute("user.id", opts.userEntraId);
+  span.setAttribute("user.id", userHash);
   if (opts.model) {
     span.setAttribute("llm.model", opts.model);
   }

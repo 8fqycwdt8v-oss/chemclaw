@@ -191,7 +191,15 @@ export class MontyHost {
         }
 
         if (frame.type === "external_call") {
-          void this._handleExternalCall(
+          // Fire-and-forget the external-call dispatch, but catch the
+          // tail rejection: anything escaping `_handleExternalCall`
+          // (e.g. a `lifecycle.dispatch("post_tool", ...)` rejecting
+          // outside the bridge's catch) becomes an unhandledRejection
+          // that hangs the host promise until wall-time fires AND
+          // crashes the Node process under the default policy. The
+          // catch translates the rejection into a clean `error`
+          // outcome so the script gets a structured failure instead.
+          this._handleExternalCall(
             frame,
             child,
             allowedToolIds,
@@ -214,7 +222,25 @@ export class MontyHost {
                 }
               }
             },
-          );
+          ).catch((err: unknown) => {
+            // Defense-in-depth: any synchronous rejection that escapes
+            // _handleExternalCall is converted to a clean `error`
+            // outcome. The bridge's own try/catch handles tool failures
+            // by returning `ok: false` responses; this catch is for the
+            // unexpected — e.g. a lifecycle hook throwing outside the
+            // bridge's scope, or the registry lookup rejecting.
+            if (resolved) return;
+            const message = err instanceof Error ? err.message : String(err);
+            log.error(
+              {
+                event: "monty_external_call_dispatch_failed",
+                run_id: runOpts.runId,
+                err: message,
+              },
+              "Monty external_call dispatch threw outside the bridge — failing run",
+            );
+            finish({ kind: "error", error: message });
+          });
           return;
         }
 

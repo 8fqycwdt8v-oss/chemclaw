@@ -87,11 +87,14 @@ function serializeErrorAt(
     return { type: "unknown", message: "" };
   }
   if (typeof err !== "object") {
-    // `getLogger().error("string-only error")` → primitive falls through
-    // unchanged; nothing to scrub.
+    // `getLogger().error({ err: "raw string" }, "...")` — the primitive
+    // string also needs scrubbing. Driver / MCP layers sometimes hand us
+    // pre-formatted strings carrying SMILES / compound codes; the serializer
+    // is the only chance to mask them before Pino formats. Non-string
+    // primitives JSON-stringify cleanly with no PII surface.
     return {
       type: typeof err,
-      message: typeof err === "string" ? err : JSON.stringify(err),
+      message: typeof err === "string" ? scrub(err) : JSON.stringify(err),
     };
   }
   if (seen.has(err)) {
@@ -142,6 +145,24 @@ function serializeError(err: unknown): Record<string, unknown> {
   return serializeErrorAt(err, 0, new WeakSet());
 }
 
+/**
+ * Field-level serializer that scrubs a string-typed log field. Used for
+ * `err_msg` / `errMsg` / `error_message` / `errorMessage` so the common
+ * "pre-extract `err.message` and pass as a top-level string" pattern at
+ * call sites (`log.warn({ err_msg: (err as Error).message }, "...")`)
+ * runs through the same regex pipeline as the structured `err` channel.
+ *
+ * Pino calls a serializer with the field value. For non-string inputs we
+ * fall through to JSON.stringify so callers that accidentally pass an
+ * Error / object don't crash the logger; the value will then be visible
+ * but the scrub-string variant is intended for the string channel.
+ */
+function scrubStringField(value: unknown): unknown {
+  if (typeof value === "string") return scrub(value);
+  if (value instanceof Error) return serializeError(value);
+  return value;
+}
+
 /** Test-only export so unit tests can exercise the depth cap and cycle
  * detection without going through Pino's stdout transport. Production code
  * MUST NOT import this — use `getLogger()`.
@@ -165,6 +186,15 @@ function buildRoot(): Logger {
       // Same shape, different name — some call sites use `error` instead
       // of `err` (e.g. legacy fastify reply context fields).
       error: serializeError,
+      // `err_msg` is the second-most-common channel — many call sites
+      // pre-extract `(err as Error).message` and pass it as a top-level
+      // string field (`{ err_msg: "..." }`). Pino's path-redact list
+      // can't regex over values; a plain serializer that scrubs the
+      // string is the only way to keep those bodies clean.
+      err_msg: scrubStringField,
+      errMsg: scrubStringField,
+      error_message: scrubStringField,
+      errorMessage: scrubStringField,
     },
     timestamp: pino.stdTimeFunctions.isoTime,
     // Auto-enrich every record with correlation fields when an HTTP request

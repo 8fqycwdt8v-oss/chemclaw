@@ -113,10 +113,18 @@ export function registerArtifactsRoutes(
               confidence_ensemble: unknown;
               created_at: string;
             }>(
+              // Bi-temporal filter: a corrected artifact has
+              // superseded_at set; the public GET should return only the
+              // current row. Without this filter a stale ID returns the
+              // pre-correction payload, undermining the "current view"
+              // contract from db/init/17_unified_confidence_and_temporal.sql.
+              // Sibling reads (e.g. compute_confidence_ensemble) already
+              // apply this filter — surfaces consistency.
               `SELECT id::text AS id, kind, payload, maturity,
                       confidence_ensemble, created_at::text AS created_at
                  FROM artifacts
-                WHERE id = $1::uuid`,
+                WHERE id = $1::uuid
+                  AND superseded_at IS NULL`,
               [id],
             );
             return result.rows[0] ?? null;
