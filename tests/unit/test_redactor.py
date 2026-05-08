@@ -78,15 +78,25 @@ def test_redact_completes_quickly_on_arrow_heavy_input() -> None:
     assert out.counts.get("RXN_SMILES", 0) == 0
 
 
-def test_redact_skips_oversized_input() -> None:
-    """Inputs larger than the 5MB cap return unmodified — bounding worst
-    case CPU regardless of pattern shape."""
+def test_redact_oversized_input_fails_closed() -> None:
+    """Inputs larger than the 5MB cap fail CLOSED — return an OVERSIZE
+    placeholder rather than the original text.
+
+    Pre-fix this returned the unredacted text, which let any caller
+    crafting a >5 MB payload exfiltrate raw SMILES / compound codes
+    / emails through LiteLLM with the redactor silently passing them
+    through. Defense-in-depth — the upstream caller should chunk-and-
+    redact for legitimate large payloads.
+    """
     huge = "alice@example.com " * (6 * 1024 * 1024 // 18)
     assert len(huge) > 5 * 1024 * 1024
     out = redact(huge)
-    # Refusal: exact same string back, no replacements recorded.
-    assert out.text == huge
-    assert out.counts == {}
+    # Fail-closed: single placeholder, not the original text.
+    assert out.text == "[REDACTED:OVERSIZE]"
+    # Original PII (email) must not appear in the returned text.
+    assert "alice@example.com" not in out.text
+    # `oversize` counter bumped so operators can chart the rate.
+    assert out.counts.get("oversize") == 1
 
 
 def test_redact_skips_rxn_regex_when_arrows_absent() -> None:

@@ -28,7 +28,19 @@ import psycopg
 
 logger = logging.getLogger(__name__)
 
-_CACHE_TTL_SECONDS = 60.0
+# Pattern TTL — short by design.
+#
+# Admin POST/PATCH/DELETE on /api/admin/redaction-patterns mutates the DB
+# row but cannot reach across to this redactor sidecar's in-process cache
+# (different container, different process). A long TTL means a freshly-
+# added tenant-specific deny-pattern takes up to TTL seconds to fire; a
+# freshly-removed false-positive pattern keeps blocking real prompts for
+# the same window. 5s is short enough that operators don't have to wait
+# minutes after an admin change, but long enough to absorb the steady-
+# state DB hit (one query every 5s per redactor process). The proper
+# fix — an /internal/redactor/invalidate endpoint hit by the admin
+# handler on every mutation — is BACKLOG'd separately.
+_CACHE_TTL_SECONDS = 5.0
 _MAX_PATTERN_LEN = 200
 
 
