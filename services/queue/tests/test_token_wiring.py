@@ -51,7 +51,7 @@ def test_handler_sends_authorization_header_when_key_set(monkeypatch):
     client = _stub_client_returning(captured)
     _patch_handler(monkeypatch, client)
 
-    handlers = worker._build_handlers(worker.WorkerSettings())
+    handlers, _client = worker._build_handlers(worker.WorkerSettings())
     asyncio.run(handlers["qm_single_point"]({"smiles": "CCO"}))
     assert len(captured) == 1
     assert captured[0]["Authorization"].startswith("Bearer ")
@@ -68,7 +68,7 @@ def test_handler_omits_authorization_header_in_dev_mode(monkeypatch):
     client = _stub_client_returning(captured)
     _patch_handler(monkeypatch, client)
 
-    handlers = worker._build_handlers(worker.WorkerSettings())
+    handlers, _client = worker._build_handlers(worker.WorkerSettings())
     asyncio.run(handlers["qm_geometry_opt"]({"smiles": "CCO"}))
     assert len(captured) == 1
     assert "Authorization" not in captured[0]
@@ -80,7 +80,7 @@ def test_genchem_handler_uses_genchem_audience(monkeypatch):
     client = _stub_client_returning(captured)
     _patch_handler(monkeypatch, client)
 
-    handlers = worker._build_handlers(worker.WorkerSettings())
+    handlers, _client = worker._build_handlers(worker.WorkerSettings())
     asyncio.run(handlers["genchem_scaffold"]({"scaffold_smiles": "c1ccccc1[*:1]"}))
     token = captured[0]["Authorization"].split(" ", 1)[1]
     claims = verify_mcp_token(
@@ -95,7 +95,7 @@ def test_crest_handler_uses_crest_audience(monkeypatch):
     client = _stub_client_returning(captured)
     _patch_handler(monkeypatch, client)
 
-    handlers = worker._build_handlers(worker.WorkerSettings())
+    handlers, _client = worker._build_handlers(worker.WorkerSettings())
     asyncio.run(handlers["qm_crest_conformers"]({"smiles": "CCO"}))
     token = captured[0]["Authorization"].split(" ", 1)[1]
     claims = verify_mcp_token(

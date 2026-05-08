@@ -75,7 +75,19 @@ class WorkerSettings(BaseSettings):
 # ---------------------------------------------------------------------------
 
 
-def _build_handlers(settings: WorkerSettings) -> dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]]:
+def _build_handlers(
+    settings: WorkerSettings,
+) -> tuple[
+    dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]],
+    httpx.AsyncClient,
+]:
+    """Construct the per-task-kind handlers + the shared httpx client.
+
+    The client is returned alongside the handlers so the worker can
+    `aclose()` it on shutdown — pre-fix the closure-captured client
+    leaked open connections on every SIGTERM, accumulating egress-side
+    sockets across k8s rolling restarts.
+    """
     client = httpx.AsyncClient(timeout=600.0)
     token_cache = McpTokenCache(default_subject="queue-worker")
 
@@ -116,7 +128,7 @@ def _build_handlers(settings: WorkerSettings) -> dict[str, Callable[[dict[str, A
     async def genchem_bioisostere(p: dict[str, Any]) -> dict[str, Any]:
         return await post("mcp-genchem", f"{settings.mcp_genchem_url}/bioisostere_replace", p)
 
-    return {
+    handlers = {
         "qm_single_point":    qm_single_point,
         "qm_geometry_opt":    qm_geometry_opt,
         "qm_frequencies":     qm_frequencies,
@@ -125,6 +137,7 @@ def _build_handlers(settings: WorkerSettings) -> dict[str, Callable[[dict[str, A
         "genchem_scaffold":   genchem_scaffold,
         "genchem_bioisostere": genchem_bioisostere,
     }
+    return handlers, client
 
 
 # ---------------------------------------------------------------------------
@@ -136,7 +149,7 @@ class QueueWorker:
     def __init__(self, settings: WorkerSettings) -> None:
         self.settings = settings
         self._shutdown = asyncio.Event()
-        self._handlers = _build_handlers(settings)
+        self._handlers, self._http_client = _build_handlers(settings)
         self._task_kinds = [k.strip() for k in settings.queue_tasks.split(",") if k.strip()]
         self._sema = asyncio.Semaphore(settings.queue_concurrency)
         self._lease_id = f"{socket.gethostname()}/{os.getpid()}"
@@ -219,6 +232,16 @@ class QueueWorker:
                         t.cancel()
                 # Allow the cancellation handlers to run.
                 await asyncio.gather(*self._inflight_tasks, return_exceptions=True)
+
+        # Close the shared httpx client. Pre-fix the closure-captured
+        # client at line 79 was never closed; on every SIGTERM the open
+        # connection pool leaked into kernel-side TIME_WAIT, accumulating
+        # across rolling restarts. aclose drains pending requests and
+        # releases the underlying sockets.
+        try:
+            await self._http_client.aclose()
+        except Exception as exc:  # noqa: BLE001
+            log.warning("[queue] httpx client aclose failed: %s", exc)
 
         log.info("[queue] worker stopped")
 
