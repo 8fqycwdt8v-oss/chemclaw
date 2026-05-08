@@ -35,11 +35,17 @@ def _enable_dev_mode() -> None:
     os.environ.setdefault("MOCK_ELN_ALLOW_DEV_PASSWORD", "true")
     os.environ.setdefault("LOGS_ALLOW_DEV_PASSWORD", "true")
     # CHEMCLAW_DEV_MODE is the canonical dev signal for the user-hash
-    # salt resolver (services/mcp_tools/common/user_hash.py). The TS
-    # side honours only this var; the Python side now matches. Without
-    # this default, any test that imports user_hash + calls hash_user
-    # without LOG_USER_SALT set raises RuntimeError on the production
-    # fail-closed branch.
+    # salt resolver (services/mcp_tools/common/user_hash.py); the auth
+    # middleware in app.py invokes hash_user, which raises on the
+    # production fail-closed branch without this signal or a real
+    # LOG_USER_SALT. Setting it here makes the test suite run cleanly
+    # without per-test boilerplate.
+    #
+    # NOTE: this env var ALSO feeds pydantic-settings instances
+    # elsewhere in the test tree (e.g. session_reanimator's Settings
+    # reads chemclaw_dev_mode for assert_production_safe). Tests that
+    # need to verify the *default* False need an explicit
+    # monkeypatch.delenv("CHEMCLAW_DEV_MODE") in scope.
     os.environ.setdefault("CHEMCLAW_DEV_MODE", "true")
 
 
