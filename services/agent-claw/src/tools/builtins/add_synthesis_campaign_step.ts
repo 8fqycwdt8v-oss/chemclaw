@@ -51,6 +51,18 @@ export function buildAddSynthesisCampaignStepTool(pool: Pool) {
         );
         if (owns.rows.length === 0) throw new Error("synthesis_campaign_not_found_or_forbidden");
 
+        const dependsOn = input.depends_on ?? [];
+        if (dependsOn.length > 0) {
+          const validDeps = await client.query<{ id: string }>(
+            `SELECT id::text FROM synthesis_campaign_steps
+              WHERE campaign_id = $1::uuid AND id = ANY($2::uuid[])`,
+            [input.campaign_id, dependsOn],
+          );
+          if (validDeps.rows.length !== dependsOn.length) {
+            throw new Error("synthesis_campaign_step_depends_on_invalid");
+          }
+        }
+
         const next = await client.query<{ next_index: number }>(
           `SELECT COALESCE(MAX(step_index), -1) + 1 AS next_index
              FROM synthesis_campaign_steps

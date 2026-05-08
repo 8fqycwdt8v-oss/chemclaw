@@ -194,6 +194,8 @@ CREATE TABLE IF NOT EXISTS synthesis_campaign_events (
                                   'step_added',
                                   'step_started',
                                   'step_completed',
+                                  'step_skipped',
+                                  'step_cancelled',
                                   'step_failed',
                                   'gate_passed',
                                   'gate_failed',

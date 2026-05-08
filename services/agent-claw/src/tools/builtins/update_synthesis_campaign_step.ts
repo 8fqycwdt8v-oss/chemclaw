@@ -113,6 +113,14 @@ export function buildUpdateSynthesisCampaignStepTool(pool: Pool) {
         const campaignRow = campaignAfter.rows[0];
         if (!campaignRow) throw new Error("synthesis_campaign_not_found_after_step_update");
 
+        const eventType: Record<typeof input.status, string> = {
+          in_progress: "step_started",
+          completed: "step_completed",
+          skipped: "step_skipped",
+          cancelled: "step_cancelled",
+          failed: "step_failed",
+          pending: "step_added",
+        };
         await client.query(
           `INSERT INTO synthesis_campaign_events (campaign_id, step_id, event_type, payload)
            VALUES ($1::uuid, $2::uuid, $3::text,
@@ -121,10 +129,7 @@ export function buildUpdateSynthesisCampaignStepTool(pool: Pool) {
           [
             input.campaign_id,
             input.step_id,
-            input.status === "failed" ? "step_failed" :
-              input.status === "in_progress" ? "step_started" :
-              input.status === "completed" ? "step_completed" :
-              "step_completed",
+            eventType[input.status],
             prevStatus,
             input.status,
             input.ref_table ?? null,

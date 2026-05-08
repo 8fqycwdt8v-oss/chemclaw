@@ -96,7 +96,8 @@ synthesis_campaign_steps
 synthesis_campaign_events
   ├─ id, campaign_id, step_id?, event_type, payload, occurred_at
   └─ event_type ∈ { campaign_created, campaign_status_changed,
-                    step_added, step_started, step_completed, step_failed,
+                    step_added, step_started, step_completed, step_skipped,
+                    step_cancelled, step_failed,
                     gate_passed, gate_failed, die_triggered,
                     measurement_recorded, campaign_completed,
                     campaign_aborted }

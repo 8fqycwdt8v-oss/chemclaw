@@ -232,6 +232,54 @@ describe("get_synthesis_campaign", () => {
 // add_synthesis_campaign_step
 // ---------------------------------------------------------------------------
 describe("add_synthesis_campaign_step", () => {
+  it("rejects depends_on UUIDs that don't belong to the campaign", async () => {
+    const { pool } = createMockPool({
+      dataHandler: async (sql) => {
+        if (sql.includes("FROM synthesis_campaigns WHERE id")) return rows({ id: CAMPAIGN_UUID });
+        if (sql.includes("FROM synthesis_campaign_steps") && sql.includes("ANY($2::uuid[])")) {
+          // Caller asked for two deps; we only return one as valid.
+          return rows({ id: STEP_UUID });
+        }
+        return rows();
+      },
+    });
+    const tool = buildAddSynthesisCampaignStepTool(pool);
+    await expect(
+      tool.execute(makeCtx(), {
+        campaign_id: CAMPAIGN_UUID,
+        kind: "bo_round",
+        inputs: {},
+        depends_on: [STEP_UUID, "44444444-4444-4444-4444-444444444444"],
+      }),
+    ).rejects.toThrow(/depends_on_invalid/);
+  });
+
+  it("accepts depends_on UUIDs that all belong to the campaign", async () => {
+    const { pool } = createMockPool({
+      dataHandler: async (sql) => {
+        if (sql.includes("FROM synthesis_campaigns WHERE id")) return rows({ id: CAMPAIGN_UUID });
+        if (sql.includes("FROM synthesis_campaign_steps") && sql.includes("ANY($2::uuid[])")) {
+          return rows({ id: STEP_UUID });
+        }
+        if (sql.includes("COALESCE(MAX(step_index)")) return rows({ next_index: 1 });
+        if (sql.includes("INSERT INTO synthesis_campaign_steps")) {
+          return rows({ ...SAMPLE_STEP_ROW, depends_on: [STEP_UUID], step_index: 1 });
+        }
+        if (sql.includes("UPDATE synthesis_campaigns")) return rows();
+        if (sql.includes("INSERT INTO synthesis_campaign_events")) return rows();
+        return rows();
+      },
+    });
+    const tool = buildAddSynthesisCampaignStepTool(pool);
+    const out = await tool.execute(makeCtx(), {
+      campaign_id: CAMPAIGN_UUID,
+      kind: "bo_round",
+      inputs: {},
+      depends_on: [STEP_UUID],
+    });
+    expect(out.step.depends_on).toEqual([STEP_UUID]);
+  });
+
   it("computes the next step_index and bumps total_steps", async () => {
     const { pool, dataSpy } = createMockPool({
       dataHandler: async (sql) => {
@@ -297,6 +345,56 @@ describe("update_synthesis_campaign_step", () => {
       .filter(([sql]) => (sql as string).includes("INSERT INTO synthesis_campaign_events"))
       .map(([, params]) => (params as unknown[])[2]);
     expect(eventTypes).toContain("step_completed");
+  });
+
+  it("emits step_skipped when transitioning to skipped", async () => {
+    const eventTypes: unknown[] = [];
+    const { pool } = createMockPool({
+      dataHandler: async (sql, params) => {
+        if (sql.includes("SELECT status FROM synthesis_campaign_steps")) return rows({ status: "in_progress" });
+        if (sql.includes("UPDATE synthesis_campaign_steps")) {
+          return rows({ ...SAMPLE_STEP_ROW, status: "skipped", completed_at: NOW_ISO });
+        }
+        if (sql.includes("UPDATE synthesis_campaigns")) return rows({ ...SAMPLE_CAMPAIGN_ROW });
+        if (sql.includes("INSERT INTO synthesis_campaign_events")) {
+          eventTypes.push((params as unknown[])[2]);
+          return rows();
+        }
+        return rows();
+      },
+    });
+    const tool = buildUpdateSynthesisCampaignStepTool(pool);
+    await tool.execute(makeCtx(), {
+      campaign_id: CAMPAIGN_UUID,
+      step_id: STEP_UUID,
+      status: "skipped",
+    });
+    expect(eventTypes).toContain("step_skipped");
+  });
+
+  it("emits step_cancelled when transitioning to cancelled", async () => {
+    const eventTypes: unknown[] = [];
+    const { pool } = createMockPool({
+      dataHandler: async (sql, params) => {
+        if (sql.includes("SELECT status FROM synthesis_campaign_steps")) return rows({ status: "in_progress" });
+        if (sql.includes("UPDATE synthesis_campaign_steps")) {
+          return rows({ ...SAMPLE_STEP_ROW, status: "cancelled", completed_at: NOW_ISO });
+        }
+        if (sql.includes("UPDATE synthesis_campaigns")) return rows({ ...SAMPLE_CAMPAIGN_ROW });
+        if (sql.includes("INSERT INTO synthesis_campaign_events")) {
+          eventTypes.push((params as unknown[])[2]);
+          return rows();
+        }
+        return rows();
+      },
+    });
+    const tool = buildUpdateSynthesisCampaignStepTool(pool);
+    await tool.execute(makeCtx(), {
+      campaign_id: CAMPAIGN_UUID,
+      step_id: STEP_UUID,
+      status: "cancelled",
+    });
+    expect(eventTypes).toContain("step_cancelled");
   });
 
   it("does NOT double-increment when re-completing an already-terminal step", async () => {
