@@ -80,19 +80,20 @@ describe.skipIf(!dockerAvailable)(
     });
 
     it("two parallel withUserContext blocks see disjoint row sets", async () => {
-      // Both queries run in parallel against the SAME pool. RLS context
-      // is transaction-scoped (SET LOCAL), so even if the pool reuses the
-      // same physical connection across the two transactions, the second
-      // tx's SET LOCAL overrides the first within its own scope without
-      // bleeding back. The test's value lies in running both blocks
-      // concurrently — a regression that swapped SET LOCAL for SET (session
-      // scope) would silently let one transaction inherit the other's
-      // user_entra_id.
+      // Both queries run in parallel against the SAME pool. With pool
+      // size 8 the two concurrent blocks almost certainly land on
+      // separate physical connections, so this test exercises the
+      // "two simultaneous in-flight transactions" case rather than the
+      // single-connection reuse case (covered by the sequential test
+      // below). A regression that swapped SET LOCAL for SET (session
+      // scope) would still trip here because the GUC would persist on
+      // each connection past COMMIT and bleed into whichever block's
+      // queries follow on the same connection.
       const [aliceRows, bobRows] = await Promise.all([
         withUserContext(appPool, alice, async (client) => {
-          // A small artificial delay inside one block widens the window
-          // where a missing SET LOCAL would manifest — gives the other
-          // tx time to overwrite the GUC if it were SET (session) scope.
+          // Hold alice's transaction open briefly so bob's transaction
+          // is guaranteed to be in flight at the same moment — proves
+          // the two SET LOCAL calls don't interfere across connections.
           await client.query("SELECT pg_sleep(0.05)");
           const r = await client.query<{ user_entra_id: string }>(
             `SELECT user_entra_id FROM agent_sessions ORDER BY user_entra_id`,

@@ -128,10 +128,14 @@ describe("post_compact end-to-end with the real compact-window hook", () => {
     expect(first.trigger).toBe("auto");
 
     // (c) The harness's `messages` array — the same reference the hook
-    // mutated — is now shorter than what we passed in, proving the
-    // splice took effect. Pre-compaction we had 1 + 30*2 = 61 messages;
-    // the compactor keeps system + synopsis + N=2 recent ≤ 4 entries,
-    // depending on whether a system message is auto-prepended.
-    expect(messages.length).toBeLessThan(61);
+    // mutated — is now strictly shorter than the pre-compaction window
+    // by a wide margin, proving the splice took effect. Pre-compaction
+    // we had 1 + 30*2 = 61 messages; the compactor keeps system +
+    // synopsis + N=2 recent + the freshly-pushed step-1 tool_call
+    // assistant + tool_result messages. Cap the upper bound at 10 so a
+    // regression that removes only a handful of entries (e.g. a no-op
+    // splice that drops one user turn but leaves the rest) trips this
+    // assertion instead of silently passing.
+    expect(messages.length).toBeLessThanOrEqual(10);
   });
 });
