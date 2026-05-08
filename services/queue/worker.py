@@ -49,12 +49,6 @@ class WorkerSettings(BaseSettings):
     queue_lease_seconds: int = 300
     queue_tasks: str = "qm,genchem,classifier"
     poll_interval_seconds: int = 30  # belt-and-suspenders: poll even if no NOTIFYs
-    # Max time (seconds) the worker waits for in-flight handler tasks to
-    # finish at SIGTERM/shutdown before cancelling them. Cancelled tasks
-    # still release their lease via the per-task _fail path. Default 30s
-    # gives a typical handler enough time to call _succeed/_fail without
-    # holding up a k8s rolling restart for the full 5-min lease window.
-    queue_drain_timeout_s: int = 30
 
     # MCP base URLs
     mcp_xtb_url: str = "http://mcp-xtb:8010"
@@ -75,19 +69,7 @@ class WorkerSettings(BaseSettings):
 # ---------------------------------------------------------------------------
 
 
-_HandlerMap = dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]]
-
-
-def _build_handlers(
-    settings: WorkerSettings,
-) -> tuple[_HandlerMap, httpx.AsyncClient]:
-    """Construct the per-task-kind handlers + the shared httpx client.
-
-    The client is returned alongside the handlers so the worker can
-    `aclose()` it on shutdown — pre-fix the closure-captured client
-    leaked open connections on every SIGTERM, accumulating egress-side
-    sockets across k8s rolling restarts.
-    """
+def _build_handlers(settings: WorkerSettings) -> dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]]:
     client = httpx.AsyncClient(timeout=600.0)
     token_cache = McpTokenCache(default_subject="queue-worker")
 
@@ -128,7 +110,7 @@ def _build_handlers(
     async def genchem_bioisostere(p: dict[str, Any]) -> dict[str, Any]:
         return await post("mcp-genchem", f"{settings.mcp_genchem_url}/bioisostere_replace", p)
 
-    handlers: _HandlerMap = {
+    return {
         "qm_single_point":    qm_single_point,
         "qm_geometry_opt":    qm_geometry_opt,
         "qm_frequencies":     qm_frequencies,
@@ -137,7 +119,6 @@ def _build_handlers(
         "genchem_scaffold":   genchem_scaffold,
         "genchem_bioisostere": genchem_bioisostere,
     }
-    return handlers, client
 
 
 # ---------------------------------------------------------------------------
@@ -149,7 +130,7 @@ class QueueWorker:
     def __init__(self, settings: WorkerSettings) -> None:
         self.settings = settings
         self._shutdown = asyncio.Event()
-        self._handlers, self._http_client = _build_handlers(settings)
+        self._handlers = _build_handlers(settings)
         self._task_kinds = [k.strip() for k in settings.queue_tasks.split(",") if k.strip()]
         self._sema = asyncio.Semaphore(settings.queue_concurrency)
         self._lease_id = f"{socket.gethostname()}/{os.getpid()}"
@@ -195,53 +176,6 @@ class QueueWorker:
                     if shutdown_task in done:
                         break
                     await self._sweep_all(work_conn)
-
-        # Drain in-flight handler tasks before exiting. Pre-fix the
-        # `async with work_conn` exit closed the work connection while
-        # `_handle_with_sema` tasks were still running; those tasks
-        # held leases on rows in `task_queue`, and the per-task
-        # `_succeed`/`_fail` connections never opened so the lease
-        # persisted until `QUEUE_LEASE_SECONDS` (default 300s) before
-        # the next worker reclaimed. Under k8s rolling restarts this
-        # multiplied: every replica deploy stalled every in-flight QM
-        # job by 5 minutes minimum.
-        #
-        # Bounded by `QUEUE_DRAIN_TIMEOUT_S` (default 30s) so a stuck
-        # handler can't hold up the SIGTERM forever; tasks that don't
-        # complete in time are cancelled, which still releases the
-        # lease via the per-task `_fail` path on the cancellation
-        # exception.
-        if self._inflight_tasks:
-            log.info(
-                "[queue] draining %d inflight tasks (timeout=%ds)",
-                len(self._inflight_tasks),
-                self.settings.queue_drain_timeout_s,
-            )
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(*self._inflight_tasks, return_exceptions=True),
-                    timeout=self.settings.queue_drain_timeout_s,
-                )
-            except asyncio.TimeoutError:
-                log.warning(
-                    "[queue] drain timed out — cancelling %d remaining tasks",
-                    sum(1 for t in self._inflight_tasks if not t.done()),
-                )
-                for t in self._inflight_tasks:
-                    if not t.done():
-                        t.cancel()
-                # Allow the cancellation handlers to run.
-                await asyncio.gather(*self._inflight_tasks, return_exceptions=True)
-
-        # Close the shared httpx client. Pre-fix the closure-captured
-        # client at line 79 was never closed; on every SIGTERM the open
-        # connection pool leaked into kernel-side TIME_WAIT, accumulating
-        # across rolling restarts. aclose drains pending requests and
-        # releases the underlying sockets.
-        try:
-            await self._http_client.aclose()
-        except Exception as exc:  # noqa: BLE001
-            log.warning("[queue] httpx client aclose failed: %s", exc)
 
         log.info("[queue] worker stopped")
 
