@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
-from services.litellm_redactor.redaction import redact, redact_messages
+import pytest
+
+from services.litellm_redactor.redaction import (
+    redact,
+    redact_messages,
+    redact_messages_with_counts,
+)
 
 
 def test_redacts_reaction_smiles() -> None:
@@ -140,3 +146,258 @@ def test_redact_messages_handles_string_and_list_content() -> None:
     assert "NCE-007" not in block0["text"]
     # Non-text block preserved.
     assert out[1]["content"][1]["type"] == "image"
+
+
+# ---------------------------------------------------------------------------
+# False-positive resistance for the SMILES heuristic.
+#
+# `_looks_like_smiles` documents specific prose patterns it must NOT fire on
+# (CLI flags, key=value pairs, paths). These tests pin that contract — a
+# regression that loosens the heuristic will leak prose into the redactor's
+# replacement map and surface as <SMILES_*> tags inside model prompts.
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize(
+    "prose",
+    # These are the false-positive triggers `_looks_like_smiles` was tightened
+    # to reject: equals-sign and key-value prose without any SMILES atom on
+    # the right of a structural character, ratios, percentages.
+    # NOTE: URL paths and unix-style paths (e.g. "/usr/local/bin/python",
+    # "https://...") still trip the heuristic because '/p', '/c', '/n' look
+    # like multi-bonds to a SMILES atom — that limitation is acknowledged in
+    # the `_looks_like_smiles` docstring and the post_turn defense-in-depth
+    # scrub catches the residual leak. Pinning that here would freeze a known
+    # over-redaction case as "good", which it isn't.
+    [
+        "Run with --opt=value to enable feature.",
+        "See page=12, line=34 of the manual.",
+        "Use --no-cache=true and retry.",
+        "The ratio is 2:1 with 50% yield.",
+        "Cells in row=5 column=12 of the grid.",
+    ],
+)
+def test_smiles_heuristic_rejects_prose(prose: str) -> None:
+    out = redact(prose)
+    assert out.text == prose, f"prose got tagged: {out.text!r}"
+    assert out.counts.get("SMILES", 0) == 0
+
+
+@pytest.mark.parametrize(
+    "smiles",
+    [
+        "CCO",                    # ethanol — too short, won't match the 6-char floor
+        "c1ccccc1",               # benzene aromatic — has ring closure
+        "[Na+].[Cl-]",            # bracketed atoms
+        "CC(=O)O",                # acetic acid — multi-bond + atom
+        "N#Cc1ccccc1",            # benzonitrile — multi-bond and ring closure
+    ],
+)
+def test_smiles_heuristic_catches_real_chemistry(smiles: str) -> None:
+    text = f"prefix {smiles} suffix"
+    out = redact(text)
+    # Tokens shorter than 6 chars are deliberately not redacted (documented
+    # in `_looks_like_smiles`); just assert prose is never harmed and that
+    # tokens long enough to match the regex *do* get tagged.
+    if len(smiles) >= 6:
+        assert smiles not in out.text, f"SMILES leaked: {out.text!r}"
+        assert out.counts.get("SMILES", 0) >= 1
+    assert "prefix" in out.text and "suffix" in out.text
+
+
+# ---------------------------------------------------------------------------
+# Placeholder structure and reversibility.
+# ---------------------------------------------------------------------------
+
+def test_placeholder_format_is_kind_tagged_and_stable() -> None:
+    """Same value twice in one call → same placeholder; different values →
+    different placeholders. The replacements map must round-trip back to the
+    original strings."""
+    # Spaces around emails so the email regex doesn't sweep up trailing
+    # punctuation (the TLD class is documented to include '.' — see
+    # test_email_redaction_is_greedy_with_trailing_period).
+    text = "Email alice@x.com and alice@x.com again plus bob@y.com here."
+    out = redact(text)
+    # Two distinct emails → two placeholders; the duplicate of alice@x.com
+    # collapses to the same tag.
+    tags = [tag for tag in out.replacements if tag.startswith("<EMAIL_")]
+    assert len(tags) == 2
+    # Every placeholder maps back to the original.
+    for tag, original in out.replacements.items():
+        assert original in {"alice@x.com", "bob@y.com"}
+        assert tag in out.text
+    # Counts reflect three replacement events (alice twice, bob once).
+    assert out.counts["EMAIL"] == 3
+
+
+def test_placeholders_are_stable_across_calls() -> None:
+    """Determinism is documented as a feature: the same SMILES/email/code
+    must yield the same placeholder across separate calls so the model can
+    refer to it consistently within a session."""
+    a = redact("alice@example.com")
+    b = redact("alice@example.com")
+    assert a.text == b.text
+    # Same tag on both sides of the round-trip.
+    assert set(a.replacements) == set(b.replacements)
+
+
+def test_redact_handles_empty_and_whitespace_input() -> None:
+    assert redact("").text == ""
+    assert redact("").counts == {}
+    out = redact("   \n\t  ")
+    assert out.text == "   \n\t  "
+    assert out.counts == {}
+
+
+# ---------------------------------------------------------------------------
+# Email pattern edge cases.
+# ---------------------------------------------------------------------------
+
+def test_email_with_subdomain_and_plus_alias_is_redacted() -> None:
+    text = "Reach me at alice+chem@research.lab.example.co.uk for details."
+    out = redact(text)
+    assert "alice+chem@research.lab.example.co.uk" not in out.text
+    assert out.counts["EMAIL"] == 1
+
+
+def test_email_redaction_is_greedy_with_trailing_period() -> None:
+    """Documented contract: the email TLD class includes '.', so an email
+    immediately followed by a sentence-ending period gets the period eaten
+    into the placeholder. This is consistent with the redactor's "over-
+    redaction is better than leakage" stance — pin it so a regex tightening
+    that drops the trailing dot is a deliberate change with a test update,
+    not a silent behaviour shift."""
+    text = "Write to bob@lab.org, then carol@lab.org."
+    out = redact(text)
+    assert out.counts["EMAIL"] == 2
+    # Neither email survives in the redacted text.
+    assert "bob@lab.org" not in out.text
+    assert "carol@lab.org" not in out.text
+    # The trailing period is captured into carol's placeholder; assert that
+    # explicitly so a future loosening doesn't sneak through.
+    originals = set(out.replacements.values())
+    assert "bob@lab.org" in originals
+    assert "carol@lab.org." in originals  # trailing period included
+    # Comma between the two stays as prose — it isn't in the TLD class.
+    assert "," in out.text
+
+
+# ---------------------------------------------------------------------------
+# redact_messages_with_counts — the optimised counts-aware variant used by
+# the LiteLLM callback. Previously only redact_messages (which discards
+# counts) was directly tested.
+# ---------------------------------------------------------------------------
+
+def test_redact_messages_with_counts_aggregates_across_messages() -> None:
+    msgs = [
+        {"role": "user", "content": "alice@x.com and NCE-1"},
+        {"role": "assistant", "content": "ack CMP-12345"},
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "another bob@y.com"},
+            ],
+        },
+    ]
+    redacted, totals = redact_messages_with_counts(msgs)
+    assert totals["EMAIL"] == 2
+    assert totals["NCE"] == 1
+    assert totals["CMP"] == 1
+    # Per-message redaction still applies.
+    assert "alice@x.com" not in redacted[0]["content"]
+    assert "CMP-12345" not in redacted[1]["content"]
+    assert "bob@y.com" not in redacted[2]["content"][0]["text"]
+
+
+def test_redact_messages_does_not_mutate_input() -> None:
+    msgs = [{"role": "user", "content": "alice@x.com"}]
+    snapshot = "alice@x.com"
+    redact_messages(msgs)
+    assert msgs[0]["content"] == snapshot
+
+
+def test_redact_messages_passes_through_non_dict_entries() -> None:
+    """Defensive: malformed entries shouldn't crash the redactor."""
+    msgs: list = ["not a dict", {"role": "user", "content": "alice@x.com"}, 42]
+    out = redact_messages(msgs)
+    assert out[0] == "not a dict"
+    assert out[2] == 42
+    assert "alice@x.com" not in out[1]["content"]
+
+
+# ---------------------------------------------------------------------------
+# OpenAI-style tool_calls scrubbing — assistant turns where the sensitive
+# value lives inside `function.arguments` (a JSON string). Regression
+# protection for the path added when OFAT-campaign tool calls were leaking
+# SMILES back into the next LLM turn.
+# ---------------------------------------------------------------------------
+
+def test_redact_messages_scrubs_openai_tool_call_arguments() -> None:
+    msgs = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_1",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup_compound",
+                        "arguments": '{"smiles": "N#Cc1ccc(Br)cc1", "code": "CMP-12345", "owner": "alice@x.com"}',
+                    },
+                }
+            ],
+        }
+    ]
+    redacted, totals = redact_messages_with_counts(msgs)
+    args = redacted[0]["tool_calls"][0]["function"]["arguments"]
+    assert "N#Cc1ccc(Br)cc1" not in args
+    assert "CMP-12345" not in args
+    assert "alice@x.com" not in args
+    assert totals.get("EMAIL", 0) == 1
+    assert totals.get("CMP", 0) == 1
+    assert totals.get("SMILES", 0) >= 1
+
+
+def test_redact_messages_preserves_tool_call_structure() -> None:
+    """Tool-call ID, type, function name, and unrelated fields must survive
+    redaction so the model and tool dispatch still line up."""
+    msgs = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": "call_xyz",
+                    "type": "function",
+                    "function": {
+                        "name": "lookup_compound",
+                        "arguments": '{"code": "CMP-99999"}',
+                    },
+                }
+            ],
+        }
+    ]
+    out = redact_messages(msgs)
+    tc = out[0]["tool_calls"][0]
+    assert tc["id"] == "call_xyz"
+    assert tc["type"] == "function"
+    assert tc["function"]["name"] == "lookup_compound"
+    assert "CMP-99999" not in tc["function"]["arguments"]
+
+
+def test_redact_messages_handles_tool_calls_without_arguments() -> None:
+    """Some tool-call shapes omit `function.arguments` entirely; the
+    redactor must not raise on the missing key."""
+    msgs = [
+        {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {"id": "c1", "type": "function", "function": {"name": "noop"}},
+                {"id": "c2", "type": "function"},  # no function dict at all
+                {"id": "c3"},  # not even a type — still must not crash
+            ],
+        }
+    ]
+    out = redact_messages(msgs)
+    assert len(out[0]["tool_calls"]) == 3

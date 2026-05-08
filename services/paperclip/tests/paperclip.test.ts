@@ -1,7 +1,7 @@
 // Vitest tests for Paperclip-lite sidecar.
 // 8+ tests covering budget, heartbeat, concurrency, and HTTP routes.
 
-import { describe, it, expect, beforeEach } from "vitest";
+import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import { BudgetManager, DEFAULT_BUDGET_CONFIG } from "../src/budget.js";
 import { HeartbeatTracker } from "../src/heartbeat.js";
 import { SlidingWindowCounter } from "../src/concurrency.js";
@@ -233,5 +233,271 @@ describe("BudgetManager.rehydrateDailyUsd", () => {
     mgr.rehydrateDailyUsd(new Map([[`u1:${ymd}`, 5.0]]));
     mgr.rehydrateDailyUsd(new Map([[`u1:${ymd}`, 12.0]]));
     expect(mgr.todayUsd("u1")).toBeCloseTo(12.0);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// BudgetManager — boundary / isolation / accumulation gaps. The block above
+// covers the happy paths; these pin the off-by-one and cross-user contracts
+// that block real-execution paths.
+// ---------------------------------------------------------------------------
+
+describe("BudgetManager — limit boundaries", () => {
+  let mgr: BudgetManager;
+
+  beforeEach(() => {
+    mgr = new BudgetManager({
+      maxConcurrentPerUser: 2,
+      maxTokensPerTurn: 10_000,
+      maxUsdPerDay: 5.0,
+    });
+  });
+
+  it("allows a reservation at exactly the per-turn token limit", () => {
+    // Source contract: `if (estTokens > maxTokensPerTurn)` — strict greater-than.
+    const result = mgr.check({ userEntraId: "u", estTokens: 10_000, estUsd: 0.01 });
+    expect(result.allowed).toBe(true);
+  });
+
+  it("rejects a reservation one token past the per-turn token limit", () => {
+    const result = mgr.check({ userEntraId: "u", estTokens: 10_001, estUsd: 0.01 });
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("token_budget");
+  });
+
+  it("allows a reservation at exactly the daily USD limit", () => {
+    // spent=0, est=5.0, max=5.0 → 0+5.0 > 5.0 is false → allowed.
+    const result = mgr.check({ userEntraId: "u", estTokens: 100, estUsd: 5.0 });
+    expect(result.allowed).toBe(true);
+  });
+
+  it("rejects a reservation one cent past the daily USD limit", () => {
+    const result = mgr.check({ userEntraId: "u", estTokens: 100, estUsd: 5.01 });
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("usd_budget");
+  });
+
+  it("checks concurrency before token budget when both would fail", () => {
+    // Saturate concurrency, then ask for tokens that also exceed the per-turn cap.
+    // Concurrency reason must win — it's checked first in `check()`.
+    for (let i = 0; i < 2; i++) {
+      mgr.reserve({
+        reservationId: `r${i}`,
+        userEntraId: "u",
+        sessionId: "s",
+        estTokens: 1,
+        estUsd: 0.01,
+        reservedAt: Date.now(),
+      });
+    }
+    const result = mgr.check({ userEntraId: "u", estTokens: 999_999, estUsd: 0.01 });
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("concurrency_limit");
+  });
+
+  it("isolates concurrency limits per user", () => {
+    // user-a saturates their own quota; user-b should be unaffected.
+    for (let i = 0; i < 2; i++) {
+      mgr.reserve({
+        reservationId: `a${i}`,
+        userEntraId: "user-a",
+        sessionId: "s",
+        estTokens: 1,
+        estUsd: 0.01,
+        reservedAt: Date.now(),
+      });
+    }
+    expect(mgr.check({ userEntraId: "user-a", estTokens: 1, estUsd: 0.01 }).allowed).toBe(false);
+    expect(mgr.check({ userEntraId: "user-b", estTokens: 1, estUsd: 0.01 }).allowed).toBe(true);
+  });
+
+  it("isolates daily USD ledgers per user", () => {
+    mgr.reserve({ reservationId: "r1", userEntraId: "user-a", sessionId: "s", estTokens: 1, estUsd: 4.99, reservedAt: Date.now() });
+    mgr.release("r1", 4.99);
+    expect(mgr.todayUsd("user-a")).toBeCloseTo(4.99);
+    expect(mgr.todayUsd("user-b")).toBe(0);
+    expect(mgr.check({ userEntraId: "user-b", estTokens: 1, estUsd: 4.99 }).allowed).toBe(true);
+  });
+
+  it("release accumulates USD across multiple turns", () => {
+    for (const [id, usd] of [["r1", 1.5], ["r2", 0.75], ["r3", 0.25]] as const) {
+      mgr.reserve({ reservationId: id, userEntraId: "u", sessionId: "s", estTokens: 1, estUsd: usd, reservedAt: Date.now() });
+      mgr.release(id, usd);
+    }
+    expect(mgr.todayUsd("u")).toBeCloseTo(2.5);
+  });
+
+  it("release of an unknown reservation does not change the USD ledger", () => {
+    mgr.reserve({ reservationId: "r1", userEntraId: "u", sessionId: "s", estTokens: 1, estUsd: 1.0, reservedAt: Date.now() });
+    mgr.release("r1", 1.0);
+    expect(mgr.todayUsd("u")).toBeCloseTo(1.0);
+
+    const found = mgr.release("does-not-exist", 99.0);
+    expect(found).toBe(false);
+    expect(mgr.todayUsd("u")).toBeCloseTo(1.0); // unchanged
+  });
+});
+
+describe("BudgetManager.expireStale", () => {
+  it("only removes reservations older than maxAgeMs and leaves fresh ones in place", () => {
+    const mgr = new BudgetManager(DEFAULT_BUDGET_CONFIG);
+    const now = Date.now();
+    mgr.reserve({ reservationId: "fresh", userEntraId: "u", sessionId: "s", estTokens: 1, estUsd: 0.01, reservedAt: now });
+    mgr.reserve({ reservationId: "stale", userEntraId: "u", sessionId: "s", estTokens: 1, estUsd: 0.01, reservedAt: now - 10 * 60_000 });
+    expect(mgr.concurrencyCount("u")).toBe(2);
+
+    const expired = mgr.expireStale(5 * 60_000);
+
+    expect(expired).toBe(1);
+    expect(mgr.concurrencyCount("u")).toBe(1);
+  });
+
+  it("expires stale reservations across multiple users in one pass", () => {
+    const mgr = new BudgetManager(DEFAULT_BUDGET_CONFIG);
+    const old = Date.now() - 10 * 60_000;
+    mgr.reserve({ reservationId: "a-stale", userEntraId: "user-a", sessionId: "s", estTokens: 1, estUsd: 0.01, reservedAt: old });
+    mgr.reserve({ reservationId: "b-stale", userEntraId: "user-b", sessionId: "s", estTokens: 1, estUsd: 0.01, reservedAt: old });
+    mgr.reserve({ reservationId: "c-fresh", userEntraId: "user-c", sessionId: "s", estTokens: 1, estUsd: 0.01, reservedAt: Date.now() });
+
+    expect(mgr.expireStale(5 * 60_000)).toBe(2);
+    expect(mgr.totalActive()).toBe(1);
+    expect(mgr.concurrencyCount("user-c")).toBe(1);
+  });
+});
+
+describe("BudgetManager.rehydrateDailyUsd — clearing semantics", () => {
+  it("an empty snapshot clears the in-memory ledger", () => {
+    const mgr = new BudgetManager(DEFAULT_BUDGET_CONFIG);
+    mgr.reserve({ reservationId: "r1", userEntraId: "u", sessionId: "s", estTokens: 1, estUsd: 3.0, reservedAt: Date.now() });
+    mgr.release("r1", 3.0);
+    expect(mgr.todayUsd("u")).toBeCloseTo(3.0);
+
+    mgr.rehydrateDailyUsd(new Map());
+    expect(mgr.todayUsd("u")).toBe(0);
+  });
+
+  it("releases after rehydrate accumulate on top of the rehydrated total", () => {
+    const mgr = new BudgetManager(DEFAULT_BUDGET_CONFIG);
+    const today = new Date();
+    const ymd = `${today.getUTCFullYear()}-${String(today.getUTCMonth() + 1).padStart(2, "0")}-${String(today.getUTCDate()).padStart(2, "0")}`;
+    mgr.rehydrateDailyUsd(new Map([[`u:${ymd}`, 10.0]]));
+
+    mgr.reserve({ reservationId: "r-after", userEntraId: "u", sessionId: "s", estTokens: 1, estUsd: 2.5, reservedAt: Date.now() });
+    mgr.release("r-after", 2.5);
+
+    expect(mgr.todayUsd("u")).toBeCloseTo(12.5);
+  });
+});
+
+describe("BudgetManager — usd_budget retryAfterMs ≈ ms until UTC midnight", () => {
+  beforeEach(() => {
+    // Pin the wall clock so the maths is deterministic. Pick noon UTC on a
+    // fixed date so both the bucket date and the "ms until next UTC midnight"
+    // are unambiguous.
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-05-08T12:00:00.000Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  it("returns the exact ms remaining until the next UTC day boundary", () => {
+    const mgr = new BudgetManager({ maxConcurrentPerUser: 4, maxTokensPerTurn: 10_000, maxUsdPerDay: 5.0 });
+    // Push spend over the cap so the next check falls into the usd_budget branch.
+    mgr.reserve({ reservationId: "r", userEntraId: "u", sessionId: "s", estTokens: 1, estUsd: 5.0, reservedAt: Date.now() });
+    mgr.release("r", 5.0);
+
+    const result = mgr.check({ userEntraId: "u", estTokens: 1, estUsd: 0.01 });
+    expect(result.allowed).toBe(false);
+    expect(result.reason).toBe("usd_budget");
+    // 12 hours until the next UTC midnight, exactly.
+    expect(result.retryAfterMs).toBe(12 * 60 * 60 * 1000);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// HeartbeatTracker — the existing block covers isAlive + gc; these add
+// `get()`, activeCount, and the touch() refresh contract used by sessions
+// that heartbeat every 30s with a 90s TTL.
+// ---------------------------------------------------------------------------
+
+describe("HeartbeatTracker.get and activeCount", () => {
+  it("get() returns the entry when alive, undefined when expired", async () => {
+    const tracker = new HeartbeatTracker(50);
+    tracker.touch("sess-a", "user-1");
+    const entry = tracker.get("sess-a");
+    expect(entry?.userEntraId).toBe("user-1");
+    expect(entry?.sessionId).toBe("sess-a");
+
+    await new Promise((r) => setTimeout(r, 60));
+    expect(tracker.get("sess-a")).toBeUndefined();
+  });
+
+  it("activeCount only counts sessions still inside the TTL window", async () => {
+    const tracker = new HeartbeatTracker(50);
+    tracker.touch("alive-1", "u1");
+    tracker.touch("expiring-1", "u2");
+    expect(tracker.activeCount()).toBe(2);
+
+    await new Promise((r) => setTimeout(r, 60));
+    // Both have aged out at this point — refresh just one.
+    tracker.touch("alive-1", "u1");
+    expect(tracker.activeCount()).toBe(1);
+  });
+
+  it("touch() refreshes lastSeen so a session past its initial TTL stays alive", async () => {
+    const tracker = new HeartbeatTracker(50);
+    tracker.touch("s", "u");
+
+    await new Promise((r) => setTimeout(r, 30));
+    tracker.touch("s", "u"); // refresh before expiry
+    await new Promise((r) => setTimeout(r, 30));
+
+    // 60ms has elapsed since the first touch, but only 30ms since the most
+    // recent — so the session should still be alive.
+    expect(tracker.isAlive("s")).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// SlidingWindowCounter — existing block covers happy / over-limit / count.
+// These cover per-key isolation and window rollover (the core sliding-window
+// contract that's only tested implicitly today).
+// ---------------------------------------------------------------------------
+
+describe("SlidingWindowCounter — isolation and rollover", () => {
+  it("rate-limits per key, not globally", () => {
+    const counter = new SlidingWindowCounter(60_000, 1);
+    expect(counter.tryRecord("user-a").allowed).toBe(true);
+    // user-a is now saturated; user-b should still get a slot.
+    expect(counter.tryRecord("user-a").allowed).toBe(false);
+    expect(counter.tryRecord("user-b").allowed).toBe(true);
+  });
+
+  it("frees a slot after the window rolls over", async () => {
+    const counter = new SlidingWindowCounter(40, 1);
+    expect(counter.tryRecord("u").allowed).toBe(true);
+    expect(counter.tryRecord("u").allowed).toBe(false);
+    await new Promise((r) => setTimeout(r, 60));
+    expect(counter.tryRecord("u").allowed).toBe(true);
+  });
+
+  it("retryAfterMs equals the remaining lifetime of the oldest in-window timestamp", () => {
+    vi.useFakeTimers();
+    try {
+      vi.setSystemTime(new Date("2026-05-08T00:00:00.000Z"));
+      const counter = new SlidingWindowCounter(60_000, 1);
+      counter.tryRecord("u"); // recorded at t=0
+
+      vi.setSystemTime(new Date("2026-05-08T00:00:20.000Z")); // +20s
+      const result = counter.tryRecord("u");
+      expect(result.allowed).toBe(false);
+      // Oldest timestamp was at t=0; window=60_000; now=20_000.
+      // retryAfterMs = 0 + 60000 - 20000 = 40000.
+      expect(result.retryAfterMs).toBe(40_000);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

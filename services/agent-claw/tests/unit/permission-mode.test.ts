@@ -175,4 +175,200 @@ describe("permission resolver", () => {
     });
     expect(r.decision).toBe("deny");
   });
+
+  // ---------------------------------------------------------------------------
+  // Precedence interactions — the resolver's contract is documented as a
+  // 7-step ladder. The block above pins individual rungs; the cases below
+  // pin what happens when several rungs apply at once.
+  // ---------------------------------------------------------------------------
+
+  it("bypassPermissions wins over a disallowedTools match", async () => {
+    const r = await resolveDecision({
+      tool: stubTool("Bash"),
+      input: {},
+      ctx: makeCtx(),
+      options: { permissionMode: "bypassPermissions", disallowedTools: ["Bash"] },
+      lifecycle: new Lifecycle(),
+    });
+    // bypass is rung 1; disallowedTools is rung 2.
+    expect(r.decision).toBe("allow");
+    expect(r.reason).toMatch(/bypass/);
+  });
+
+  it("disallowedTools wins over acceptEdits for filesystem-touching tools", async () => {
+    const r = await resolveDecision({
+      tool: stubTool("Write"),
+      input: {},
+      ctx: makeCtx(),
+      options: { permissionMode: "acceptEdits", disallowedTools: ["Write"] },
+      lifecycle: new Lifecycle(),
+    });
+    // acceptEdits is rung 4; disallowedTools is rung 2 — deny wins.
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toMatch(/disallowedTools/);
+  });
+
+  it("disallowedTools supports trailing-wildcard matches", async () => {
+    const r = await resolveDecision({
+      tool: stubTool("mcp__github__delete_file"),
+      input: {},
+      ctx: makeCtx(),
+      options: { disallowedTools: ["mcp__github__*"] },
+      lifecycle: new Lifecycle(),
+    });
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toMatch(/disallowedTools/);
+  });
+
+  it("static allowedTools short-circuits before the enforce-mode hook fires", async () => {
+    // The resolver checks allowedTools (rung 3) BEFORE consulting the
+    // permission_request hook in enforce mode. Pin that ordering so a hook
+    // can never accidentally veto an explicit allowlist match.
+    const lc = new Lifecycle();
+    let hookFired = false;
+    lc.on("permission_request", "spy", async () => {
+      hookFired = true;
+      return {
+        hookSpecificOutput: {
+          hookEventName: "permission_request",
+          permissionDecision: "deny",
+          permissionDecisionReason: "should not reach here",
+        },
+      };
+    });
+    const r = await resolveDecision({
+      tool: stubTool("query_kg"),
+      input: {},
+      ctx: makeCtx(),
+      options: { permissionMode: "enforce", allowedTools: ["query_kg"] },
+      lifecycle: lc,
+    });
+    expect(r.decision).toBe("allow");
+    expect(hookFired).toBe(false);
+  });
+
+  it("acceptEdits auto-approves the SDK-alias filesystem tools (Write/Edit/MultiEdit)", async () => {
+    for (const id of ["Write", "Edit", "MultiEdit"]) {
+      const r = await resolveDecision({
+        tool: stubTool(id),
+        input: {},
+        ctx: makeCtx(),
+        options: { permissionMode: "acceptEdits" },
+        lifecycle: new Lifecycle(),
+      });
+      expect(r.decision, `tool=${id}`).toBe("allow");
+    }
+  });
+
+  it("default mode + hook returning allow yields allow", async () => {
+    const lc = new Lifecycle();
+    lc.on("permission_request", "policy", async () => ({
+      hookSpecificOutput: {
+        hookEventName: "permission_request",
+        permissionDecision: "allow",
+        permissionDecisionReason: "policy approved",
+      },
+    }));
+    const r = await resolveDecision({
+      tool: stubTool("Bash"),
+      input: {},
+      ctx: makeCtx(),
+      options: { permissionMode: "default" },
+      lifecycle: lc,
+    });
+    expect(r.decision).toBe("allow");
+    expect(r.reason).toBe("policy approved");
+  });
+
+  it("default mode + permissionCallback returning deny yields deny (not the no-callback fallback)", async () => {
+    const r = await resolveDecision({
+      tool: stubTool("Bash"),
+      input: {},
+      ctx: makeCtx(),
+      options: { permissionMode: "default", permissionCallback: () => "deny" },
+      lifecycle: new Lifecycle(),
+    });
+    expect(r.decision).toBe("deny");
+    expect(r.reason).toBe("permissionCallback");
+  });
+
+  it("default mode + permissionCallback returning ask yields ask", async () => {
+    const r = await resolveDecision({
+      tool: stubTool("Bash"),
+      input: {},
+      ctx: makeCtx(),
+      options: { permissionMode: "default", permissionCallback: () => "ask" },
+      lifecycle: new Lifecycle(),
+    });
+    expect(r.decision).toBe("ask");
+  });
+
+  it("default mode + hook decision short-circuits the permissionCallback", async () => {
+    // Hook returns a decision; callback should not be consulted.
+    const lc = new Lifecycle();
+    lc.on("permission_request", "policy", async () => ({
+      hookSpecificOutput: {
+        hookEventName: "permission_request",
+        permissionDecision: "deny",
+        permissionDecisionReason: "hook policy",
+      },
+    }));
+    let callbackFired = false;
+    const r = await resolveDecision({
+      tool: stubTool("Bash"),
+      input: {},
+      ctx: makeCtx(),
+      options: {
+        permissionMode: "default",
+        permissionCallback: () => {
+          callbackFired = true;
+          return "allow";
+        },
+      },
+      lifecycle: lc,
+    });
+    expect(r.decision).toBe("deny");
+    expect(callbackFired).toBe(false);
+  });
+
+  it("aggregates multiple hook handlers via deny > ask > allow", async () => {
+    // Two handlers on the same lifecycle event: one allows, one denies.
+    // The lifecycle aggregator must surface deny.
+    const lc = new Lifecycle();
+    lc.on("permission_request", "permissive", async () => ({
+      hookSpecificOutput: {
+        hookEventName: "permission_request",
+        permissionDecision: "allow",
+        permissionDecisionReason: "permissive policy",
+      },
+    }));
+    lc.on("permission_request", "strict", async () => ({
+      hookSpecificOutput: {
+        hookEventName: "permission_request",
+        permissionDecision: "deny",
+        permissionDecisionReason: "strict policy",
+      },
+    }));
+    const r = await resolveDecision({
+      tool: stubTool("Bash"),
+      input: {},
+      ctx: makeCtx(),
+      options: { permissionMode: "default" },
+      lifecycle: lc,
+    });
+    expect(r.decision).toBe("deny");
+  });
+
+  it("undefined options falls through to default-mode deny without crashing", async () => {
+    // Routes that haven't been migrated to pass an explicit permissions
+    // block should NOT throw — the resolver treats absent options as default.
+    const r = await resolveDecision({
+      tool: stubTool("Bash"),
+      input: {},
+      ctx: makeCtx(),
+      options: undefined,
+      lifecycle: new Lifecycle(),
+    });
+    expect(r.decision).toBe("deny");
+  });
 });
