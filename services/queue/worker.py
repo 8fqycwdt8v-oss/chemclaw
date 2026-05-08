@@ -75,12 +75,12 @@ class WorkerSettings(BaseSettings):
 # ---------------------------------------------------------------------------
 
 
+_HandlerMap = dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]]
+
+
 def _build_handlers(
     settings: WorkerSettings,
-) -> tuple[
-    dict[str, Callable[[dict[str, Any]], Awaitable[dict[str, Any]]]],
-    httpx.AsyncClient,
-]:
+) -> tuple[_HandlerMap, httpx.AsyncClient]:
     """Construct the per-task-kind handlers + the shared httpx client.
 
     The client is returned alongside the handlers so the worker can
@@ -128,7 +128,7 @@ def _build_handlers(
     async def genchem_bioisostere(p: dict[str, Any]) -> dict[str, Any]:
         return await post("mcp-genchem", f"{settings.mcp_genchem_url}/bioisostere_replace", p)
 
-    handlers = {
+    handlers: _HandlerMap = {
         "qm_single_point":    qm_single_point,
         "qm_geometry_opt":    qm_geometry_opt,
         "qm_frequencies":     qm_frequencies,
