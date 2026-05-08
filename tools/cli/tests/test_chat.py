@@ -163,8 +163,8 @@ def test_resume_with_no_stored_session_exits_5(
     # No transport patched — should exit before any HTTP call.
     result = CliRunner().invoke(app, ["chat", "--resume", "x"])
     assert result.exit_code == 5
-    combined = (result.stdout or "") + (result.stderr or "")
-    assert "no saved session" in combined.lower()
+    assert "no saved session" in result.stderr.lower()
+    assert result.stdout == ""
 
 
 def test_explicit_session_flag_overrides_resume(
@@ -218,7 +218,7 @@ def test_error_event_exits_1(monkeypatch: pytest.MonkeyPatch) -> None:
 
     result = CliRunner().invoke(app, ["chat", "boom"])
     assert result.exit_code == 1
-    assert "model timeout" in result.stdout
+    assert "model timeout" in result.stderr
 
 
 def test_connect_error_exits_3(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -229,15 +229,22 @@ def test_connect_error_exits_3(monkeypatch: pytest.MonkeyPatch) -> None:
 
     result = CliRunner().invoke(app, ["chat", "x"])
     assert result.exit_code == 3
-    assert "not reachable" in result.stdout.lower()
+    assert "not reachable" in result.stderr.lower()
+    assert result.stdout == ""
 
 
 def test_http_401_exits_4(monkeypatch: pytest.MonkeyPatch) -> None:
-    _patch_transport(monkeypatch, lambda req: httpx.Response(status_code=401, content=b"nope"))
+    _patch_transport(
+        monkeypatch, lambda req: httpx.Response(status_code=401, content=b"forbidden by proxy")
+    )
 
     result = CliRunner().invoke(app, ["chat", "x"])
     assert result.exit_code == 4
-    assert "auth" in result.stdout.lower()
+    assert "auth" in result.stderr.lower()
+    # The body snippet is surfaced so a misconfigured proxy is distinguishable
+    # from a real auth rejection.
+    assert "forbidden by proxy" in result.stderr
+    assert result.stdout == ""
 
 
 def test_http_500_exits_1(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -247,4 +254,19 @@ def test_http_500_exits_1(monkeypatch: pytest.MonkeyPatch) -> None:
 
     result = CliRunner().invoke(app, ["chat", "x"])
     assert result.exit_code == 1
-    assert "server boom" in result.stdout
+    assert "server boom" in result.stderr
+    assert result.stdout == ""
+
+
+def test_stream_without_finish_exits_1(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A stream that ends without `finish` is a server-side disconnect, not a
+    silent success — it must exit non-zero so callers don't trust partial output."""
+    events = [{"type": "text_delta", "delta": "partial reply"}]
+    _patch_transport(monkeypatch, lambda req: _sse_response(events))
+
+    result = CliRunner().invoke(app, ["chat", "x"])
+    assert result.exit_code == 1
+    # stdout still carries whatever did stream through (so scripts can salvage it).
+    assert "partial reply" in result.stdout
+    # The reason for the non-zero exit goes to stderr.
+    assert "without finish" in result.stderr.lower()

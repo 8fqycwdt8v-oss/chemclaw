@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import pytest
 
-from chemclaw_cli.sse import parse_sse_lines
+from chemclaw_cli.sse import (
+    SseFrameTooLargeError,
+    parse_sse_lines,
+)
+from chemclaw_cli import sse as sse_mod
 
 
 def test_parses_single_data_event() -> None:
@@ -82,3 +86,22 @@ def test_data_with_no_space_after_colon_still_parses() -> None:
     lines = ['data:{"type":"text_delta","delta":"z"}', ""]
     events = list(parse_sse_lines(iter(lines)))
     assert events == [{"type": "text_delta", "delta": "z"}]
+
+
+def test_oversized_line_raises_frame_too_large(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A single line above the per-line char cap must abort, not OOM."""
+    monkeypatch.setattr(sse_mod, "_MAX_LINE_CHARS", 64)
+    huge = "data: " + ("x" * 200)
+    with pytest.raises(SseFrameTooLargeError):
+        list(parse_sse_lines(iter([huge, ""])))
+
+
+def test_accumulated_event_payload_raises_frame_too_large(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Many small `data:` lines that together exceed the event cap must abort."""
+    monkeypatch.setattr(sse_mod, "_MAX_LINE_CHARS", 1024)
+    monkeypatch.setattr(sse_mod, "_MAX_EVENT_CHARS", 256)
+    chunks = [f"data: {'a' * 64}" for _ in range(8)]
+    with pytest.raises(SseFrameTooLargeError):
+        list(parse_sse_lines(iter([*chunks, ""])))
