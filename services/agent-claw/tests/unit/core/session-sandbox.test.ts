@@ -78,6 +78,24 @@ describe("acquireSessionSandbox", () => {
   });
 });
 
+describe("acquireSessionSandbox — wrong-shape slot guard", () => {
+  it("ignores a non-CachedSandbox value in the slot and creates fresh", async () => {
+    const client = fakeClient();
+    const ctx = makeCtx();
+    enableSessionSandboxCache(ctx);
+    // Some other writer poisons the slot with the wrong shape.
+    ctx.scratchpad.set("__chemclaw_e2b_session_sandbox", "not-a-cached-sandbox");
+
+    const lease = await acquireSessionSandbox(ctx, client, "stub-v1");
+    expect(client.createCalls).toBe(1);
+    expect(lease.handle.id).toBe("sandbox-1");
+    // Fresh entry is now installed; second call hits cache.
+    const lease2 = await acquireSessionSandbox(ctx, client, "stub-v1");
+    expect(client.createCalls).toBe(1);
+    expect(lease2.handle.id).toBe(lease.handle.id);
+  });
+});
+
 describe("closeSessionSandbox", () => {
   it("is idempotent when no sandbox is cached", async () => {
     const client = fakeClient();

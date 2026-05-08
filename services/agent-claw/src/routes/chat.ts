@@ -28,6 +28,7 @@ import { buildAgent, runHarness } from "../core/harness.js";
 import { parseSlash } from "../core/slash.js";
 import type { RedactReplacement } from "../core/hooks/redact-secrets.js";
 import { hydrateScratchpad, persistTurnState } from "../core/session-state.js";
+import { enableSessionSandboxCache } from "../core/session-sandbox.js";
 import { lifecycle } from "../core/runtime.js";
 import { buildSystemPromptForTurn, resolveSession } from "./chat-setup.js";
 import { runWithRequestContext } from "../core/request-context.js";
@@ -312,6 +313,13 @@ async function handleChat(
       ...(event.toolUseId ? { toolUseId: event.toolUseId } : {}),
     });
   };
+
+  // Opt the session into per-session E2B sandbox reuse — run_program
+  // and forged-tool dispatch will share one sandbox across the whole
+  // session and the session-sandbox-close hook closes it on
+  // session_end. Single-use callers (sub-agents, tests, non-streaming
+  // requests) skip this branch and fall through to per-call create+close.
+  enableSessionSandboxCache(ctx);
 
   // NOTE: onSession fires BEFORE pre_turn (when both streamSink and
   // sessionId are set) — runHarness drives the `session` SSE event via the

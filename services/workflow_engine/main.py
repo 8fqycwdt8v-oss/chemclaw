@@ -315,6 +315,12 @@ class WorkflowEngine:
 
         Step shape:
             {kind: 'parallel', steps: [<step>, ...], max_concurrency?: int}
+
+        Concurrency note: substeps share `scope` by reference. Today's
+        _exec_* handlers only READ scope, so this is safe under
+        asyncio.gather. A future handler that mutates scope (e.g. to
+        propagate a substep result during execution) would race — at
+        that point, either deep-copy per substep or serialize the writes.
         """
         substeps = step.get("steps")
         if not isinstance(substeps, list) or not substeps:
@@ -369,7 +375,11 @@ class WorkflowEngine:
         goal = step.get("goal")
         if not isinstance(goal, str) or not goal.strip():
             raise ValueError("sub_agent step requires non-empty 'goal' string")
-        # JMESPath substitution: if goal looks like '${expr}', resolve.
+        # Whole-string JMESPath substitution: if goal is exactly '${expr}'
+        # (no surrounding text), resolve against scope. Mixed strings like
+        # 'look up ${steps.first.smiles}' are NOT substituted today; pass
+        # them through as-is. If you need substring substitution, build
+        # the full goal in a tool_call step and reference its result.
         if goal.startswith("${") and goal.endswith("}"):
             resolved = self._resolve_jmespath(goal[2:-1], scope)
             if not isinstance(resolved, str) or not resolved.strip():
@@ -394,6 +404,12 @@ class WorkflowEngine:
         max_steps = step.get("max_steps", 10)
         if not isinstance(max_steps, int) or max_steps < 1 or max_steps > 50:
             raise ValueError("sub_agent 'max_steps' must be int in [1, 50]")
+
+        sub_inputs = step.get("inputs", {})
+        if not isinstance(sub_inputs, dict):
+            raise ValueError(
+                f"sub_agent 'inputs' must be a dict, got {type(sub_inputs).__name__}"
+            )
 
         timeout_seconds = step.get(
             "timeout_seconds",
@@ -438,6 +454,7 @@ class WorkflowEngine:
             "user_entra_id": user_entra_id,
             "type": agent_type,
             "max_steps": max_steps,
+            "inputs": sub_inputs,
         }
         try:
             resp = await self._http.post(

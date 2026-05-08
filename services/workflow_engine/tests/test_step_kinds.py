@@ -204,6 +204,46 @@ def test_sub_agent_validates_type():
         asyncio.run(eng._execute_step(step, {}))
 
 
+def test_sub_agent_threads_inputs_to_route_payload():
+    eng = _build_engine()
+    response = MagicMock(status_code=200, json=lambda: {"text": "ok"})
+    captured: dict[str, Any] = {}
+
+    async def fake_post(url, **kwargs):  # noqa: ANN001, ARG001
+        captured["json"] = kwargs.get("json")
+        return response
+
+    eng._http = MagicMock()
+    eng._http.post = fake_post
+
+    step = {
+        "kind": "sub_agent",
+        "goal": "x",
+        "user_entra_id": "u1",
+        "inputs": {"smiles": "CCO", "temperature_c": 25},
+    }
+    old_key = os.environ.pop("MCP_AUTH_SIGNING_KEY", None)
+    try:
+        asyncio.run(eng._execute_step(step, {}))
+    finally:
+        if old_key is not None:
+            os.environ["MCP_AUTH_SIGNING_KEY"] = old_key
+
+    assert captured["json"]["inputs"] == {"smiles": "CCO", "temperature_c": 25}
+
+
+def test_sub_agent_inputs_must_be_dict():
+    eng = _build_engine()
+    step = {
+        "kind": "sub_agent",
+        "goal": "x",
+        "user_entra_id": "u1",
+        "inputs": "not-a-dict",
+    }
+    with pytest.raises(ValueError, match="inputs"):
+        asyncio.run(eng._execute_step(step, {}))
+
+
 def test_sub_agent_resolves_goal_jmespath_template():
     eng = _build_engine()
     response = MagicMock(status_code=200, json=lambda: {"text": "ok"})

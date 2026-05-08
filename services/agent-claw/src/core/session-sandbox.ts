@@ -42,6 +42,23 @@ interface CachedSandbox {
   mountedStubs: Set<string>;
 }
 
+/**
+ * Runtime guard on the scratchpad slot. The slot key is namespaced
+ * (`__chemclaw_e2b_session_sandbox`) so collision is unlikely, but a
+ * future writer that puts something else there would otherwise crash
+ * acquireSessionSandbox with a confusing `.mountedStubs.has is not a
+ * function`. A stricter "wrong shape" branch logs + ignores so we
+ * fall through to creating a fresh sandbox.
+ */
+function isCachedSandbox(value: unknown): value is CachedSandbox {
+  if (typeof value !== "object" || value === null) return false;
+  const v = value as Record<string, unknown>;
+  const handle = v.handle;
+  if (typeof handle !== "object" || handle === null) return false;
+  const handleId = (handle as Record<string, unknown>).id;
+  return typeof handleId === "string" && v.mountedStubs instanceof Set;
+}
+
 export interface SessionSandboxLease {
   handle: SandboxHandle;
   /** True when this call should mount the chemclaw stub before exec. */
@@ -73,7 +90,15 @@ export async function acquireSessionSandbox(
   client: SandboxClient,
   stubKey: string,
 ): Promise<SessionSandboxLease> {
-  const cached = ctx.scratchpad.get(SLOT) as CachedSandbox | undefined;
+  const cachedRaw = ctx.scratchpad.get(SLOT);
+  if (cachedRaw !== undefined && !isCachedSandbox(cachedRaw)) {
+    getLogger("agent-claw.core.session_sandbox").warn(
+      { event: "session_sandbox_slot_wrong_shape" },
+      "scratchpad slot held a non-CachedSandbox value — ignoring and creating fresh",
+    );
+    ctx.scratchpad.delete(SLOT);
+  }
+  const cached = isCachedSandbox(cachedRaw) ? cachedRaw : undefined;
   if (cached) {
     const needsStubMount = !cached.mountedStubs.has(stubKey);
     return {
@@ -130,8 +155,13 @@ export async function closeSessionSandbox(
   ctx: ToolContext,
   client: SandboxClient,
 ): Promise<void> {
-  const cached = ctx.scratchpad.get(SLOT) as CachedSandbox | undefined;
-  if (!cached) return;
+  const cachedRaw = ctx.scratchpad.get(SLOT);
+  if (!isCachedSandbox(cachedRaw)) {
+    // Either no slot at all (idempotent) or wrong-shape — clear and exit.
+    if (cachedRaw !== undefined) ctx.scratchpad.delete(SLOT);
+    return;
+  }
+  const cached = cachedRaw;
   ctx.scratchpad.delete(SLOT);
   try {
     await client.closeSandbox(cached.handle);
