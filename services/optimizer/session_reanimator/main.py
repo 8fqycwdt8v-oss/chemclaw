@@ -62,9 +62,12 @@ class Settings(BaseSettings):
     # carrying the session's owning user as the `user` claim and the
     # `agent:resume` scope; the agent's /api/internal/sessions/:id/resume
     # route verifies and trusts only the signed claim (no x-user-entra-id
-    # forgery surface). When unset, the daemon falls back to the legacy
-    # x-user-entra-id header for the public /api/sessions/:id/resume route
-    # — useful in dev where MCP_AUTH_SIGNING_KEY isn't configured.
+    # forgery surface). REQUIRED in any non-dev bootstrap — the legacy
+    # x-user-entra-id header fallback against the public resume route was
+    # removed because it was identity-spoof surface if MCP_AUTH_DEV_MODE
+    # leaked. Without this key set, resume_session refuses with a
+    # structured `mcp-auth-signing-key-required` envelope and
+    # assert_production_safe() refuses to start the daemon at all.
     mcp_auth_signing_key: str = ""
 
     # When false (default), an unset / empty mcp_auth_signing_key is fatal at
@@ -163,17 +166,22 @@ async def resume_session(
     session_id: str,
     user_entra_id: str,
 ) -> dict[str, Any]:
-    """POST the agent's resume endpoint for one session.
+    """POST the agent's internal resume endpoint for one session.
 
-    Auth strategy:
-      - When MCP_AUTH_SIGNING_KEY is configured: mint a JWT with the
-        session's owning user as `user` and scope `agent:resume`, send to
-        /api/internal/sessions/:id/resume (which trusts ONLY the signed
-        claim — no header forgery surface). This is the production path.
-      - Otherwise: fall back to the legacy x-user-entra-id header against
-        the public /api/sessions/:id/resume route. This is the dev-mode
-        path (and also acceptable for one-off ops use behind the auth
-        proxy where header forgery isn't a concern).
+    Auth contract:
+      MCP_AUTH_SIGNING_KEY MUST be configured. The reanimator mints a
+      JWT with the session's owning user as `user` and scope
+      `agent:resume`, posted to /api/internal/sessions/:id/resume which
+      trusts ONLY the signed claim — no x-user-entra-id forgery surface.
+
+      The pre-fix dev-mode header path (forging x-user-entra-id against
+      the public /api/sessions/:id/resume route when the signing key was
+      unset) was an identity-spoof surface if MCP_AUTH_DEV_MODE leaked
+      into a real cluster — the daemon could resume any user's session
+      by stamping a header. It's gone. Local dev that needs reanimator
+      behaviour must set MCP_AUTH_SIGNING_KEY (a `openssl rand -hex 32`
+      value works); the assert_production_safe() check at startup also
+      requires this in production-mode bootstraps.
     """
     base = settings.agent_base_url.rstrip("/")
     # Mint a fresh request_id per resume so the agent-claw log line, the
@@ -184,31 +192,40 @@ async def resume_session(
     # tick summary loses any link to the per-session work it caused.
     request_id = str(uuid.uuid4())
     headers: dict[str, str] = {"x-request-id": request_id}
-    url: str
 
-    if settings.mcp_auth_signing_key:
-        try:
-            # audience="agent-claw" binds the token to the resume route
-            # specifically — the verifier rejects tokens with any other
-            # `aud` claim. Keep this literal in sync with
-            # `verifyBearerHeader({expectedAudience: "agent-claw"})` in
-            # services/agent-claw/src/routes/sessions-handlers.ts.
-            token = sign_mcp_token(
-                sandbox_id="reanimator",
-                user_entra_id=user_entra_id,
-                scopes=["agent:resume"],
-                audience="agent-claw",
-                ttl_seconds=300,
-                signing_key=settings.mcp_auth_signing_key,
-            )
-            headers["Authorization"] = f"Bearer {token}"
-            url = f"{base}/api/internal/sessions/{session_id}/resume"
-        except McpAuthError as exc:
-            log.error("failed to mint resume token for session %s: %s", session_id, exc)
-            return {"ok": False, "status": 0, "body": f"token-mint-failed: {exc}"}
-    else:
-        headers["x-user-entra-id"] = user_entra_id
-        url = f"{base}/api/sessions/{session_id}/resume"
+    if not settings.mcp_auth_signing_key:
+        log.error(
+            "MCP_AUTH_SIGNING_KEY is unset — refusing to resume session %s. "
+            "Reanimator requires signed JWTs; the dev-mode x-user-entra-id "
+            "header fallback was removed because it was an identity-spoof "
+            "surface if MCP_AUTH_DEV_MODE leaked into a production cluster.",
+            session_id,
+        )
+        return {
+            "ok": False,
+            "status": 0,
+            "body": "mcp-auth-signing-key-required",
+        }
+
+    try:
+        # audience="agent-claw" binds the token to the resume route
+        # specifically — the verifier rejects tokens with any other
+        # `aud` claim. Keep this literal in sync with
+        # `verifyBearerHeader({expectedAudience: "agent-claw"})` in
+        # services/agent-claw/src/routes/sessions-handlers.ts.
+        token = sign_mcp_token(
+            sandbox_id="reanimator",
+            user_entra_id=user_entra_id,
+            scopes=["agent:resume"],
+            audience="agent-claw",
+            ttl_seconds=300,
+            signing_key=settings.mcp_auth_signing_key,
+        )
+        headers["Authorization"] = f"Bearer {token}"
+        url = f"{base}/api/internal/sessions/{session_id}/resume"
+    except McpAuthError as exc:
+        log.error("failed to mint resume token for session %s: %s", session_id, exc)
+        return {"ok": False, "status": 0, "body": f"token-mint-failed: {exc}"}
 
     r = await client.post(url, headers=headers, timeout=120.0)
     if r.status_code == 409:
