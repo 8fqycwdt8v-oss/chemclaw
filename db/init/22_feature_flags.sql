@@ -59,24 +59,33 @@ CREATE POLICY feature_flags_admin_write ON feature_flags
 -- Seed the catalog with the env-var gates we already have, so admins can
 -- discover them via GET /api/admin/feature-flags before any code migration.
 -- ────────────────────────────────────────────────────────────────────────────
-INSERT INTO feature_flags (key, enabled, description, updated_by)
-VALUES
-  ('agent.confidence_cross_model', false,
-   'Phase D shadow cross-model agreement signal. Expensive — adds a Haiku '
-   'call per turn. Mirrors AGENT_CONFIDENCE_CROSS_MODEL env var.',
-   'seed:22_feature_flags.sql'),
-  ('mcp.auth_dev_mode', false,
-   'Bypasses MCP JWT validation for local dev. NEVER enable in production. '
-   'Mirrors MCP_AUTH_DEV_MODE env var.',
-   'seed:22_feature_flags.sql'),
-  ('chemclaw.dev_mode', false,
-   'Top-level dev-mode toggle. Disables several auth checks. '
-   'Mirrors CHEMCLAW_DEV_MODE env var.',
-   'seed:22_feature_flags.sql'),
-  ('mock_eln.enabled', false,
-   'Enables the local mock-ELN testbed (mcp_eln_local). '
-   'Mirrors MOCK_ELN_ENABLED env var.',
-   'seed:22_feature_flags.sql')
-ON CONFLICT (key) DO NOTHING;
+-- Routes through bootstrap_feature_flag() (SECURITY DEFINER, defined in
+-- 22_admin_rls_bootstrap_helpers.sql which runs first by lex order) so a
+-- non-superuser migration role can apply this file even though
+-- feature_flags is FORCE-RLS + admin-INSERT-only.
+SELECT bootstrap_feature_flag(
+  'agent.confidence_cross_model', false,
+  'Phase D shadow cross-model agreement signal. Expensive — adds a Haiku '
+  'call per turn. Mirrors AGENT_CONFIDENCE_CROSS_MODEL env var.',
+  'seed:22_feature_flags.sql'
+);
+SELECT bootstrap_feature_flag(
+  'mcp.auth_dev_mode', false,
+  'Bypasses MCP JWT validation for local dev. NEVER enable in production. '
+  'Mirrors MCP_AUTH_DEV_MODE env var.',
+  'seed:22_feature_flags.sql'
+);
+SELECT bootstrap_feature_flag(
+  'chemclaw.dev_mode', false,
+  'Top-level dev-mode toggle. Disables several auth checks. '
+  'Mirrors CHEMCLAW_DEV_MODE env var.',
+  'seed:22_feature_flags.sql'
+);
+SELECT bootstrap_feature_flag(
+  'mock_eln.enabled', false,
+  'Enables the local mock-ELN testbed (mcp_eln_local). '
+  'Mirrors MOCK_ELN_ENABLED env var.',
+  'seed:22_feature_flags.sql'
+);
 
 COMMIT;
