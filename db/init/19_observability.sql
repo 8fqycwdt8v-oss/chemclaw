@@ -348,9 +348,13 @@ BEGIN
         );
     EXCEPTION WHEN OTHERS THEN
         -- Forward the failure to error_events so the gap is observable.
+        -- Use the record_error_event() helper instead of a direct INSERT
+        -- so the 16 KiB payload cap (defined in record_error_event)
+        -- applies uniformly. A future maintainer attaching to_jsonb(NEW)
+        -- here for diagnosis would otherwise blow the table; routing
+        -- through the helper keeps a single ingress point.
         BEGIN
-            INSERT INTO error_events (service, error_code, severity, payload)
-            VALUES (
+            PERFORM record_error_event(
                 'postgres',
                 'AUDIT_LOG_INSERT_FAILED',
                 'warn',
@@ -360,8 +364,8 @@ BEGIN
                 )
             );
         EXCEPTION WHEN OTHERS THEN
-            -- If even error_events is unwritable, swallow — the user's
-            -- transaction must succeed regardless.
+            -- If even record_error_event is unwritable, swallow — the
+            -- user's transaction must succeed regardless.
             NULL;
         END;
     END;

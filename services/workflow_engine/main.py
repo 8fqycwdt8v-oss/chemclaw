@@ -315,7 +315,25 @@ class WorkflowEngine:
         self, work_conn: psycopg.AsyncConnection, run_id: str,
         kind: str, step_id: str | None, payload: dict[str, Any],
     ) -> None:
+        # SEQ allocation is racy across replicas: SELECT MAX(seq)+1 at
+        # READ COMMITTED with no row lock means two concurrent writers
+        # for the same run_id can observe the same MAX and produce the
+        # same seq — failing the (run_id, seq) UNIQUE constraint and
+        # raising on the second INSERT.
+        #
+        # Take a transaction-scoped advisory lock keyed on the run_id
+        # hash so writes for the same run serialise across replicas.
+        # The lock is released automatically at COMMIT (advisory_xact)
+        # so a crashed worker doesn't leak a held lock. hashtext yields
+        # a 32-bit int suitable for the single-key pg_try_advisory_xact_lock
+        # form; we use the two-key variant with 'workflow_events' as a
+        # namespace constant so other code using advisory locks doesn't
+        # collide.
         async with work_conn.cursor() as cur:
+            await cur.execute(
+                "SELECT pg_advisory_xact_lock(hashtext(%s), hashtext(%s::text))",
+                ("workflow_events", run_id),
+            )
             await cur.execute(
                 """
                 INSERT INTO workflow_events (run_id, seq, kind, step_id, payload)
