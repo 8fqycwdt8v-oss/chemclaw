@@ -171,86 +171,118 @@ class CompoundFingerprinter(BaseProjector):
     async def _fingerprint(
         self, work_conn: psycopg.AsyncConnection, inchikey: str, smiles: str,
     ) -> None:
+        # Atomicity contract: every write inside this method runs in a single
+        # transaction terminated by either commit() (full success) or rollback()
+        # (any exception). Pre-fix the SMARTS-rule loop swallowed per-rule HTTP
+        # failures with `continue` and committed the partial state alongside
+        # fp_version='v1' / fp_computed_at=NOW() — failed rules then permanently
+        # lacked compound_substructure_hits rows because the catch-up SELECT
+        # ignores rows with the current fp_version, and the trigger only re-fires
+        # on row UPDATE. Now: any rule failure raises after the loop completes,
+        # the transaction rolls back, fp_version stays NULL, and the next
+        # catch-up sweep re-attempts the compound.
         if self._http is None:
             raise RuntimeError("http client not initialized")
 
-        # 1. Compute fingerprints in parallel.
-        morgan_r2_task = self._morgan(smiles, radius=2, n_bits=2048)
-        morgan_r3_task = self._morgan(smiles, radius=3, n_bits=2048)
-        maccs_task = self._post_json("/tools/maccs_fingerprint", {"smiles": smiles})
-        atompair_task = self._post_json(
-            "/tools/atompair_fingerprint", {"smiles": smiles, "n_bits": 2048},
-        )
-        scaffold_task = self._post_json("/tools/murcko_scaffold", {"smiles": smiles})
+        try:
+            # 1. Compute fingerprints in parallel.
+            morgan_r2_task = self._morgan(smiles, radius=2, n_bits=2048)
+            morgan_r3_task = self._morgan(smiles, radius=3, n_bits=2048)
+            maccs_task = self._post_json("/tools/maccs_fingerprint", {"smiles": smiles})
+            atompair_task = self._post_json(
+                "/tools/atompair_fingerprint", {"smiles": smiles, "n_bits": 2048},
+            )
+            scaffold_task = self._post_json("/tools/murcko_scaffold", {"smiles": smiles})
 
-        morgan_r2, morgan_r3, maccs, atompair, scaffold = await asyncio.gather(
-            morgan_r2_task, morgan_r3_task, maccs_task, atompair_task, scaffold_task,
-        )
-
-        # 2. Convert on_bits → dense vector strings (pgvector format).
-        morgan_r2_vec = _bits_to_vector(morgan_r2.get("on_bits", []), morgan_r2.get("n_bits", 2048))
-        morgan_r3_vec = _bits_to_vector(morgan_r3.get("on_bits", []), morgan_r3.get("n_bits", 2048))
-        maccs_vec = _bits_to_vector(maccs.get("on_bits", []), maccs.get("n_bits", 167))
-        atompair_vec = _bits_to_vector(atompair.get("on_bits", []), atompair.get("n_bits", 2048))
-
-        # 3. Write fingerprint vectors + scaffold to the compound row.
-        async with work_conn.cursor() as cur:
-            await cur.execute(
-                """
-                UPDATE compounds
-                   SET morgan_r2 = %s::vector,
-                       morgan_r3 = %s::vector,
-                       maccs = %s::vector,
-                       atompair = %s::vector,
-                       scaffold_smiles = %s,
-                       scaffold_inchikey = %s,
-                       fp_version = %s,
-                       fp_computed_at = NOW()
-                 WHERE inchikey = %s
-                """,
-                (
-                    morgan_r2_vec, morgan_r3_vec, maccs_vec, atompair_vec,
-                    scaffold.get("scaffold_smiles"),
-                    scaffold.get("scaffold_inchikey"),
-                    _FP_VERSION,
-                    inchikey,
-                ),
+            morgan_r2, morgan_r3, maccs, atompair, scaffold = await asyncio.gather(
+                morgan_r2_task, morgan_r3_task, maccs_task, atompair_task, scaffold_task,
             )
 
-            # 4. Iterate the SMARTS catalog and write hits.
-            await cur.execute(
-                "SELECT id::text AS id, smarts FROM compound_smarts_catalog WHERE enabled = TRUE"
-            )
-            rules = await cur.fetchall()
+            # 2. Convert on_bits → dense vector strings (pgvector format).
+            morgan_r2_vec = _bits_to_vector(morgan_r2.get("on_bits", []), morgan_r2.get("n_bits", 2048))
+            morgan_r3_vec = _bits_to_vector(morgan_r3.get("on_bits", []), morgan_r3.get("n_bits", 2048))
+            maccs_vec = _bits_to_vector(maccs.get("on_bits", []), maccs.get("n_bits", 167))
+            atompair_vec = _bits_to_vector(atompair.get("on_bits", []), atompair.get("n_bits", 2048))
 
-            # Bulk-check via mcp-rdkit's substructure_match (one round-trip per rule).
-            for rule in rules:
-                try:
-                    res = await self._post_json(
-                        "/tools/substructure_match",
-                        {"query_smarts": rule["smarts"], "target_smiles": smiles},
-                    )
-                except Exception as exc:  # noqa: BLE001
-                    log.warning("[%s] SMARTS rule %s failed: %s", self.name, rule["id"], exc)
-                    continue
-                count = int(res.get("count", 0))
-                if count == 0:
-                    # Skip the row to keep the table small; the absence of a row
-                    # is treated as "no match" by every consumer.
-                    continue
+            # 3. Write fingerprint vectors + scaffold to the compound row.
+            async with work_conn.cursor() as cur:
                 await cur.execute(
                     """
-                    INSERT INTO compound_substructure_hits (inchikey, smarts_id, n_matches, computed_at)
-                    VALUES (%s, %s::uuid, %s, NOW())
-                    ON CONFLICT (inchikey, smarts_id)
-                      DO UPDATE SET n_matches = EXCLUDED.n_matches, computed_at = NOW()
+                    UPDATE compounds
+                       SET morgan_r2 = %s::vector,
+                           morgan_r3 = %s::vector,
+                           maccs = %s::vector,
+                           atompair = %s::vector,
+                           scaffold_smiles = %s,
+                           scaffold_inchikey = %s,
+                           fp_version = %s,
+                           fp_computed_at = NOW()
+                     WHERE inchikey = %s
                     """,
-                    (inchikey, rule["id"], count),
+                    (
+                        morgan_r2_vec, morgan_r3_vec, maccs_vec, atompair_vec,
+                        scaffold.get("scaffold_smiles"),
+                        scaffold.get("scaffold_inchikey"),
+                        _FP_VERSION,
+                        inchikey,
+                    ),
                 )
 
-            # 5. Notify downstream classifier projector.
-            await cur.execute("SELECT pg_notify(%s, %s)", (_OUT_NOTIFY_CHANNEL, inchikey))
-        await work_conn.commit()
+                # 4. Iterate the SMARTS catalog and write hits. Track per-rule
+                # failures rather than swallowing them — partial-success commits
+                # would leave failed rules without hits forever (see contract
+                # docstring at top of method).
+                await cur.execute(
+                    "SELECT id::text AS id, smarts FROM compound_smarts_catalog WHERE enabled = TRUE"
+                )
+                rules = await cur.fetchall()
+
+                failed_rule_ids: list[str] = []
+                for rule in rules:
+                    try:
+                        res = await self._post_json(
+                            "/tools/substructure_match",
+                            {"query_smarts": rule["smarts"], "target_smiles": smiles},
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        log.warning("[%s] SMARTS rule %s failed: %s", self.name, rule["id"], exc)
+                        failed_rule_ids.append(rule["id"])
+                        continue
+                    count = int(res.get("count", 0))
+                    if count == 0:
+                        # Skip the row to keep the table small; the absence of a row
+                        # is treated as "no match" by every consumer.
+                        continue
+                    await cur.execute(
+                        """
+                        INSERT INTO compound_substructure_hits (inchikey, smarts_id, n_matches, computed_at)
+                        VALUES (%s, %s::uuid, %s, NOW())
+                        ON CONFLICT (inchikey, smarts_id)
+                          DO UPDATE SET n_matches = EXCLUDED.n_matches, computed_at = NOW()
+                        """,
+                        (inchikey, rule["id"], count),
+                    )
+
+                if failed_rule_ids:
+                    raise PermanentHandlerError(
+                        f"compound {inchikey}: {len(failed_rule_ids)} of {len(rules)} "
+                        f"SMARTS rules failed; rolling back so catch-up retries "
+                        f"(failed rule_ids: {failed_rule_ids[:5]}{'…' if len(failed_rule_ids) > 5 else ''})"
+                    )
+
+                # 5. Notify downstream classifier projector.
+                await cur.execute("SELECT pg_notify(%s, %s)", (_OUT_NOTIFY_CHANNEL, inchikey))
+            await work_conn.commit()
+        except BaseException:
+            # Cancel + any error path: explicitly rollback so the next call
+            # on this connection starts with a clean transaction. Without
+            # this, the failed run's UPDATE compounds + partial INSERTs leak
+            # into the next _fingerprint's transaction.
+            try:
+                await work_conn.rollback()
+            except Exception:
+                log.exception("[%s] rollback failed for %s", self.name, inchikey)
+            raise
 
     async def _morgan(self, smiles: str, radius: int, n_bits: int) -> dict[str, Any]:
         return await self._post_json(

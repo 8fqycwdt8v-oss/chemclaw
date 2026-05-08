@@ -101,8 +101,10 @@ async function fetchCalibrationRows(
     let projectRows: CalibrationRow[] = [];
     if (projectInternalId) {
       const result = await client.query<CalibrationRow>(
+        // reactions_current excludes invalidated/superseded rows; calibration
+        // sets must not pollute conformal thresholds with retracted data.
         `SELECT r.rxn_smiles, e.yield_pct::float AS yield_pct
-           FROM reactions r
+           FROM reactions_current r
            JOIN experiments e ON e.id = r.experiment_id
            JOIN synthetic_steps s ON s.id = e.synthetic_step_id
            JOIN nce_projects p ON p.id = s.nce_project_id
@@ -121,7 +123,7 @@ async function fetchCalibrationRows(
     // project filter. Still RLS-scoped — only projects this user can see.
     const result = await client.query<CalibrationRow>(
       `SELECT r.rxn_smiles, e.yield_pct::float AS yield_pct
-         FROM reactions r
+         FROM reactions_current r
          JOIN experiments e ON e.id = r.experiment_id
         WHERE e.yield_pct IS NOT NULL
           AND r.rxn_smiles IS NOT NULL
@@ -140,7 +142,7 @@ async function fetchNearestDistance(
   return await withUserContext(pool, userEntraId, async (client) => {
     const result = await client.query<{ distance: number }>(
       `SELECT r.drfp_vector <=> $1::vector AS distance
-         FROM reactions r
+         FROM reactions_current r
         WHERE r.drfp_vector IS NOT NULL
         ORDER BY r.drfp_vector <=> $1::vector ASC
         LIMIT 1`,

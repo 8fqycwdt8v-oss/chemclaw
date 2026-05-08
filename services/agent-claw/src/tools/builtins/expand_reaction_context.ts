@@ -262,12 +262,17 @@ export function buildExpandReactionContextTool(pool: Pool, mcpKgUrl: string) {
       if (include.has("predecessors") && input.hop_limit === 2) {
         const preds = await withUserContext(pool, ctx.userEntraId, async (client) => {
           const q = await client.query<Record<string, unknown>>(
+            // The seed reaction r1 is looked up by explicit id (may be
+            // invalidated — caller asked for it), so r1 reads from the
+            // base `reactions` table. Predecessors r2 are surfaced as
+            // suggestions, so they MUST be filtered to current rows only
+            // — see db/init/48_reactions_current_view.sql.
             `SELECT r2.id::text AS reaction_id,
                     'prior_step_in_same_synthetic_step' AS relationship
                FROM reactions r1
                JOIN experiments e1 ON e1.id = r1.experiment_id
                JOIN experiments e2 ON e2.synthetic_step_id = e1.synthetic_step_id
-               JOIN reactions r2   ON r2.experiment_id = e2.id
+               JOIN reactions_current r2 ON r2.experiment_id = e2.id
               WHERE r1.id = $1::uuid
                 AND e2.created_at < e1.created_at
               ORDER BY e2.created_at DESC

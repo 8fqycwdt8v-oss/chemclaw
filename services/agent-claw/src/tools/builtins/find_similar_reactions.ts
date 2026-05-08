@@ -107,7 +107,7 @@ export function buildFindSimilarReactionsTool(pool: Pool, mcpDrfpUrl: string) {
                  p.internal_id AS project_internal_id,
                  e.yield_pct,
                  e.outcome_status
-            FROM reactions r
+            FROM reactions_current r
             JOIN experiments e       ON e.id  = r.experiment_id
             JOIN synthetic_steps ss  ON ss.id = e.synthetic_step_id
             JOIN nce_projects p      ON p.id  = ss.nce_project_id

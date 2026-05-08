@@ -1,5 +1,6 @@
 // GET /healthz — liveness probe (no external dependencies checked).
-// Phase A.1: minimal. Readiness (Postgres ping) lands in A.2.
+// /readyz is registered separately by bootstrap/probes.ts: it both pings
+// Postgres and asserts at least one mcp_tools row is healthy.
 
 import type { FastifyInstance } from "fastify";
 
