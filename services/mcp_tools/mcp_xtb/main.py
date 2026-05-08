@@ -81,6 +81,7 @@ from services.mcp_tools.mcp_xtb._shared import (
     QmRespBase,
     SolventModel,
     check_cache as _check_cache,
+    gxtb_available as _gxtb_available,
     method_flags as _method_flags,
     parse_energy as _parse_energy,
     parse_fukui as _parse_fukui,
@@ -95,6 +96,28 @@ from services.mcp_tools.mcp_xtb._shared import (
     stda_available as _stda_available,
     xtb_available as _xtb_available,
 )
+
+
+def _assert_method_supported(method: str) -> None:
+    """Surface unsupported-binary methods as HTTP 501 before any cache hit.
+
+    The check runs before `_check_cache` so a previously-poisoned cache
+    row (e.g. from the pre-fix `--general` placeholder era) cannot return
+    a misleading 200. When a real `gxtb` binary lands in the image,
+    `_gxtb_available()` flips to True and the guard becomes a no-op.
+    """
+    if method == "g-xTB" and not _gxtb_available():
+        raise HTTPException(
+            status_code=501,
+            detail={
+                "error": ERROR_CODE_NOT_IMPLEMENTED,
+                "detail": (
+                    "g-xTB requires the standalone `gxtb` binary which is "
+                    "not bundled in this image. Use GFN2 (default) or "
+                    "GFN-FF for now. Tracked in BACKLOG.md."
+                ),
+            },
+        )
 
 
 log = logging.getLogger("mcp-xtb")
@@ -156,6 +179,7 @@ class SinglePointOut(QmRespBase):
 
 @app.post("/single_point", response_model=SinglePointOut, tags=["xtb"])
 async def single_point(req: Annotated[QmReqBase, Body(...)]) -> SinglePointOut:
+    _assert_method_supported(req.method)
     canonical, xyz, inchikey = _smiles_to_canonical_and_xyz(req.smiles)
     cached = _check_cache(
         method=req.method, task="sp", smiles_canonical=canonical,
@@ -218,6 +242,7 @@ class GeomOptOut(QmRespBase):
 
 @app.post("/geometry_opt", response_model=GeomOptOut, tags=["xtb"])
 async def geometry_opt(req: Annotated[GeomOptIn, Body(...)]) -> GeomOptOut:
+    _assert_method_supported(req.method)
     canonical, xyz, inchikey = _smiles_to_canonical_and_xyz(req.smiles)
     params = {"threshold": req.threshold}
     cached = _check_cache(
@@ -285,6 +310,7 @@ class FrequenciesOut(QmRespBase):
 
 @app.post("/frequencies", response_model=FrequenciesOut, tags=["xtb"])
 async def frequencies(req: Annotated[QmReqBase, Body(...)]) -> FrequenciesOut:
+    _assert_method_supported(req.method)
     canonical, xyz, inchikey = _smiles_to_canonical_and_xyz(req.smiles)
     cached = _check_cache(
         method=req.method, task="freq", smiles_canonical=canonical,
@@ -420,6 +446,7 @@ class RelaxedScanOut(QmRespBase):
 
 @app.post("/relaxed_scan", response_model=RelaxedScanOut, tags=["xtb"])
 async def relaxed_scan(req: Annotated[RelaxedScanIn, Body(...)]) -> RelaxedScanOut:
+    _assert_method_supported(req.method)
     lo, hi, step = req.coord_def.range
     n_points = int(abs(hi - lo) / max(abs(step), 1e-9)) + 1
     if n_points > _MAX_SCAN_POINTS:
@@ -505,6 +532,7 @@ class MdOut(QmRespBase):
 
 @app.post("/md", response_model=MdOut, tags=["xtb"])
 async def md(req: Annotated[MdIn, Body(...)]) -> MdOut:
+    _assert_method_supported(req.method)
     canonical, xyz, inchikey = _smiles_to_canonical_and_xyz(req.smiles)
     params = {"n_steps": req.n_steps, "dt_fs": req.dt_fs, "temp_K": req.temp_K}
     cached = _check_cache(
@@ -730,6 +758,7 @@ class FukuiOut(QmRespBase):
 
 @app.post("/fukui", response_model=FukuiOut, tags=["xtb"])
 async def fukui(req: Annotated[QmReqBase, Body(...)]) -> FukuiOut:
+    _assert_method_supported(req.method)
     canonical, xyz, inchikey = _smiles_to_canonical_and_xyz(req.smiles)
     cached = _check_cache(
         method=req.method, task="fukui", smiles_canonical=canonical,
@@ -785,6 +814,7 @@ class ChargesOut(QmRespBase):
 
 @app.post("/charges", response_model=ChargesOut, tags=["xtb"])
 async def charges(req: Annotated[ChargesIn, Body(...)]) -> ChargesOut:
+    _assert_method_supported(req.method)
     canonical, xyz, inchikey = _smiles_to_canonical_and_xyz(req.smiles)
     params = {"scheme": req.scheme}
     cached = _check_cache(

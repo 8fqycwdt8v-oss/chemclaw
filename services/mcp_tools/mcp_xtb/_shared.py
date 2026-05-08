@@ -44,18 +44,31 @@ ChargeScheme = Literal["mulliken", "cm5"]
 # CLI flag mapping
 # ---------------------------------------------------------------------------
 
+# g-xTB is intentionally absent. It is the standalone "general extended
+# tight-binding" binary (Grimme group); it is *not* an `xtb` subcommand and
+# the image does not ship a `gxtb` binary today. The previous placeholder
+# (`--gfn 2 --general`) silently fell back to GFN2 — the result was then
+# cached as method='g-xTB' in `qm_jobs` and projected into Neo4j with the
+# wrong method label, poisoning both the cache and the KG. Endpoints now
+# 501 explicitly via `method_flags` → caller sees `not_implemented` and
+# the cache stays clean. Wiring the real binary is tracked in BACKLOG.md.
 _METHOD_FLAGS: dict[str, list[str]] = {
     "GFN0": ["--gfn", "0"],
     "GFN1": ["--gfn", "1"],
     "GFN2": ["--gfn", "2"],
     "GFN-FF": ["--gfnff"],
-    "g-xTB": ["--gfn", "2", "--general"],  # placeholder; real g-xTB binary uses --gxtb
     "sTDA-xTB": ["--gfn", "2"],  # sTDA driven by --vfukui or --tda flag downstream
     "IPEA-xTB": ["--gfn", "2", "--ipea"],
 }
 
 
 def method_flags(method: str) -> list[str]:
+    if method == "g-xTB":
+        raise NotImplementedError(
+            "g-xTB requires the standalone `gxtb` binary, which is not "
+            "available in this image. The endpoint should surface this as "
+            "HTTP 501 not_implemented before reaching this helper.",
+        )
     if method not in _METHOD_FLAGS:
         raise ValueError(f"unsupported method: {method!r}")
     return list(_METHOD_FLAGS[method])
@@ -138,6 +151,17 @@ def xtb_available() -> bool:
 
 def stda_available() -> bool:
     return shutil.which("stda") is not None
+
+
+def gxtb_available() -> bool:
+    """Whether the standalone `gxtb` binary is on PATH.
+
+    Distinct from `xtb` — g-xTB is a separate Grimme-group binary, not an
+    `xtb` subcommand. Today every image returns False; the probe exists so
+    a future image that bundles the binary can flip behaviour without
+    touching every endpoint.
+    """
+    return shutil.which("gxtb") is not None
 
 
 # ---------------------------------------------------------------------------
