@@ -1,9 +1,14 @@
-// Tests for the new "enforce" permission mode.
+// Tests for the "enforce" permission mode.
 //
 // Phase 3 of the configuration concept (Initiative 5). The enforce mode is
 // the production wiring point: routes pass { permissionMode: "enforce" }
-// so the permission_request hook actually fires AND a no-decision hook
-// allows (vs. the existing "default" mode's deny-on-no-decision).
+// so the permission_request hook actually fires.
+//
+// 2026-05-08 hardening: when no hook returns a decision, the resolver now
+// defaults to ASK (not ALLOW) so the silent-allow path that combined with
+// missing PolicyMatchContext.org/project to silently miss org-scoped denies
+// is closed. Operators wanting the legacy permissive default add a global
+// allow-all policy row.
 
 import { describe, it, expect } from "vitest";
 import { Lifecycle } from "../../src/core/lifecycle.js";
@@ -21,7 +26,7 @@ const fakeTool: Tool = {
 const fakeCtx: ToolContext = {} as unknown as ToolContext;
 
 describe("permissionMode='enforce'", () => {
-  it("allows when no policy hook returns a decision", async () => {
+  it("asks when no policy hook returns a decision (was: allow pre-fix)", async () => {
     const lifecycle = new Lifecycle();
     const r = await resolveDecision({
       tool: fakeTool,
@@ -30,7 +35,7 @@ describe("permissionMode='enforce'", () => {
       options: { permissionMode: "enforce" },
       lifecycle,
     });
-    expect(r.decision).toBe("allow");
+    expect(r.decision).toBe("ask");
     expect(r.reason).toMatch(/no matching policy/);
   });
 

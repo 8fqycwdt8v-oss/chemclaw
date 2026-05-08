@@ -112,7 +112,7 @@ async function loadReactionRows(
               (e.tabular_data->>'catalyst_loading_mol_pct')::numeric                  AS catalyst_loading_mol_pct,
               COALESCE(r.base,          e.tabular_data->>'base')                       AS base,
               e.yield_pct
-         FROM reactions r
+         FROM reactions_current r
          JOIN experiments e ON e.id = r.experiment_id
         WHERE r.id = ANY($1::uuid[])`,
       [ids],
@@ -164,7 +164,7 @@ export function buildStatisticalAnalyzeTool(pool: Pool, mcpTabiclUrl: string) {
                        COALESCE(r.solvent,       e.tabular_data->>'solvent')                          AS solvent,
                        COALESCE(r.temperature_c, (e.tabular_data->>'temp_c')::numeric)                AS temp_c,
                        e.yield_pct
-                  FROM reactions r
+                  FROM reactions_current r
                   JOIN experiments e ON e.id = r.experiment_id
                  WHERE r.id = ANY($1::uuid[])
                    AND e.yield_pct IS NOT NULL

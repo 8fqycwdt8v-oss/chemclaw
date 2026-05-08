@@ -39,6 +39,15 @@ export async function withUserContext<T>(
   const userHash = hashUser(userEntraId);
   const started = Date.now();
   const client = await pool.connect();
+  // Track whether we hit any failure path; if so, destroy the client on
+  // release rather than returning it to the pool with a possibly-open or
+  // half-aborted transaction. node-postgres `client.release(err)` (truthy
+  // arg) discards the client; `release()` returns it to the pool. Without
+  // this guard, an exception thrown after `pool.connect()` resolved but
+  // before `BEGIN` succeeded — or any error during ROLLBACK — could put
+  // the client back in the pool with leftover transaction state and the
+  // next caller sees stray rows / serialization errors.
+  let releaseError: Error | undefined;
   try {
     await client.query("BEGIN");
     await client.query(
@@ -66,11 +75,14 @@ export async function withUserContext<T>(
     return result;
   } catch (err) {
     const duration = Date.now() - started;
+    releaseError = err as Error;
     try {
       await client.query("ROLLBACK");
     } catch (rbErr) {
       // Surface the rollback failure so an errant client isn't returned
-      // to the pool in an unknown state.
+      // to the pool in an unknown state. `releaseError` already captures
+      // the original throw, which guarantees the finally below destroys
+      // the client; we attach the rollback failure for diagnostics.
       (err as { rollbackError?: unknown }).rollbackError = rbErr;
     }
     log.error(
@@ -85,7 +97,11 @@ export async function withUserContext<T>(
     );
     throw err;
   } finally {
-    client.release();
+    // node-postgres: passing a truthy arg to release() destroys the client
+    // instead of returning it to the pool. Use this whenever an error has
+    // been observed so a client whose transaction state we can't trust
+    // doesn't pollute subsequent connections.
+    client.release(releaseError);
   }
 }
 

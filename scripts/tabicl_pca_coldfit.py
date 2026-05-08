@@ -32,7 +32,12 @@ def main() -> None:
         f"password={os.environ.get('POSTGRES_PASSWORD', '')}"
     )
     with psycopg.connect(dsn) as conn, conn.cursor() as cur:
-        cur.execute("SELECT drfp_vector FROM reactions WHERE drfp_vector IS NOT NULL")
+        # reactions_current excludes invalidated/superseded rows so the
+        # PCA baseline isn't biased by retracted reactions. See
+        # db/init/48_reactions_current_view.sql.
+        cur.execute(
+            "SELECT drfp_vector FROM reactions_current WHERE drfp_vector IS NOT NULL"
+        )
         rows = cur.fetchall()
     if not rows:
         raise SystemExit("no DRFP vectors found; run the reaction-vectorizer first")

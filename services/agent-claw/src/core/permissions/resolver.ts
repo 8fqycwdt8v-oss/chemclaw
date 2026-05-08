@@ -33,6 +33,7 @@ import type {
   PermissionResolution,
   ToolContext,
 } from "../types.js";
+import { getLogger } from "../../observability/logger.js";
 
 export interface ResolveDecisionInput {
   tool: Tool;
@@ -115,7 +116,19 @@ export async function resolveDecision(
 
   if (mode === "enforce") {
     // Phase 3 of the configuration concept: consult the permission_request
-    // hook (DB-backed policies). Allow when no policy matches.
+    // hook (DB-backed policies). When no policy matches we used to default
+    // to ALLOW, which combined with the enforce-mode-default-permissive
+    // contract meant any tool with zero matching policies executed silently
+    // — and an org-scoped deny that failed to thread its scope through the
+    // PolicyMatchContext (orgId/projectId not yet on ToolContext) would
+    // also miss, also fail open. Now: default to ASK so the UI permission
+    // flow surfaces the call and sub-agent / non-interactive callers
+    // (which treat ask as deny per step.ts handling) fail closed.
+    //
+    // Operators who legitimately want the legacy permissive default add a
+    // single global allow-all policy:
+    //   INSERT INTO permission_policies (scope, scope_id, decision, tool_pattern, enabled)
+    //         VALUES ('global', '*', 'allow', '*', TRUE);
     const enforceResult = await input.lifecycle.dispatch("permission_request", {
       ctx: input.ctx,
       toolId: tool.id,
@@ -124,7 +137,17 @@ export async function resolveDecision(
     if (enforceResult.decision) {
       return { decision: enforceResult.decision, reason: enforceResult.reason };
     }
-    return { decision: "allow", reason: "enforce mode: no matching policy" };
+    getLogger("agent-claw.core.permissions.resolver").warn(
+      {
+        event: "permission_enforce_no_policy_match",
+        tool_id: tool.id,
+      },
+      "enforce-mode tool call had no matching policy; defaulting to ask",
+    );
+    return {
+      decision: "ask",
+      reason: "enforce mode: no matching policy → ask (was allow pre-fix)",
+    };
   }
 
   // default mode — try the permission_request hook chain first.

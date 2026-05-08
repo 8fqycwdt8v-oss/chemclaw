@@ -120,3 +120,15 @@ Deferred follow-ups discovered while doing other work. One bullet per item, pref
 - [DONE cluster-C] audit_row_change EXCEPTION block now routes through `record_error_event(...)` so the 16 KiB payload cap applies uniformly; future maintainers attaching to_jsonb(NEW) for diagnosis can't blow the table.
 - [DONE cluster-C] task_queue gained `enqueued_by` column (DEFAULT current_setting GUC); new `task_queue_insert_self` INSERT policy with WITH CHECK enforces enqueued_by = current user. chemclaw_service (BYPASSRLS) workers unaffected. 46_task_queue_tenant_scope.sql.
 - [db/init] `34_kg_group_id_constraint.sql` and several other 33-40 init files are inconsistent about self-recording into schema_version. Pick one convention (rely on Makefile loop OR every file self-records); reconcile.
+
+# Deep-review hardening follow-ups (2026-05-08, PR #123)
+
+- [DONE PR-123] reactions_current view (db/init/48_*.sql); migrated 8 call sites including the Python tabicl_pca_coldfit script.
+- [DONE PR-123] compound_fingerprinter._fingerprint per-rule failure tracking + transaction rollback contract; closes the partial-state idempotency gap.
+- [DONE PR-123] permission resolver enforce-mode no-policy default flipped allow → ask.
+- [DONE PR-123] workflow_engine pg_advisory_lock per run_id + ConfigRegistry-driven http_timeout / wait_poll_interval / default_wait_timeout.
+- [DONE PR-123] withUserContext passes captured error to client.release(err) so node-postgres destroys clients with possibly-open transaction state.
+- [DONE PR-123] mock_eln + fake_logs FORCE ROW LEVEL SECURITY with a known-roles-only ALL policy on every table (db/init/49_*.sql).
+- [tests/projectors] add `tests/unit/projectors/test_compound_fingerprinter_errors.py` mirroring the chunk_embedder error-policy pattern (httpx mock for `/tools/substructure_match` 4xx, assert PermanentHandlerError raised + work_conn.rollback() called); compound_fingerprinter currently sits in coverage.run omit alongside workflow_engine because the new failure path needs a testcontainer.
+- [agent-claw/permissions] thread `org` / `project` through PolicyMatchContext for real (PolicyMatchContext already has the fields; ToolContext doesn't carry tenant binding yet — Phase F.3). Once threaded, the resolver enforce-mode default can stay "ask" without operators needing the global allow-all policy escape hatch.
+- [tests/agent-claw] update permission-enforce-mode.test.ts to also assert the WARN log fires with `event: "permission_enforce_no_policy_match"` when the default fires (currently only the decision is asserted).

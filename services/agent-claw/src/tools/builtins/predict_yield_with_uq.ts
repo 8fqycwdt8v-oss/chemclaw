@@ -61,8 +61,11 @@ async function fetchTrainingPairs(
 ): Promise<TrainingRow[]> {
   return await withUserContext(pool, userEntraId, async (client) => {
     const result = await client.query<TrainingRow>(
+      // reactions_current: yield-model training data must exclude
+      // invalidated/superseded reactions or the model learns retracted
+      // labels. See db/init/48_reactions_current_view.sql.
       `SELECT r.rxn_smiles, e.yield_pct::float AS yield_pct
-         FROM reactions r
+         FROM reactions_current r
          JOIN experiments e ON e.id = r.experiment_id
          JOIN synthetic_steps s ON s.id = e.synthetic_step_id
          JOIN nce_projects p ON p.id = s.nce_project_id

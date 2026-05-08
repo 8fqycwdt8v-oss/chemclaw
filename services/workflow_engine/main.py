@@ -35,6 +35,7 @@ import psycopg
 from psycopg.rows import dict_row
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from services.common.config_registry import ConfigRegistry
 from services.mcp_tools.common.logging import configure_logging
 from services.mcp_tools.common.mcp_token_cache import McpTokenCache
 
@@ -75,6 +76,11 @@ class WorkflowEngine:
         # not hold an open transaction against the run-state cursor that
         # `_advance_run` updates. Lazily opened on first `wait` step.
         self._poll_conn: psycopg.AsyncConnection | None = None
+        # config_settings reader for tunable knobs (HTTP timeout, wait poll
+        # interval, default wait-step timeout). Falls back to the embedded
+        # default if the table is unreachable, so the engine starts on a
+        # fresh DB before the migration runs.
+        self._config = ConfigRegistry(dsn=self.settings.dsn)
 
     async def run(self) -> None:
         loop = asyncio.get_running_loop()
@@ -85,7 +91,13 @@ class WorkflowEngine:
                 pass
         log.info("[workflow_engine] starting")
 
-        self._http = httpx.AsyncClient(timeout=600.0)
+        # http_timeout_seconds is config-tunable; the 600s embedded default
+        # matches the pre-config baseline so existing deployments behave
+        # identically when the row is absent.
+        http_timeout = self._config.get_float(
+            "workflow_engine.http_timeout_seconds", 600.0,
+        )
+        self._http = httpx.AsyncClient(timeout=http_timeout)
         try:
             async with await psycopg.AsyncConnection.connect(
                 self.settings.dsn, autocommit=True, row_factory=dict_row,
@@ -158,43 +170,88 @@ class WorkflowEngine:
 
     async def _advance_run(self, work_conn: psycopg.AsyncConnection, run: dict[str, Any]) -> None:
         run_id = run["id"]
-        definition = run["definition"]
-        cursor = run["cursor"] or {}
-        scope = run["scope"] or {}
 
-        steps = definition.get("steps", [])
-        next_index = int(cursor.get("step_index", 0))
-        if next_index >= len(steps):
-            await self._finish(work_conn, run_id, "succeeded", scope, definition.get("outputs", {}))
-            return
-
-        step = steps[next_index]
-        step_id = step.get("id", f"step_{next_index}")
-        await self._append_event(work_conn, run_id, "step_started", step_id, {"step": step})
-        try:
-            result = await self._execute_step(step, scope)
-        except Exception as exc:  # noqa: BLE001
-            log.exception("[workflow_engine] step %s failed in %s", step_id, run_id)
-            await self._append_event(work_conn, run_id, "step_failed", step_id, {"error": str(exc)})
-            await self._finish(work_conn, run_id, "failed", scope, {})
-            return
-
-        scope.setdefault("steps", {})[step_id] = result
-        cursor["step_index"] = next_index + 1
-        await self._append_event(work_conn, run_id, "step_succeeded", step_id, {"result": result})
+        # Take a session-scoped advisory lock keyed on the run_id BEFORE the
+        # first internal commit. The FOR UPDATE OF r SKIP LOCKED row lock
+        # acquired in _sweep is released as soon as _append_event commits
+        # (the very first thing this method does), at which point a peer
+        # replica's next sweep can pick up the same run and race on
+        # _execute_step. The advisory lock survives intermediate commits
+        # and is released only in the finally below, so two replicas
+        # serialise on the same run for the entire advance cycle.
+        #
+        # pg_try_advisory_lock returns FALSE if a peer already holds it →
+        # we skip the run silently; the peer will finish and the next
+        # NOTIFY / poll cycle re-evaluates.
         async with work_conn.cursor() as cur:
             await cur.execute(
-                """
-                UPDATE workflow_state
-                   SET current_step = %s::text,
-                       scope = %s::jsonb,
-                       cursor = %s::jsonb,
-                       updated_at = NOW()
-                 WHERE run_id = %s::uuid
-                """,
-                (step_id, json.dumps(scope), json.dumps(cursor), run_id),
+                "SELECT pg_try_advisory_lock(hashtext(%s), hashtext(%s::text)) AS got",
+                ("workflow_run_advance", run_id),
             )
+            row = await cur.fetchone()
+            got_lock = bool(row and row.get("got"))
+        # The SELECT above leaves a transaction open on work_conn; commit so
+        # later _append_event commits start clean. Advisory session locks
+        # are NOT released by COMMIT — only pg_advisory_unlock or session
+        # close releases them.
         await work_conn.commit()
+
+        if not got_lock:
+            log.debug("[workflow_engine] run %s held by peer; skipping", run_id)
+            return
+
+        try:
+            definition = run["definition"]
+            cursor = run["cursor"] or {}
+            scope = run["scope"] or {}
+
+            steps = definition.get("steps", [])
+            next_index = int(cursor.get("step_index", 0))
+            if next_index >= len(steps):
+                await self._finish(work_conn, run_id, "succeeded", scope, definition.get("outputs", {}))
+                return
+
+            step = steps[next_index]
+            step_id = step.get("id", f"step_{next_index}")
+            await self._append_event(work_conn, run_id, "step_started", step_id, {"step": step})
+            try:
+                result = await self._execute_step(step, scope)
+            except Exception as exc:  # noqa: BLE001
+                log.exception("[workflow_engine] step %s failed in %s", step_id, run_id)
+                await self._append_event(work_conn, run_id, "step_failed", step_id, {"error": str(exc)})
+                await self._finish(work_conn, run_id, "failed", scope, {})
+                return
+
+            scope.setdefault("steps", {})[step_id] = result
+            cursor["step_index"] = next_index + 1
+            await self._append_event(work_conn, run_id, "step_succeeded", step_id, {"result": result})
+            async with work_conn.cursor() as cur:
+                await cur.execute(
+                    """
+                    UPDATE workflow_state
+                       SET current_step = %s::text,
+                           scope = %s::jsonb,
+                           cursor = %s::jsonb,
+                           updated_at = NOW()
+                     WHERE run_id = %s::uuid
+                    """,
+                    (step_id, json.dumps(scope), json.dumps(cursor), run_id),
+                )
+            await work_conn.commit()
+        finally:
+            # Release the session lock so the run is eligible for the next
+            # advance cycle (or a peer replica). Best-effort; if the
+            # connection is already broken the lock releases on session
+            # close anyway.
+            try:
+                async with work_conn.cursor() as cur:
+                    await cur.execute(
+                        "SELECT pg_advisory_unlock(hashtext(%s), hashtext(%s::text))",
+                        ("workflow_run_advance", run_id),
+                    )
+                await work_conn.commit()
+            except Exception:
+                log.exception("[workflow_engine] failed to release advisory lock for %s", run_id)
 
     async def _execute_step(
         self, step: dict[str, Any], scope: dict[str, Any],
@@ -251,13 +308,22 @@ class WorkflowEngine:
         if "batch_id" in spec:
             # MVP: poll the batch row until total reached.
             batch_id = self._resolve_jmespath(spec["batch_id"], scope)
-            timeout = step.get("timeout_seconds", 3600)
+            # Default timeout is config-tunable (workflow_engine.default_wait_timeout_seconds);
+            # per-step `timeout_seconds` still wins. Poll interval is also
+            # config-tunable so operators can trade DB load for wait latency.
+            default_timeout = self._config.get_int(
+                "workflow_engine.default_wait_timeout_seconds", 3600,
+            )
+            timeout = int(step.get("timeout_seconds", default_timeout))
+            poll_interval = max(
+                1, self._config.get_int("workflow_engine.wait_poll_interval_seconds", 5)
+            )
             poll_conn = await self._get_poll_conn()
             # autocommit=True on poll_conn means each SELECT runs in its own
             # implicit transaction; the connection itself is reused across
             # the whole timeout window instead of dialing a fresh socket
-            # every 5 s.
-            for _ in range(timeout // 5):
+            # per poll.
+            for _ in range(max(1, timeout // poll_interval)):
                 async with poll_conn.cursor() as cur:
                     await cur.execute(
                         "SELECT total, succeeded, failed, cancelled FROM task_batches WHERE id = %s::uuid",
@@ -268,7 +334,7 @@ class WorkflowEngine:
                     raise RuntimeError(f"batch not found: {batch_id}")
                 if row["succeeded"] + row["failed"] + row["cancelled"] >= row["total"]:
                     return dict(row)
-                await asyncio.sleep(5)
+                await asyncio.sleep(poll_interval)
             raise TimeoutError(f"wait on batch {batch_id} timed out")
         raise ValueError("only batch_id wait is implemented in MVP")
 
