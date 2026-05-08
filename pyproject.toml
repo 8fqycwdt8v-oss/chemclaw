@@ -156,13 +156,10 @@ omit = [
     # rather than unit. omit at the run layer until a generic-error fixture
     # lands.
     "services/mcp_tools/common/app.py",
-    # projectors/common/base.py — was previously omitted because the
-    # A17 (Tier 4) handle()-wrapper required a testcontainer projector
-    # run for real coverage. Cluster-D added _assert_bypass_rls + a
-    # focused unit test (tests/unit/projectors/test_base_bypass_rls.py)
-    # so the file is now back in the tracked set; diff-cover sees the
-    # touched lines. Re-add the omit if a future change introduces
-    # testcontainer-only code paths to this module.
+    # projectors/common/base.py — A17 (Tier 4) wrapped handle() in a
+    # log_context_scope contextvar and added per-event ack-or-skip flow.
+    # Real coverage requires a testcontainer projector run.
+    "services/projectors/common/base.py",
     "documentation/*",
 ]
 parallel = true

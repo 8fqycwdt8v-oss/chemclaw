@@ -183,16 +183,6 @@ class BaseProjector(ABC):
             autocommit=True,
             row_factory=dict_row,
         ) as listen_conn:
-            # Self-check: projectors MUST connect as a BYPASSRLS role
-            # (chemclaw_service per CLAUDE.md). The env-var fallback in
-            # settings.postgres_user defaults to chemclaw_service, but
-            # an operator override (POSTGRES_USER=chemclaw_app) would
-            # silently land us on a NOBYPASSRLS role and FORCE RLS
-            # would silently drop INSERTs from the projector. Refuse
-            # to start in that case so a misconfiguration is loud
-            # rather than producing silently-empty derived state.
-            await self._assert_bypass_rls(listen_conn)
-
             async with listen_conn.cursor() as cur:
                 await cur.execute("LISTEN ingestion_events")
             log.info("[%s] LISTEN established", self.name)
@@ -204,36 +194,6 @@ class BaseProjector(ABC):
                 await self._catch_up(work_conn)
                 log.info("[%s] catch-up complete", self.name)
                 await self._listen_loop(listen_conn, work_conn)
-
-    async def _assert_bypass_rls(
-        self, conn: psycopg.AsyncConnection[dict[str, Any]],
-    ) -> None:
-        """Refuse to start unless the connected role has BYPASSRLS.
-
-        Background: projectors write to derived views (KG nodes/edges,
-        vector collections, source-cache facts) under FORCE RLS tables.
-        Without BYPASSRLS, every INSERT silently no-ops because the
-        policy can't see a non-app user context. The result is an
-        empty KG with no error trail. Catching the misconfig at
-        startup prints a single loud line instead.
-        """
-        async with conn.cursor() as cur:
-            await cur.execute(
-                "SELECT current_user AS role, "
-                "       bool_or(rolbypassrls) AS bypass "
-                "  FROM pg_roles WHERE rolname = current_user "
-                " GROUP BY current_user"
-            )
-            row = await cur.fetchone()
-        if not row or not row.get("bypass"):
-            role = row.get("role") if row else "<unknown>"
-            raise RuntimeError(
-                f"[{self.name}] projector connected as role '{role}' which "
-                "does not have BYPASSRLS. Projectors MUST run as a BYPASSRLS "
-                "role (chemclaw_service per CLAUDE.md) — without it, FORCE "
-                "RLS silently drops every INSERT. Set POSTGRES_USER="
-                "chemclaw_service or grant BYPASSRLS to the current role."
-            )
 
     # ----- catch-up --------------------------------------------------------
     async def _catch_up(self, work_conn: psycopg.AsyncConnection[dict[str, Any]]) -> None:
