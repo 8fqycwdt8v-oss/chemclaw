@@ -1,7 +1,15 @@
 """Tests for mcp-xtb FastAPI app.
 
-subprocess (xtb/crest) and RDKit _smiles_to_xyz are mocked.
+subprocess (xtb/crest) and the RDKit-backed SMILES helpers are mocked.
 No xtb binary or rdkit required in dev .venv for these tests.
+
+Mock targets:
+- Legacy single-shot routes (/optimize_geometry) call
+  ``_shared.smiles_to_canonical_and_xyz`` which returns
+  ``(canonical_smiles, xyz_block, inchikey_or_None)``.
+- Engine-routed recipes (/conformer_ensemble → optimize_ensemble) call
+  ``_helpers.smiles_to_xyz`` which returns the XYZ block as a string.
+Both surfaces are mocked depending on which path the test exercises.
 """
 from __future__ import annotations
 
@@ -100,8 +108,8 @@ def test_optimize_geometry_happy_path(client, tmp_path):
         return proc_result
 
     with mock.patch(
-        "services.mcp_tools.mcp_xtb._helpers.smiles_to_xyz",
-        return_value=_FAKE_XYZ,
+        "services.mcp_tools.mcp_xtb._shared.smiles_to_canonical_and_xyz",
+        return_value=("CCO", _FAKE_XYZ, "LFQSCWFLJHTTHZ-UHFFFAOYSA-N"),
     ), mock.patch(
         "services.mcp_tools.mcp_xtb.main._run_xtb",
         side_effect=fake_run_xtb,
@@ -120,7 +128,7 @@ def test_optimize_geometry_happy_path(client, tmp_path):
 
 def test_optimize_geometry_invalid_smiles_returns_400(client):
     with mock.patch(
-        "services.mcp_tools.mcp_xtb._helpers.smiles_to_xyz",
+        "services.mcp_tools.mcp_xtb._shared.smiles_to_canonical_and_xyz",
         side_effect=ValueError("invalid SMILES"),
     ):
         r = client.post(
@@ -141,8 +149,8 @@ def test_optimize_geometry_method_enum_rejected(client):
 def test_xtb_process_failure_raises_400(client):
     proc_result = _make_mock_subprocess_result(returncode=1, stderr="SCF did not converge")
     with mock.patch(
-        "services.mcp_tools.mcp_xtb._helpers.smiles_to_xyz",
-        return_value=_FAKE_XYZ,
+        "services.mcp_tools.mcp_xtb._shared.smiles_to_canonical_and_xyz",
+        return_value=("CCO", _FAKE_XYZ, "LFQSCWFLJHTTHZ-UHFFFAOYSA-N"),
     ), mock.patch(
         "services.mcp_tools.mcp_xtb.main._run_xtb",
         return_value=proc_result,

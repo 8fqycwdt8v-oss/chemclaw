@@ -200,7 +200,14 @@ def validate_network_host(host: str) -> list[str]:
     validated: list[str] = []
     seen: set[str] = set()
     for info in infos:
-        addr = info[4][0]
+        # info[4] is the sockaddr tuple: (host, port) for AF_INET,
+        # (host, port, flowinfo, scopeid) for AF_INET6. Element [0] is
+        # always the address string; mypy widens it to ``str | int``
+        # because the tuple is heterogeneous, so we narrow at the seam.
+        addr_raw = info[4][0]
+        if not isinstance(addr_raw, str):
+            continue
+        addr = addr_raw
         if ip_is_blocked(addr):
             if not ALLOW_HOSTS or h not in ALLOW_HOSTS:
                 raise ValueError(

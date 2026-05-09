@@ -97,6 +97,13 @@ def test_predict_and_rank_uses_inference(pca_path: Path) -> None:
 
 
 def test_row_cap_rejection(pca_path: Path) -> None:
+    """1001-row payload trips Pydantic max_length=1000 on FeaturizeIn.reaction_rows.
+
+    The cap moved from a runtime ValueError (HTTP 400 via the
+    create_app handler) to a payload-shape constraint (HTTP 422 via
+    Pydantic). 422 is the right surface — bad shapes shouldn't reach
+    the featurize() inner loop.
+    """
     app = build_app(pca_path=pca_path)
     with TestClient(app) as c:
         payload = {
@@ -110,4 +117,4 @@ def test_row_cap_rejection(pca_path: Path) -> None:
             "include_targets": False,
         }
         r = c.post("/featurize", json=payload)
-        assert r.status_code == 400
+        assert r.status_code == 422
