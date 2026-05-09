@@ -272,6 +272,18 @@ $$;
 -- before/after row state, and the table name. Runs as SECURITY DEFINER
 -- so it can write into audit_log even when the caller has no INSERT
 -- privilege on it.
+--
+-- Coverage carve-out (intentional):
+--   This trigger is attached only to user-state tables (sessions, plans,
+--   todos, experiments, project metadata, skills, forged-tool tests). It is
+--   deliberately NOT attached to bi-temporal evidence tables — `reactions`,
+--   `hypotheses`, `artifacts`, mock_eln.* — because those carry their own
+--   history through valid_from/valid_to/refuted_at/superseded_at columns
+--   plus the ingestion_events emit-on-status-change pattern. Adding
+--   audit_row_change to those tables would double-record every state
+--   transition. If you find yourself wanting full row-level audit on a
+--   bi-temporal table, the right move is to add a dedicated *_history
+--   table or use Postgres temporal tables, not this trigger.
 CREATE OR REPLACE FUNCTION audit_row_change()
 RETURNS TRIGGER
 LANGUAGE plpgsql
