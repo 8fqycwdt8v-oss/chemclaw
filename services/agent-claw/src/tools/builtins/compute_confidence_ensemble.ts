@@ -13,6 +13,7 @@ import { defineTool } from "../tool.js";
 import { withUserContext } from "../../db/with-user-context.js";
 import {
   extractVerbalizedConfidence,
+  extractCalibratedConfidence,
   computeBayesianPosterior,
   composeEnsemble,
   crossModelAgreement,
@@ -59,13 +60,14 @@ export const ComputeConfidenceEnsembleOut = z.object({
         ci_high: z.number(),
       })
       .nullable(),
+    calibrated: z.number().nullable(),
     overall: z.number(),
     // Tranche 2 / M3 — categorical label + structured per-signal record so
     // the LLM can reason about each signal independently.
     confidence_label: z.enum(["foundational", "high", "medium", "low"]),
     signals: z.array(
       z.object({
-        name: z.enum(["verbalized", "cross_model", "bayesian"]),
+        name: z.enum(["verbalized", "cross_model", "bayesian", "calibrated"]),
         score: z.number().nullable(),
         weight: z.number(),
         present: z.boolean(),
@@ -113,6 +115,12 @@ export function buildComputeConfidenceEnsembleTool(
         // Signal 1: verbalized confidence.
         const verbalized = extractVerbalizedConfidence(row.payload);
 
+        // Signal 4: calibrated uncertainty from chemprop-style std (review
+        // §1.3). Returns null when the artifact's payload doesn't carry a
+        // recognised predictions[] array — back-compat with non-chemistry
+        // artifacts.
+        const calibrated = extractCalibratedConfidence(row.payload);
+
         // Signal 2: cross-model agreement.
         //
         // Tranche 2 / M2: when an LlmProvider is wired AND the caller opts
@@ -139,6 +147,7 @@ export function buildComputeConfidenceEnsembleTool(
           verbalized,
           cross_model,
           bayesian,
+          calibrated,
         });
 
         // Persist back to artifacts.

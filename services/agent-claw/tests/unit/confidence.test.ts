@@ -3,6 +3,7 @@
 import { describe, it, expect } from "vitest";
 import {
   extractVerbalizedConfidence,
+  extractCalibratedConfidence,
   extractFactIds,
   jaccardSimilarity,
   computeBayesianPosterior,
@@ -150,27 +151,48 @@ describe("computeBayesianPosterior", () => {
 
 describe("composeEnsemble", () => {
   it("returns 0.5 when all signals are null", () => {
-    const ens = composeEnsemble({ verbalized: null, cross_model: null, bayesian: null });
+    const ens = composeEnsemble({
+      verbalized: null,
+      cross_model: null,
+      bayesian: null,
+      calibrated: null,
+    });
     expect(ens.overall).toBe(0.5);
   });
 
   it("uses only verbalized when other signals are null", () => {
-    const ens = composeEnsemble({ verbalized: 0.8, cross_model: null, bayesian: null });
+    const ens = composeEnsemble({
+      verbalized: 0.8,
+      cross_model: null,
+      bayesian: null,
+      calibrated: null,
+    });
     expect(ens.overall).toBe(0.8);
   });
 
-  it("weights verbalized (0.4), cross_model (0.3), bayesian (0.3) correctly", () => {
+  it("weights verbalized (0.3), cross_model (0.25), bayesian (0.25), calibrated (0.20) correctly", () => {
     const bayesian = { mean: 0.6, ci_low: 0.4, ci_high: 0.8 };
-    const ens = composeEnsemble({ verbalized: 1.0, cross_model: 1.0, bayesian });
-    // (1.0*0.4 + 1.0*0.3 + 0.6*0.3) / (0.4+0.3+0.3) = (0.4+0.3+0.18)/1.0 = 0.88
-    expect(ens.overall).toBeCloseTo(0.88, 2);
+    const ens = composeEnsemble({
+      verbalized: 1.0,
+      cross_model: 1.0,
+      bayesian,
+      calibrated: 0.4,
+    });
+    // (1.0*0.3 + 1.0*0.25 + 0.6*0.25 + 0.4*0.20) / 1.0
+    // = 0.3 + 0.25 + 0.15 + 0.08 = 0.78
+    expect(ens.overall).toBeCloseTo(0.78, 2);
   });
 
   it("redistributes weight when cross_model is null", () => {
     const bayesian = { mean: 0.6, ci_low: 0.4, ci_high: 0.8 };
-    const ens = composeEnsemble({ verbalized: 1.0, cross_model: null, bayesian });
-    // (1.0*0.4 + 0.6*0.3) / (0.4+0.3) = 0.58/0.7 ≈ 0.8286
-    expect(ens.overall).toBeCloseTo(0.829, 2);
+    const ens = composeEnsemble({
+      verbalized: 1.0,
+      cross_model: null,
+      bayesian,
+      calibrated: null,
+    });
+    // (1.0*0.3 + 0.6*0.25) / (0.3+0.25) = 0.45/0.55 ≈ 0.818
+    expect(ens.overall).toBeCloseTo(0.818, 2);
   });
 
   it("includes brier_estimate when provided", () => {
@@ -178,6 +200,7 @@ describe("composeEnsemble", () => {
       verbalized: 0.7,
       cross_model: null,
       bayesian: null,
+      calibrated: null,
       brier_estimate: 0.12,
     });
     expect(ens.brier_estimate).toBe(0.12);
@@ -185,10 +208,16 @@ describe("composeEnsemble", () => {
 
   it("populates all fields of the output", () => {
     const bayesian = { mean: 0.5, ci_low: 0.3, ci_high: 0.7 };
-    const ens = composeEnsemble({ verbalized: 0.8, cross_model: 0.6, bayesian });
+    const ens = composeEnsemble({
+      verbalized: 0.8,
+      cross_model: 0.6,
+      bayesian,
+      calibrated: 0.7,
+    });
     expect(ens.verbalized).toBe(0.8);
     expect(ens.cross_model).toBe(0.6);
     expect(ens.bayesian).toEqual(bayesian);
+    expect(ens.calibrated).toBe(0.7);
     expect(typeof ens.overall).toBe("number");
   });
 });
@@ -216,36 +245,43 @@ describe("composeEnsemble — structured signals + label", () => {
       verbalized: 0.95,
       cross_model: 0.9,
       bayesian: { mean: 0.9, ci_low: 0.85, ci_high: 0.95 },
+      calibrated: 0.9,
     });
     expect(ens.overall).toBeGreaterThanOrEqual(0.85);
     expect(ens.confidence_label).toBe("foundational");
   });
 
-  it("returns three signals each with name + score + weight + present", () => {
+  it("returns four signals each with name + score + weight + present", () => {
     const ens = composeEnsemble({
       verbalized: 0.7,
       cross_model: null,
       bayesian: { mean: 0.5, ci_low: 0.3, ci_high: 0.7 },
+      calibrated: 0.6,
     });
-    expect(ens.signals).toHaveLength(3);
+    expect(ens.signals).toHaveLength(4);
 
     const names = ens.signals.map((s) => s.name).sort();
-    expect(names).toEqual(["bayesian", "cross_model", "verbalized"]);
+    expect(names).toEqual(["bayesian", "calibrated", "cross_model", "verbalized"]);
 
     const verbalized = ens.signals.find((s) => s.name === "verbalized")!;
     expect(verbalized.score).toBe(0.7);
     expect(verbalized.present).toBe(true);
-    expect(verbalized.weight).toBe(0.4);
+    expect(verbalized.weight).toBe(0.3);
 
     const cross = ens.signals.find((s) => s.name === "cross_model")!;
     expect(cross.score).toBeNull();
     expect(cross.present).toBe(false);
-    expect(cross.weight).toBe(0.3);
+    expect(cross.weight).toBe(0.25);
 
     const bayes = ens.signals.find((s) => s.name === "bayesian")!;
     expect(bayes.score).toBe(0.5); // == bayesian.mean
     expect(bayes.present).toBe(true);
-    expect(bayes.weight).toBe(0.3);
+    expect(bayes.weight).toBe(0.25);
+
+    const calib = ens.signals.find((s) => s.name === "calibrated")!;
+    expect(calib.score).toBe(0.6);
+    expect(calib.present).toBe(true);
+    expect(calib.weight).toBe(0.2);
   });
 
   it("maps a no-signals ensemble to the medium label (overall=0.5)", () => {
@@ -253,9 +289,122 @@ describe("composeEnsemble — structured signals + label", () => {
       verbalized: null,
       cross_model: null,
       bayesian: null,
+      calibrated: null,
     });
     expect(ens.overall).toBe(0.5);
     expect(ens.confidence_label).toBe("medium");
     expect(ens.signals.every((s) => !s.present)).toBe(true);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// extractCalibratedConfidence — review §1.3, recommendation 10
+// ---------------------------------------------------------------------------
+
+describe("extractCalibratedConfidence", () => {
+  it("returns null for non-prediction payloads", () => {
+    expect(extractCalibratedConfidence({ confidence: 0.8 })).toBeNull();
+    expect(extractCalibratedConfidence(null)).toBeNull();
+    expect(extractCalibratedConfidence([{ predictions: [] }])).toBeNull();
+  });
+
+  it("returns null when predictions array is empty", () => {
+    expect(extractCalibratedConfidence({ predictions: [] })).toBeNull();
+  });
+
+  it("returns null when predictions have no std/ensemble_std field", () => {
+    expect(
+      extractCalibratedConfidence({
+        predictions: [{ smiles: "CC", value: 1.5 }],
+      }),
+    ).toBeNull();
+  });
+
+  it("maps yield std=0 to confidence=1.0", () => {
+    expect(
+      extractCalibratedConfidence({
+        predictions: [
+          { rxn_smiles: "A>>B", predicted_yield: 80, std: 0, model_id: "m@v1" },
+        ],
+      }),
+    ).toBe(1.0);
+  });
+
+  it("maps yield std=30 to confidence=0 (boundary of usable signal)", () => {
+    expect(
+      extractCalibratedConfidence({
+        predictions: [
+          { rxn_smiles: "A>>B", predicted_yield: 50, std: 30, model_id: "m@v1" },
+        ],
+      }),
+    ).toBe(0);
+  });
+
+  it("maps yield std=15 to confidence=0.5 (midpoint)", () => {
+    expect(
+      extractCalibratedConfidence({
+        predictions: [
+          { rxn_smiles: "A>>B", predicted_yield: 50, std: 15, model_id: "m@v1" },
+        ],
+      }),
+    ).toBe(0.5);
+  });
+
+  it("averages confidence across multiple yield predictions", () => {
+    // std=5 → 1-5/30=0.833 ; std=25 → 1-25/30=0.167 ; mean = 0.5
+    const score = extractCalibratedConfidence({
+      predictions: [
+        { rxn_smiles: "A>>B", predicted_yield: 80, std: 5, model_id: "m@v1" },
+        { rxn_smiles: "C>>D", predicted_yield: 30, std: 25, model_id: "m@v1" },
+      ],
+    });
+    expect(score).toBeCloseTo(0.5, 2);
+  });
+
+  it("prefers ensemble_std over std (predict_yield_with_uq shape)", () => {
+    // ensemble_std=10 → 1-10/30=0.667 ; chemprop_std=5 should be ignored.
+    expect(
+      extractCalibratedConfidence({
+        predictions: [
+          {
+            rxn_smiles: "A>>B",
+            predicted_yield: 60,
+            ensemble_std: 10,
+            components: { chemprop_std: 5, xgb_disagreement: 5 },
+          },
+        ],
+      }),
+    ).toBeCloseTo(0.667, 2);
+  });
+
+  it("uses value-relative scaling for property predictions", () => {
+    // logP value=2, std=0.4 → 1 - 0.4/2 = 0.8
+    expect(
+      extractCalibratedConfidence({
+        predictions: [{ smiles: "CCO", value: 2, std: 0.4 }],
+      }),
+    ).toBeCloseTo(0.8, 2);
+  });
+
+  it("floors the value scale at 1 to avoid blow-up at near-zero values", () => {
+    // value=0.1, std=0.5 → without floor would be 1-0.5/0.1=clipped 0; with floor,
+    // 1-0.5/max(0.1,1)=1-0.5=0.5.
+    expect(
+      extractCalibratedConfidence({
+        predictions: [{ smiles: "CC", value: 0.1, std: 0.5 }],
+      }),
+    ).toBe(0.5);
+  });
+
+  it("skips predictions with NaN/negative std", () => {
+    // First skipped (NaN), second (std=0) wins.
+    expect(
+      extractCalibratedConfidence({
+        predictions: [
+          { rxn_smiles: "A>>B", predicted_yield: 50, std: Number.NaN },
+          { rxn_smiles: "C>>D", predicted_yield: 50, std: 0 },
+        ],
+      }),
+    ).toBe(1.0);
   });
 });
