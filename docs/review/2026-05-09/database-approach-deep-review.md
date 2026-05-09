@@ -145,3 +145,23 @@ The list of things to keep doing rather than change:
 - The **runbook coverage** is unusually good (`docs/runbooks/`) — the audit gaps are not from lack of operator awareness.
 
 The sum of unfinished work here is small relative to a typical backlog of this size. The biggest structural risk is the migration tool itself; everything else is in the "afternoon's work" range.
+
+---
+
+## Implementation status (2026-05-09 follow-up commits)
+
+The above review's punch list was implemented in this branch. Commits, in order:
+
+1. **`fix(optimizer): close connection-role drift on three workers`** — `services/optimizer/common/db.py` with `get_dsn()` defaulting to `chemclaw_service` + `assert_bypass_rls()` mirroring the projector base. `skill_promoter/{promoter,runner}.py` and `forged_tool_validator/runner.py` rewired through it. 18 unit tests covering the env-var matrix and the BYPASSRLS check states.
+2. **`feat(db): add hypotheses_current and artifacts_current bi-temporal views`** — `db/init/52_bitemporal_current_views.sql` with `security_invoker = true`, mirroring `reactions_current`.
+3. **`feat(db): reject '__system__' sentinel in real owner-identity columns`** — `db/init/53_system_sentinel_checks.sql` adds CHECK constraints on `agent_sessions`, `feedback_events`, `corrections`, `notifications`, `paperclip_state`, `research_reports`, `user_project_access`, `hypotheses.proposed_by_user_entra_id`, `artifacts.owner_entra_id`. System-mutable bookkeeping columns left unconstrained.
+4. **`fix(qm_kg): retire qm_job_succeeded legacy NOTIFY channel`** — `db/init/54_qm_legacy_notify_cleanup.sql` backfills `ingestion_events` for legacy succeeded `qm_jobs`, replaces the trigger with a single-write canonical version. `services/projectors/qm_kg/main.py` drops the custom `_connect_and_run` / `_catch_up_qm` / `_listen_loop_qm` overrides and the defensive `_ack` INSERT — now follows the standard BaseProjector path. Deletes the orphan `db/migrations/202604230001_research_reports.sql`.
+5. **`feat(db): pg_notify oversize guard + empty-user guards on owner policies`** — `db/init/55_ingestion_event_notify_hardening.sql` octet-length-guards the trigger payload (forwards `NOTIFY_PAYLOAD_OVERSIZE` to `record_error_event` + falls back to id-only NOTIFY) and replaces the bare owner-equality on `feedback_events`/`corrections`/`notifications` with the IS NOT NULL / <> '' guarded form. `19_observability.sql` gains a comment block at `audit_row_change` documenting the bi-temporal-evidence carve-out.
+6. **`feat(db,ci): backfill schema_version self-record + cold-start lints`** — every `db/init/*.sql` now self-records into `schema_version`. `scripts/check_init_self_record.sh` enforces it. `scripts/check_event_vocabulary.sh` asserts every projector's `interested_event_types` is in `ingestion_event_catalog`. CI schema job runs both lints and asserts post-apply `schema_version` row count ≥ file count.
+7. **`test(projectors): replay-idempotency contract for BaseProjector + matrix`** — `tests/unit/projectors/test_base_replay_contract.py` pins the universal replay contract via mocked work_conn (six tests: first-pass, replay-after-delete, concurrent-double-pass, transient-no-ack, permanent-acks, uninterested-event-still-acks). `tests/integration/test_projector_replay_idempotency.py` is the parametrized scaffold gated on `PG_DSN`+`NEO4J_URI`.
+
+Deferred (now in `BACKLOG.md`):
+
+- Wiring the full `scripts/smoke.sh` into CI requires docker-compose + 10+ services and is operationally too expensive. The cold-start invariants (`schema_version` row count + lints) cover the regression mode that prompted the recommendation.
+- Real migration tool (Alembic / sqitch / dbmate). The schema_version backfill + lints close the immediate gap; the underlying lex-ordered idempotent-SQL pattern is still load-bearing without a real history check or down-migration story.
+- Extending the projector replay matrix (`PROJECTOR_CASES`) to cover chunk_embedder / contextual_chunker / reaction_vectorizer / kg_documents / kg_experiments / kg_source_cache / qm_kg as their fixtures stabilise.
