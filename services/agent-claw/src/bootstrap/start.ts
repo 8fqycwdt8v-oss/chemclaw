@@ -32,10 +32,11 @@ import {
 // post_tool_failure, post_tool_batch, subagent_start, subagent_stop,
 // task_created, task_completed, post_compact).
 // 22 = +detect-mcp-leakage (review §3.8 defense-in-depth tripwire).
+// 23 = +loop-detector (adaptive-replanning Phase A1).
 // Bump every time BUILTIN_REGISTRARS gains an entry so a silent failure to
 // load a new hook trips the startup gate instead of quietly downgrading
 // the safety net.
-const MIN_EXPECTED_HOOKS = 22;
+const MIN_EXPECTED_HOOKS = 23;
 
 // Builtins gate. Mirrors MIN_EXPECTED_HOOKS for tools/builtins/: a new
 // builtin module landing under `services/agent-claw/src/tools/builtins/`
@@ -46,8 +47,12 @@ const MIN_EXPECTED_HOOKS = 22;
 // Bumped whenever `registerBuiltinTools` gains a registration; if the
 // gate trips, either add the missing registerBuiltin call or update
 // this number with intent. The 2026-05-09 code-completeness review
-// flagged this as an L3-5 hygiene gap.
-const MIN_EXPECTED_BUILTINS = 81;
+// flagged this as an L3-5 hygiene gap. +1 for manage_plan
+// (adaptive-replanning Phase A3). The fs/shell builtins are NOT counted
+// here because they're conditionally registered behind
+// AGENT_FS_TOOLS_ENABLED — counting them would force the gate to fail
+// in default-config deployments.
+const MIN_EXPECTED_BUILTINS = 82;
 
 export async function startServer(
   app: FastifyInstance,

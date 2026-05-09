@@ -41,6 +41,7 @@ import { registerTagMaturityHook } from "./hooks/tag-maturity.js";
 import { registerDetectMcpLeakageHook } from "./hooks/detect-mcp-leakage.js";
 import { registerBudgetGuardHook } from "./hooks/budget-guard.js";
 import { registerInitScratchHook } from "./hooks/init-scratch.js";
+import { registerLoopDetectorHook } from "./hooks/loop-detector.js";
 import { registerAntiFabricationHook } from "./hooks/anti-fabrication.js";
 import { registerFoundationCitationGuardHook } from "./hooks/foundation-citation-guard.js";
 import { registerSourceCacheHook } from "./hooks/source-cache.js";
@@ -140,6 +141,11 @@ const BUILTIN_REGISTRARS = new Map<string, BuiltinRegistrar>([
   ["detect-mcp-leakage", (lc) => { registerDetectMcpLeakageHook(lc); }],
   ["budget-guard", (lc) => { registerBudgetGuardHook(lc); }],
   ["init-scratch", (lc) => { registerInitScratchHook(lc); }],
+  // Adaptive replanning: tracks recent tool-call signatures and denies the
+  // 5th identical repeat with a structured reflection signal. Surfaces
+  // earlier soft warnings via scratchpad.loop_warnings for the
+  // chained-harness reflection prompt.
+  ["loop-detector", (lc) => { registerLoopDetectorHook(lc); }],
   ["anti-fabrication", (lc) => { registerAntiFabricationHook(lc); }],
   ["foundation-citation-guard", (lc) => { registerFoundationCitationGuardHook(lc); }],
   ["source-cache", (lc, deps) => { registerSourceCacheHook(lc, deps.pool); }],
