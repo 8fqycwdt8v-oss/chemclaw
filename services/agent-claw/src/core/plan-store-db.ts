@@ -210,7 +210,7 @@ export async function insertPlanStepAt(
     );
     const row0 = r0.rows[0];
     if (!row0) return null;
-    const before = row0.steps as PlanStep[];
+    const before = row0.steps;
     const idx = Math.max(0, Math.min(insertAt, before.length));
     const next = [
       ...before.slice(0, idx),
@@ -259,7 +259,7 @@ export async function removePlanStepAt(
     );
     const row0 = r0.rows[0];
     if (!row0) return null;
-    const before = row0.steps as PlanStep[];
+    const before = row0.steps;
     if (removeAt < 0 || removeAt >= before.length) {
       // Out-of-range removal is a no-op; return the unchanged plan so the
       // caller can decide whether to surface a warning.

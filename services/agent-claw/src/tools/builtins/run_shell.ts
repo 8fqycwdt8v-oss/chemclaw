@@ -144,10 +144,10 @@ export function buildRunShellTool(opts: RunShellOptions) {
           }
         });
 
-        if (input.stdin && child.stdin) {
+        if (input.stdin) {
           child.stdin.write(input.stdin);
           child.stdin.end();
-        } else if (child.stdin) {
+        } else {
           child.stdin.end();
         }
 

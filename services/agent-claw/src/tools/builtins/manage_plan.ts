@@ -149,7 +149,7 @@ export function buildManagePlanTool(pool: Pool) {
               tool: input.step.tool,
               args: input.step.args,
               rationale: input.step.rationale,
-            } as Omit<PlanStep, "step_number">,
+            },
           );
           if (!updated) {
             return planToOutput(plan, "insert_failed");

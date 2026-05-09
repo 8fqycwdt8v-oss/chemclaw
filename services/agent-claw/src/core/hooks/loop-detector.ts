@@ -75,8 +75,9 @@ function _normalize(v: unknown): unknown {
   if (v === null || typeof v !== "object") return v;
   if (Array.isArray(v)) return v.map(_normalize);
   const sorted: Record<string, unknown> = {};
-  for (const k of Object.keys(v as Record<string, unknown>).sort()) {
-    sorted[k] = _normalize((v as Record<string, unknown>)[k]);
+  const obj = v as Record<string, unknown>;
+  for (const k of Object.keys(obj).sort()) {
+    sorted[k] = _normalize(obj[k]);
   }
   return sorted;
 }
