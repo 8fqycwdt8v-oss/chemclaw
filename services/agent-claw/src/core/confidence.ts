@@ -35,6 +35,13 @@ export interface ConfidenceEnsemble {
   cross_model: number | null;
   /** Beta-Binomial posterior from KG priors, or null if no priors. */
   bayesian: BayesianPosterior | null;
+  /**
+   * Calibrated uncertainty extracted from a structured tool output (chemprop's
+   * `std` per prediction or `predict_yield_with_uq`'s `ensemble_std`). Mapped
+   * to [0,1] with higher = more confident. Null when the artifact's payload
+   * has no recognised std-bearing predictions. Review §1.3, recommendation 10.
+   */
+  calibrated: number | null;
   /** Weighted overall score (0–1). */
   overall: number;
   /**
@@ -62,7 +69,7 @@ export type ConfidenceLabel = "foundational" | "high" | "medium" | "low";
 
 export interface ConfidenceSignal {
   /** Human-readable signal name. */
-  name: "verbalized" | "cross_model" | "bayesian";
+  name: "verbalized" | "cross_model" | "bayesian" | "calibrated";
   /** Numeric score on the [0,1] axis used by the ensemble, or null when unavailable. */
   score: number | null;
   /** Weight applied in the ensemble composition. */
@@ -231,6 +238,85 @@ export function jaccardSimilarity(a: Set<string>, b: Set<string>): number {
 }
 
 // ---------------------------------------------------------------------------
+// Signal 4: Calibrated uncertainty from structured tool output
+// ---------------------------------------------------------------------------
+//
+// chemprop returns calibrated `std` per prediction (aleatoric uncertainty
+// from its MVE head); `predict_yield_with_uq` returns `ensemble_std`
+// combining chemprop's std with the chemprop↔XGBoost disagreement
+// (epistemic). The 2026-05-08 review §1.3 / recommendation 10 noted these
+// signals were being discarded by the ensemble.
+//
+// The mapping from std → [0,1] confidence depends on the prediction's
+// natural scale:
+//   - yield (0–100):    confidence = 1 − clip(std / 30, 0, 1)
+//   - property value:   confidence = 1 − clip(std / max(|value|, 1), 0, 1)
+//
+// Yield's scale=30 reflects production observation: chemprop yield std is
+// typically 5–25%; ≥30% is "we have no idea". For property predictions
+// (logP, logS, mp, bp) the natural scale varies, so we normalise by the
+// magnitude of the value itself with a floor of 1 to avoid blow-up at
+// near-zero values.
+
+/**
+ * Convert a std value to a [0,1] calibrated confidence score.
+ * `scale` is the std at which confidence drops to zero.
+ */
+function stdToConfidence(std: number, scale: number): number {
+  if (!Number.isFinite(std) || std < 0 || !Number.isFinite(scale) || scale <= 0) {
+    return 0;
+  }
+  return Math.max(0, 1 - Math.min(1, std / scale));
+}
+
+/**
+ * Extract a calibrated confidence score from a tool output's `predictions[]`
+ * array (chemprop / predict_yield_with_uq shape).
+ *
+ * Returns null when no recognisable std field is present — back-compat with
+ * artifacts whose payload doesn't carry chemprop output.
+ */
+export function extractCalibratedConfidence(output: unknown): number | null {
+  if (output === null || typeof output !== "object" || Array.isArray(output)) {
+    return null;
+  }
+  const obj = output as Record<string, unknown>;
+  const predictions = obj.predictions;
+  if (!Array.isArray(predictions) || predictions.length === 0) {
+    return null;
+  }
+  const scores: number[] = [];
+  for (const p of predictions) {
+    if (p === null || typeof p !== "object" || Array.isArray(p)) continue;
+    const pred = p as Record<string, unknown>;
+    // Prefer ensemble_std (predict_yield_with_uq) over std (chemprop direct).
+    // Skip non-finite or negative std — these come from a corrupted upstream
+    // response and shouldn't poison the average with a zero-confidence row.
+    const stdRaw =
+      typeof pred.ensemble_std === "number"
+        ? pred.ensemble_std
+        : typeof pred.std === "number"
+          ? pred.std
+          : null;
+    if (stdRaw === null || !Number.isFinite(stdRaw) || stdRaw < 0) continue;
+    // Yield predictions live on a 0–100 scale; properties on the value's own
+    // magnitude. Disambiguate via the presence of the `predicted_yield` key.
+    let scale: number;
+    if (typeof pred.predicted_yield === "number") {
+      scale = 30;
+    } else if (typeof pred.value === "number") {
+      scale = Math.max(Math.abs(pred.value), 1);
+    } else {
+      continue;
+    }
+    scores.push(stdToConfidence(stdRaw, scale));
+  }
+  if (scores.length === 0) return null;
+  const mean = scores.reduce((s, v) => s + v, 0) / scores.length;
+  return Math.round(mean * 1000) / 1000;
+}
+
+// ---------------------------------------------------------------------------
 // Signal 3: Bayesian posterior (Beta-Binomial)
 // ---------------------------------------------------------------------------
 
@@ -277,27 +363,37 @@ export function computeBayesianPosterior(
 // ---------------------------------------------------------------------------
 
 /**
- * Compose the three signals into a ConfidenceEnsemble.
+ * Compose the four signals into a ConfidenceEnsemble.
  *
- * Weighting (equal by default; Phase E will calibrate):
- *   verbalized  → weight 0.4
- *   cross_model → weight 0.3 (skipped if null — weight redistributed)
- *   bayesian    → weight 0.3 (skipped if null — weight redistributed)
+ * Weighting (Phase E will calibrate):
+ *   verbalized  → weight 0.3
+ *   cross_model → weight 0.25 (skipped if null — weight redistributed)
+ *   bayesian    → weight 0.25 (skipped if null — weight redistributed)
+ *   calibrated  → weight 0.20 (skipped if null — weight redistributed)
+ *
+ * Calibrated gets the smallest weight because it's the narrowest signal
+ * (only fires when the artifact's payload carries chemprop-style std), but
+ * when present it's the most calibrated — chemprop's MVE std is a real
+ * aleatoric estimate, not an LLM self-report. Once Phase E runs the
+ * calibration loop the weights become data-driven.
  */
 export function composeEnsemble(opts: {
   verbalized: number | null;
   cross_model: number | null;
   bayesian: BayesianPosterior | null;
+  calibrated: number | null;
   brier_estimate?: number;
 }): ConfidenceEnsemble {
-  const VERBALIZED_WEIGHT = 0.4;
-  const CROSS_MODEL_WEIGHT = 0.3;
-  const BAYESIAN_WEIGHT = 0.3;
+  const VERBALIZED_WEIGHT = 0.3;
+  const CROSS_MODEL_WEIGHT = 0.25;
+  const BAYESIAN_WEIGHT = 0.25;
+  const CALIBRATED_WEIGHT = 0.2;
 
   const weighted: Array<[number, number]> = []; // [value, weight]
   if (opts.verbalized !== null) weighted.push([opts.verbalized, VERBALIZED_WEIGHT]);
   if (opts.cross_model !== null) weighted.push([opts.cross_model, CROSS_MODEL_WEIGHT]);
   if (opts.bayesian !== null) weighted.push([opts.bayesian.mean, BAYESIAN_WEIGHT]);
+  if (opts.calibrated !== null) weighted.push([opts.calibrated, CALIBRATED_WEIGHT]);
 
   let overall: number;
   if (weighted.length === 0) {
@@ -331,12 +427,19 @@ export function composeEnsemble(opts: {
       weight: BAYESIAN_WEIGHT,
       present: opts.bayesian !== null,
     },
+    {
+      name: "calibrated",
+      score: opts.calibrated,
+      weight: CALIBRATED_WEIGHT,
+      present: opts.calibrated !== null,
+    },
   ];
 
   return {
     verbalized: opts.verbalized,
     cross_model: opts.cross_model,
     bayesian: opts.bayesian,
+    calibrated: opts.calibrated,
     overall: roundedOverall,
     confidence_label: confidenceLabel(roundedOverall),
     signals,
