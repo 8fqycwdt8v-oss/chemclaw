@@ -18,6 +18,9 @@
 //   /forged [list|show|disable] [<id>] — manage forged tools catalog (Phase D.5).
 //   /eval golden — run active prompts against the held-out fixture (Phase E).
 //   /eval shadow <prompt_name> — show shadow_run_scores summary (Phase E).
+//   /synthesize <description> — start (or resume) an autonomous synthesis
+//     campaign; activates the synthesis_campaign_orchestrator skill which
+//     creates a synthesis_campaigns row and walks the per-kind playbook.
 
 // ---------------------------------------------------------------------------
 // Result type returned by parseSlash.
@@ -41,7 +44,7 @@ const SHORT_CIRCUIT_VERBS = new Set(["help", "skills", "feedback", "check", "lea
 // is streamable because the user expects assistant text on the same SSE
 // connection (the synopsis is written back into the message history, then
 // the harness produces the actual response against the compacted window).
-const STREAMABLE_VERBS = new Set(["plan", "dr", "retro", "qc", "forge", "compact"]);
+const STREAMABLE_VERBS = new Set(["plan", "dr", "retro", "qc", "forge", "compact", "synthesize"]);
 
 // All known verbs.
 const ALL_VERBS = new Set([...SHORT_CIRCUIT_VERBS, ...STREAMABLE_VERBS]);
@@ -104,7 +107,8 @@ export const HELP_TEXT = `Available commands:
   /forged disable <id> <reason>       — disable a forged tool (owner or admin only)
   /eval golden                        — run active prompts against held-out fixture; per-class breakdown (Phase E)
   /eval shadow <prompt_name>          — show shadow_run_scores summary for a shadow prompt (Phase E)
-  /compact [instructions]             — manually compact the message window before the next turn`;
+  /compact [instructions]             — manually compact the message window before the next turn
+  /synthesize <description>           — start or resume an autonomous synthesis campaign (single experiment, library, screening, BO, BO-or-die)`;
 
 // ---------------------------------------------------------------------------
 // /forged sub-command parser (Phase D.5)

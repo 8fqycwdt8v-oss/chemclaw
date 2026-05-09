@@ -432,4 +432,5 @@ export const VERB_TO_SKILL: Record<string, string> = {
   dr: "deep_research",
   retro: "retro",
   qc: "qc",
+  synthesize: "synthesis_campaign_orchestrator",
 };
