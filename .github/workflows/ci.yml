@@ -207,7 +207,7 @@ jobs:
             --exclude='services/ingestion/eln_json_importer.legacy/**'
 
   schema:
-    name: Schema (idempotent re-apply)
+    name: Schema (idempotent re-apply + cold-start invariants)
     runs-on: ubuntu-latest
     services:
       postgres:
@@ -226,13 +226,43 @@ jobs:
       PGPASSWORD: ci_test_pw
     steps:
       - uses: actions/checkout@v4
+      - name: Static lint — every init file self-records into schema_version
+        run: bash scripts/check_init_self_record.sh
       - name: Apply migrations twice (idempotency check)
         run: |
           for f in db/init/*.sql; do
             echo ">>> applying $f"
-            psql -h localhost -U chemclaw -d chemclaw -f "$f"
+            psql -h localhost -U chemclaw -d chemclaw -v ON_ERROR_STOP=1 -f "$f"
           done
           for f in db/init/*.sql; do
             echo ">>> re-applying $f"
-            psql -h localhost -U chemclaw -d chemclaw -f "$f"
+            psql -h localhost -U chemclaw -d chemclaw -v ON_ERROR_STOP=1 -f "$f"
           done
+      - name: Cold-start invariant — schema_version covers every init file
+        # The init suite is the load-bearing migration tool today (CLAUDE.md
+        # "Hard requirements"). Every init file MUST self-record into
+        # schema_version so `SELECT * FROM schema_version` is the canonical
+        # applied-init list (per the lint above). After applying the suite,
+        # assert that the row count matches the number of files on disk.
+        # Catches a file that was idempotent enough to apply without error
+        # but quietly skipped its INSERT (the regression mode that
+        # BACKLOG.md:58, 123 documented).
+        run: |
+          file_count=$(ls -1 db/init/*.sql | wc -l)
+          row_count=$(psql -h localhost -U chemclaw -d chemclaw -tAc \
+            "SELECT count(*) FROM schema_version" | tr -d '[:space:]')
+          echo "init files on disk: ${file_count}"
+          echo "schema_version rows: ${row_count}"
+          if [[ "${row_count}" -lt "${file_count}" ]]; then
+            echo "::error::schema_version has ${row_count} rows but ${file_count} init files exist"
+            psql -h localhost -U chemclaw -d chemclaw -c \
+              "SELECT filename FROM schema_version ORDER BY filename"
+            exit 1
+          fi
+      - name: Cold-start invariant — every projector event_type is in the catalog
+        # services/projectors/<name>/main.py declares interested_event_types.
+        # db/init/35_event_type_vocabulary.sql is the canonical catalog. CI
+        # asserts every projector subscription has a matching catalog entry
+        # so a future projector that types its event_type wrong fails at PR
+        # time instead of silently never receiving any events.
+        run: bash scripts/check_event_vocabulary.sh

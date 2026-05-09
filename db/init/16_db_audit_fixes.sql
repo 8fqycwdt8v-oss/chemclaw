@@ -474,4 +474,9 @@ BEGIN
   END IF;
 END $$;
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('16_db_audit_fixes.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

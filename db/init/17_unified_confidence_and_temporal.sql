@@ -166,4 +166,9 @@ BEGIN
   END IF;
 END $$;
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('17_unified_confidence_and_temporal.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

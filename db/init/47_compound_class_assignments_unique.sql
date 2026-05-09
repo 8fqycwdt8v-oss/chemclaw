@@ -52,4 +52,9 @@ CREATE UNIQUE INDEX IF NOT EXISTS uq_compound_class_assignments_live
   ON compound_class_assignments (inchikey, class_id)
   WHERE valid_to IS NULL;
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('47_compound_class_assignments_unique.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

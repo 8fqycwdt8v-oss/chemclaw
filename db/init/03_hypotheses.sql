@@ -85,4 +85,9 @@ USING (
     EXISTS (SELECT 1 FROM hypotheses h WHERE h.id = hypothesis_citations.hypothesis_id)
 );
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('03_hypotheses.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

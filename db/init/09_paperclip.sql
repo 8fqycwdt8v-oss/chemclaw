@@ -46,3 +46,8 @@ CREATE POLICY paperclip_own_policy ON paperclip_state
   WITH CHECK (
     user_entra_id = current_setting('app.current_user_entra_id', true)
   );
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('09_paperclip.sql')
+ON CONFLICT DO NOTHING;

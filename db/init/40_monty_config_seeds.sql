@@ -51,4 +51,9 @@ SELECT bootstrap_config_setting(
   '__bootstrap__'
 );
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('40_monty_config_seeds.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

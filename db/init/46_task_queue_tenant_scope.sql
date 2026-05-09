@@ -68,4 +68,9 @@ CREATE POLICY task_queue_insert_self ON task_queue
 -- system workers run as chemclaw_service (BYPASSRLS) and can pass an
 -- explicit enqueued_by value.
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('46_task_queue_tenant_scope.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

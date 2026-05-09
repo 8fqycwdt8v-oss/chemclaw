@@ -110,4 +110,9 @@ CREATE POLICY agent_todos_owner_policy ON agent_todos
 GRANT SELECT, INSERT, UPDATE, DELETE ON agent_sessions TO chemclaw_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON agent_todos    TO chemclaw_app;
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('13_agent_sessions.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

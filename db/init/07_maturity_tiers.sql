@@ -77,4 +77,9 @@ CREATE POLICY artifacts_owner_update ON artifacts FOR UPDATE
   USING (owner_entra_id = current_setting('app.current_user_entra_id', true))
   WITH CHECK (owner_entra_id = current_setting('app.current_user_entra_id', true));
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('07_maturity_tiers.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

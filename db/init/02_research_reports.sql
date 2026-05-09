@@ -33,4 +33,9 @@ CREATE POLICY research_reports_owner_policy ON research_reports
     OR user_entra_id = current_setting('app.current_user_entra_id', true)
   );
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('02_research_reports.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

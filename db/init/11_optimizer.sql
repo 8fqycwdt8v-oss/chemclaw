@@ -82,4 +82,9 @@ END $$;
 -- No extra columns needed; the promoter aggregates forged_tool_validation_runs
 -- for forged tools and skill_library.success_count for prompt skills.
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('11_optimizer.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

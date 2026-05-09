@@ -55,4 +55,9 @@ BEGIN
   END IF;
 END $$;
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('33_bitemporal_current_indexes.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

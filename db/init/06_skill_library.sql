@@ -74,4 +74,9 @@ DO $$ BEGIN
   END IF;
 END $$;
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('06_skill_library.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

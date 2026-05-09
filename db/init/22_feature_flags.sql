@@ -97,4 +97,9 @@ SELECT bootstrap_feature_flag(
   'seed:22_feature_flags.sql'
 );
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('22_feature_flags.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

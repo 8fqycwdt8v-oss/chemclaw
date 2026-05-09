@@ -52,4 +52,9 @@ BEGIN
   END IF;
 END $$;
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('18_finish_reason_widen.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

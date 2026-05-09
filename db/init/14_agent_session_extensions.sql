@@ -124,4 +124,9 @@ CREATE POLICY agent_plans_via_session_policy ON agent_plans
 
 GRANT SELECT, INSERT, UPDATE, DELETE ON agent_plans TO chemclaw_app;
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('14_agent_session_extensions.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

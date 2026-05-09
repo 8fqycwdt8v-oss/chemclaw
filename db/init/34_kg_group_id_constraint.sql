@@ -36,4 +36,9 @@ BEGIN;
 -- schema_version row inserts cleanly. Postgres treats this as valid SQL.
 SELECT 'tranche-1/c6: kg_group_id_constraint marker (see comments above)' AS migration_marker;
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('34_kg_group_id_constraint.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

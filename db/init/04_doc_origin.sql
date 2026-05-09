@@ -23,4 +23,9 @@ UPDATE documents
  WHERE original_uri IS NULL
    AND source_path  IS NOT NULL;
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('04_doc_origin.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

@@ -501,4 +501,9 @@ REVOKE EXECUTE ON FUNCTION enforce_user_context(TEXT) FROM PUBLIC;
 -- INSERT here — duplicating it produced a second row keyed by the
 -- basename and confused `SELECT * FROM schema_version` audits.
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('19_observability.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

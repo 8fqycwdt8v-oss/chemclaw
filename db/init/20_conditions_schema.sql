@@ -53,4 +53,9 @@ CREATE INDEX IF NOT EXISTS idx_reactions_temp
 CREATE INDEX IF NOT EXISTS idx_reactions_extracted
   ON reactions (conditions_extracted_from);
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('20_conditions_schema.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

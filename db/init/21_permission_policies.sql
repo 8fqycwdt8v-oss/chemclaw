@@ -78,4 +78,9 @@ CREATE POLICY permission_policies_admin_write ON permission_policies
   USING (current_user_is_admin())
   WITH CHECK (current_user_is_admin());
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('21_permission_policies.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

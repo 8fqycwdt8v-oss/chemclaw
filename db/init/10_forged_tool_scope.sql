@@ -115,4 +115,9 @@ CREATE POLICY validation_runs_visibility ON forged_tool_validation_runs FOR SELE
 -- Validator service inserts via service role (BYPASSRLS).
 -- Insert policy for regular users not needed; validator runs as chemclaw_service.
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('10_forged_tool_scope.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

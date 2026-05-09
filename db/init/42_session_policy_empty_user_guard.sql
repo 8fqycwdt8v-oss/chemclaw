@@ -82,4 +82,9 @@ CREATE POLICY agent_plans_via_session_policy ON agent_plans
     )
   );
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('42_session_policy_empty_user_guard.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

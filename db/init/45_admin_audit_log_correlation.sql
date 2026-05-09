@@ -40,4 +40,9 @@ CREATE INDEX IF NOT EXISTS idx_admin_audit_log_trace_id
 CREATE INDEX IF NOT EXISTS idx_admin_audit_log_request_id
   ON admin_audit_log(request_id) WHERE request_id IS NOT NULL;
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('45_admin_audit_log_correlation.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

@@ -365,4 +365,9 @@ COMMENT ON COLUMN skill_library.code_sha256 IS
   'integrity-check migration; the agent logs once and runs without '
   'verification for those (re-forge to enable).';
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('12_security_hardening.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;
