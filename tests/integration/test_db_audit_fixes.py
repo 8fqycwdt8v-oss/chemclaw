@@ -364,3 +364,40 @@ def test_paperclip_state_token_columns_are_bigint() -> None:
             ], f"expected BIGINT for both token columns, got {rows!r}"
     finally:
         conn.close()
+
+
+# ---------------------------------------------------------------------------
+# 7. audit_row_change() is installed on the canonical chemistry tables.
+# ---------------------------------------------------------------------------
+#
+# 19_observability.sql installed the trigger on the agent / project working
+# set; 52_audit_canonical_tables.sql extends it to reactions / hypotheses /
+# artifacts. Locks the gap flagged by the 2026-05-08 review §3.8.
+
+@pytest.mark.parametrize(
+    "table",
+    ["reactions", "hypotheses", "artifacts"],
+)
+def test_audit_trigger_installed_on_canonical_table(table: str) -> None:
+    _skip_if_table_missing(f"public.{table}")
+    conn = _connect()
+    try:
+        with conn.cursor() as cur:
+            cur.execute(
+                "SELECT t.tgname, p.proname "
+                "FROM pg_trigger t "
+                "JOIN pg_proc p ON p.oid = t.tgfoid "
+                "WHERE t.tgrelid = %s::regclass AND t.tgname = %s",
+                (f"public.{table}", f"audit_{table}"),
+            )
+            row = cur.fetchone()
+            assert row is not None, (
+                f"expected trigger audit_{table} on public.{table} "
+                f"(see db/init/52_audit_canonical_tables.sql)"
+            )
+            tgname, proname = row
+            assert proname == "audit_row_change", (
+                f"audit_{table} should call audit_row_change(), got {proname!r}"
+            )
+    finally:
+        conn.close()
