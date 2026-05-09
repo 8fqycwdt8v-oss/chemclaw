@@ -15,6 +15,12 @@ import psycopg
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 
+from services.optimizer.common.db import (
+    assert_bypass_rls,
+    enforce_bypass_rls_check_enabled,
+    get_dsn,
+)
+
 from .promoter import run_promotion_pass, run_prompt_promotion_pass
 
 logger = logging.getLogger(__name__)
@@ -25,13 +31,8 @@ _last_events: list[dict[str, Any]] = []
 
 
 def _get_dsn() -> str:
-    return (
-        f"host={os.environ.get('POSTGRES_HOST', 'localhost')} "
-        f"port={os.environ.get('POSTGRES_PORT', '5432')} "
-        f"dbname={os.environ.get('POSTGRES_DB', 'chemclaw')} "
-        f"user={os.environ.get('POSTGRES_USER', 'chemclaw_service')} "
-        f"password={os.environ.get('POSTGRES_PASSWORD', '')}"
-    )
+    """Back-compat shim — prefer ``services.optimizer.common.db.get_dsn``."""
+    return get_dsn()
 
 
 async def run_skill_promoter_job() -> None:
@@ -43,6 +44,11 @@ async def run_skill_promoter_job() -> None:
     try:
         dsn = _get_dsn()
         with psycopg.connect(dsn) as conn:
+            assert_bypass_rls(
+                conn,
+                service_name="skill_promoter",
+                enforce=enforce_bypass_rls_check_enabled(),
+            )
             skill_events = run_promotion_pass(conn)
             prompt_events = run_prompt_promotion_pass(conn)
             events = skill_events + prompt_events

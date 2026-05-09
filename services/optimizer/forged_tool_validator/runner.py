@@ -19,6 +19,12 @@ import psycopg
 from psycopg.rows import dict_row
 from apscheduler.schedulers.blocking import BlockingScheduler
 
+from services.optimizer.common.db import (
+    assert_bypass_rls,
+    enforce_bypass_rls_check_enabled,
+    get_dsn,
+)
+
 from .sandbox_client import LocalSubprocessSandbox, SandboxClient
 from .validator import ForgedTool, ForgedToolValidator, TestCase, ValidationResult
 
@@ -30,13 +36,8 @@ logger = logging.getLogger(__name__)
 
 
 def _get_dsn() -> str:
-    return (
-        f"host={os.environ.get('POSTGRES_HOST', 'localhost')} "
-        f"port={os.environ.get('POSTGRES_PORT', '5432')} "
-        f"dbname={os.environ.get('POSTGRES_DB', 'chemclaw')} "
-        f"user={os.environ.get('POSTGRES_USER', 'chemclaw_service')} "
-        f"password={os.environ.get('POSTGRES_PASSWORD', '')}"
-    )
+    """Back-compat shim — prefer ``services.optimizer.common.db.get_dsn``."""
+    return get_dsn()
 
 
 def _fetch_active_forged_tools(conn: Any) -> list[ForgedTool]:
@@ -185,6 +186,11 @@ def run_validation(sandbox: SandboxClient | None = None) -> list[ValidationResul
 
     conn = psycopg.connect(_get_dsn())
     try:
+        assert_bypass_rls(
+            conn,
+            service_name="forged_tool_validator",
+            enforce=enforce_bypass_rls_check_enabled(),
+        )
         tools = _fetch_active_forged_tools(conn)
         logger.info("forge-validator: validating %d active forged tools", len(tools))
 

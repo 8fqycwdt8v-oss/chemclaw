@@ -18,7 +18,7 @@ import json
 import logging
 import os
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -38,20 +38,10 @@ PROMOTION_SUCCESS_RATE = 0.55
 DEMOTION_SUCCESS_RATE = 0.40
 MIN_RUNS = 30
 
-# Track D (cross-project KG transfer): cross-project promotion gate.
-# Defaults are 0 so legacy rows with empty validated_in_projects arrays are
-# not blocked; operators raise via config_settings once skill validation
-# population (routes/learn.ts, forge_tool.ts, etc.) is wired through with
-# project context. See db/init/54_skill_library_validated_projects.sql.
-MIN_PROJECTS_FOR_PROMOTION = 0
-MIN_EVIDENCE_COUNT = 0
-
 _THRESHOLD_DEFAULTS = {
     "PROMOTION_SUCCESS_RATE": PROMOTION_SUCCESS_RATE,
     "DEMOTION_SUCCESS_RATE": DEMOTION_SUCCESS_RATE,
     "MIN_RUNS": MIN_RUNS,
-    "MIN_PROJECTS_FOR_PROMOTION": MIN_PROJECTS_FOR_PROMOTION,
-    "MIN_EVIDENCE_COUNT": MIN_EVIDENCE_COUNT,
 }
 
 
@@ -63,7 +53,6 @@ def apply_config_overrides(dsn: str) -> None:
     so a config_settings outage can't block the promotion pass.
     """
     global PROMOTION_SUCCESS_RATE, DEMOTION_SUCCESS_RATE, MIN_RUNS
-    global MIN_PROJECTS_FOR_PROMOTION, MIN_EVIDENCE_COUNT
     from services.common.config_registry import ConfigRegistry  # noqa: PLC0415
     reg = ConfigRegistry(dsn=dsn)
     PROMOTION_SUCCESS_RATE = reg.get_float(
@@ -75,19 +64,9 @@ def apply_config_overrides(dsn: str) -> None:
     MIN_RUNS = reg.get_int(
         "optimizer.min_runs", _THRESHOLD_DEFAULTS["MIN_RUNS"],
     )
-    MIN_PROJECTS_FOR_PROMOTION = reg.get_int(
-        "optimizer.min_projects_for_promotion",
-        _THRESHOLD_DEFAULTS["MIN_PROJECTS_FOR_PROMOTION"],
-    )
-    MIN_EVIDENCE_COUNT = reg.get_int(
-        "optimizer.min_evidence_count",
-        _THRESHOLD_DEFAULTS["MIN_EVIDENCE_COUNT"],
-    )
     logger.info(
-        "promoter thresholds: promotion=%.2f demotion=%.2f min_runs=%d "
-        "min_projects=%d min_evidence=%d",
+        "promoter thresholds: promotion=%.2f demotion=%.2f min_runs=%d",
         PROMOTION_SUCCESS_RATE, DEMOTION_SUCCESS_RATE, MIN_RUNS,
-        MIN_PROJECTS_FOR_PROMOTION, MIN_EVIDENCE_COUNT,
     )
 
 
@@ -105,10 +84,6 @@ class SkillRow:
     success_count: int
     total_runs: int
     proposed_by_user_entra_id: str
-    # Track D: cross-project validation signal. Defaults preserve legacy
-    # behaviour for rows / tests that don't yet populate the columns.
-    validated_in_projects: list[str] = field(default_factory=list)
-    evidence_count: int = 0
 
 
 @dataclass
@@ -129,28 +104,6 @@ def _success_rate(skill: SkillRow) -> float | None:
     if skill.total_runs < MIN_RUNS:
         return None
     return skill.success_count / skill.total_runs
-
-
-def _cross_project_gate_blocks(skill: SkillRow) -> str | None:
-    """Track D: portfolio-validation gate. Returns a reason string if the
-    skill fails the cross-project gate (and should not be promoted), or
-    None if the skill passes (or the gate is no-op due to threshold = 0).
-
-    Defaults are 0/0 so legacy rows pass; operators tighten via
-    `optimizer.min_projects_for_promotion` / `optimizer.min_evidence_count`.
-    """
-    project_count = len(skill.validated_in_projects)
-    if project_count < MIN_PROJECTS_FOR_PROMOTION:
-        return (
-            f"validated_in_projects={project_count} < "
-            f"min_projects_for_promotion={MIN_PROJECTS_FOR_PROMOTION}"
-        )
-    if skill.evidence_count < MIN_EVIDENCE_COUNT:
-        return (
-            f"evidence_count={skill.evidence_count} < "
-            f"min_evidence_count={MIN_EVIDENCE_COUNT}"
-        )
-    return None
 
 
 def _forged_tool_validator_status(conn: psycopg.Connection, skill_name: str) -> str | None:
@@ -216,9 +169,7 @@ def run_promotion_pass(conn: psycopg.Connection) -> list[PromotionEvent]:
         SELECT id::text, name, version, kind, active,
                COALESCE(success_count, 0) AS success_count,
                COALESCE(total_runs, 0) AS total_runs,
-               COALESCE(proposed_by_user_entra_id, 'system') AS proposed_by_user_entra_id,
-               COALESCE(validated_in_projects, '{}'::uuid[]) AS validated_in_projects,
-               COALESCE(evidence_count, 0) AS evidence_count
+               COALESCE(proposed_by_user_entra_id, 'system') AS proposed_by_user_entra_id
         FROM skill_library
         WHERE kind IN ('prompt', 'forged_tool')
         ORDER BY name, version
@@ -230,8 +181,6 @@ def run_promotion_pass(conn: psycopg.Connection) -> list[PromotionEvent]:
             id=r[0], name=r[1], version=r[2], kind=r[3], active=r[4],
             success_count=r[5], total_runs=r[6],
             proposed_by_user_entra_id=r[7],
-            validated_in_projects=[str(p) for p in (r[8] or [])],
-            evidence_count=r[9],
         )
         for r in rows
     ]
@@ -259,17 +208,6 @@ def run_promotion_pass(conn: psycopg.Connection) -> list[PromotionEvent]:
                             skill.name, skill.version, vstatus,
                         )
                         continue
-
-                # Track D: cross-project gate. No-op when thresholds are 0
-                # (default); meaningful once operators raise them via
-                # config_settings and population is wired through.
-                xp_block = _cross_project_gate_blocks(skill)
-                if xp_block is not None:
-                    logger.info(
-                        "Skipping promotion of %s v%d: %s",
-                        skill.name, skill.version, xp_block,
-                    )
-                    continue
 
                 conn.execute(
                     "UPDATE skill_library SET active=true WHERE id=%s",
@@ -328,15 +266,20 @@ def run_promotion_pass(conn: psycopg.Connection) -> list[PromotionEvent]:
 # ---------------------------------------------------------------------------
 
 def run_once() -> None:
-    dsn = (
-        f"host={os.environ.get('POSTGRES_HOST', 'localhost')} "
-        f"port={os.environ.get('POSTGRES_PORT', '5432')} "
-        f"dbname={os.environ.get('POSTGRES_DB', 'chemclaw')} "
-        f"user={os.environ.get('POSTGRES_USER', 'chemclaw_service')} "
-        f"password={os.environ.get('POSTGRES_PASSWORD', '')}"
+    from services.optimizer.common.db import (
+        assert_bypass_rls,
+        enforce_bypass_rls_check_enabled,
+        get_dsn,
     )
+
+    dsn = get_dsn()
     apply_config_overrides(dsn)
     with psycopg.connect(dsn) as conn:
+        assert_bypass_rls(
+            conn,
+            service_name="skill_promoter",
+            enforce=enforce_bypass_rls_check_enabled(),
+        )
         events = run_promotion_pass(conn)
     logger.info("Promotion pass complete — %d events", len(events))
 
