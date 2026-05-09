@@ -5,16 +5,12 @@ runnable step. The canonical state of a run is the fold of `workflow_events`;
 `workflow_state` is a materialized projection rebuildable at any time.
 
 Step kinds supported:
-  - tool_call      — invoke an MCP service via HTTP (mcp-xtb, mcp-genchem, …)
-  - sub_agent      — placeholder; future hook into the agent's sub-agent
-                     dispatch path
-  - conditional    — pick branch by JMESPath expr against scope
-  - loop / parallel — sequential or parallel iteration over for_each
-  - wait           — block on a batch_id until all tasks resolve
-
-This MVP runs only the simple step kinds (tool_call + conditional + wait
-on batch_id). loop / parallel / sub_agent step bodies are accepted but
-executed serially as a single iteration; full implementations follow.
+  - tool_call   — invoke an MCP service via HTTP (mcp-xtb, mcp-genchem, …)
+  - sub_agent   — spawn an agent-claw sub-agent via the internal endpoint
+  - conditional — pick branch by JMESPath expr against scope
+  - parallel    — fan-out substeps via asyncio.gather (concurrency-capped)
+  - loop        — iterate `body` over `for_each` items, sequential or parallel
+  - wait        — block on a batch_id until all tasks resolve
 
 Failure semantics: a step_failed event is appended; the workflow status
 moves to 'failed' and the run is finalized.
@@ -269,16 +265,7 @@ class WorkflowEngine:
         if kind == "sub_agent":
             return await self._exec_sub_agent(step, scope)
         if kind == "loop":
-            # Still NotImplementedError for now — loop semantics interact with
-            # workflow_events bookkeeping (each iteration ought to emit its
-            # own step_started/step_succeeded), which deserves a separate
-            # change. Fail loudly so workflows using `loop` don't silently
-            # mis-execute.
-            raise NotImplementedError(
-                "workflow step kind 'loop' is not yet implemented; "
-                "express iteration via 'parallel' (fan-out) or call multiple "
-                "tool_call steps explicitly"
-            )
+            return await self._exec_loop(step, scope)
         raise ValueError(f"unknown step kind: {kind!r}")
 
     async def _exec_conditional(
@@ -353,6 +340,98 @@ class WorkflowEngine:
 
         results = await asyncio.gather(*(_run_one(s) for s in substeps))
         return list(results)
+
+    async def _exec_loop(
+        self, step: dict[str, Any], scope: dict[str, Any],
+    ) -> Any:
+        """Iterative step: resolve `for_each` to a list, execute `body` once
+        per item, collect results in input order.
+
+        Step shape:
+            {kind: 'loop', for_each: '<jmespath>', body: <step>,
+             mode?: 'sequential'|'parallel', max_concurrency?: int}
+
+        Each iteration sees a per-iteration scope copy with `loop` =
+        {'item': <item>, 'index': <i>}. Body steps reference the
+        iteration via that key (e.g. conditional `if: 'loop.item.score > \\`0.5\\`'`,
+        sub_agent `goal: '${loop.item.smiles}'`).
+
+        Sequential mode (default) runs iterations one after another and
+        propagates the first failure. Parallel mode runs under a semaphore
+        whose cap is the min of step.max_concurrency,
+        config_settings.workflow_engine.loop_max_concurrency, and len(items).
+
+        An empty `for_each` result returns [] without raising. A null result
+        (JMESPath miss) is treated as []; misuse — a non-list result —
+        raises so workflow authors notice.
+        """
+        # Validate the structural fields (for_each, body, mode) before
+        # touching scope, so a malformed step always raises the same
+        # ValueError regardless of what scope happens to contain.
+        expr = step.get("for_each")
+        if not isinstance(expr, str) or not expr:
+            raise ValueError("loop step requires non-empty 'for_each' (JMESPath string)")
+
+        body = step.get("body")
+        if not isinstance(body, dict):
+            raise ValueError("loop step requires 'body' step dict")
+
+        mode = step.get("mode", "sequential")
+        if mode not in ("sequential", "parallel"):
+            raise ValueError(
+                f"loop 'mode' must be 'sequential' or 'parallel', got {mode!r}"
+            )
+
+        items = self._resolve_jmespath(expr, scope)
+        if items is None:
+            items = []
+        if not isinstance(items, list):
+            raise ValueError(
+                f"loop 'for_each' must resolve to a list, got {type(items).__name__}"
+            )
+
+        if not items:
+            return []
+
+        async def _run_iteration(index: int, item: Any) -> Any:
+            # Shallow-copy the outer scope so the loop var doesn't leak
+            # into subsequent steps. Substeps that READ scope see both
+            # outer state and `loop`. Substeps that WRITE would race
+            # under parallel mode; today's _exec_* handlers only read
+            # (parallel.steps and conditional.then/else share the same
+            # constraint).
+            iter_scope = dict(scope)
+            iter_scope["loop"] = {"item": item, "index": index}
+            return await self._execute_step(body, iter_scope)
+
+        if mode == "parallel":
+            config_cap = max(
+                1,
+                self._config.get_int("workflow_engine.loop_max_concurrency", 16),
+            )
+            requested = step.get("max_concurrency")
+            if isinstance(requested, int) and requested > 0:
+                cap = min(requested, config_cap)
+            else:
+                cap = config_cap
+            cap = min(cap, len(items))
+            sem = asyncio.Semaphore(cap)
+
+            async def _gated(index: int, item: Any) -> Any:
+                async with sem:
+                    return await _run_iteration(index, item)
+
+            return list(
+                await asyncio.gather(
+                    *(_gated(i, it) for i, it in enumerate(items))
+                )
+            )
+
+        # sequential — first failure propagates immediately
+        results: list[Any] = []
+        for index, item in enumerate(items):
+            results.append(await _run_iteration(index, item))
+        return results
 
     async def _exec_sub_agent(
         self, step: dict[str, Any], scope: dict[str, Any],

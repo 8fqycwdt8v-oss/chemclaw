@@ -9,8 +9,9 @@
 --      ignored every policy. We FORCE every RLS-enabled table here.
 --
 --   2. Several project-scoped tables had NO RLS at all (documents,
---      document_chunks, compounds, reactions, feedback_events, corrections,
+--      document_chunks, compounds, reactions, feedback_events,
 --      notifications, prompt_registry). Each gets a policy here.
+--      (`corrections` was in this list; the table was dropped 2026-05-09.)
 --
 --   3. The `chemclaw_service` role was created NOLOGIN, which broke the
 --      kg_hypotheses docker-compose entry that tried to connect as it
@@ -120,8 +121,8 @@ ALTER TABLE experiments      FORCE ROW LEVEL SECURITY;
 --      (chemclaw_app); ingestion workers bypass via chemclaw_service.
 --   - `reactions`: scoped by joining experiment → synthetic_step →
 --      user_project_access. Mirrors the experiments_read_policy.
---   - `feedback_events`, `corrections`, `notifications`: scoped by
---      user_entra_id directly.
+--   - `feedback_events`, `notifications`: scoped by user_entra_id
+--      directly. (`corrections` was here; table dropped 2026-05-09.)
 --
 -- Each policy is FOR ALL so writes inherit the same gate as reads.
 -- WITH CHECK clauses prevent users from inserting rows attributed
@@ -209,14 +210,8 @@ CREATE POLICY feedback_events_owner_policy ON feedback_events
   USING (user_entra_id = current_setting('app.current_user_entra_id', true))
   WITH CHECK (user_entra_id = current_setting('app.current_user_entra_id', true));
 
--- corrections — owned by the user_entra_id column.
-ALTER TABLE corrections ENABLE ROW LEVEL SECURITY;
-ALTER TABLE corrections FORCE ROW LEVEL SECURITY;
-DROP POLICY IF EXISTS corrections_owner_policy ON corrections;
-CREATE POLICY corrections_owner_policy ON corrections
-  FOR ALL
-  USING (user_entra_id = current_setting('app.current_user_entra_id', true))
-  WITH CHECK (user_entra_id = current_setting('app.current_user_entra_id', true));
+-- corrections — table dropped 2026-05-09; see db/init/52_drop_corrections.sql.
+-- The RLS+policy block previously here was removed when the table was.
 
 -- notifications — owned by the user_entra_id column.
 ALTER TABLE notifications ENABLE ROW LEVEL SECURITY;

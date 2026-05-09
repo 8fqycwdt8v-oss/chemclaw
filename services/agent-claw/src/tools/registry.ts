@@ -359,6 +359,25 @@ export class ToolRegistry {
     return this;
   }
 
+  /** Number of distinct builtin factories registered via registerBuiltin().
+   *
+   * Used by the startup gate (`MIN_EXPECTED_BUILTINS` in
+   * `bootstrap/start.ts`) to catch the silent-drift failure mode where a
+   * new builtin module is added under `tools/builtins/` but never wired
+   * into `registerBuiltinTools` — pre-this-counter the agent would boot
+   * green with the tool simply absent from the catalog.
+   */
+  get builtinCount(): number {
+    return this._builtinFactories.size;
+  }
+
+  /** Names of every builtin factory registered, alphabetised. Used for
+   * audit logging at startup so the registered set is queryable from
+   * structured logs without needing the full registry hydration. */
+  builtinNames(): string[] {
+    return [...this._builtinFactories.keys()].sort();
+  }
+
   // ---------------------------------------------------------------------------
   // DB-backed hydration (Phase A.2)
   // ---------------------------------------------------------------------------
