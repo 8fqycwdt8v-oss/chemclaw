@@ -40,7 +40,7 @@ Same compound (same InChIKey) referenced by multiple projects. The right answer 
 
 In Postgres this is **already** the design: `compounds` is globally readable subject to an authenticated session (`db/init/12_security_hardening.sql:162-180`), `compound_smarts_catalog` / `compound_substructure_hits` / `compound_classes` / `compound_class_assignments` are global-with-auth-gate (`db/init/39_compound_catalog_rls.sql:14-16,44-45`), and the `compound_fingerprinter` (`services/projectors/compound_fingerprinter/main.py:1-15`) and `compound_classifier` (`services/projectors/compound_classifier/main.py:1-92`) projectors run as `chemclaw_service` to update them per-InChIKey regardless of which project triggered the change.
 
-In Neo4j it is **not** yet the design: `kg_experiments/main.py:178` stamps every fact — including (presumably) compound nodes — with `group_id = bundle["project_id"]`. The same InChIKey appearing in projects A and B becomes two `Compound` nodes in two `group_id` shards; structural / catalog properties are duplicated, and Graphiti-side similarity / relational queries cannot bridge the two without code changes.
+In Neo4j it is **not** yet the design: `kg_experiments/main.py:178` sets `scope_group_id = bundle["project_id"]` and reuses it for every `write_fact` call, including the explicit `Compound` writes at `services/projectors/kg_experiments/main.py:310`. The same InChIKey appearing in projects A and B becomes two `Compound` nodes in two `group_id` shards; structural / catalog properties are duplicated, and Graphiti-side similarity / relational queries cannot bridge the two without code changes.
 
 This is the single highest-ROI fix, and it is not "transfer learning" in the ML sense — it is canonicalization.
 
@@ -121,7 +121,7 @@ For ChemClaw the natural pre-train target is the **public** subgraph: compounds 
 This is the clean, well-scoped formalisation of "KG transfer learning" inside the existing A-on-C / RLS / Graphiti architecture.
 
 ### 5.3 Federated and DP-style learning
-FedAvg, FedProx, FedSGD, DP-SGD, secure aggregation, split learning. **All assume the projects are trust-isolated tenants on different infrastructure**. ChemClaw runs all projects on a single operator-trusted Postgres + Neo4j. The host is already inside the trust boundary (it bypasses RLS via `chemclaw_service` for projector workloads). Adding FedAvg-style protocols imposes a substantial implementation tax with no marginal privacy benefit — every "remote party" is the same database.
+FedAvg / FedProx (FedSGD is the `local_epochs=1` degenerate case of FedAvg), DP-SGD, secure aggregation, split learning. **All assume the projects are trust-isolated tenants on different infrastructure**. ChemClaw runs all projects on a single operator-trusted Postgres + Neo4j. The host is already inside the trust boundary (it bypasses RLS via `chemclaw_service` for projector workloads). Adding FedAvg-style protocols imposes a substantial implementation tax with no marginal privacy benefit — every "remote party" is the same database.
 
 DP noise on aggregate releases (§5.4) *is* warranted; full federated training is not, until / unless the deployment model becomes genuinely multi-tenant in the operator-trust sense.
 
@@ -143,24 +143,24 @@ This is a low-risk, high-leverage extension; it transfers *reasoning routines*, 
 
 ## 6. Recommendation
 
-A three-track plan, ordered by risk-adjusted ROI. Each track ends in a merged ADR + working code + runbook.
+A four-track plan: tracks A–C ordered by risk-adjusted ROI, plus Track D as a low-effort parallel improvement. Each track ends in a merged ADR + working code + runbook.
 
-### Track A — Compound canonicalization in the KG (highest ROI, lowest risk)
+### Track A — Compound canonicalization in the KG (lowest risk, highest ROI)
 
 **Goal.** One `Compound` Neo4j node per InChIKey, shared across all `group_id`s, carrying only public-knowledge properties.
 
 **Concrete changes:**
 1. New ADR proposing `Compound` as a `group_id = "__catalog__"` (or `SYSTEM_GROUP_ID = "__system__"`, already defined at `services/mcp_tools/mcp_kg/models.py`) global node, with `(:Compound {inchikey})` as the canonical key.
 2. Modify `services/projectors/kg_experiments/main.py` so `Compound` writes carry `group_id = SYSTEM_GROUP_ID`; reaction edges (`USED_IN_REACTION` etc.) keep `group_id = project_id`.
-3. Update `mcp_kg` query layer to allow read on `__system__`-grouped nodes whenever `app.current_user_entra_id` is set, mirroring the Postgres `compound_catalog` posture.
+3. Update `mcp_kg` query layer to allow read on `__system__`-grouped nodes for any caller bearing a valid MCP JWT (the Bearer-token / ADR-006 mechanism enforced by `services/mcp_tools/common/app.py`), mirroring the "globally readable subject to authenticated session" posture of the Postgres `compound_catalog`. Note that Postgres-side `app.current_user_entra_id` does not gate Neo4j reads — the two layers have separate auth.
 4. Backfill: `DELETE FROM projection_acks WHERE projector_name = 'kg_experiments'` and replay; the projector deduplicates on `inchikey`.
-5. Add a `Compound.contributed_by_projects: UUID[]` property — written by the projector, never returned to user-facing reads (intermediate table only) — to support audit / Track C k-anonymity gating.
+5. Add a `Compound.contributed_by_projects: UUID[]` Neo4j node property — written by the projector and never surfaced through `mcp_kg` reads (kept as an internal property) — to support audit / Track C k-anonymity gating.
 
 **Effort:** 1–2 weeks. **Risk:** low; the pattern is already used for `__system__` group writes.
 
 **Success criteria:** in a two-project test fixture, the same InChIKey produces a single `Compound` node; `query_kg` from either project returns it; reaction edges remain isolated.
 
-### Track B — Public-pretrained KGE for the confidence ensemble (highest research value)
+### Track B — Public-pretrained KGE for the confidence ensemble (medium risk, high research value)
 
 **Goal.** Plug a pretrained KGE score into `compute_confidence_ensemble` as a third or fourth signal alongside chemprop std and existing signals.
 
@@ -173,15 +173,15 @@ A three-track plan, ordered by risk-adjusted ROI. Each track ends in a merged AD
 
 **Effort:** 4–6 weeks of ML + integration time. **Risk:** medium; needs disciplined eval (hold-out projects for the fine-tune step) to avoid leakage between fine-tune and evaluation. Public-corpus licensing must be cleared.
 
-**Success criteria:** ablation on a held-out project shows the KGE signal adds ≥3pp to top-1 link prediction over the existing ensemble; fine-tune is bi-temporally consistent (predictions made at time T do not depend on edges with `valid_from > T`).
+**Success criteria:** ablation on a held-out project shows the KGE signal adds a measurable lift to top-1 link prediction over the existing ensemble (a ≥3pp target is illustrative — the real bar should be set after a baseline-only ablation against the existing chemprop-std signal); fine-tune is bi-temporally consistent (predictions made at time T do not depend on edges with `valid_from > T`).
 
-### Track C — k-anonymous motif aggregator (highest privacy stakes; require security review)
+### Track C — k-anonymous motif aggregator (medium-high risk; require security review)
 
 **Goal.** A single explicit write-direction cross-project transfer surface, with k-anonymity enforced in SQL and admin audit on every read.
 
 **Concrete changes:**
 1. New ADR + security-review document. This track is the only one that crosses RLS deliberately, and it deserves the friction.
-2. New table `kg_motif_aggregates (motif_key TEXT, condition_class TEXT, n_projects INT, n_observations INT, success_rate NUMERIC, mean_yield NUMERIC, std_yield NUMERIC, last_refreshed TIMESTAMPTZ)`.
+2. New table `kg_motif_aggregates (motif_key TEXT, condition_class TEXT, n_projects INT, n_observations INT, success_rate NUMERIC(4,3), mean_yield NUMERIC(5,2), std_yield NUMERIC(5,2), last_refreshed TIMESTAMPTZ)` — `NUMERIC(4,3)` for success rate matches the precision used for `confidence_score` in `db/init/17_unified_confidence_and_temporal.sql`.
 3. New scheduled projector `services/projectors/motif_aggregator/` (cron, `chemclaw_service`) that recomputes the table with `HAVING COUNT(DISTINCT project_id) >= 5 AND COUNT(*) >= 20`. No project-of-origin columns; output is purely aggregate.
 4. New MCP tool `services/mcp_tools/mcp_motif_lookup/` with `/lookup (motif_key) → row | null`. Reads run under the user's session and are audited via `appendAudit`.
 5. Admin endpoint `POST /api/admin/motif-transfer/disable-for-project/:project_id` to opt a project out of contributing to the aggregator (needed for projects with stricter contractual constraints).
@@ -215,22 +215,23 @@ A three-track plan, ordered by risk-adjusted ROI. Each track ends in a merged AD
 3. Graphiti GPL-3 footprint — is it acceptable to keep KGE artifacts in our own Postgres tables (recommended) versus baking into Neo4j as node properties?
 4. Track B fine-tune cadence — per-event (expensive), per-night, or on-demand?
 5. Is there a PHI / regulated-data carve-out where even Track A canonicalization should be opt-in (e.g., compounds in a confidential clinical pipeline)?
-6. Should the cross-project bootstrap fallback in `assess_applicability_domain.ts:199-231` be retrofitted to write an audit row for every fallback trip, regardless of the rest of this plan?
+6. The cross-project bootstrap fallback in `assess_applicability_domain.ts:199-231` should be retrofitted to write an audit row (via `appendAudit`) for every fallback trip, regardless of the rest of this plan. This is a small change with immediate value; track as a sibling micro-task to Track A rather than waiting for the full transfer roadmap.
 
 ## 8. References
 
-- `services/projectors/kg_experiments/main.py:170-235` — KG experiment projector, `group_id` scoping pattern.
-- `services/mcp_tools/mcp_kg/models.py:53-124,186-211` — `group_id` enforcement at the KG read/write boundary.
+- `services/projectors/kg_experiments/main.py:178` (`scope_group_id` derivation), `:207` (first `write_fact` with `group_id=scope_group_id`), `:310` (explicit `Compound` write) — `group_id` scoping pattern.
+- `services/mcp_tools/mcp_kg/models.py:73` (`SYSTEM_GROUP_ID = "__system__"`), `:124,189,211,240` (default `group_id` on each request model) — `group_id` enforcement at the KG read/write boundary.
 - `services/agent-claw/src/tools/builtins/assess_applicability_domain.ts:199-231` — cross-project bootstrap fallback precedent.
 - `services/agent-claw/src/tools/builtins/find_similar_reactions.ts:99-120` — DRFP cross-project similarity within RLS.
-- `services/projectors/compound_fingerprinter/main.py:1-15` — global fingerprint projector.
-- `services/projectors/compound_classifier/main.py:1-92` — global classification projector with bi-temporal `valid_to`.
-- `services/projectors/reaction_vectorizer/main.py:1-45` — DRFP global vector space.
-- `services/optimizer/session_reanimator/main.py:1-160` — only existing optimizer surface; no cross-project signal today.
-- `services/mcp_tools/mcp_chemprop/main.py:1-95` — globally pretrained yield predictor.
-- `services/mcp_tools/common/redaction_filter.py:1-49` — log-side redaction; not a transfer-boundary control.
+- `services/projectors/compound_fingerprinter/main.py:38-39` (NOTIFY channel constants), `:274` (emit `compound_fingerprinted`) — global fingerprint projector.
+- `services/projectors/compound_classifier/main.py:35` (`_NOTIFY_CHANNEL = "compound_fingerprinted"`), `:58` (LISTEN) — global classification projector with bi-temporal `valid_to`.
+- `services/projectors/reaction_vectorizer/main.py` — DRFP global vector space.
+- `services/optimizer/session_reanimator/main.py` — only existing optimizer surface; no cross-project signal today.
+- `services/mcp_tools/mcp_chemprop/main.py` — globally pretrained yield predictor.
+- `services/mcp_tools/common/redaction_filter.py` — log-side redaction; not a transfer-boundary control.
+- `services/mcp_tools/common/app.py` — MCP Bearer-token middleware (Track A item 3).
 - `db/init/12_security_hardening.sql:162-200` — RLS architecture for compounds / reactions / experiments.
 - `db/init/17_unified_confidence_and_temporal.sql:18-123` — bi-temporal + confidence schema.
-- `db/init/39_compound_catalog_rls.sql:1-114` — global compound catalog RLS posture.
+- `db/init/39_compound_catalog_rls.sql` — global compound catalog RLS posture.
 - `services/agent-claw/src/middleware/require-admin.ts:19` — admin role definitions.
-- `skills/cross_learning/SKILL.md:1-37` — existing portfolio-pattern-mining skill.
+- `skills/cross_learning/SKILL.md` — existing portfolio-pattern-mining skill.
