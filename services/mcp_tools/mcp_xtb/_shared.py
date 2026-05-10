@@ -96,8 +96,12 @@ def solvent_flags(model: str | None, name: str | None) -> list[str]:
 # Re-exported here to avoid breaking the existing `from services.mcp_tools.
 # mcp_xtb._shared import smiles_to_canonical_and_xyz` import path.
 
+# Explicit `name as name` re-export so mypy strict (implicit_reexport=False)
+# treats it as part of this module's public surface; mcp_xtb.main and any
+# future caller of `from ._shared import smiles_to_canonical_and_xyz` keeps
+# working through the legacy path.
 from services.mcp_tools.common.smiles import (  # noqa: E402, F401
-    smiles_to_canonical_and_xyz,
+    smiles_to_canonical_and_xyz as smiles_to_canonical_and_xyz,
 )
 
 
