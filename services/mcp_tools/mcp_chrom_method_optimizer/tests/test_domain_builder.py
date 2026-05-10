@@ -11,11 +11,18 @@ import pytest
 from services.mcp_tools.mcp_chrom_method_optimizer import domain_builder as _db
 
 
-# Minimal viable inputs reused across tests
-MIN_COLS = ["BEH-C18", "Kinetex-EVO"]
+# Minimal viable inputs reused across tests. Tanaka values are
+# deliberately distinct on every axis — BoFire's
+# CategoricalDescriptorInput rejects descriptors with no variation
+# across categories, and real Tanaka tables sometimes have ties.
+# The production path drops constant descriptors silently
+# (see _drop_constant_descriptors); for the happy-path assertions
+# we want all six axes preserved.
+MIN_COLS = ["BEH-C18", "Kinetex-EVO", "HSS-T3"]
 MIN_DESC = [
     [3.30, 1.480, 1.500, 0.420, 0.190, 0.290],   # BEH-C18
-    [3.20, 1.480, 1.510, 0.460, 0.140, 0.310],   # Kinetex-EVO
+    [3.20, 1.470, 1.510, 0.460, 0.140, 0.310],   # Kinetex-EVO
+    [3.55, 1.490, 1.520, 0.430, 0.090, 0.410],   # HSS-T3
 ]
 MIN_BSOL = ["MeCN", "MeOH"]
 MIN_ADD  = ["FA_0.1pct", "TFA_0.1pct"]
@@ -79,9 +86,53 @@ def test_descriptor_input_carries_tanaka_values():
     )
     column_feature = next(f for f in domain.inputs.features if f.key == "column")
     assert column_feature.categories == MIN_COLS
+    # All 6 Tanaka descriptors vary across MIN_COLS, so all 6 are kept.
     assert tuple(column_feature.descriptors) == _db.TANAKA_DESCRIPTORS
-    # Round-trip via the values list of lists
     assert column_feature.values == MIN_DESC
+
+
+def test_constant_descriptors_are_dropped():
+    """A column subset with identical kPB on every column should drop
+    that descriptor and keep only the varying ones."""
+    cols = ["A", "B", "C"]
+    descs = [
+        [3.0, 1.0, 1.5, 0.4, 0.1, 0.3],
+        [3.0, 1.1, 1.6, 0.5, 0.2, 0.4],   # kPB constant at 3.0
+        [3.0, 1.2, 1.7, 0.6, 0.3, 0.5],
+    ]
+    domain = _db.build_chrom_domain(
+        gradient_scheme=_db.GradientScheme.HOLD_RAMP_HOLD,
+        column_choices=cols,
+        column_descriptors=descs,
+        b_solvent_choices=MIN_BSOL,
+        additive_choices=MIN_ADD,
+    )
+    column_feature = next(f for f in domain.inputs.features if f.key == "column")
+    # kPB (index 0) was constant → dropped. Other 5 retained.
+    assert "kPB" not in column_feature.descriptors
+    assert len(column_feature.descriptors) == 5
+
+
+def test_all_constant_descriptors_falls_back_to_plain_categorical():
+    """Two columns with every descriptor identical → all 6 descriptors are
+    constant, so the build falls back to plain CategoricalInput rather
+    than failing the way an unfiltered CategoricalDescriptorInput would.
+    (BoFire requires ≥ 2 categories on either categorical type, so we
+    use 2 identical-descriptor columns rather than a single column.)"""
+    domain = _db.build_chrom_domain(
+        gradient_scheme=_db.GradientScheme.HOLD_RAMP_HOLD,
+        column_choices=["clone_a", "clone_b"],
+        column_descriptors=[
+            [3.0, 1.0, 1.5, 0.4, 0.1, 0.3],
+            [3.0, 1.0, 1.5, 0.4, 0.1, 0.3],
+        ],
+        b_solvent_choices=MIN_BSOL,
+        additive_choices=MIN_ADD,
+    )
+    column_feature = next(f for f in domain.inputs.features if f.key == "column")
+    # No descriptors → plain CategoricalInput (no `descriptors` attribute).
+    assert not hasattr(column_feature, "descriptors") or not column_feature.descriptors
+    assert column_feature.categories == ["clone_a", "clone_b"]
 
 
 def test_pareto_domain_has_three_outputs():

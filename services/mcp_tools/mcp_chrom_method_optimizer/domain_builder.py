@@ -108,13 +108,27 @@ def build_chrom_domain(
     # ── gradient parameters ─────────────────────────────────────────────
     inputs.extend(_gradient_inputs(gradient_scheme, ContinuousInput, n_segments))
 
-    # ── column (CategoricalDescriptorInput with Tanaka descriptors) ─────
-    inputs.append(CategoricalDescriptorInput(
-        key="column",
-        categories=list(column_choices),
-        descriptors=list(TANAKA_DESCRIPTORS),
-        values=[list(row) for row in column_descriptors],
-    ))
+    # ── column ──────────────────────────────────────────────────────────
+    # BoFire's CategoricalDescriptorInput rejects descriptors with no
+    # variation across categories (a constant column adds no information
+    # to the GP). Drop constants before passing in; if NO descriptors
+    # vary (e.g. only one column was supplied) fall back to plain
+    # CategoricalInput.
+    kept_names, kept_values = _drop_constant_descriptors(
+        list(TANAKA_DESCRIPTORS), [list(row) for row in column_descriptors],
+    )
+    if kept_names:
+        inputs.append(CategoricalDescriptorInput(
+            key="column",
+            categories=list(column_choices),
+            descriptors=kept_names,
+            values=kept_values,
+        ))
+    else:
+        inputs.append(CategoricalInput(
+            key="column",
+            categories=list(column_choices),
+        ))
 
     # ── B-solvent + additive (plain CategoricalInput, low cardinality) ──
     inputs.append(CategoricalInput(key="b_solvent", categories=list(b_solvent_choices)))
@@ -188,6 +202,36 @@ def _gradient_inputs(
             "hold_ramp_hold in Phase 1."
         )
     raise ValueError(f"unknown gradient_scheme: {scheme!r}")
+
+
+def _drop_constant_descriptors(
+    names: list[str],
+    values: list[list[float]],
+) -> tuple[list[str], list[list[float]]]:
+    """Drop descriptor columns whose values are identical across all rows.
+
+    BoFire's `CategoricalDescriptorInput` requires every descriptor to
+    actually distinguish at least two categories — a constant column
+    raises pydantic `ValidationError("No variation for descriptor X")`.
+    Real Tanaka tables for closely-matched columns frequently show
+    identical values on one or two of the six axes; we drop those silently
+    so a campaign with such a column subset still builds.
+
+    Returns (kept_names, [[row1_kept], [row2_kept], ...]). `kept_names`
+    may be empty if every descriptor is constant (e.g. a single column),
+    in which case the caller should fall back to plain CategoricalInput.
+    """
+    if not values:
+        return list(names), []
+    n_descriptors = len(names)
+    keep_idx: list[int] = []
+    for j in range(n_descriptors):
+        col_vals = {row[j] for row in values}
+        if len(col_vals) > 1:
+            keep_idx.append(j)
+    kept_names = [names[j] for j in keep_idx]
+    kept_values = [[row[j] for j in keep_idx] for row in values]
+    return kept_names, kept_values
 
 
 def _validate_inputs(

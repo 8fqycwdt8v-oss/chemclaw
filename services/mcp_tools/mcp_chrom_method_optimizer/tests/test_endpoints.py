@@ -12,13 +12,17 @@ def client():
         yield c
 
 
-# Common payload — minimal viable build_domain request
+# Common payload — minimal viable build_domain request. Tanaka values
+# are deliberately distinct on every axis so the happy path exercises a
+# real CategoricalDescriptorInput rather than the constant-descriptor
+# fallback to plain CategoricalInput.
 DEFAULT_BUILD_REQUEST = {
     "gradient_scheme": "hold_ramp_hold",
-    "column_choices":  ["BEH-C18", "Kinetex-EVO"],
+    "column_choices":  ["BEH-C18", "Kinetex-EVO", "HSS-T3"],
     "column_descriptors": [
         [3.30, 1.480, 1.500, 0.420, 0.190, 0.290],
-        [3.20, 1.480, 1.510, 0.460, 0.140, 0.310],
+        [3.20, 1.470, 1.510, 0.460, 0.140, 0.310],
+        [3.55, 1.490, 1.520, 0.430, 0.090, 0.410],
     ],
     "b_solvent_choices": ["MeCN", "MeOH"],
     "additive_choices":  ["FA_0.1pct", "TFA_0.1pct"],
