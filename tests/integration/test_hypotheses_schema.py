@@ -206,6 +206,61 @@ def test_rls_owner_sees_own_cross_portfolio() -> None:
         conn.close()
 
 
+def test_status_change_emits_ingestion_event() -> None:
+    """Updating hypotheses.status fires trg_hypotheses_status_event, which
+    must INSERT a corresponding ingestion_events row of type
+    'hypothesis_status_changed'. This contract is what update_hypothesis_status
+    (services/agent-claw/src/tools/builtins/update_hypothesis_status.ts) relies
+    on — the builtin only runs the UPDATE; the event emission is the trigger's
+    job. If this test breaks, the kg_hypotheses projector silently stops
+    seeing refutation cascades. Review §2.3.
+    """
+    conn = _connect()
+    hid: uuid.UUID
+    try:
+        with conn.cursor() as cur:
+            _bypass_rls(cur)
+
+            cur.execute(
+                "INSERT INTO hypotheses "
+                "(hypothesis_text, confidence, proposed_by_user_entra_id, status) "
+                "VALUES (%s, %s, %s, %s) RETURNING id",
+                ("Hypothesis whose status we will refute.", 0.7, "user-a", "proposed"),
+            )
+            hid = cur.fetchone()[0]
+
+            # Sanity: no event yet for this row.
+            cur.execute(
+                "SELECT count(*) FROM ingestion_events "
+                "WHERE event_type = 'hypothesis_status_changed' "
+                "  AND source_row_id = %s",
+                (hid,),
+            )
+            assert cur.fetchone()[0] == 0
+
+            # Trigger: UPDATE the status. trg_hypotheses_status_event should fire.
+            cur.execute(
+                "UPDATE hypotheses SET status = 'refuted' WHERE id = %s",
+                (hid,),
+            )
+
+            cur.execute(
+                "SELECT event_type, payload FROM ingestion_events "
+                "WHERE source_row_id = %s "
+                "ORDER BY created_at DESC LIMIT 1",
+                (hid,),
+            )
+            row = cur.fetchone()
+            assert row is not None, "trigger did not emit an ingestion_events row"
+            event_type, payload = row
+            assert event_type == "hypothesis_status_changed", event_type
+            assert payload.get("new_status") == "refuted", payload
+        # Rollback to keep DB clean.
+        conn.rollback()
+    finally:
+        conn.close()
+
+
 def test_citations_cascade_on_hypothesis_delete() -> None:
     """Deleting a hypothesis cascades to its hypothesis_citations."""
     conn = _connect()
