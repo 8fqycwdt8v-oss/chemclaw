@@ -17,6 +17,8 @@ import {
   computeBayesianPosterior,
   composeEnsemble,
   crossModelAgreement,
+  loadConfidenceThresholds,
+  logEnsembleSignals,
   type ConfidenceEnsemble,
   type CrossModelLlmProvider,
   type KgPriorCounts,
@@ -143,12 +145,25 @@ export function buildComputeConfidenceEnsembleTool(
           }
         }
 
+        // Resolve tenant-scoped thresholds; falls back to defaults silently
+        // if config_settings is missing the keys or unreachable.
+        let thresholds;
+        try {
+          thresholds = await loadConfidenceThresholds({ user: ctx.userEntraId });
+        } catch {
+          thresholds = undefined;
+        }
+
         const ensemble: ConfidenceEnsemble = composeEnsemble({
           verbalized,
           cross_model,
           bayesian,
           calibrated,
+          thresholds,
         });
+
+        // Telemetry: record which signals contributed for GEPA recalibration.
+        logEnsembleSignals(ensemble, { artifact_id: input.artifact_id, tool_id: "compute_confidence_ensemble" });
 
         // Persist back to artifacts.
         let persisted = false;
