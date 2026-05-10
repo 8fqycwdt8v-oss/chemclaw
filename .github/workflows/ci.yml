@@ -90,6 +90,7 @@ jobs:
           python3 -m pip install -r services/mcp_tools/mcp_applicability_domain/requirements.txt
           python3 -m pip install -r services/mcp_tools/mcp_green_chemistry/requirements.txt
           python3 -m pip install -r services/mcp_tools/mcp_reaction_optimizer/requirements.txt
+          python3 -m pip install -r services/mcp_tools/mcp_chrom_method_optimizer/requirements.txt
           python3 -m pip install pytest pytest-asyncio coverage \
             "mypy>=1.11" "ruff>=0.6,<0.7" "diff-cover>=9.0"
       - name: Ruff
@@ -116,6 +117,7 @@ jobs:
             services/mcp_tools/mcp_applicability_domain/tests/ \
             services/mcp_tools/mcp_green_chemistry/tests/ \
             services/mcp_tools/mcp_reaction_optimizer/tests/ \
+            services/mcp_tools/mcp_chrom_method_optimizer/tests/ \
             services/mcp_tools/mcp_xtb/tests/test_gxtb_placeholder.py \
             services/mcp_tools/mcp_instrument_template/tests/ \
             services/optimizer/eval_chemistry/tests/test_chembench_subset.py
