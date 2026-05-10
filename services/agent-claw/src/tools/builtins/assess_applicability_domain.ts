@@ -9,7 +9,11 @@ import type { Pool } from "pg";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { withUserContext } from "../../db/with-user-context.js";
+import { appendAudit } from "../../routes/admin/audit-log.js";
+import { getLogger } from "../../observability/logger.js";
 import { MAX_RXN_SMILES_LEN } from "../_limits.js";
+
+const log = getLogger("assess_applicability_domain");
 
 const CONFORMAL_MIN_N = 30;
 const CALIBRATION_LIMIT = 100;
@@ -202,6 +206,35 @@ export function buildAssessApplicabilityDomainTool(
         userEntraId,
         input.project_internal_id,
       );
+
+      // Track D sibling (kg-transfer-learning.md §7 Q6): every bootstrap
+      // fallback gets a row in admin_audit_log so admins can review the
+      // pattern. The fallback is RLS-safe (the cross-project read still
+      // rides withUserContext) but it's the only existing cross-project
+      // surface in the agent — and prior to this it had no audit trail.
+      // We deliberately omit rxn_smiles from the payload: SMILES are
+      // sensitive and admins can pivot via trace_id (auto-populated by
+      // appendAudit) to find the originating span in Langfuse.
+      // Audit failures must not block the AD verdict — log and continue.
+      if (usedGlobalFallback) {
+        try {
+          await appendAudit(pool, {
+            actor: userEntraId,
+            action: "ad.cross_project_bootstrap_used",
+            target: input.project_internal_id ?? "__no_project_id__",
+            afterValue: {
+              calibration_size: calibrationRows.length,
+              project_internal_id_supplied: input.project_internal_id != null,
+            },
+            reason: "AD calibration fell back to cross-project pool",
+          });
+        } catch (err) {
+          log.warn(
+            { err, projectInternalId: input.project_internal_id },
+            "failed to record ad.cross_project_bootstrap_used audit row",
+          );
+        }
+      }
 
       // 4. Conformal abstain when even the cross-project pool is too small.
       const conformalAbstain = calibrationRows.length < CONFORMAL_MIN_N;
