@@ -31,10 +31,11 @@ import {
 // + 9 lifecycle-telemetry stubs (cluster F: session_end, user_prompt_submit,
 // post_tool_failure, post_tool_batch, subagent_start, subagent_stop,
 // task_created, task_completed, post_compact).
+// 22 = +detect-mcp-leakage (review §3.8 defense-in-depth tripwire).
 // Bump every time BUILTIN_REGISTRARS gains an entry so a silent failure to
 // load a new hook trips the startup gate instead of quietly downgrading
 // the safety net.
-const MIN_EXPECTED_HOOKS = 21;
+const MIN_EXPECTED_HOOKS = 22;
 
 export async function startServer(
   app: FastifyInstance,
