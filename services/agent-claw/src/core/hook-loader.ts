@@ -42,6 +42,7 @@ import { registerBudgetGuardHook } from "./hooks/budget-guard.js";
 import { registerInitScratchHook } from "./hooks/init-scratch.js";
 import { registerAntiFabricationHook } from "./hooks/anti-fabrication.js";
 import { registerFoundationCitationGuardHook } from "./hooks/foundation-citation-guard.js";
+import { registerScheduledSubstanceGateHook } from "./hooks/scheduled-substance-gate.js";
 import { registerSourceCacheHook } from "./hooks/source-cache.js";
 import { registerCompactWindowHook } from "./hooks/compact-window.js";
 import { registerApplySkillsHook } from "./hooks/apply-skills.js";
@@ -140,6 +141,9 @@ const BUILTIN_REGISTRARS = new Map<string, BuiltinRegistrar>([
   ["init-scratch", (lc) => { registerInitScratchHook(lc); }],
   ["anti-fabrication", (lc) => { registerAntiFabricationHook(lc); }],
   ["foundation-citation-guard", (lc) => { registerFoundationCitationGuardHook(lc); }],
+  // gap-plan H0.9: scheduled-substance deny-list. Runs early (order=50 in
+  // YAML) so a CWC Schedule-1 hit fails fast before budget-guard / etc.
+  ["scheduled-substance-gate", (lc) => { registerScheduledSubstanceGateHook(lc); }],
   ["source-cache", (lc, deps) => { registerSourceCacheHook(lc, deps.pool); }],
   [
     "compact-window",

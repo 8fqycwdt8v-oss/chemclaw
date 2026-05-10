@@ -148,12 +148,12 @@ Deferred follow-ups discovered while doing other work. One bullet per item, pref
 - [agent-claw/optimizer] qNEHVI/qParEGO multi-objective in BoFire — gap-plan H0.1
 - [agent-claw/skills/retro] route-scoring vector (SAScore + SCScore + RAscore + iGAL + PMI) on every retrosynth result — H0.2
 - [mcp_green_chemistry] HSPiPy nearest-neighbour green-substitute via merged CHEM21+GSK+Pfizer table — H0.3
-- [agent-claw/builtins] `pubchem_ghs_lookup` builtin + `pre_tool` gate on H300/H310/H330/H350/H360 — H0.4
+- [DONE 2026-05-10 H0.4] `pubchem_ghs_lookup` builtin shipped (`tools/builtins/pubchem_ghs_lookup.ts`) — calls PubChem PUG-View `?heading=GHS+Classification`, returns hazard codes (H200-H499) + pictograms (GHS01-09) + signal word + cid; resolves SMILES via mcp-rdkit InChIKey roundtrip when InChIKey not supplied; 11 unit tests with hermetic fetch mock; `MIN_EXPECTED_BUILTINS` 81→82. Follow-up: wire as `pre_tool` advisory hook + cache CID lookups in a new `pubchem_ghs_cache` table.
 - [agent-claw/builtins] OPSIN name-to-structure builtin (closes literature-name → SMILES gap) — H0.5
 - [mcp_tools/common] `@with_conformal(coverage=...)` decorator for numeric tool outputs + `prediction_calibration` projector populated from validated experiments — H0.6
 - [agent-claw/hooks] reflexion `post_turn` hook with `config_settings` gate (subsumes future `/check`) — H0.7
 - [agent-claw/core] tool-RAG over MCP registry — embed tool descriptions, top-k retrieval per turn — H0.8
-- [agent-claw/permissions] CWC Schedule-1 + DEA + EAR Cat 1C SMARTS `pre_tool` gate; deny-by-default with tenant override to ask-with-attestation — H0.9
+- [DONE 2026-05-10 H0.9 partial] scheduled-substance-gate `pre_tool` hook shipped (`core/hooks/scheduled-substance-gate.ts`); curated catalog at `src/data/scheduled-substances.ts` (CWC Schedule-1 deny / DEA Schedule-I ask / EAR Cat 1C ask, ~14 entries); deep-walks tool input for verbatim canonical-SMILES + InChIKey matches; emits `permissionDecision: "deny"` for CWC, `"ask"` for DEA/EAR; tenant override path is a `permission_policies` allow-row (resolver runs before pre_tool dispatch). 15 unit tests; `MIN_EXPECTED_HOOKS` 21→22; `pre_tool` count 2→3. Follow-up: substructure SMARTS matching via `mcp_rdkit /tools/substructure_match` to catch tautomers/salts/Kekulé re-writes; tenant-scoped DB-backed catalog table.
 - [mcp_reaction_optimizer] Atlas / EDBO+ alternate backends for mixed continuous/categorical campaigns (catalysts, ligands, additives) — H0.10
 - [mcp_chemprop] upgrade to Chemprop v2 + bundle ADMET-AI 41-endpoint weights — H0.11
 - [config_settings] migrate ICH Q3A/Q3B/M7 thresholds + CWC/DEA/EAR lists from code to `config_settings` — H0.12
