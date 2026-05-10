@@ -24,17 +24,17 @@ Outputs (objective_mode):
 """
 from __future__ import annotations
 
-from enum import Enum
+from enum import StrEnum
 from typing import Any, Sequence
 
 
-class GradientScheme(str, Enum):
+class GradientScheme(StrEnum):
     LINEAR = "linear"
     HOLD_RAMP_HOLD = "hold_ramp_hold"
     MULTI_SEGMENT = "multi_segment"
 
 
-class ObjectiveMode(str, Enum):
+class ObjectiveMode(StrEnum):
     SINGLE = "single"
     PARETO = "pareto"
     CLOSE_TO_TARGET = "close_to_target"
