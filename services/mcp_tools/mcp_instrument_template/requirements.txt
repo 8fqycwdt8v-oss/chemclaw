@@ -1,0 +1,7 @@
+# Minimum runtime deps for the skeleton. Add vendor-specific clients
+# (httpx for REST APIs, aiofiles for CSV-export, etc.) when you copy
+# this template to a real adapter directory.
+fastapi>=0.110
+pydantic>=2.6
+pydantic-settings>=2.2
+uvicorn[standard]>=0.27
