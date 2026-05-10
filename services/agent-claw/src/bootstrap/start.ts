@@ -46,7 +46,7 @@ const MIN_EXPECTED_HOOKS = 21;
 // gate trips, either add the missing registerBuiltin call or update
 // this number with intent. The 2026-05-09 code-completeness review
 // flagged this as an L3-5 hygiene gap.
-const MIN_EXPECTED_BUILTINS = 81;
+const MIN_EXPECTED_BUILTINS = 85;
 
 export async function startServer(
   app: FastifyInstance,
