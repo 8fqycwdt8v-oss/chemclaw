@@ -111,7 +111,7 @@ def smiles_to_canonical_and_xyz(smiles: str) -> tuple[str, str, str | None]:
         raise ValueError(f"invalid SMILES: {smiles!r}")
     canonical = Chem.MolToSmiles(mol)
     try:
-        inchikey = _ToInchiKey(mol) or None  # type: ignore[no-untyped-call]
+        inchikey = _ToInchiKey(mol) or None
     except Exception:  # noqa: BLE001
         inchikey = None
 

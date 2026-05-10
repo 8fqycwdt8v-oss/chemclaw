@@ -20,7 +20,6 @@ Deferred follow-ups discovered while doing other work. One bullet per item, pref
 - [ci/mypy] restore `mcp_doc_fetcher` to mypy clean subset — ~10 errors (unused PyPDF2/pdf2image `type: ignore`, missing `dict[]` generics, `JSONResponse` return-type mismatches in FastAPI handlers)
 - [ci/mypy] restore `mcp_eln_local` to mypy clean subset — ~11 errors in `routes.py` (untyped `_acquire`, Row vs dict argument types, missing parameter annotations)
 - [ci/mypy] restore `ingestion/doc_ingester` to mypy clean subset — 2 untyped-decorator errors on `typer @app.command()` in `cli.py`
-- [ci/mypy] drop the narrow `# type: ignore[no-untyped-call]` on `services/mcp_tools/mcp_xtb/_shared.py:101` (`MolToInchiKey`) once RDKit ships type stubs or a partial stub package is added
 - [ci/diff-cover] add real tests for `services/queue/**` (worker LISTEN setup currently 0% covered; excluded from diff-cover in `.github/workflows/ci.yml`)
 - [ci/diff-cover] add tests covering `services/optimizer/session_reanimator/**`, `services/projectors/kg_hypotheses/**`, `services/mcp_tools/mcp_drfp/**`, `services/mcp_tools/mcp_rdkit/**` so the diff-cover excludes can be removed
 - [cleanup] decide fate of `services/ingestion/eln_json_importer.legacy/**` — currently excluded from diff-cover and ruff; either delete or re-enable
