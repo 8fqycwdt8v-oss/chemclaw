@@ -82,20 +82,27 @@ export function buildStartSynthesisCampaignTool(pool: Pool) {
         const campaignRow = inserted.rows[0];
         if (!campaignRow) throw new Error("synthesis_campaign_insert_returned_no_rows");
 
-        // Seed the per-kind playbook as pending steps, if requested.
+        // Seed the per-kind playbook as pending steps, if requested. Each
+        // step depends on the previous one — the playbooks are linear
+        // chains today, but the resolver in advance_synthesis_campaign is
+        // depends_on-aware, so wiring real prerequisites means a stalled
+        // step blocks downstream picks instead of the resolver silently
+        // walking past it on step_index alone.
         if (playbookSteps.length > 0) {
-          const values: string[] = [];
-          const params: unknown[] = [];
-          let pIdx = 1;
+          const insertedIds: string[] = [];
           for (const [i, stepKind] of playbookSteps.entries()) {
-            values.push(`($${pIdx++}::uuid, $${pIdx++}::int, $${pIdx++}, 'pending')`);
-            params.push(campaignRow.id, i, stepKind);
+            const dependsOn = i === 0 ? [] : [insertedIds[i - 1]];
+            const ins = await client.query<{ id: string }>(
+              `INSERT INTO synthesis_campaign_steps
+                 (campaign_id, step_index, kind, status, depends_on)
+               VALUES ($1::uuid, $2::int, $3, 'pending', $4::uuid[])
+               RETURNING id::text`,
+              [campaignRow.id, i, stepKind, dependsOn],
+            );
+            const inserted = ins.rows[0];
+            if (!inserted) throw new Error("synthesis_campaign_step_insert_returned_no_rows");
+            insertedIds.push(inserted.id);
           }
-          await client.query(
-            `INSERT INTO synthesis_campaign_steps (campaign_id, step_index, kind, status)
-             VALUES ${values.join(", ")}`,
-            params,
-          );
           await client.query(
             `UPDATE synthesis_campaigns SET total_steps = $2 WHERE id = $1::uuid`,
             [campaignRow.id, playbookSteps.length],

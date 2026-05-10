@@ -163,13 +163,16 @@ export const PLAYBOOK: Record<CampaignKindT, StepKindT[]> = {
     "readiness_gate",
     "summary",
   ],
+  // bo_or_die intentionally does NOT enqueue a `die_check` step — the gate is
+  // evaluated campaign-side by advance_synthesis_campaign before each step
+  // pick, so a queued `die_check` step would have no associated tool and
+  // confuse the orchestrator with "no recommended_tools" turns.
   bo_or_die: [
     "condition_design",
     "bo_round",
     "submit_batch",
     "measurement_wait",
     "ingest_results",
-    "die_check",
     "readiness_gate",
     "summary",
   ],

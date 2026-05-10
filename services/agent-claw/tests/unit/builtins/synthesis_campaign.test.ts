@@ -69,9 +69,11 @@ const SAMPLE_STEP_ROW = {
 // start_synthesis_campaign
 // ---------------------------------------------------------------------------
 describe("start_synthesis_campaign", () => {
-  it("inserts the campaign and seeds the per-kind playbook", async () => {
+  it("inserts the campaign and seeds the per-kind playbook with linear depends_on", async () => {
+    let stepInsertSeq = 0;
+    const insertedStepCalls: { sql: string; params: unknown[] }[] = [];
     const { pool, dataSpy } = createMockPool({
-      dataHandler: async (sql) => {
+      dataHandler: async (sql, params) => {
         if (sql.includes("FROM nce_projects WHERE internal_id")) {
           return rows({ id: PROJECT_UUID });
         }
@@ -79,7 +81,9 @@ describe("start_synthesis_campaign", () => {
           return rows({ ...SAMPLE_CAMPAIGN_ROW });
         }
         if (sql.includes("INSERT INTO synthesis_campaign_steps")) {
-          return rows();
+          insertedStepCalls.push({ sql, params: (params ?? []) as unknown[] });
+          stepInsertSeq += 1;
+          return rows({ id: `step-uuid-${stepInsertSeq}` });
         }
         if (sql.includes("UPDATE synthesis_campaigns SET total_steps")) {
           return rows();
@@ -109,6 +113,14 @@ describe("start_synthesis_campaign", () => {
     expect(sqls.some((s) => s.includes("INSERT INTO synthesis_campaigns"))).toBe(true);
     expect(sqls.some((s) => s.includes("INSERT INTO synthesis_campaign_steps"))).toBe(true);
     expect(sqls.some((s) => s.includes("INSERT INTO synthesis_campaign_events"))).toBe(true);
+
+    // depends_on wiring: first step empty, every subsequent step depends on
+    // the previous insert's returned UUID.
+    expect(insertedStepCalls).toHaveLength(PLAYBOOK.single_experiment.length);
+    expect(insertedStepCalls[0]!.params[3]).toEqual([]);
+    for (let i = 1; i < insertedStepCalls.length; i++) {
+      expect(insertedStepCalls[i]!.params[3]).toEqual([`step-uuid-${i}`]);
+    }
   });
 
   it("rejects unknown projects", async () => {
@@ -698,8 +710,15 @@ describe("PLAYBOOK", () => {
       expect(PLAYBOOK[kind].length).toBeGreaterThan(0);
     }
   });
-  it("bo_or_die includes a die_check step", () => {
-    expect(PLAYBOOK.bo_or_die).toContain("die_check");
+  it("bo_or_die does NOT enqueue a die_check step (gate is campaign-level)", () => {
+    // Per the BO-capabilities review: die_check is evaluated by
+    // advance_synthesis_campaign before each step pick, so a queued
+    // die_check step has no associated tool and only confuses the
+    // orchestrator. Keep the step kind in the enum for backward compat
+    // with rows already in the DB, but don't seed it from the playbook.
+    expect(PLAYBOOK.bo_or_die).not.toContain("die_check");
+    expect(PLAYBOOK.bo_or_die).toContain("bo_round");
+    expect(PLAYBOOK.bo_or_die).toContain("ingest_results");
   });
 });
 
