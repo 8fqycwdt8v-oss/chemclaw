@@ -218,26 +218,15 @@ export function buildRecommendNextBatchTool(
         // Surface BoFire failures durably so a campaign that has degraded to
         // random isn't invisible. Cold-start is benign (the loop is
         // designed for it); only `random_*_failed` paths are recorded.
+        //
+        // Wrapped in a SAVEPOINT so an audit-write failure (e.g. partially-
+        // migrated dev DB missing record_error_event) doesn't roll back the
+        // optimization_rounds INSERT this transaction just made — losing the
+        // round is much worse than losing the audit row.
         const failureSource = reco.proposals.find(
           (p) => p.source.startsWith("random_") && p.source.endsWith("_failed"),
         );
         if (failureSource) {
-          await client.query(
-            `SELECT record_error_event($1, $2, $3, $4::jsonb)`,
-            [
-              "mcp-reaction-optimizer",
-              "BO_FALLBACK_TO_RANDOM",
-              `recommend_next_batch fell back to random: source=${failureSource.source}`,
-              JSON.stringify({
-                campaign_id: input.campaign_id,
-                round_id: roundRow.id,
-                round_index: nextIndex,
-                fallback_reason: reco.fallback_reason ?? null,
-                strategy: reco.strategy,
-                acquisition: reco.acquisition,
-              }),
-            ],
-          );
           log.warn(
             {
               campaign_id: input.campaign_id,
@@ -247,6 +236,36 @@ export function buildRecommendNextBatchTool(
             },
             "BO fell back to random",
           );
+          await client.query("SAVEPOINT bo_audit");
+          try {
+            await client.query(
+              `SELECT record_error_event($1, $2, $3, $4::jsonb)`,
+              [
+                "mcp-reaction-optimizer",
+                "BO_FALLBACK_TO_RANDOM",
+                `recommend_next_batch fell back to random: source=${failureSource.source}`,
+                JSON.stringify({
+                  campaign_id: input.campaign_id,
+                  round_id: roundRow.id,
+                  round_index: nextIndex,
+                  fallback_reason: reco.fallback_reason ?? null,
+                  strategy: reco.strategy,
+                  acquisition: reco.acquisition,
+                }),
+              ],
+            );
+            await client.query("RELEASE SAVEPOINT bo_audit");
+          } catch (auditErr) {
+            await client.query("ROLLBACK TO SAVEPOINT bo_audit");
+            log.warn(
+              {
+                campaign_id: input.campaign_id,
+                round_id: roundRow.id,
+                err: auditErr instanceof Error ? auditErr.message : String(auditErr),
+              },
+              "record_error_event failed; BO round retained, audit row dropped",
+            );
+          }
         }
 
         return { roundRow, reco, nextIndex };
