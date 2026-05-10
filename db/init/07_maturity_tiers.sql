@@ -30,6 +30,13 @@ CREATE TABLE IF NOT EXISTS artifacts (
   maturity               text        NOT NULL DEFAULT 'EXPLORATORY'
                                      CHECK (maturity IN ('EXPLORATORY','WORKING','FOUNDATION')),
   confidence_ensemble    jsonb,                             -- ConfidenceEnsemble shape; NULL until computed
+  confidence_score       numeric(4,3) CHECK (confidence_score IS NULL OR
+                                             (confidence_score >= 0.000 AND confidence_score <= 1.000)),
+  -- Bi-temporal (matches reactions / hypotheses). 17_unified_confidence_and_temporal
+  -- adds these defensively for upgrades where 07 ran before 17 was introduced;
+  -- new deployments get them here on first create.
+  valid_from             timestamptz NOT NULL DEFAULT NOW(),
+  superseded_at          timestamptz,
   agent_trace_id         text,                             -- chat trace that produced this artifact
   tool_id                text,                             -- which tool produced it
   created_at             timestamptz NOT NULL DEFAULT NOW(),
