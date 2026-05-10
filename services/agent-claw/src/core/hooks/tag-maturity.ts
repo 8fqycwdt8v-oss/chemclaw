@@ -15,7 +15,15 @@ import type { HookJSONOutput } from "../hook-output.js";
 
 // Tools whose output carries structured data worth persisting as an artifact.
 // All other tool outputs are stamped but NOT persisted (keep artifact table lean).
-const ARTIFACT_TOOL_IDS = new Set<string>([
+//
+// Chemistry prediction tools (askcos / aizynth / chemprop / sirius /
+// synthegy-mech) are included so the foundation-citation guard can validate
+// maturity claims about their outputs and `compute_confidence_ensemble`'s
+// calibrated signal can score them. The QM tools (qm_*, run_xtb_workflow,
+// qm_crest_screen) are intentionally NOT here because they already persist
+// to qm_jobs / qm_results — adding them to artifacts would duplicate the
+// canonical row. Review §3.4, recommendation 2.
+export const ARTIFACT_TOOL_IDS = new Set<string>([
   "propose_hypothesis",
   "synthesize_insights",
   "draft_section",
@@ -23,6 +31,13 @@ const ARTIFACT_TOOL_IDS = new Set<string>([
   "dispatch_sub_agent",
   "check_contradictions",
   "compute_confidence_ensemble",
+  // Chemistry prediction tools (review §3.4):
+  "propose_retrosynthesis",
+  "predict_reaction_yield",
+  "predict_yield_with_uq",
+  "predict_molecular_property",
+  "identify_unknown_from_ms",
+  "elucidate_mechanism",
 ]);
 
 /**
