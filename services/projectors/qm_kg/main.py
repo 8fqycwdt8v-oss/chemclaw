@@ -65,18 +65,22 @@ class QmKgProjector(BaseProjector):
     """Project succeeded `qm_jobs` rows into the Neo4j knowledge graph."""
 
     name = "qm_kg"
-    # We rely on the dedicated `qm_job_succeeded` channel rather than
-    # `ingestion_events`, so we accept all event types that surface QM data.
-    interested_event_types = ("qm_job_succeeded",)
+    # Driven entirely by the custom `qm_job_succeeded` NOTIFY channel — see
+    # `_connect_and_run` below and DR-06 in CLAUDE.md. The base loop is not
+    # used, so `interested_event_types` is empty (matches the
+    # compound_fingerprinter / compound_classifier convention).
+    interested_event_types = ()
 
     def __init__(self, settings: QmKgProjectorSettings) -> None:
         super().__init__(settings)
         self._neo4j_driver: Any = None
         self.qm_settings = settings
 
-    # The base class subscribes to `ingestion_events`. For QM we want the
-    # dedicated `qm_job_succeeded` channel too — override `_connect_and_run`
-    # to issue both LISTENs on the same connection.
+    # Override the base class's `ingestion_events`-driven loop. Custom channel:
+    # `qm_job_succeeded` (declared in db/init/37_qm_ingestion_events.sql);
+    # payload = qm_jobs.id (UUID string). 37 also dual-emits to ingestion_events
+    # for OTHER consumers; this projector intentionally only watches the custom
+    # channel because the catch-up scan in `_catch_up_qm` walks qm_jobs directly.
     async def _connect_and_run(self) -> None:
         async with await psycopg.AsyncConnection.connect(
             self.settings.postgres_dsn,
