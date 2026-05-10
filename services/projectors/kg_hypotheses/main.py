@@ -1,7 +1,7 @@
 """Projector: canonical hypotheses → Neo4j :Hypothesis nodes + :CITES edges.
 
 Subscribes to `hypothesis_proposed` and `hypothesis_status_changed`.
-Idempotent via uniqueness constraint on fact_id (shared with kg-experiments).
+Idempotent via uniqueness constraint on fact_id (shared with kg_experiments).
 """
 from __future__ import annotations
 

@@ -78,7 +78,7 @@ def _safe_group_id(group_id: str) -> str:
 
 
 class KgDocumentsProjector(BaseProjector):
-    name = "kg-documents"
+    name = "kg_documents"
     interested_event_types = ("document_ingested",)
 
     def __init__(self, settings: ProjectorSettings) -> None:
