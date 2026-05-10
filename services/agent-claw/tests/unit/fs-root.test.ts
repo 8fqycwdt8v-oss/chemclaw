@@ -55,3 +55,47 @@ describe("resolveAndCheckPath", () => {
     expect(abs).toContain("sub");
   });
 });
+
+import { describe as describe2, it as it2, expect as expect2, beforeAll as beforeAll2 } from "vitest";
+import { mkdtemp as mkdtemp2, mkdir as mkdir2, writeFile as writeFile2 } from "node:fs/promises";
+import { tmpdir as tmpdir2 } from "node:os";
+import { join as join2 } from "node:path";
+import { buildReadFileTool } from "../../src/tools/builtins/read_file.js";
+
+let readFileRoot: string;
+beforeAll2(async () => {
+  readFileRoot = await mkdtemp2(join2(tmpdir2(), "chemclaw-rf-"));
+  await mkdir2(readFileRoot, { recursive: true });
+});
+
+describe2("read_file — OOM guard", () => {
+  it2("rejects a file larger than the cap when no slicing requested", async () => {
+    const big = join2(readFileRoot, "big.txt");
+    // Create a 2 MiB file (2x the 1 MiB cap).
+    await writeFile2(big, "x".repeat(2 * 1024 * 1024));
+    const tool = buildReadFileTool(readFileRoot);
+    const ctx = {
+      userEntraId: "u",
+      scratchpad: new Map(),
+      seenFactIds: new Set<string>(),
+    };
+    await expect2(
+      tool.execute(ctx, { path: "big.txt" }),
+    ).rejects.toThrow(/exceeds.*cap/);
+  });
+
+  it2("rejects a file larger than 8x the cap even when slicing IS requested", async () => {
+    const huge = join2(readFileRoot, "huge.txt");
+    // 9 MiB file, sliced read attempts to grab 100 lines → still rejected.
+    await writeFile2(huge, "x".repeat(9 * 1024 * 1024));
+    const tool = buildReadFileTool(readFileRoot);
+    const ctx = {
+      userEntraId: "u",
+      scratchpad: new Map(),
+      seenFactIds: new Set<string>(),
+    };
+    await expect2(
+      tool.execute(ctx, { path: "huge.txt", start_line: 1, line_count: 100 }),
+    ).rejects.toThrow(/exceeds.*cap/);
+  });
+});

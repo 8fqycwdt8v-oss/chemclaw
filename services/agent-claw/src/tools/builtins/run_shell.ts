@@ -79,6 +79,18 @@ export function buildRunShellTool(opts: RunShellOptions) {
             "Operators must configure an allowlist before this tool can run.",
         );
       }
+      // Reject anything that looks like a path so the allowlist can't be
+      // bypassed by passing `/usr/bin/ls` when only `ls` is allowlisted.
+      // Allowlist entries MUST be bare executable names; the spawned
+      // command resolves through PATH (which we control via the env
+      // strip below).
+      if (input.command.includes("/") || input.command.includes("\\")) {
+        throw new Error(
+          `command '${input.command}' contains a path separator; ` +
+            `AGENT_SHELL_ALLOWLIST entries must be bare executable names ` +
+            `(e.g. 'ls', not '/usr/bin/ls'). PATH resolution handles the rest.`,
+        );
+      }
       if (!allowSet.has(input.command)) {
         throw new Error(
           `command '${input.command}' is not in AGENT_SHELL_ALLOWLIST ` +
@@ -100,7 +112,14 @@ export function buildRunShellTool(opts: RunShellOptions) {
             // doesn't inherit credentials. Operators who need extra env
             // should fork this tool or configure the executable itself.
             PATH: process.env.PATH ?? "/usr/local/bin:/usr/bin:/bin",
-            HOME: cwdAbs,
+            // Inherit HOME so tools that need user config (git → ~/.gitconfig,
+            // npm → ~/.npmrc, ssh → ~/.ssh) keep working. Earlier we set
+            // HOME=cwdAbs as belt-and-suspenders sandboxing, but that
+            // silently broke common allowlist candidates (git, npm, gh)
+            // with no error message. The trust boundary is the allowlist
+            // + path-escape check + stripped env; HOME=cwd doesn't add
+            // meaningful protection on top of those.
+            HOME: process.env.HOME ?? cwdAbs,
             LANG: "C.UTF-8",
           },
           stdio: ["pipe", "pipe", "pipe"],

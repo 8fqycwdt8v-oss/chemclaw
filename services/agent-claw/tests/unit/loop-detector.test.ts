@@ -39,6 +39,36 @@ describe("loop-detector — hashToolInput", () => {
     const b = { xs: [1, 2, { k: "v" }] };
     expect(hashToolInput(a)).toBe(hashToolInput(b));
   });
+
+  it("handles Date stably (ISO normalization)", () => {
+    const d = new Date("2026-05-09T12:00:00Z");
+    expect(hashToolInput({ t: d })).toBe(hashToolInput({ t: d }));
+    // Same instant via different constructor call → same hash.
+    expect(hashToolInput({ t: new Date("2026-05-09T12:00:00Z") })).toBe(
+      hashToolInput({ t: new Date(Date.UTC(2026, 4, 9, 12, 0, 0)) }),
+    );
+  });
+
+  it("handles BigInt without throwing", () => {
+    expect(hashToolInput({ n: 1n })).toBe(hashToolInput({ n: 1n }));
+    expect(hashToolInput({ n: 1n })).not.toBe(hashToolInput({ n: 2n }));
+  });
+
+  it("handles circular references without throwing", () => {
+    const a: Record<string, unknown> = { name: "loop" };
+    a.self = a;
+    expect(() => hashToolInput(a)).not.toThrow();
+    // Two separate objects with the same shape + cycle should hash equal.
+    const b: Record<string, unknown> = { name: "loop" };
+    b.self = b;
+    expect(hashToolInput(a)).toBe(hashToolInput(b));
+  });
+
+  it("handles undefined + null without throwing", () => {
+    expect(() => hashToolInput(undefined)).not.toThrow();
+    expect(() => hashToolInput(null)).not.toThrow();
+    expect(() => hashToolInput({ x: undefined })).not.toThrow();
+  });
 });
 
 describe("loop-detector — observe-only at STUCK_THRESHOLD", () => {

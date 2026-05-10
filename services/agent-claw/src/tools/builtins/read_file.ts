@@ -51,9 +51,22 @@ export function buildReadFileTool(root: string) {
       if (!st.isFile()) {
         throw new Error(`path '${input.path}' is not a regular file`);
       }
-      if (st.size > MAX_BYTES && !input.start_line && !input.line_count) {
+      // Hard size guard: a 10 GB single-line file would otherwise be loaded
+      // into memory by readFile() before we ever check MAX_BYTES on the
+      // assembled string. Reject up front whether or not the caller asked
+      // for slicing — slicing reduces what we RETURN, not what we READ.
+      // For sliced reads we permit up to 8× MAX_BYTES so that callers can
+      // address late chunks of a file that's still small enough to
+      // realistically fit in memory; anything larger needs a streaming
+      // tool we don't ship yet.
+      const sliced = input.start_line !== undefined || input.line_count !== undefined;
+      const sizeCap = sliced ? MAX_BYTES * 8 : MAX_BYTES;
+      if (st.size > sizeCap) {
         throw new Error(
-          `file size ${st.size} exceeds 1 MiB cap; pass start_line + line_count to read a slice`,
+          `file size ${st.size} exceeds the ${sizeCap}-byte cap` +
+            (sliced
+              ? " (sliced reads still bound the file size to 8 MiB; use a streaming tool)"
+              : "; pass start_line + line_count to read a slice"),
         );
       }
       const fullContent = await readFile(abs, { encoding: "utf8" });

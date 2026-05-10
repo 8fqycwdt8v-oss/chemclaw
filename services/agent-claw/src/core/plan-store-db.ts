@@ -195,6 +195,12 @@ export async function insertPlanStepAt(
   step: Omit<PlanStep, "step_number">,
 ): Promise<DbPlan | null> {
   return await withUserContext(pool, userEntraId, async (client) => {
+    // SELECT FOR UPDATE inside the withUserContext transaction so two
+    // parallel insert/remove calls on the same plan_id serialise instead
+    // of read-modify-writing on stale snapshots. Without this, parallel
+    // manage_plan calls (chat tab + reanimator both resuming the same
+    // session) silently overwrite each other's edits — the second commit
+    // wins and the first's mutation is lost.
     const r0 = await client.query<PlanRow>(
       `SELECT id::text AS id,
               session_id::text AS session_id,
@@ -205,7 +211,8 @@ export async function insertPlanStepAt(
               created_at,
               updated_at
          FROM agent_plans
-        WHERE id = $1::uuid`,
+        WHERE id = $1::uuid
+        FOR UPDATE`,
       [planId],
     );
     const row0 = r0.rows[0];
@@ -244,6 +251,12 @@ export async function removePlanStepAt(
   removeAt: number,
 ): Promise<DbPlan | null> {
   return await withUserContext(pool, userEntraId, async (client) => {
+    // SELECT FOR UPDATE inside the withUserContext transaction so two
+    // parallel insert/remove calls on the same plan_id serialise instead
+    // of read-modify-writing on stale snapshots. Without this, parallel
+    // manage_plan calls (chat tab + reanimator both resuming the same
+    // session) silently overwrite each other's edits — the second commit
+    // wins and the first's mutation is lost.
     const r0 = await client.query<PlanRow>(
       `SELECT id::text AS id,
               session_id::text AS session_id,
@@ -254,7 +267,8 @@ export async function removePlanStepAt(
               created_at,
               updated_at
          FROM agent_plans
-        WHERE id = $1::uuid`,
+        WHERE id = $1::uuid
+        FOR UPDATE`,
       [planId],
     );
     const row0 = r0.rows[0];

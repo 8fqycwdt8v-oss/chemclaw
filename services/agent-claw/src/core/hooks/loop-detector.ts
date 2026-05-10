@@ -64,20 +64,68 @@ export interface LoopWarning {
  * we sort keys recursively so `{a:1,b:2}` and `{b:2,a:1}` collide. Returns
  * a 16-char hex prefix of sha-256 — collision-resistant enough for a per-
  * session bounded log without bloating the scratchpad row.
+ *
+ * Defensive against non-JSON-safe inputs that would either crash
+ * JSON.stringify (circular refs) or hash unstably (Date — `new Date()`
+ * embedded in args produces a different ISO string per call). We pre-
+ * normalize the common offenders so the hash is actually a stable
+ * fingerprint of "the same tool call." Anything we can't normalize falls
+ * through to a typeof-based placeholder rather than throwing.
  */
 export function hashToolInput(input: unknown): string {
-  const normalized = _normalize(input);
-  const json = JSON.stringify(normalized);
+  const normalized = _normalize(input, new WeakSet());
+  // JSON.stringify(undefined) returns undefined (not the string), and
+  // JSON.stringify(() => {}) also returns undefined — but @types/node's
+  // signature claims string. Cast through unknown so the runtime-true
+  // undefined coalesces; eslint's `no-unnecessary-condition` would
+  // otherwise reject the guard against a "type-impossible" undefined.
+  let json: string;
+  try {
+    const raw = JSON.stringify(normalized) as unknown;
+    json = typeof raw === "string" ? raw : "__undefined";
+  } catch {
+    json = `__unhashable:${typeof normalized}`;
+  }
   return createHash("sha256").update(json).digest("hex").slice(0, 16);
 }
 
-function _normalize(v: unknown): unknown {
-  if (v === null || typeof v !== "object") return v;
-  if (Array.isArray(v)) return v.map(_normalize);
+function _normalize(v: unknown, seen: WeakSet<object>): unknown {
+  if (v === null || v === undefined) return v;
+  const t = typeof v;
+  if (t === "string" || t === "number" || t === "boolean") return v;
+  if (t === "bigint") return `__bigint:${(v as bigint).toString()}`;
+  if (t === "function" || t === "symbol") return `__${t}`;
+  if (v instanceof Date) return `__date:${v.toISOString()}`;
+  // Detect cycles BEFORE recursing. v is now an object value; the WeakSet
+  // tracks identities so a reused subtree doesn't recurse forever.
+  if (seen.has(v)) return "__cycle";
+  seen.add(v);
+  if (Array.isArray(v)) return v.map((x) => _normalize(x, seen));
+  if (v instanceof Map) {
+    const entries: [string, unknown][] = [];
+    for (const [k, val] of v.entries()) {
+      entries.push([String(k), _normalize(val, seen)]);
+    }
+    entries.sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
+    return { __map: entries };
+  }
+  if (v instanceof Set) {
+    const items = Array.from(v).map((x) => _normalize(x, seen));
+    // Stringify each element for sort comparison — we don't need
+    // semantic ordering, just a deterministic one. Cast through unknown
+    // so the runtime-undefined return value of JSON.stringify on
+    // unrepresentable elements coalesces without tripping eslint.
+    items.sort((a, b) => {
+      const sa = (JSON.stringify(a) as unknown) ?? "";
+      const sb = (JSON.stringify(b) as unknown) ?? "";
+      return sa < sb ? -1 : sa > sb ? 1 : 0;
+    });
+    return { __set: items };
+  }
   const sorted: Record<string, unknown> = {};
-  const obj = v as Record<string, unknown>;
-  for (const k of Object.keys(obj).sort()) {
-    sorted[k] = _normalize(obj[k]);
+  const record = v as Record<string, unknown>;
+  for (const k of Object.keys(record).sort()) {
+    sorted[k] = _normalize(record[k], seen);
   }
   return sorted;
 }
