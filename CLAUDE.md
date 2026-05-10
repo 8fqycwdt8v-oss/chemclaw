@@ -227,7 +227,7 @@ Never `console.log` / `print` in service code. Both layers structure-log; never 
   const log = getLogger("ToolRegistry");
   log.warn({ toolId, reason }, "tool disabled");
   ```
-  Pino; level from `AGENT_LOG_LEVEL`; redacts `authorization` / `cookie` / `detail` only. **`err.message` and `err.stack` are NOT redacted today**; Postgres + MCP errors regularly carry SMILES + compound codes — scrub user-derived content explicitly. Tracked in 2026-05-03 deep-review backlog (cluster 6).
+  Pino; level from `AGENT_LOG_LEVEL`; path-redacts `authorization` / `cookie` / `detail` / `*.password` / `*.token`. The custom `err` / `error` / `err_msg` serializers in `services/agent-claw/src/observability/logger.ts` route `err.message`, `err.stack`, and the cause chain through `scrub()` (the same length-bounded regex pipeline as the egress redactor) so SMILES / compound codes / NCE-IDs embedded in driver error strings are masked before formatting. Cause-chain walk capped at depth 5 with a WeakSet cycle guard.
 - **Python** — `configure_logging` from `services.mcp_tools.common.logging`:
   ```py
   from services.mcp_tools.common.logging import configure_logging
@@ -254,6 +254,7 @@ DB-side audit: `error_events` (via `record_error_event`, `chemclaw_app` / `chemc
 - `docs/runbooks/post-v1.0.0-hardening.md`
 - `docs/runbooks/redaction-pattern-management.md`
 - `docs/runbooks/rotate-mcp-auth-key.md`
+- `docs/runbooks/synthesis-campaign-lifecycle.md`
 
 Read the relevant runbook BEFORE filing a feature that asks an admin to do anything new.
 
@@ -301,10 +302,10 @@ To replay: `DELETE FROM projection_acks WHERE projector_name='<name>'` and resta
 - **D**: E2B PTC sandbox; `run_program`; Paperclip-lite; Langfuse OTel; `/feedback` → DB; multi-model routing.
 - **D.5**: tool forging (`forge_tool`, `induce_forged_tool_from_trace`, `add_forged_tool_test`); `forged_tool_validation_runs`; weak-from-strong transfer; scope promotion.
 - **E**: DSPy GEPA nightly optimizer; golden + held-out promotion gate; skill promotion loop; shadow serving (`shadow_until`); `/eval` slash verb.
-- **F.1**: chemistry MCPs on `chemistry` profile: askcos (8007), aizynth (8008), chemprop (8009), xtb (8010), synthegy-mech (8011), sirius (8012). admetlab removed. **synthegy-mech**: LLM-guided mechanism elucidation via A* over arrow-pushing primitives (Bran et al., *Matter* 2026, [10.1016/j.matt.2026.102812](https://doi.org/10.1016/j.matt.2026.102812)); vendored from `github.com/schwallergroup/steer` (MIT). Ionic only — radical/pericyclic surface a `warnings` entry. LLM traffic via central LiteLLM. Server-side wall-clock 270 s (30 s under agent-side `TIMEOUT_SYNTHEGY_MECH_MS = 300_000`). xTB intermediate-energy validation opt-in via `validate_energies=true`.
+- **F.1**: chemistry MCPs on `chemistry` profile: askcos (8007), aizynth (8008), chemprop (8009), xtb (8010), synthegy-mech (8011), sirius (8012). admetlab removed. **synthegy-mech**: LLM-guided mechanism elucidation via A* over arrow-pushing primitives (Bran et al., *Matter* 2026, [10.1016/j.matt.2026.102812](https://doi.org/10.1016/j.matt.2026.102812)); vendored from `github.com/schwallergroup/steer` (MIT). Ionic only — radical/pericyclic surface a `warnings` entry. LLM traffic via central LiteLLM. Server-side wall-clock 270 s (30 s under agent-side `TIMEOUT_SYNTHEGY_MECH_MS = 300_000`). xTB intermediate-energy validation opt-in via `validate_energies=true`. **Caveats**: g-xTB returns 501 — the standalone `gxtb` binary is not bundled in the image (intentional; previously the path silently fell back to GFN2 and poisoned the cache). REINVENT integration in `mcp_genchem` (`/reinvent_run`) likewise returns 501 until the library is bundled; use `scaffold_decorate` / `bioisostere_replace` / `fragment_grow` for now.
 - **F.2**: source-system MCPs replacing the deleted vendor adapters.
   - **`mcp_eln_local`** (port 8013, profile `testbed`): local Postgres-backed mock ELN. `mock_eln` schema seeded with ≥ 2000 deterministic experiments across 4 projects, 10 chemistry families, 10 OFAT campaigns. Five agent-claw builtins including OFAT-aware `query_eln_canonical_reactions` (collapses 200-row OFAT campaigns into one canonical row + `ofat_count`). Plan: `docs/plans/eln-mock-and-logs-sciy.md`.
-  - **`mcp_logs_sciy`** (port 8016, profile `sources`): LOGS-by-SciY adapter (HPLC/NMR/MS SDMS). Backends: `fake-postgres` (default; `fake_logs` schema, ~3000 datasets cross-linked to `mock_eln.samples`) and `real` (stub, gated on tenant access). Three builtins.
+  - **`mcp_logs_sciy`** (port 8016, profile `sources`): LOGS-by-SciY adapter (HPLC/NMR/MS SDMS). Backends: `fake-postgres` (default; `fake_logs` schema, ~3000 datasets cross-linked to `mock_eln.samples`) and `real` (stub, gated on tenant access — every endpoint raises `NotImplementedError` until a real LOGS tenant lands per plan §11 Q1). Three builtins.
   - The `source-cache` post-tool hook + `kg_source_cache` projector pick both up via the unchanged regex `/^(query|fetch)_(eln|lims|instrument)_/`.
   - `eln_json_importer` retired from live path; preserved as `services/ingestion/eln_json_importer.legacy/` for one-shot bulk migrations.
   - Helm chart: `infra/helm/` with profile flags. `services/agent/` deleted; Streamlit `AGENT_BASE_URL` defaults to :3101. ADRs: `docs/adr/004-harness-engineering.md`, `005-data-layer-revision.md`. Runbook: `docs/runbooks/harness-rollback.md`.
@@ -313,14 +314,24 @@ To replay: `DELETE FROM projection_acks WHERE projector_name='<name>'` and resta
 
 ## Test counts (current branch)
 
+Order-of-magnitude sanity check, not a contract. Regenerate with
+`make test-counts` (which counts `it()` / `test()` calls and `def test_`
+patterns; the actual `npm test` / `pytest` "passed" counts run a bit
+higher because each parametrised case counts as one).
+
 ```
-services/agent-claw  npm test           → 1118 passed (153 files)
+services/agent-claw  npm test           → 1343 it/test calls across 183 files (1354 passed | 12 skipped)
 services/agent-claw  npx tsc --noEmit   → ok
-services/paperclip   npm test           → 23 passed
-.venv/bin/pytest services/mcp_tools/common/tests/ -q  → 87 passed
-.venv/bin/pytest services/queue/tests services/workflow_engine/tests services/paperclip/tests -q  → 18 passed
+services/paperclip   npm test           → 43 it/test calls across 2 files
+.venv/bin/pytest services/mcp_tools/common/tests/ -q  → 91 passed
+.venv/bin/pytest services/queue/tests services/workflow_engine/tests services/paperclip/tests -q  → 60 passed
 npm audit (root)                         → 0 vulnerabilities
 ```
+
+`schema_version` is recorded by the `make db.init` loop (one row per
+applied init file, `ON CONFLICT DO NOTHING`); a handful of older init
+files also INSERT a row inside their body, which is redundant but
+harmless. The Makefile loop is the source of truth.
 
 The integration trio (`etag-conflict`, `chained-execution`, `reanimator-roundtrip`) needs Docker — the testcontainer harness in `services/agent-claw/tests/helpers/postgres-container.ts` self-skips when Docker is unavailable.
 

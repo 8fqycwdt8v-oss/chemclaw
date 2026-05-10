@@ -31,7 +31,8 @@
 --      replays (no projector_name-leading index), research_reports.agent_trace_id,
 --      compounds.{chebi_id,pubchem_cid}, agent_sessions composite for purger,
 --      paperclip_state.session_id, artifacts composite, mock_eln.entries
---      composite, corrections.{applied,user_entra_id}.
+--      composite. (corrections.{applied,user_entra_id} was here; table
+--      dropped 2026-05-09 — see 52_drop_corrections.sql.)
 --
 --   6. Type / range bugs. paperclip_state.{est_tokens,actual_tokens} INT
 --      caps at ~2.1B tokens — too tight for long sessions. Promote to BIGINT.
@@ -246,12 +247,7 @@ BEGIN
     CREATE INDEX IF NOT EXISTS idx_artifacts_owner_maturity
       ON artifacts (owner_entra_id, maturity);
   END IF;
-  IF to_regclass('public.corrections') IS NOT NULL THEN
-    CREATE INDEX IF NOT EXISTS idx_corrections_unapplied
-      ON corrections (created_at DESC) WHERE applied = false;
-    CREATE INDEX IF NOT EXISTS idx_corrections_user
-      ON corrections (user_entra_id);
-  END IF;
+  -- corrections indexes removed 2026-05-09 with the table itself.
   IF to_regclass('mock_eln.entries') IS NOT NULL THEN
     CREATE INDEX IF NOT EXISTS idx_mock_eln_entries_project_status_modified
       ON mock_eln.entries (project_id, status, modified_at DESC);
