@@ -116,7 +116,7 @@ async def test_refutation_cascades_invalidation_to_cites_edges_and_events() -> N
     settings.postgres_dsn = "postgresql://stub"
     proj = KgHypothesesProjector.__new__(KgHypothesesProjector)
     proj.settings = settings  # type: ignore[attr-defined]
-    proj._driver = _FakeDriver(fake_session)  # type: ignore[attr-defined]
+    proj._neo4j = _FakeDriver(fake_session)  # type: ignore[attr-defined]
 
     hid = str(uuid.uuid4())
     pg_status = _pg_status_connection("refuted")
@@ -162,7 +162,7 @@ async def test_replay_emits_no_new_events_when_cascade_is_empty() -> None:
     settings.postgres_dsn = "postgresql://stub"
     proj = KgHypothesesProjector.__new__(KgHypothesesProjector)
     proj.settings = settings  # type: ignore[attr-defined]
-    proj._driver = _FakeDriver(fake_session)  # type: ignore[attr-defined]
+    proj._neo4j = _FakeDriver(fake_session)  # type: ignore[attr-defined]
 
     hid = str(uuid.uuid4())
     pg_status = _pg_status_connection("refuted")
