@@ -28,8 +28,10 @@ ALTER TABLE skill_library
     CHECK (evidence_count >= 0);
 
 -- The number of distinct projects must never exceed evidence_count.
--- DEFERRABLE so the helper can update both columns inside one statement
--- without ordering surprises.
+-- CHECK constraints are evaluated at end-of-statement in PostgreSQL, so
+-- the helper's single-statement UPDATE that touches both columns at once
+-- never trips the constraint mid-update. (CHECK constraints can't be
+-- DEFERRABLE in PG; only UNIQUE / FK / EXCLUDE can.)
 ALTER TABLE skill_library
   DROP CONSTRAINT IF EXISTS skill_library_validation_consistency;
 ALTER TABLE skill_library
