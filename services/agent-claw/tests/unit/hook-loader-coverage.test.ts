@@ -35,13 +35,13 @@ describe("hook loader coverage", () => {
     expect(skipsForMissingRegistrar).toEqual([]);
   });
 
-  it("registers all 21 known hook implementations at the right points", async () => {
+  it("registers all 22 known hook implementations at the right points", async () => {
     const lc = new Lifecycle();
     await loadHooks(lc, mockHookDeps(), hooksDir);
     // Exact counts — `>=` would hide accidental double-registration.
     expect(lc.count("pre_turn")).toBe(2); // init-scratch, apply-skills
     expect(lc.count("pre_tool")).toBe(2); // budget-guard, foundation-citation-guard
-    expect(lc.count("post_tool")).toBe(3); // tag-maturity, anti-fabrication, source-cache
+    expect(lc.count("post_tool")).toBe(4); // tag-maturity, anti-fabrication, fact-id-consistency-guard, source-cache
     expect(lc.count("pre_compact")).toBe(1); // compact-window
     expect(lc.count("post_turn")).toBe(1); // redact-secrets
     expect(lc.count("session_start")).toBe(1); // session-events (Phase 4B)
@@ -78,7 +78,7 @@ describe("hook loader coverage", () => {
         "task_completed",
       ] as const
     ).reduce((sum, p) => sum + lc.count(p), 0);
-    expect(totalRegistered).toBe(21);
+    expect(totalRegistered).toBe(22);
   });
 
   it("each YAML file's `name` field is non-empty", async () => {

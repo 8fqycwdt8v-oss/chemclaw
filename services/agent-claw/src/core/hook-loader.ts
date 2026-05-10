@@ -41,6 +41,7 @@ import { registerTagMaturityHook } from "./hooks/tag-maturity.js";
 import { registerBudgetGuardHook } from "./hooks/budget-guard.js";
 import { registerInitScratchHook } from "./hooks/init-scratch.js";
 import { registerAntiFabricationHook } from "./hooks/anti-fabrication.js";
+import { registerFactIdConsistencyGuardHook } from "./hooks/fact-id-consistency-guard.js";
 import { registerFoundationCitationGuardHook } from "./hooks/foundation-citation-guard.js";
 import { registerSourceCacheHook } from "./hooks/source-cache.js";
 import { registerCompactWindowHook } from "./hooks/compact-window.js";
@@ -139,6 +140,7 @@ const BUILTIN_REGISTRARS = new Map<string, BuiltinRegistrar>([
   ["budget-guard", (lc) => { registerBudgetGuardHook(lc); }],
   ["init-scratch", (lc) => { registerInitScratchHook(lc); }],
   ["anti-fabrication", (lc) => { registerAntiFabricationHook(lc); }],
+  ["fact-id-consistency-guard", (lc) => { registerFactIdConsistencyGuardHook(lc); }],
   ["foundation-citation-guard", (lc) => { registerFoundationCitationGuardHook(lc); }],
   ["source-cache", (lc, deps) => { registerSourceCacheHook(lc, deps.pool); }],
   [

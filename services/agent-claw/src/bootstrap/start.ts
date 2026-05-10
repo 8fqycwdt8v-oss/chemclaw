@@ -30,11 +30,12 @@ import {
 // 20 = 9 pre-rebuild hooks + session-events (Phase 4B) + permission (Phase 6)
 // + 9 lifecycle-telemetry stubs (cluster F: session_end, user_prompt_submit,
 // post_tool_failure, post_tool_batch, subagent_start, subagent_stop,
-// task_created, task_completed, post_compact).
+// task_created, task_completed, post_compact)
+// + 1 fact-id consistency guard (review 2026-05-10 §2.6).
 // Bump every time BUILTIN_REGISTRARS gains an entry so a silent failure to
 // load a new hook trips the startup gate instead of quietly downgrading
 // the safety net.
-const MIN_EXPECTED_HOOKS = 21;
+const MIN_EXPECTED_HOOKS = 22;
 
 export async function startServer(
   app: FastifyInstance,
