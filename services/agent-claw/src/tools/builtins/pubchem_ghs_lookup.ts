@@ -215,7 +215,9 @@ export function buildPubchemGhsLookupTool(mcpRdkitUrl: string) {
       }
 
       const ctl = new AbortController();
-      const timer = setTimeout(() => ctl.abort(), TIMEOUT_MS);
+      const timer = setTimeout(() => {
+        ctl.abort();
+      }, TIMEOUT_MS);
       try {
         const cid = await inchikeyToCid(inchikey, ctl.signal);
         if (cid === null) {

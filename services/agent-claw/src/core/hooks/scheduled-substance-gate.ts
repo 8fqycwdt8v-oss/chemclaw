@@ -51,11 +51,14 @@ const log = getLogger("scheduled-substance-gate");
 const DEFAULT_CATALOG: CompiledCatalog = compileCatalog();
 
 // Recursion guard — input objects are typically <10 fields deep but the
-// harness can pass arbitrary structured args (workflow_run definitions,
-// design-plate matrices, etc.). Cap depth + visited count to avoid
-// pathological cycles. Real cycles can't happen because tool inputs are
-// JSON-serialisable, but defensive caps still apply.
-const MAX_DEPTH = 8;
+// harness can pass arbitrary structured args (workflow_run definitions
+// nest step.tool.input several layers, design-plate matrices, synthesis-
+// campaign DAGs, etc.). 16 covers every documented tool-input shape
+// observed in the v1.0.0-claw catalog with headroom; bump if a real
+// false-negative surfaces. Cap visited string count to avoid pathological
+// cycles. Real cycles can't happen because tool inputs are JSON-
+// serialisable, but defensive caps still apply.
+const MAX_DEPTH = 16;
 const MAX_STRINGS = 5_000;
 
 interface ScanHit {

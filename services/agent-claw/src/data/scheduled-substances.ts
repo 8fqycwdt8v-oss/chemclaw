@@ -68,24 +68,32 @@ export const SCHEDULED_SUBSTANCES: readonly ScheduledSubstanceEntry[] = [
   // --- CWC Schedule 1 — chemical warfare agents (no legitimate pharma use) ---
   {
     name: "Sarin (GB)",
-    // PubChem CID 7871; OPCW Schedule 1.A.1
-    canonical_smiles: ["CC(C)OP(C)(=O)F"],
+    // PubChem CID 7871; OPCW Schedule 1.A.1.
+    // Two SMILES variants reflect the two common phosphorus-branch orderings
+    // an LLM trained on PubChem vs RDKit-canonicalised data may emit.
+    canonical_smiles: ["CC(C)OP(C)(=O)F", "CC(C)OP(=O)(C)F"],
     inchikey: ["DYAHQFWOVKZOOW-UHFFFAOYSA-N"],
     lists: ["CWC_SCHEDULE_1"],
     severity: "deny",
   },
   {
     name: "VX",
-    // PubChem CID 39793; OPCW Schedule 1.A.3
-    canonical_smiles: ["CCOP(C)(=O)SCCN(C(C)C)C(C)C"],
+    // PubChem CID 39793; OPCW Schedule 1.A.3.
+    canonical_smiles: [
+      "CCOP(C)(=O)SCCN(C(C)C)C(C)C",
+      "CC(C)N(C(C)C)CCSP(=O)(C)OCC",
+    ],
     inchikey: ["LBUJPTNKIBCYBY-UHFFFAOYSA-N"],
     lists: ["CWC_SCHEDULE_1"],
     severity: "deny",
   },
   {
     name: "Soman (GD)",
-    // PubChem CID 7548; OPCW Schedule 1.A.1
-    canonical_smiles: ["CC(C(C)(C)C)OP(C)(=O)F"],
+    // PubChem CID 7548; OPCW Schedule 1.A.1.
+    canonical_smiles: [
+      "CC(C(C)(C)C)OP(C)(=O)F",
+      "CC(C(C)(C)C)OP(=O)(C)F",
+    ],
     inchikey: ["LBHIOVVIQHSOQN-UHFFFAOYSA-N"],
     lists: ["CWC_SCHEDULE_1"],
     severity: "deny",
@@ -211,9 +219,15 @@ export function normaliseSmiles(s: string): string {
   return s.replace(/\s+/g, "");
 }
 
-/** True iff the string looks like a Standard InChIKey (14-10-1). */
+/**
+ * True iff the string looks like a Standard InChIKey (14-10-1) — case-
+ * insensitive on input so that an LLM emitting the key in lowercase or
+ * mixed case (which happens in free-text emission, even though the spec
+ * mandates upper) still surfaces. The lookup itself uppercases before
+ * indexing, so a case-insensitive shape check is the necessary first gate.
+ */
 export function looksLikeInchiKey(s: string): boolean {
-  return /^[A-Z]{14}-[A-Z]{10}-[A-Z]$/.test(s);
+  return /^[A-Z]{14}-[A-Z]{10}-[A-Z]$/i.test(s);
 }
 
 export function compileCatalog(

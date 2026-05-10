@@ -52,12 +52,15 @@ describe("scheduled-substances catalog", () => {
     expect(normaliseSmiles("c1ccccc1")).toBe("c1ccccc1");
   });
 
-  it("looksLikeInchiKey accepts canonical 14-10-1 form, rejects others", () => {
+  it("looksLikeInchiKey accepts canonical 14-10-1 form (case-insensitive)", () => {
     expect(looksLikeInchiKey("DYAHQFWOVKZOOW-UHFFFAOYSA-N")).toBe(true);
+    // Spec mandates upper-case but free-text emission may not respect it,
+    // so the shape check is case-insensitive (lookup itself uppercases).
+    expect(looksLikeInchiKey("dyahqfwovkzoow-uhfffaoysa-n")).toBe(true);
     expect(looksLikeInchiKey("not-an-inchikey")).toBe(false);
     expect(looksLikeInchiKey("CC(C)OP(C)(=O)F")).toBe(false);
-    // Lowercase / wrong-shape variants are rejected (regex anchored).
-    expect(looksLikeInchiKey("dyahqfwovkzoow-uhffaoysa-n")).toBe(false);
+    // Wrong shape (segment lengths) still rejected.
+    expect(looksLikeInchiKey("ABCDEF-GHIJK-N")).toBe(false);
   });
 });
 
@@ -102,6 +105,18 @@ describe("scanInputForScheduled", () => {
     expect(hit!.entry.severity).toBe("deny");
   });
 
+  it("matches a lowercase InChIKey (free-text emission case)", () => {
+    // The shape check is case-insensitive; the lookup uppercases. An LLM
+    // emitting the InChIKey in lowercase from training-corpus prose must
+    // still trigger the gate.
+    const hit = scanInputForScheduled({
+      compound: "lbujptnkibcyby-uhfffaoysa-n",
+    });
+    expect(hit).not.toBeNull();
+    expect(hit!.entry.name).toBe("VX");
+    expect(hit!.via).toBe("inchikey");
+  });
+
   it("normalises whitespace before matching", () => {
     // Sulfur mustard with an embedded tab.
     const hit = scanInputForScheduled({ smiles: " ClCCSCCCl\t" });
@@ -144,7 +159,10 @@ describe("scanInputForScheduled", () => {
   it("respects MAX_DEPTH so a deeply-nested non-match returns null", () => {
     // 50 levels of nesting; the gate caps at MAX_DEPTH=8 and stops
     // descending. No catalog entry exists at depth 50, so result is null.
-    type Nested = { x?: Nested; smiles?: string };
+    interface Nested {
+      x?: Nested;
+      smiles?: string;
+    }
     let nested: Nested = { smiles: "CC(=O)O" };
     for (let i = 0; i < 50; i++) {
       nested = { x: nested };
