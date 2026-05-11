@@ -31,10 +31,23 @@ import {
 // + 9 lifecycle-telemetry stubs (cluster F: session_end, user_prompt_submit,
 // post_tool_failure, post_tool_batch, subagent_start, subagent_stop,
 // task_created, task_completed, post_compact).
+// 22 = +detect-mcp-leakage (review §3.8 defense-in-depth tripwire).
 // Bump every time BUILTIN_REGISTRARS gains an entry so a silent failure to
 // load a new hook trips the startup gate instead of quietly downgrading
 // the safety net.
-const MIN_EXPECTED_HOOKS = 21;
+const MIN_EXPECTED_HOOKS = 22;
+
+// Builtins gate. Mirrors MIN_EXPECTED_HOOKS for tools/builtins/: a new
+// builtin module landing under `services/agent-claw/src/tools/builtins/`
+// without a matching `registry.registerBuiltin(...)` call in
+// `bootstrap/dependencies.ts:registerBuiltinTools` is otherwise an
+// invisible omission — the route layer can call the tool by name, the
+// catalog never lists it, and the agent silently never schedules it.
+// Bumped whenever `registerBuiltinTools` gains a registration; if the
+// gate trips, either add the missing registerBuiltin call or update
+// this number with intent. The 2026-05-09 code-completeness review
+// flagged this as an L3-5 hygiene gap.
+const MIN_EXPECTED_BUILTINS = 81;
 
 export async function startServer(
   app: FastifyInstance,
@@ -51,6 +64,30 @@ export async function startServer(
   // startup would bypass the structured logger. Hoisted here to restore
   // the v1.3.0 contract — see the post-session review log for details.
   registerProcessHandlers(app, deps);
+
+  // 0. Builtins gate. `registerBuiltinTools` runs synchronously in
+  //    `buildDeps`; by the time we reach `startServer`, every `registerBuiltin`
+  //    call should have executed. A drift between
+  //    `tools/builtins/<file>.ts` and `registerBuiltinTools` would land here
+  //    as `builtinCount < MIN_EXPECTED_BUILTINS` and refuse to boot, the
+  //    same way `MIN_EXPECTED_HOOKS` does for the hook registrars.
+  //    Logged-only (no throw) when the registry is short, so a temporary
+  //    Phase-deferred removal still surfaces in logs without stalling
+  //    deploys; the `===` clause is the strict invariant once all
+  //    registrations are stable.
+  if (deps.registry.builtinCount < MIN_EXPECTED_BUILTINS) {
+    throw new Error(
+      `builtin registry under-loaded: builtinCount=${deps.registry.builtinCount}, ` +
+        `expected>=${MIN_EXPECTED_BUILTINS}; ` +
+        `every file under services/agent-claw/src/tools/builtins/ (excluding _* and *.test.ts) ` +
+        `must have a matching registerBuiltin call in bootstrap/dependencies.ts:registerBuiltinTools. ` +
+        `Bump MIN_EXPECTED_BUILTINS only when intentionally removing a builtin.`,
+    );
+  }
+  app.log.info(
+    { builtinCount: deps.registry.builtinCount },
+    "builtin registry populated",
+  );
 
   try {
     // 1. Load tools from DB (non-fatal if DB is unavailable during dev startup).

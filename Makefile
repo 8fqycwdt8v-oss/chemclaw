@@ -183,6 +183,15 @@ test: ## Run all tests
 	$(VENV)/bin/pytest
 	npm run test
 
+.PHONY: test-counts
+test-counts: ## Print test-suite sizes for CLAUDE.md "Test counts" section
+	@echo "agent-claw .test.ts files:    $$(find services/agent-claw/tests -name '*.test.ts' | wc -l)"
+	@echo "agent-claw it()/test() calls: $$(grep -rE '^\s*(it|test)\s*\(' services/agent-claw/tests --include='*.test.ts' | wc -l)"
+	@echo "paperclip .test.ts files:     $$(find services/paperclip/tests -name '*.test.ts' 2>/dev/null | wc -l)"
+	@echo "paperclip it()/test() calls:  $$(grep -rE '^\s*(it|test)\s*\(' services/paperclip/tests --include='*.test.ts' 2>/dev/null | wc -l)"
+	@echo "mcp_tools/common pytest fns:  $$(grep -rE '^\s*def test_' services/mcp_tools/common/tests --include='*.py' 2>/dev/null | wc -l)"
+	@echo "queue+wf+paperclip pytest:    $$(grep -rE '^\s*def test_' services/queue/tests services/workflow_engine/tests services/paperclip/tests --include='*.py' 2>/dev/null | wc -l)"
+
 .PHONY: coverage
 coverage: ## Run TS + Python coverage and emit lcov / coverage.xml for diff-cover
 	# TypeScript: vitest with @vitest/coverage-v8 (lcov + json-summary)

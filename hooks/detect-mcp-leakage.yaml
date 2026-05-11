@@ -1,0 +1,25 @@
+name: detect-mcp-leakage
+# Defense-in-depth tripwire (review §3.8). Fires post_tool for source-system
+# MCP calls (query_eln_*, fetch_eln_*, query_lims_*, fetch_lims_*,
+# query_instrument_*, fetch_instrument_*). Scans response leaves for the
+# same SMILES / email / NCE / CMP patterns the redactor cares about; on
+# match, emits a structured log line with per-pattern counts (never the
+# original token) so operators can see whether tenant content is appearing
+# in MCP responses that shouldn't surface it.
+#
+# Does NOT mutate the response — sources legitimately return the user's
+# own data and the agent needs it verbatim to reason.
+lifecycle: post_tool
+enabled: true
+# No script — uses the built-in TypeScript implementation in
+# services/agent-claw/src/core/hooks/detect-mcp-leakage.ts
+definition:
+  description: >
+    Tripwire for MCP source-system responses. Counts (does not redact)
+    occurrences of SMILES / reaction SMILES / email / NCE / CMP tokens
+    in tool outputs from query_eln_* / fetch_eln_* / query_lims_* /
+    fetch_lims_* / query_instrument_* / fetch_instrument_* and emits a
+    structured log line bound to component
+    `agent-claw.detect-mcp-leakage`. Operators tail Loki for
+    `event: "mcp_response_pattern_detected"` to detect potential
+    cross-tenant leakage from an MCP whose RLS / auth has regressed.

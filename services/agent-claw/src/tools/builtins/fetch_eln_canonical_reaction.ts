@@ -9,18 +9,12 @@ import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import {
   CanonicalReactionDetailSchema,
+  elnIdField,
   type CanonicalReactionDetail,
 } from "./_eln_shared.js";
 
 export const FetchElnCanonicalReactionIn = z.object({
-  reaction_id: z
-    .string()
-    .min(1)
-    .max(128)
-    .regex(
-      /^[A-Za-z0-9_.:-]+$/,
-      "reaction_id must match [A-Za-z0-9_-.:]+",
-    ),
+  reaction_id: elnIdField("reaction_id"),
   top_n_ofat: z.number().int().min(0).max(200).default(10),
 });
 export type FetchElnCanonicalReactionInput = z.infer<

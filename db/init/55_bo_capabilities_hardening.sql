@@ -107,11 +107,11 @@ CREATE TRIGGER trg_optimization_round_event
 INSERT INTO ingestion_event_catalog (event_type, description, emitted_by, consumed_by) VALUES
   ('optimization_round_proposed',
    'A new optimization_rounds row was inserted by recommend_next_batch (proposals only; measured_outcomes still NULL).',
-   'db/init/53_bo_capabilities_hardening.sql (trigger trg_optimization_round_event)',
+   'db/init/55_bo_capabilities_hardening.sql (trigger trg_optimization_round_event)',
    ARRAY[]::TEXT[]),
   ('optimization_results_ingested',
    'optimization_rounds.measured_outcomes was populated by ingest_campaign_results.',
-   'db/init/53_bo_capabilities_hardening.sql (trigger trg_optimization_round_event)',
+   'db/init/55_bo_capabilities_hardening.sql (trigger trg_optimization_round_event)',
    ARRAY[]::TEXT[])
 ON CONFLICT (event_type) DO NOTHING;
 
@@ -148,7 +148,7 @@ When working on an optimization_campaigns row your job is:
 $TPL$,
   jsonb_build_object(
     'description', 'Closed-loop BO planner mode used by skills/closed-loop-optimization.',
-    'reviewed_in', '53_bo_capabilities_hardening.sql'
+    'reviewed_in', '55_bo_capabilities_hardening.sql'
   ),
   '__system__',
   '__system__',
@@ -158,7 +158,7 @@ $TPL$,
 ON CONFLICT (prompt_name, version) DO NOTHING;
 
 INSERT INTO schema_version (filename, applied_at)
-  VALUES ('53_bo_capabilities_hardening.sql', NOW())
+  VALUES ('55_bo_capabilities_hardening.sql', NOW())
   ON CONFLICT (filename) DO NOTHING;
 
 COMMIT;

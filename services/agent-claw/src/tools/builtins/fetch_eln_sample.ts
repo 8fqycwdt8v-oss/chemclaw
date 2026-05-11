@@ -8,17 +8,10 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
-import { SampleSchema, type Sample } from "./_eln_shared.js";
+import { SampleSchema, elnIdField, type Sample } from "./_eln_shared.js";
 
 export const FetchElnSampleIn = z.object({
-  sample_id: z
-    .string()
-    .min(1)
-    .max(128)
-    .regex(
-      /^[A-Za-z0-9_.:-]+$/,
-      "sample_id must match [A-Za-z0-9_-.:]+",
-    ),
+  sample_id: elnIdField("sample_id"),
 });
 export type FetchElnSampleInput = z.infer<typeof FetchElnSampleIn>;
 

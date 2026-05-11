@@ -11,6 +11,7 @@ from services.optimizer.skill_promoter.promoter import (
     SkillRow,
     PromotionEvent,
     _success_rate,
+    _cross_project_gate_blocks,
     run_promotion_pass,
     PROMOTION_SUCCESS_RATE,
     DEMOTION_SUCCESS_RATE,
@@ -30,6 +31,8 @@ def _make_skill(
     kind: str = "prompt",
     name: str = "test_skill",
     version: int = 1,
+    validated_in_projects: list[str] | None = None,
+    evidence_count: int = 0,
 ) -> SkillRow:
     return SkillRow(
         id="id-1",
@@ -40,6 +43,8 @@ def _make_skill(
         success_count=success,
         total_runs=total,
         proposed_by_user_entra_id="user@example.com",
+        validated_in_projects=validated_in_projects or [],
+        evidence_count=evidence_count,
     )
 
 
@@ -49,7 +54,8 @@ def _make_mock_conn(skills: list[SkillRow], validator_status: str | None = "pass
     main_cursor = MagicMock()
     main_cursor.fetchall.return_value = [
         (s.id, s.name, s.version, s.kind, s.active,
-         s.success_count, s.total_runs, s.proposed_by_user_entra_id)
+         s.success_count, s.total_runs, s.proposed_by_user_entra_id,
+         s.validated_in_projects, s.evidence_count)
         for s in skills
     ]
 
@@ -147,6 +153,85 @@ class TestRunPromotionPass:
 
         events = run_promotion_pass(conn)
         assert len(events) == 0
+
+
+# ---------------------------------------------------------------------------
+# Track D: cross-project gate (_cross_project_gate_blocks)
+# ---------------------------------------------------------------------------
+
+
+class TestCrossProjectGate:
+    """The gate is no-op while module thresholds are 0 (the seeded defaults).
+    Tests temporarily mutate the module constants and restore on teardown so
+    other tests in the same process see the canonical defaults."""
+
+    def _patch_thresholds(self, monkeypatch, *, min_projects: int, min_evidence: int):
+        from services.optimizer.skill_promoter import promoter
+        monkeypatch.setattr(promoter, "MIN_PROJECTS_FOR_PROMOTION", min_projects)
+        monkeypatch.setattr(promoter, "MIN_EVIDENCE_COUNT", min_evidence)
+
+    def test_default_thresholds_are_no_op(self):
+        """With both thresholds at 0 (the default), every skill passes."""
+        skill = _make_skill(active=False, success=20, total=30)
+        assert _cross_project_gate_blocks(skill) is None
+
+    def test_blocks_when_project_count_below_threshold(self, monkeypatch):
+        self._patch_thresholds(monkeypatch, min_projects=3, min_evidence=0)
+        skill = _make_skill(
+            active=False, success=20, total=30,
+            validated_in_projects=["proj-1", "proj-2"],
+            evidence_count=10,
+        )
+        reason = _cross_project_gate_blocks(skill)
+        assert reason is not None
+        assert "validated_in_projects=2" in reason
+        assert "min_projects_for_promotion=3" in reason
+
+    def test_passes_when_project_count_meets_threshold(self, monkeypatch):
+        self._patch_thresholds(monkeypatch, min_projects=3, min_evidence=0)
+        skill = _make_skill(
+            active=False, success=20, total=30,
+            validated_in_projects=["proj-1", "proj-2", "proj-3"],
+            evidence_count=10,
+        )
+        assert _cross_project_gate_blocks(skill) is None
+
+    def test_blocks_when_evidence_count_below_threshold(self, monkeypatch):
+        self._patch_thresholds(monkeypatch, min_projects=0, min_evidence=50)
+        skill = _make_skill(
+            active=False, success=20, total=30,
+            validated_in_projects=["proj-1"],
+            evidence_count=10,
+        )
+        reason = _cross_project_gate_blocks(skill)
+        assert reason is not None
+        assert "evidence_count=10" in reason
+        assert "min_evidence_count=50" in reason
+
+    def test_run_promotion_pass_skips_when_xp_gate_blocks(self, monkeypatch):
+        """End-to-end: rate gate passes, but cross-project gate blocks."""
+        self._patch_thresholds(monkeypatch, min_projects=3, min_evidence=0)
+        skill = _make_skill(
+            active=False, success=25, total=30,  # rate = 0.833 >= 0.55
+            validated_in_projects=["proj-1"],
+        )
+        conn = _make_mock_conn([skill])
+
+        events = run_promotion_pass(conn)
+
+        # Promoter must NOT promote and must NOT update active.
+        assert not any(e.event_type == "promote" for e in events)
+
+    def test_run_promotion_pass_promotes_when_xp_gate_passes(self, monkeypatch):
+        self._patch_thresholds(monkeypatch, min_projects=3, min_evidence=0)
+        skill = _make_skill(
+            active=False, success=25, total=30,
+            validated_in_projects=["proj-1", "proj-2", "proj-3"],
+        )
+        conn = _make_mock_conn([skill])
+
+        events = run_promotion_pass(conn)
+        assert any(e.event_type == "promote" for e in events)
 
 
 # ---------------------------------------------------------------------------
@@ -267,6 +352,8 @@ class TestApplyConfigOverrides:
         orig_promotion = promoter.PROMOTION_SUCCESS_RATE
         orig_demotion = promoter.DEMOTION_SUCCESS_RATE
         orig_min = promoter.MIN_RUNS
+        orig_min_projects = promoter.MIN_PROJECTS_FOR_PROMOTION
+        orig_min_evidence = promoter.MIN_EVIDENCE_COUNT
 
         # Patch the registry to return tenant overrides.
         class _FakeRegistry:
@@ -278,7 +365,11 @@ class TestApplyConfigOverrides:
                     "optimizer.demotion_success_rate": 0.30,
                 }[key]
             def get_int(self, key, default, ctx=None):  # noqa: ARG002
-                return {"optimizer.min_runs": 50}[key]
+                return {
+                    "optimizer.min_runs": 50,
+                    "optimizer.min_projects_for_promotion": 3,
+                    "optimizer.min_evidence_count": 25,
+                }[key]
 
         monkeypatch.setattr(config_registry, "ConfigRegistry", _FakeRegistry)
 
@@ -287,6 +378,8 @@ class TestApplyConfigOverrides:
             assert promoter.PROMOTION_SUCCESS_RATE == 0.70
             assert promoter.DEMOTION_SUCCESS_RATE == 0.30
             assert promoter.MIN_RUNS == 50
+            assert promoter.MIN_PROJECTS_FOR_PROMOTION == 3
+            assert promoter.MIN_EVIDENCE_COUNT == 25
         finally:
             # Restore defaults so subsequent tests in the same process don't
             # see leaked state. The promoter module mutates its own globals,
@@ -294,6 +387,8 @@ class TestApplyConfigOverrides:
             promoter.PROMOTION_SUCCESS_RATE = orig_promotion
             promoter.DEMOTION_SUCCESS_RATE = orig_demotion
             promoter.MIN_RUNS = orig_min
+            promoter.MIN_PROJECTS_FOR_PROMOTION = orig_min_projects
+            promoter.MIN_EVIDENCE_COUNT = orig_min_evidence
 
     def test_threshold_defaults_dict_preserves_originals(self):
         """The _THRESHOLD_DEFAULTS dict is the canonical source for the
@@ -305,4 +400,6 @@ class TestApplyConfigOverrides:
             "PROMOTION_SUCCESS_RATE": 0.55,
             "DEMOTION_SUCCESS_RATE": 0.40,
             "MIN_RUNS": 30,
+            "MIN_PROJECTS_FOR_PROMOTION": 0,
+            "MIN_EVIDENCE_COUNT": 0,
         }

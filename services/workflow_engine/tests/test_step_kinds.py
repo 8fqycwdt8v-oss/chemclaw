@@ -1,6 +1,6 @@
-"""Unit tests for the new workflow_engine step kinds — conditional,
-parallel, and sub_agent. All run via _execute_step / direct dispatch
-without DB or agent-claw, mocking the HTTP client where needed.
+"""Unit tests for workflow_engine step kinds — conditional, parallel,
+sub_agent, and loop. All run via _execute_step / direct dispatch without
+DB or agent-claw, mocking the HTTP client where needed.
 """
 
 from __future__ import annotations
@@ -326,11 +326,167 @@ def test_sub_agent_translates_timeout_to_timeout_error():
 
 
 # ---------------------------------------------------------------------------
-# loop kind still NotImplementedError
+# loop
 # ---------------------------------------------------------------------------
 
 
-def test_loop_kind_still_raises_not_implemented():
+def test_loop_iterates_body_over_for_each_results_in_order():
     eng = _build_engine()
-    with pytest.raises(NotImplementedError, match="loop"):
+    scope = {"input": {"items": [{"x": 1}, {"x": 2}, {"x": 3}]}}
+    step = {
+        "kind": "loop",
+        "for_each": "input.items",
+        "body": {"kind": "tool_call", "tool": "noop"},
+    }
+
+    captured: list[dict[str, Any]] = []
+
+    async def fake_exec(s: dict[str, Any], iter_scope: dict[str, Any]) -> Any:
+        captured.append({"scope_loop": iter_scope.get("loop")})
+        return iter_scope["loop"]["item"]["x"] * 10
+
+    eng._exec_tool_call = fake_exec  # type: ignore[assignment]
+
+    result = asyncio.run(eng._execute_step(step, scope))
+    assert result == [10, 20, 30]
+    assert [c["scope_loop"]["index"] for c in captured] == [0, 1, 2]
+    assert [c["scope_loop"]["item"] for c in captured] == [
+        {"x": 1}, {"x": 2}, {"x": 3},
+    ]
+
+
+def test_loop_empty_list_returns_empty_results():
+    eng = _build_engine()
+    step = {
+        "kind": "loop",
+        "for_each": "input.items",
+        "body": {"kind": "tool_call", "tool": "noop"},
+    }
+    result = asyncio.run(eng._execute_step(step, {"input": {"items": []}}))
+    assert result == []
+
+
+def test_loop_jmespath_miss_returns_empty_results():
+    # JMESPath that doesn't match anything yields None; loop treats that as []
+    # rather than raising, since "no matches" is the natural query result of
+    # filter expressions (e.g. `outputs[?status=='ok']`).
+    eng = _build_engine()
+    step = {
+        "kind": "loop",
+        "for_each": "missing.thing",
+        "body": {"kind": "tool_call", "tool": "noop"},
+    }
+    result = asyncio.run(eng._execute_step(step, {}))
+    assert result == []
+
+
+def test_loop_for_each_must_be_list():
+    eng = _build_engine()
+    step = {
+        "kind": "loop",
+        "for_each": "@",
+        "body": {"kind": "tool_call", "tool": "noop"},
+    }
+    with pytest.raises(ValueError, match="must resolve to a list"):
+        asyncio.run(eng._execute_step(step, {"x": "scalar"}))
+
+
+def test_loop_requires_for_each_string():
+    eng = _build_engine()
+    with pytest.raises(ValueError, match="non-empty 'for_each'"):
         asyncio.run(eng._execute_step({"kind": "loop"}, {}))
+
+
+def test_loop_requires_body_dict():
+    eng = _build_engine()
+    step = {"kind": "loop", "for_each": "@", "body": "not-a-dict"}
+    with pytest.raises(ValueError, match="'body' step dict"):
+        asyncio.run(eng._execute_step(step, {}))
+
+
+def test_loop_invalid_mode_rejected():
+    eng = _build_engine()
+    step = {
+        "kind": "loop",
+        "for_each": "input.items",
+        "body": {"kind": "tool_call", "tool": "noop"},
+        "mode": "fanout",  # invalid
+    }
+    with pytest.raises(ValueError, match="must be 'sequential' or 'parallel'"):
+        asyncio.run(eng._execute_step(step, {"input": {"items": [1]}}))
+
+
+def test_loop_propagates_first_failure_in_sequential_mode():
+    eng = _build_engine()
+    scope = {"input": {"items": [1, 2, 3]}}
+    step = {
+        "kind": "loop",
+        "for_each": "input.items",
+        "body": {"kind": "tool_call", "tool": "noop"},
+    }
+
+    seen: list[int] = []
+
+    async def fake_exec(s: dict[str, Any], iter_scope: dict[str, Any]) -> Any:
+        idx = iter_scope["loop"]["index"]
+        seen.append(idx)
+        if idx == 1:
+            raise RuntimeError("iteration failed")
+        return idx
+
+    eng._exec_tool_call = fake_exec  # type: ignore[assignment]
+
+    with pytest.raises(RuntimeError, match="iteration failed"):
+        asyncio.run(eng._execute_step(step, scope))
+    # Sequential mode short-circuits — the third iteration must not run.
+    assert seen == [0, 1]
+
+
+def test_loop_parallel_mode_respects_max_concurrency():
+    eng = _build_engine()
+    step = {
+        "kind": "loop",
+        "for_each": "input.items",
+        "mode": "parallel",
+        "max_concurrency": 2,
+        "body": {"kind": "tool_call", "tool": "noop"},
+    }
+
+    in_flight = 0
+    peak = 0
+
+    async def fake_exec(s: dict[str, Any], iter_scope: dict[str, Any]) -> Any:
+        nonlocal in_flight, peak
+        in_flight += 1
+        peak = max(peak, in_flight)
+        await asyncio.sleep(0.01)
+        in_flight -= 1
+        return iter_scope["loop"]["index"]
+
+    eng._exec_tool_call = fake_exec  # type: ignore[assignment]
+
+    result = asyncio.run(
+        eng._execute_step(step, {"input": {"items": list(range(5))}})
+    )
+    assert result == [0, 1, 2, 3, 4]
+    assert peak <= 2, f"loop parallel max_concurrency=2 violated, peak {peak}"
+
+
+def test_loop_iteration_scope_does_not_leak_to_outer():
+    # The loop var is bound on a per-iteration shallow copy; the outer
+    # scope must not gain a `loop` key after the step returns.
+    eng = _build_engine()
+    scope: dict[str, Any] = {"input": {"items": [1, 2]}}
+    step = {
+        "kind": "loop",
+        "for_each": "input.items",
+        "body": {"kind": "tool_call", "tool": "noop"},
+    }
+
+    async def fake_exec(s: dict[str, Any], iter_scope: dict[str, Any]) -> Any:
+        return iter_scope["loop"]["item"]
+
+    eng._exec_tool_call = fake_exec  # type: ignore[assignment]
+
+    asyncio.run(eng._execute_step(step, scope))
+    assert "loop" not in scope

@@ -241,18 +241,10 @@ CREATE TABLE IF NOT EXISTS feedback_events (
 );
 CREATE INDEX IF NOT EXISTS idx_feedback_user_created ON feedback_events (user_entra_id, created_at DESC);
 
-CREATE TABLE IF NOT EXISTS corrections (
-  id                    UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_entra_id         TEXT NOT NULL,
-  target_kind           TEXT NOT NULL
-                          CHECK (target_kind IN ('kg_edge', 'kg_node', 'chunk', 'experiment_field', 'reaction_field')),
-  target_ref            JSONB NOT NULL,
-  corrected_value       JSONB NOT NULL,
-  reason                TEXT,
-  applied               BOOLEAN NOT NULL DEFAULT FALSE,
-  created_at            TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  applied_at            TIMESTAMPTZ
-);
+-- `corrections` removed 2026-05-09 — duplicate of feedback_events
+-- (signal='correction' + correction_payload JSONB), zero readers/writers in
+-- the repo's lifetime. See db/init/52_drop_corrections.sql for the drop on
+-- existing deployments.
 
 CREATE TABLE IF NOT EXISTS prompt_registry (
   id              UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
