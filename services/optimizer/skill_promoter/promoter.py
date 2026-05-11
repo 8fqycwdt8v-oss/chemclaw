@@ -336,7 +336,7 @@ def run_once() -> None:
         f"host={os.environ.get('POSTGRES_HOST', 'localhost')} "
         f"port={os.environ.get('POSTGRES_PORT', '5432')} "
         f"dbname={os.environ.get('POSTGRES_DB', 'chemclaw')} "
-        f"user={os.environ.get('POSTGRES_USER', 'chemclaw')} "
+        f"user={os.environ.get('POSTGRES_USER', 'chemclaw_service')} "
         f"password={os.environ.get('POSTGRES_PASSWORD', '')}"
     )
     apply_config_overrides(dsn)

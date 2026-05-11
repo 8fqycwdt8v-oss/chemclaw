@@ -61,6 +61,7 @@ class CompoundClassifier(BaseProjector):
             async with await psycopg.AsyncConnection.connect(
                 self.settings.postgres_dsn, row_factory=dict_row,
             ) as work_conn:
+                await self._assert_bypass_rls(work_conn)
                 await self._catch_up(work_conn)
                 log.info("[%s] catch-up complete", self.name)
                 await self._listen_loop_classes(listen_conn, work_conn)

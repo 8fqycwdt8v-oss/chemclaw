@@ -6,6 +6,19 @@
 
 import { z } from "zod";
 
+// Shared validator for ELN-style identifiers (entry, sample, reaction, etc.).
+// Conservative — alphanumeric plus the four punctuation chars the upstream
+// ELN actually emits. Length-bounded to defuse path/header injection.
+export const ELN_ID_PATTERN = /^[A-Za-z0-9_.:-]+$/;
+
+export function elnIdField(label: string) {
+  return z
+    .string()
+    .min(1)
+    .max(128)
+    .regex(ELN_ID_PATTERN, `${label} must match [A-Za-z0-9_-.:]+`);
+}
+
 export const AuditEntrySchema = z.object({
   actor_email: z.string().nullable().optional(),
   action: z.string(),

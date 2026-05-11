@@ -23,10 +23,13 @@ the documented threat surface.
 from __future__ import annotations
 
 import hashlib
+import logging
 import re
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any
+
+log = logging.getLogger(__name__)
 
 # Defense against pathological input: real prompts are <100KB. Anything past
 # this is refused (returned unmodified) to bound the worst-case CPU spent in
@@ -193,7 +196,9 @@ def redact(text: str) -> RedactionResult:
                 continue
             _sub(dp.pattern, dp.category)
     except Exception:  # noqa: BLE001 — never let dynamic patterns break the redactor
-        pass
+        # Hardcoded baseline above always ran. Log so operators see the
+        # fallback firing instead of silently shipping the un-augmented set.
+        log.warning("dynamic redaction patterns skipped", exc_info=True)
 
     return result
 
