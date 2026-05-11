@@ -316,7 +316,7 @@ describe("recommend_next_batch", () => {
     // Confirm strategy + acquisition were forwarded to the MCP request.
     expect(fetchMock.mock.calls).toHaveLength(1);
     const body = JSON.parse(
-      ((fetchMock.mock.calls[0]![1] as RequestInit).body as string) ?? "{}",
+      (fetchMock.mock.calls[0]![1] as RequestInit).body as string,
     );
     expect(body.strategy).toBe("SoboStrategy");
     expect(body.acquisition).toBe("qLogEI");

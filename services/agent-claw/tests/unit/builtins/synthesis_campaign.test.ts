@@ -81,7 +81,7 @@ describe("start_synthesis_campaign", () => {
           return rows({ ...SAMPLE_CAMPAIGN_ROW });
         }
         if (sql.includes("INSERT INTO synthesis_campaign_steps")) {
-          insertedStepCalls.push({ sql, params: (params ?? []) as unknown[] });
+          insertedStepCalls.push({ sql, params: params ?? [] });
           stepInsertSeq += 1;
           return rows({ id: `step-uuid-${stepInsertSeq}` });
         }

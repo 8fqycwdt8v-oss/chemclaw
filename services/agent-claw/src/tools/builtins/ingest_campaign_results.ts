@@ -145,7 +145,9 @@ function computeImproved(
 ): boolean {
   if (directions.size === 0) return false;
   if (directions.size === 1) {
-    const [name, dir] = Array.from(directions.entries())[0]!;
+    const entry = Array.from(directions.entries())[0];
+    if (entry === undefined) return false;
+    const [name, dir] = entry;
     const sign = dir === "maximize" ? 1 : -1;
     const newBest = Math.max(
       ...newOutcomes
