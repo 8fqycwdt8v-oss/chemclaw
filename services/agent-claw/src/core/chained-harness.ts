@@ -18,8 +18,10 @@ import type { LlmProvider } from "../llm/provider.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import {
   loadSession,
+  listTodos,
   OptimisticLockError,
 } from "./session-store.js";
+import { buildReflectionPrompt } from "./reflection-prompt.js";
 import {
   Budget,
   BudgetExceededError,
@@ -74,6 +76,15 @@ export interface ChainedHarnessOptions {
    * background work still correlates across MCP services + projector
    * logs even though there's no incoming HTTP request. */
   requestId?: string;
+  /**
+   * Phase B2 — when true, the first iteration prepends the persisted
+   * messages_checkpoint to `opts.messages`, so a resume after a process
+   * crash recovers the model's working context (prior tool results,
+   * reasoning steps, citations). Resume routes set this; the active
+   * chat path leaves it false because its messages array is already
+   * authoritative.
+   */
+  useMessagesCheckpoint?: boolean;
 }
 
 export interface ChainedHarnessResult {
@@ -115,6 +126,10 @@ async function _runChainedHarnessInner(
   let totalSteps = 0;
   let finalFinishReason = "stop";
   let currentMessages = opts.messages;
+  // Phase B2 — first-iteration rehydration from messages_checkpoint. We do
+  // this LATER (inside the loop, after loadSession) because the checkpoint
+  // lives on the session row, not on opts.
+  let pendingCheckpointHydration = opts.useMessagesCheckpoint === true;
   // Phase 4B: track whether we've fired session_start for this chain. The
   // chained-run + resume routes both target an existing session row, so
   // source="resume". We only need to fire once per call (not per chained
@@ -137,6 +152,21 @@ async function _runChainedHarnessInner(
     if (!state) {
       finalFinishReason = "session_lost";
       break;
+    }
+
+    // Phase B2 — on the first iteration when the caller asked for it,
+    // prepend the persisted message checkpoint so the model resumes with
+    // the working context it had before the crash. The synthetic continue
+    // message (`opts.messages`) is appended AFTER the checkpoint so the
+    // model sees the full transcript followed by "Continue from the last
+    // step." We dedupe by skipping any checkpoint entries already present
+    // in opts.messages (rare; defensive against double-hydration).
+    if (pendingCheckpointHydration) {
+      pendingCheckpointHydration = false;
+      const checkpoint = state.messagesCheckpoint;
+      if (checkpoint && checkpoint.length > 0) {
+        currentMessages = [...checkpoint, ...opts.messages];
+      }
     }
 
     // Per-iteration Paperclip reservation. Mirrors chat.ts so the daily
@@ -196,6 +226,13 @@ async function _runChainedHarnessInner(
       const budget = new Budget({
         maxSteps: cfg.AGENT_CHAT_MAX_STEPS,
         maxPromptTokens: cfg.AGENT_TOKEN_BUDGET,
+        // Phase B1: per-turn wall-clock cap. 0 disables the gate (back-compat
+        // for tests that synthesize a Config without the new key — the schema
+        // default is 30 min, but Zod coerces 0 cleanly).
+        maxWallClockMs:
+          cfg.AGENT_TURN_WALL_CLOCK_MS > 0
+            ? cfg.AGENT_TURN_WALL_CLOCK_MS
+            : undefined,
         session: {
           inputUsed: state.sessionInputTokens,
           outputUsed: state.sessionOutputTokens,
@@ -280,6 +317,11 @@ async function _runChainedHarnessInner(
           expectedEtag: state.etag,
           messageCount: currentMessages.length,
           priorSessionSteps: state.sessionSteps,
+          // Phase B2 — checkpoint the active message history so a process
+          // crash mid-chain doesn't lose the model's working context. The
+          // helper trims to MAX_CHECKPOINT_MESSAGES (matching
+          // AGENT_CHAT_MAX_HISTORY) before writing.
+          messages: currentMessages,
         },
       );
 
@@ -306,10 +348,32 @@ async function _runChainedHarnessInner(
       // Termination conditions.
       if (r.finishReason === "stop") break;
       if (r.finishReason === "awaiting_user_input") break;
-      // Otherwise (max_steps), feed a one-line continue prompt and loop again.
-      currentMessages = [
-        { role: "user", content: "Continue from the last step. Stop when the plan is complete." },
-      ];
+      // Otherwise (max_steps / budget_exceeded), build a structured
+      // reflection prompt: surfaces loop_warnings (from loop-detector),
+      // open todos, and explicit branching guidance instead of the prior
+      // boilerplate "Continue from the last step." which gave the model
+      // no signal it was looping. Falls back to a minimal prompt if
+      // ctx/todos are unavailable so chaining still progresses.
+      let nextPrompt: string;
+      try {
+        const openTodos = await listTodos(pool, user, sessionId);
+        const reflection = buildReflectionPrompt({
+          ctx,
+          openTodos,
+          previousFinishReason: r.finishReason,
+        });
+        nextPrompt =
+          reflection ??
+          "Continue from the last step. Stop when the plan is complete.";
+      } catch (rErr) {
+        log.warn(
+          { err: rErr },
+          "buildReflectionPrompt failed (non-fatal); using boilerplate continue",
+        );
+        nextPrompt =
+          "Continue from the last step. Stop when the plan is complete.";
+      }
+      currentMessages = [{ role: "user", content: nextPrompt }];
       // Plan-progress walker: reset the inspection cursor since we just
       // replaced currentMessages with a fresh 1-element array. Without this
       // reset, the next iteration's `for (let i = inspectedUpTo; ...)` loop

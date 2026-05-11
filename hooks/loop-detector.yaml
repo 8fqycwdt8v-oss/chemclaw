@@ -1,0 +1,18 @@
+name: loop-detector
+lifecycle: pre_tool
+enabled: true
+# Run AFTER budget-guard (which is order 100) so a budget overrun trips first
+# (a stuck loop in a low-budget turn shouldn't preempt the budget signal).
+order: 110
+definition:
+  description: >
+    Detect when the model is calling the same tool with the same arguments
+    repeatedly — a strong signal it's stuck on a broken path (transient MCP
+    failure, model fixated on a bad strategy). Tracks recent (toolId, args
+    hash) pairs in ctx.scratchpad. At 3 repeats within the last 10 calls,
+    appends to scratchpad.loop_warnings (surfaced by the reflection prompt
+    on max_steps). At 5 repeats, throws StuckInLoopError to force the model
+    onto a different approach.
+  recent_window: 10
+  soft_threshold: 3
+  hard_deny_threshold: 5

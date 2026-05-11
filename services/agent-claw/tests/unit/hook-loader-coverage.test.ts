@@ -1,5 +1,5 @@
 // Phase 1A coverage test — guarantees that every YAML hook descriptor in
-// `hooks/` resolves to a registered built-in handler, and that the 22 known
+// `hooks/` resolves to a registered built-in handler, and that the 23 known
 // hook implementations register at the right lifecycle points.
 //
 // Phase 4B added the no-op session-events hook (10 total).
@@ -10,6 +10,8 @@
 // (21 total; session_end now has 2 handlers).
 // Review §3.8 added detect-mcp-leakage on post_tool (22 total; post_tool
 // now has 4 handlers).
+// Adaptive-replanning Phase A1 added loop-detector on pre_tool (23 total;
+// pre_tool now has 3 handlers).
 //
 // This test is intentionally read-only against the on-disk `hooks/` directory
 // (the canonical source of truth). It locks in the invariant that adding a
@@ -37,12 +39,12 @@ describe("hook loader coverage", () => {
     expect(skipsForMissingRegistrar).toEqual([]);
   });
 
-  it("registers all 22 known hook implementations at the right points", async () => {
+  it("registers all 23 known hook implementations at the right points", async () => {
     const lc = new Lifecycle();
     await loadHooks(lc, mockHookDeps(), hooksDir);
     // Exact counts — `>=` would hide accidental double-registration.
     expect(lc.count("pre_turn")).toBe(2); // init-scratch, apply-skills
-    expect(lc.count("pre_tool")).toBe(2); // budget-guard, foundation-citation-guard
+    expect(lc.count("pre_tool")).toBe(3); // budget-guard, foundation-citation-guard, loop-detector
     expect(lc.count("post_tool")).toBe(4); // tag-maturity, anti-fabrication, source-cache, detect-mcp-leakage
     expect(lc.count("pre_compact")).toBe(1); // compact-window
     expect(lc.count("post_turn")).toBe(1); // redact-secrets
@@ -59,7 +61,7 @@ describe("hook loader coverage", () => {
     expect(lc.count("task_created")).toBe(1);
     expect(lc.count("task_completed")).toBe(1);
     expect(lc.count("post_compact")).toBe(1);
-    // Sanity sum: 2 + 2 + 4 + 1 + 1 + 1 + 1 + 9 + 1 = 22 hooks total.
+    // Sanity sum: 2 + 3 + 4 + 1 + 1 + 1 + 1 + 9 + 1 = 23 hooks total.
     const totalRegistered = (
       [
         "pre_turn",
@@ -80,7 +82,7 @@ describe("hook loader coverage", () => {
         "task_completed",
       ] as const
     ).reduce((sum, p) => sum + lc.count(p), 0);
-    expect(totalRegistered).toBe(22);
+    expect(totalRegistered).toBe(23);
   });
 
   it("each YAML file's `name` field is non-empty", async () => {
