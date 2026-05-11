@@ -90,9 +90,19 @@ export function buildProposeHypothesisTool(pool: Pool, agentTraceId?: string) {
 
         for (const fid of input.cited_fact_ids) {
           const note = input.citation_notes?.[fid] ?? null;
+          // ON CONFLICT DO NOTHING: hypothesis_citations has
+          // PRIMARY KEY (hypothesis_id, fact_id). If the agent passes a
+          // cited_fact_ids list with duplicates (e.g. accidentally
+          // including the same fact twice across batched tool calls),
+          // the second INSERT would otherwise raise a PK-violation
+          // and abort the entire transaction — losing the hypothesis
+          // row that already INSERTed above. Conservative resolution:
+          // first citation_note wins. The hypothesis itself is the
+          // canonical artifact; per-fact notes are advisory.
           await client.query(
             `INSERT INTO hypothesis_citations (hypothesis_id, fact_id, citation_note)
-             VALUES ($1::uuid, $2::uuid, $3)`,
+             VALUES ($1::uuid, $2::uuid, $3)
+             ON CONFLICT (hypothesis_id, fact_id) DO NOTHING`,
             [hid, fid, note],
           );
         }
