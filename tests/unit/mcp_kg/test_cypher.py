@@ -246,3 +246,70 @@ class TestGroupIdTenantScope:
                 entity=EntityRef(label="Compound", id_property="inchikey", id_value="K"),
                 group_id=bad,
             )
+
+
+class TestCompoundCanonicalizationInvariant:
+    """Track A (docs/research/kg-transfer-learning.md):
+    Compound nodes are canonical by `inchikey` alone. Two projects writing
+    the same compound produce ONE Neo4j node, with `group_id` only on the
+    edges (not on the node MERGE pattern).
+
+    The research doc §3.2 originally claimed two project group_ids would
+    produce two separate Compound nodes; verification of the generated
+    Cypher disproved that. These tests lock the canonical-node invariant
+    so a future refactor that adds `group_id` to the node MERGE pattern
+    fails loud."""
+
+    def _compound_req(self, group_id: str) -> WriteFactRequest:
+        # Reaction-as-subject, Compound-as-object. The compound is the object
+        # we care about for the canonicalization invariant.
+        return WriteFactRequest(
+            subject=EntityRef(label="Reaction", id_property="uuid", id_value="RXN1"),
+            object=EntityRef(label="Compound", id_property="inchikey", id_value="INCHI-ABCD"),
+            predicate="HAS_REAGENT",
+            confidence_tier=ConfidenceTier.MULTI_SOURCE_LLM,
+            confidence_score=0.85,
+            provenance=Provenance(source_type="ELN", source_id="EXP-1"),
+            group_id=group_id,
+        )
+
+    def test_node_merge_pattern_excludes_group_id(self) -> None:
+        """The MERGE on each node uses only (label, id_property:id_value).
+        group_id must NOT appear in either node MERGE pattern."""
+        q, _ = build_write_fact_cypher(self._compound_req("proj-A"))
+        # Subject node MERGE
+        assert "MERGE (s:Reaction { uuid: $s_id_value })" in q
+        # Object node MERGE — the Compound — must not be scoped by group_id.
+        assert "MERGE (o:Compound { inchikey: $o_id_value })" in q
+        # Defense-in-depth: no node-level group_id anywhere in the MERGE clauses.
+        merge_section = q.split("RETURN")[0]
+        assert "MERGE (s:Reaction { uuid: $s_id_value, group_id" not in merge_section
+        assert "MERGE (o:Compound { inchikey: $o_id_value, group_id" not in merge_section
+
+    def test_group_id_lives_only_on_the_edge(self) -> None:
+        """group_id is set inside the relationship clause (`r.group_id`),
+        not anywhere on the node clauses."""
+        q, _ = build_write_fact_cypher(self._compound_req("proj-A"))
+        assert "r.group_id = $group_id" in q
+        # No assignment to s.group_id or o.group_id.
+        assert "s.group_id" not in q
+        assert "o.group_id" not in q
+
+    def test_two_projects_write_same_inchikey_with_distinct_group_ids(self) -> None:
+        """End-to-end shape test: a project-A write and a project-B write of
+        the same inchikey produce two Cypher statements whose node MERGE
+        patterns are byte-identical apart from the edge `group_id` param.
+
+        Locks the canonicalization invariant: two MERGE statements with the
+        same node pattern hit the same Neo4j node (MERGE deduplicates by
+        property pattern), so the compound is shared across projects."""
+        q_a, params_a = build_write_fact_cypher(self._compound_req("proj-A"))
+        q_b, params_b = build_write_fact_cypher(self._compound_req("proj-B"))
+
+        # Same Cypher string (group_id is parameterised, not interpolated).
+        assert q_a == q_b
+        # Different group_id parameter values.
+        assert params_a["group_id"] == "proj-A"
+        assert params_b["group_id"] == "proj-B"
+        # Same node-identification parameter (the inchikey).
+        assert params_a["o_id_value"] == params_b["o_id_value"] == "INCHI-ABCD"
