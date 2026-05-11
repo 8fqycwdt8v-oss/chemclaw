@@ -97,7 +97,7 @@ def solvent_flags(model: str | None, name: str | None) -> list[str]:
 # mcp_xtb._shared import smiles_to_canonical_and_xyz` import path.
 
 from services.mcp_tools.common.smiles import (  # noqa: E402, F401
-    smiles_to_canonical_and_xyz,
+    smiles_to_canonical_and_xyz as smiles_to_canonical_and_xyz,
 )
 
 
