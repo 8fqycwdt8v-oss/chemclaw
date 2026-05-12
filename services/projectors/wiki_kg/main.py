@@ -60,11 +60,15 @@ NAMESPACE_GROUNDS = uuid.UUID("9111d5a2-1100-4abc-9a11-9911aabbccdd")
 _GROUP_ID_RE = re.compile(r"^[A-Za-z0-9_\-]{1,80}$")
 
 # entity_ref.label → (node label, merge property). Only labels for which the
-# KG already creates nodes (so we OPTIONAL MATCH, never stub).
+# KG already creates a node we can MATCH on. NCEProject {internal_id} matches
+# kg_experiments; Compound {inchikey} matches the mcp-kg identity model.
+# Document is intentionally absent: kg_documents keys :Document on a synthetic
+# fact_id and exposes the document UUID (not the sha256) as `document_id`,
+# whereas a `document/<sha>` page's entity_ref.id_value is the sha256 — no
+# stable property to MATCH on yet (BACKLOG: have kg_documents expose sha256).
 _SUMMARIZES_TARGETS: dict[str, tuple[str, str]] = {
     "Compound": ("Compound", "inchikey"),
     "NCEProject": ("NCEProject", "internal_id"),
-    "Document": ("Document", "document_id"),
 }
 
 
@@ -107,6 +111,11 @@ class WikiKgProjector(BaseProjector):
         article_id = payload.get("article_id") or source_row_id
         if not slug or not article_id:
             log.warning("event %s: missing slug/article_id; acking", event_id)
+            return
+        # `index` / `log` are navigation/meta pages, not knowledge — don't make
+        # :WikiPage nodes for them (the wiki_regen daemon and the Phase-4 linter
+        # touch the `log` page on every run, which would otherwise spam wiki_kg).
+        if (payload.get("kind") or "") in ("index", "log"):
             return
         group_id = _safe_group_id(payload.get("group_id"))
 

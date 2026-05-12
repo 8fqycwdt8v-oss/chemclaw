@@ -68,6 +68,9 @@ class _FakeConn:
     async def commit(self) -> None:
         self.committed += 1
 
+    async def rollback(self) -> None:
+        self.committed += 1
+
     def lookup(self, sql: str) -> list[dict[str, Any]]:
         for substr, rows in self._fetchers:
             if substr in sql:

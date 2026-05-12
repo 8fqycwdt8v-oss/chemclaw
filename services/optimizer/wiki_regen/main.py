@@ -373,9 +373,8 @@ async def _synthesize(
         # transient (the linter will surface a page that never regenerates).
         raise _SkipPage(f"LiteLLM {r.status_code}: {r.text[:200]}")
     r.raise_for_status()
-    body = (
-        r.json().get("choices", [{}])[0].get("message", {}).get("content", "") or ""
-    ).strip()
+    choices = r.json().get("choices") or [{}]
+    body = ((choices[0] or {}).get("message", {}).get("content", "") or "").strip()
     if not body:
         raise _SkipPage("LiteLLM returned an empty body")
     # Strip a single wrapping ```markdown fence if the model added one.
@@ -386,7 +385,9 @@ async def _synthesize(
 
 async def _append_log(conn: psycopg.AsyncConnection[dict[str, Any]], line: str) -> None:
     """Prepend a one-line entry to the `log` page (creating it if absent),
-    capped at ~200 KB. No revision-history row — it's an append-only log."""
+    capped at ~200 KB. Append-only — no revision-history row, and we do NOT
+    bump `revision` (so the trigger doesn't emit a `knowledge_article_revised`
+    event for `log` on every regen); `etag` still bumps for any UI watching it."""
     async with conn.cursor() as cur:
         await cur.execute(
             """
@@ -397,7 +398,6 @@ async def _append_log(conn: psycopg.AsyncConnection[dict[str, Any]], line: str) 
                     '__system__', false)
             ON CONFLICT (slug) DO UPDATE SET
               body_md    = left(EXCLUDED.body_md || E'\n' || knowledge_articles.body_md, 200000),
-              revision   = knowledge_articles.revision + 1,
               etag       = knowledge_articles.etag + 1,
               updated_at = NOW()
             """,
@@ -473,14 +473,20 @@ async def _process_page(
     if builder is None:
         log.warning("page %s: no context builder for kind=%s — leaving dirty", page["slug"], page["kind"])
         return False
+    # Phase 1 — gather context in its own short read transaction, then commit
+    # so the (slow) LiteLLM call below doesn't hold a transaction open.
     try:
         context = await builder(conn, page)
+        await conn.commit()
     except _PermanentSkip as exc:
+        await conn.rollback()
         log.warning("page %s: %s — leaving dirty", page["slug"], exc)
         return False
     except _SkipPage as exc:
+        await conn.rollback()
         log.info("page %s: %s — retry next tick", page["slug"], exc)
         return False
+    # Phase 2 — synthesise (no DB transaction held).
     try:
         body = await _synthesize(client, settings, prompt, page, context)
     except _SkipPage as exc:
@@ -488,6 +494,8 @@ async def _process_page(
         return False
     if page.get("has_human_edits"):
         body = _ensure_human_blocks(body, _human_blocks(page.get("body_md") or ""))
+    # Phase 3 — write in a fresh transaction; _apply_regen re-checks `dirty`
+    # so a concurrent regen / human PATCH that won the race is a clean no-op.
     rev = await _apply_regen(conn, page, body)
     await conn.commit()
     if rev is None:
