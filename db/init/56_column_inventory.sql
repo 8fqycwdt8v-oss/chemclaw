@@ -133,7 +133,7 @@ ON CONFLICT (vendor, product_line, chemistry, particle_size_um, dimensions_mm)
   DO NOTHING;
 
 INSERT INTO schema_version (filename, applied_at)
-  VALUES ('54_column_inventory.sql', NOW())
+  VALUES ('56_column_inventory.sql', NOW())
   ON CONFLICT (filename) DO NOTHING;
 
 COMMIT;

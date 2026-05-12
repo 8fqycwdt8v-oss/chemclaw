@@ -117,7 +117,7 @@ INSERT INTO model_cards (
 ON CONFLICT (service_name, model_version) DO NOTHING;
 
 INSERT INTO schema_version (filename, applied_at)
-  VALUES ('55_analytical_methods.sql', NOW())
+  VALUES ('57_analytical_methods.sql', NOW())
   ON CONFLICT (filename) DO NOTHING;
 
 COMMIT;
