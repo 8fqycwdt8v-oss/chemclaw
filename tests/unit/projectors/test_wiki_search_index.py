@@ -154,9 +154,9 @@ def test_metadata() -> None:
 @pytest.mark.asyncio
 async def test_revised_deletes_then_inserts_chunks() -> None:
     body = "# Aurora\n\nA Pd-catalysed step [experiment:ELN-1].\n\n## Step 2\n\nReductive amination.\n"
-    pg = _FakeConn([("FROM knowledge_articles WHERE id", [{"slug": "project/NCE-0042", "revision": 3, "body_md": body, "status": "current"}])])
+    pg = _FakeConn([("FROM knowledge_articles WHERE id", [{"slug": "project/NCE-0042", "kind": "nce_project", "revision": 3, "body_md": body, "status": "current"}])])
     proj = await _run(
-        pg, _embed_resp(200, [[0.1, 0.2], [0.3, 0.4]]),
+        pg, _embed_resp(200, [[0.1] * 1024, [0.2] * 1024]),
         event_id="e1", event_type="knowledge_article_revised",
         source_table="knowledge_articles", source_row_id=ART,
         payload={"article_id": ART, "slug": "project/NCE-0042", "revision": 3},
@@ -168,14 +168,14 @@ async def test_revised_deletes_then_inserts_chunks() -> None:
     # params: (article_id, slug, revision, chunk_index, heading_path, text, embedding-literal, token_count)
     assert ins[0][1][0] == ART and ins[0][1][1] == "project/NCE-0042" and ins[0][1][2] == 3 and ins[0][1][3] == 0
     assert ins[1][1][3] == 1 and ins[1][1][4] == "Aurora > Step 2"
-    assert ins[0][1][6] == "[0.10000000,0.20000000]"  # vector literal
+    assert ins[0][1][6].startswith("[0.10000000,") and ins[1][1][6].startswith("[0.20000000,")  # vector literals
     # Embedder called with the chunk texts.
     proj._client.post.assert_awaited()  # type: ignore[attr-defined]
 
 
 @pytest.mark.asyncio
 async def test_stub_empty_body_is_noop_no_embed() -> None:
-    pg = _FakeConn([("FROM knowledge_articles WHERE id", [{"slug": "project/X", "revision": 1, "body_md": "", "status": "current"}])])
+    pg = _FakeConn([("FROM knowledge_articles WHERE id", [{"slug": "project/X", "kind": "nce_project", "revision": 1, "body_md": "", "status": "current"}])])
     proj = await _run(
         pg, _embed_resp(200, []),
         event_id="e2", event_type="knowledge_article_created",
@@ -203,7 +203,7 @@ async def test_archived_event_deletes_chunks() -> None:
 
 @pytest.mark.asyncio
 async def test_archived_status_deletes_chunks() -> None:
-    pg = _FakeConn([("FROM knowledge_articles WHERE id", [{"slug": "project/X", "revision": 2, "body_md": "stuff", "status": "archived"}])])
+    pg = _FakeConn([("FROM knowledge_articles WHERE id", [{"slug": "project/X", "kind": "nce_project", "revision": 2, "body_md": "stuff", "status": "archived"}])])
     await _run(
         pg, _embed_resp(200, [[0.1]]),
         event_id="e4", event_type="knowledge_article_revised",
@@ -215,7 +215,7 @@ async def test_archived_status_deletes_chunks() -> None:
 
 @pytest.mark.asyncio
 async def test_embedder_4xx_leaves_old_chunks() -> None:
-    pg = _FakeConn([("FROM knowledge_articles WHERE id", [{"slug": "project/X", "revision": 2, "body_md": "# X\n\nbody", "status": "current"}])])
+    pg = _FakeConn([("FROM knowledge_articles WHERE id", [{"slug": "project/X", "kind": "nce_project", "revision": 2, "body_md": "# X\n\nbody", "status": "current"}])])
     await _run(
         pg, _embed_resp(400),
         event_id="e5", event_type="knowledge_article_revised",
@@ -235,4 +235,31 @@ async def test_missing_article_row_is_noop() -> None:
         source_table="knowledge_articles", source_row_id=ART, payload={"article_id": ART},
     )
     assert pg.sql_with("DELETE FROM wiki_chunks") == []
+    assert pg.sql_with("INSERT INTO wiki_chunks") == []
+
+
+@pytest.mark.asyncio
+async def test_index_log_kind_not_indexed() -> None:
+    # Navigation/meta pages (kind in {index, log}) are dropped, never chunked.
+    pg = _FakeConn([("FROM knowledge_articles WHERE id", [{"slug": "log", "kind": "log", "revision": 7, "body_md": "## [2026-05-12] regen | …", "status": "current"}])])
+    proj = await _run(
+        pg, _embed_resp(200, [[0.1] * 1024]),
+        event_id="e7", event_type="knowledge_article_revised",
+        source_table="knowledge_articles", source_row_id=ART, payload={"article_id": ART},
+    )
+    assert len(pg.sql_with("DELETE FROM wiki_chunks WHERE article_id")) == 1
+    assert pg.sql_with("INSERT INTO wiki_chunks") == []
+    proj._client.post.assert_not_called()  # type: ignore[attr-defined]
+
+
+@pytest.mark.asyncio
+async def test_embedder_bad_dim_leaves_old_chunks() -> None:
+    pg = _FakeConn([("FROM knowledge_articles WHERE id", [{"slug": "project/X", "kind": "nce_project", "revision": 2, "body_md": "# X\n\nbody", "status": "current"}])])
+    # A 4-dim vector instead of 1024 → _BadEmbedError → ack, leave old chunks.
+    await _run(
+        pg, _embed_resp(200, [[0.1, 0.2, 0.3, 0.4]]),
+        event_id="e8", event_type="knowledge_article_revised",
+        source_table="knowledge_articles", source_row_id=ART, payload={"article_id": ART},
+    )
+    assert pg.sql_with("DELETE FROM wiki_chunks WHERE article_id") == []
     assert pg.sql_with("INSERT INTO wiki_chunks") == []

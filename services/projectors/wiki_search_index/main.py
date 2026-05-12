@@ -47,7 +47,12 @@ log = logging.getLogger("projector.wiki_search_index")
 _TARGET_CHARS = 1400
 # Stay well under mcp-embedder's input cap.
 _EMBED_BATCH = 32
+# BGE-M3 dimension — must match wiki_chunks.embedding's vector(1024).
+_EMBED_DIM = 1024
 _HEADING_RE = re.compile(r"^(#{1,6})\s+(\S.*)$")
+# Navigation / meta pages — not knowledge; don't index them for retrieval
+# (mirrors the same skip in the wiki_kg projector).
+_SKIP_KINDS = frozenset({"index", "log"})
 
 
 class Settings(ProjectorSettings):
@@ -139,15 +144,15 @@ class WikiSearchIndexProjector(BaseProjector):
 
             async with conn.cursor() as cur:
                 await cur.execute(
-                    "SELECT slug, revision, body_md, status FROM knowledge_articles WHERE id = %s::uuid",
+                    "SELECT slug, kind, revision, body_md, status FROM knowledge_articles WHERE id = %s::uuid",
                     (article_id,),
                 )
                 row = await cur.fetchone()
             if not row:
                 log.warning("event %s: knowledge_articles row %s gone; acking", event_id, article_id)
                 return
-            if row["status"] != "current":
-                # Archived between the event and now — drop its chunks.
+            if row["status"] != "current" or row["kind"] in _SKIP_KINDS:
+                # Archived (or a navigation/meta page) — drop any chunks it has.
                 async with conn.cursor() as cur:
                     await cur.execute("DELETE FROM wiki_chunks WHERE article_id = %s::uuid", (article_id,))
                 await conn.commit()
@@ -197,9 +202,15 @@ class WikiSearchIndexProjector(BaseProjector):
             if 400 <= r.status_code < 500:
                 raise _BadEmbedError(f"embedder 4xx: {r.status_code} {r.text[:200]}")
             r.raise_for_status()
-            vectors = r.json().get("vectors")
+            body = r.json()
+            vectors = body.get("vectors")
             if not isinstance(vectors, list) or len(vectors) != len(batch):
                 raise _BadEmbedError("embedder returned a malformed/short vectors array")
+            # Permanent if any vector isn't the expected 1024-dim — otherwise a
+            # bad-dim response surfaces as a generic Postgres ::vector mismatch
+            # on INSERT (looks transient → retry storm). Mirrors chunk_embedder.
+            if any(not isinstance(v, list) or len(v) != _EMBED_DIM for v in vectors):
+                raise _BadEmbedError(f"embedder returned vector(s) not of dim {_EMBED_DIM}")
             out.extend(vectors)
         return out
 
