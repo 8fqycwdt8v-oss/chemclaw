@@ -40,7 +40,11 @@ Same compound (same InChIKey) referenced by multiple projects. The right answer 
 
 In Postgres this is **already** the design: `compounds` is globally readable subject to an authenticated session (`db/init/12_security_hardening.sql:162-180`), `compound_smarts_catalog` / `compound_substructure_hits` / `compound_classes` / `compound_class_assignments` are global-with-auth-gate (`db/init/39_compound_catalog_rls.sql:14-16,44-45`), and the `compound_fingerprinter` (`services/projectors/compound_fingerprinter/main.py:1-15`) and `compound_classifier` (`services/projectors/compound_classifier/main.py:1-92`) projectors run as `chemclaw_service` to update them per-InChIKey regardless of which project triggered the change.
 
-In Neo4j it is **not** yet the design: `kg_experiments/main.py:178` sets `scope_group_id = bundle["project_id"]` and reuses it for every `write_fact` call, including the explicit `Compound` writes at `services/projectors/kg_experiments/main.py:310`. The same InChIKey appearing in projects A and B becomes two `Compound` nodes in two `group_id` shards; structural / catalog properties are duplicated, and Graphiti-side similarity / relational queries cannot bridge the two without code changes.
+In Neo4j it is **mostly already** the design — earlier framing of this section was wrong and is corrected here. `kg_experiments/main.py:178` sets `scope_group_id = bundle["project_id"]` and reuses it for every `write_fact` call, but the generated Cypher (`services/mcp_tools/mcp_kg/cypher.py:118-122`) merges nodes by `(label, id_property: id_value)` ONLY — `group_id` lives on the **edge** (`r.group_id = $group_id`), not the node MERGE pattern. So two projects writing the same InChIKey share **one** Compound node; only the reaction edges (`HAS_REAGENT`, `HAS_PRODUCT`, …) are project-scoped. This invariant is locked by `tests/unit/mcp_kg/test_cypher.py::TestCompoundCanonicalizationInvariant`.
+
+What does **not** yet work, and is the real Track A remainder:
+- **Property-write attribution**: `ON CREATE SET o += $object_properties` fires only on the first write, so structural properties (SMILES, MW, …) are stamped by whichever project first ingested the compound and never refreshed. A `Compound.contributed_by_projects: UUID[]` property — appended on every write, not just CREATE — needs a new MERGE clause (`SET o.contributed_by_projects = coalesce(o.contributed_by_projects, []) + $project_id` with array-distinct logic) and an extension to `write_fact`'s contract.
+- **The compound_catalog projectors** (`compound_fingerprinter`, `compound_classifier`) maintain the global Postgres catalog but don't write to Neo4j at all. Closing the loop would require either a new projector that materialises the public catalog into Neo4j or extending the existing pair.
 
 This is the single highest-ROI fix, and it is not "transfer learning" in the ML sense — it is canonicalization.
 
@@ -88,7 +92,8 @@ The hard part is already paid for: a global namespace keyed by InChIKey, project
 `services/agent-claw/src/middleware/require-admin.ts:19` defines `global_admin`, `org_admin <scope_id>`, `project_admin <scope_id>`. Every `/api/admin/*` mutation passes through `guardAdmin` and writes via `appendAudit` (`services/agent-claw/src/routes/admin/audit-log.ts`). This is the natural admin surface for any new "enable cross-project transfer for project X" toggle.
 
 ### 4.7 What does **not** exist
-- Cross-tenant Neo4j compound canonicalization. Same InChIKey → two `group_id`-isolated `Compound` nodes (§3.2).
+- **Per-write Compound property updates / project contribution tracking.** Node-level canonicalization works (§3.2 corrected), but `ON CREATE SET` semantics mean only the first write's properties stick. `Compound.contributed_by_projects` requires a write_fact extension.
+- **Public catalog → Neo4j projection.** `compound_fingerprinter` / `compound_classifier` write to the Postgres global catalog but not to Neo4j, so the canonical compound nodes lack the fingerprint / classification properties that Postgres already maintains.
 - Confidence pedigree (which projects' evidence contributed to a score).
 - Audit log of cross-project bootstrap reads.
 - Federated / DP-SGD anything.
@@ -145,20 +150,20 @@ This is a low-risk, high-leverage extension; it transfers *reasoning routines*, 
 
 A four-track plan: tracks A–C ordered by risk-adjusted ROI, plus Track D as a low-effort parallel improvement. Each track ends in a merged ADR + working code + runbook.
 
-### Track A — Compound canonicalization in the KG (lowest risk, highest ROI)
+### Track A — Compound canonicalization (lowest risk; partially landed)
 
-**Goal.** One `Compound` Neo4j node per InChIKey, shared across all `group_id`s, carrying only public-knowledge properties.
+**Goal.** One `Compound` Neo4j node per InChIKey, shared across all projects, carrying public-knowledge properties refreshed across writes.
 
-**Concrete changes:**
-1. New ADR proposing `Compound` as a `group_id = "__catalog__"` (or `SYSTEM_GROUP_ID = "__system__"`, already defined at `services/mcp_tools/mcp_kg/models.py`) global node, with `(:Compound {inchikey})` as the canonical key.
-2. Modify `services/projectors/kg_experiments/main.py` so `Compound` writes carry `group_id = SYSTEM_GROUP_ID`; reaction edges (`USED_IN_REACTION` etc.) keep `group_id = project_id`.
-3. Update `mcp_kg` query layer to allow read on `__system__`-grouped nodes for any caller bearing a valid MCP JWT (the Bearer-token / ADR-006 mechanism enforced by `services/mcp_tools/common/app.py`), mirroring the "globally readable subject to authenticated session" posture of the Postgres `compound_catalog`. Note that Postgres-side `app.current_user_entra_id` does not gate Neo4j reads — the two layers have separate auth.
-4. Backfill: `DELETE FROM projection_acks WHERE projector_name = 'kg_experiments'` and replay; the projector deduplicates on `inchikey`.
-5. Add a `Compound.contributed_by_projects: UUID[]` Neo4j node property — written by the projector and never surfaced through `mcp_kg` reads (kept as an internal property) — to support audit / Track C k-anonymity gating.
+**Status (corrected from earlier draft):** node-level canonicalization is already correct — see §3.2 and `tests/unit/mcp_kg/test_cypher.py::TestCompoundCanonicalizationInvariant`. The remaining work is property attribution and Postgres-catalog projection.
 
-**Effort:** 1–2 weeks. **Risk:** low; the pattern is already used for `__system__` group writes.
+**Remaining concrete changes:**
+1. Extend `WriteFactRequest` / `build_write_fact_cypher` to support an `ON MATCH` property merge with array-distinct semantics, then add `contributed_by_projects: UUID[]` to the Compound writes in `services/projectors/kg_experiments/main.py:305-329`. Track C will read this for k-anonymity gating.
+2. New projector (or extension to `compound_fingerprinter`) that materialises the Postgres `compounds` + `compound_class_assignments` rows into the canonical `Compound` Neo4j node — fingerprint vectors omitted (they live in Postgres), but `inchi`, `smiles`, `mw`, and `compound_class` labels become Neo4j properties.
+3. (Already done) Regression test that locks the canonical-node invariant so a future refactor adding `group_id` to the node MERGE pattern fails loud.
 
-**Success criteria:** in a two-project test fixture, the same InChIKey produces a single `Compound` node; `query_kg` from either project returns it; reaction edges remain isolated.
+**Effort:** 1–2 weeks (down from the original estimate now that the node-level work is verified done).
+
+**Success criteria:** in a two-project test fixture, the same InChIKey produces a single Neo4j node whose `contributed_by_projects` lists both project IDs; reaction edges remain isolated under their per-project `group_id`.
 
 ### Track B — Public-pretrained KGE for the confidence ensemble (medium risk, high research value)
 

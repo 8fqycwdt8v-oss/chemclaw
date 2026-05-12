@@ -45,7 +45,17 @@ const ConfigSchema = z.object({
   // Plan v2 — auto-chain cap. When a chained plan keeps making progress,
   // the harness will re-enter the loop up to this many times before
   // demanding a fresh user POST. Prevents infinite chains.
-  AGENT_PLAN_MAX_AUTO_TURNS: z.coerce.number().int().positive().default(10),
+  // Phase B3 raised the default from 10 → 40 so a long synthesis-planning
+  // task can run autonomously without immediately tripping the cap.
+  AGENT_PLAN_MAX_AUTO_TURNS: z.coerce.number().int().positive().default(40),
+
+  // Per-turn wall-clock cap (ms). Independent of step / token caps —
+  // covers the case where a single tool call burns hours (slow MCP
+  // service, blocked subprocess) without producing new LLM steps. 0
+  // disables the gate (back-compat). Default 30 min strikes a balance:
+  // long enough for a multi-stage retrosynthesis search, short enough
+  // that a hung tool can't pin a connection forever.
+  AGENT_TURN_WALL_CLOCK_MS: z.coerce.number().int().nonnegative().default(1_800_000),
 
   // Chat-specific rate limit (lower than the global rate limit).
   AGENT_CHAT_RATE_LIMIT_MAX: z.coerce.number().int().positive().default(30),
@@ -234,6 +244,35 @@ const ConfigSchema = z.object({
     .string()
     .optional()
     .transform((v) => v === "true"),
+
+  // ---------------------------------------------------------------------------
+  // Filesystem + shell builtins (Phase C — Claude-Code-class general tools).
+  //
+  // Default OFF: this is a domain-specialized chemistry agent and direct fs /
+  // shell access widens the trust boundary substantially. Set
+  // AGENT_FS_TOOLS_ENABLED=true to register read_file / write_file /
+  // list_directory / run_shell. AGENT_FS_ROOT MUST be an existing directory
+  // when tools are enabled; every tool resolves paths against it and rejects
+  // any input that escapes (relative .. traversal or absolute paths outside
+  // the root). Permission policies still apply — operators should also add
+  // explicit allow rules in `permission_policies` for the tools they want
+  // engaged in enforce mode.
+  // ---------------------------------------------------------------------------
+  AGENT_FS_TOOLS_ENABLED: z
+    .string()
+    .optional()
+    .transform((v) => v === "true"),
+  AGENT_FS_ROOT: z.string().default("/var/lib/chemclaw/agent-workdir"),
+  // run_shell hard timeout (ms). Long enough for builds/tests, short
+  // enough that a hung subprocess doesn't pin a connection.
+  AGENT_SHELL_TIMEOUT_MS: z.coerce.number().int().positive().default(120_000),
+  // run_shell allowed argv[0] commands. Comma-separated. Empty disables
+  // the tool. Restrict to your build/test/git tooling. Never include sh /
+  // bash here — run_shell does NOT shell-expand, and including a shell
+  // would re-introduce arbitrary execution by the back door.
+  AGENT_SHELL_ALLOWLIST: z
+    .string()
+    .default(""),
 });
 
 export type Config = z.infer<typeof ConfigSchema>;

@@ -134,6 +134,15 @@ export async function runHarness(options: HarnessOptions): Promise<HarnessResult
         finishReason = "max_steps";
         break loop;
       }
+      // Wall-clock cap — independent of step / token caps so a turn that
+      // burns time inside a single slow tool call (a 30-min synthesis
+      // route search) terminates cleanly instead of waiting for the LLM
+      // to produce another step. Checked alongside the step cap so the
+      // model-reported finish reason is unambiguous.
+      if (budget.isWallClockExpired()) {
+        finishReason = "wall_clock_expired";
+        break loop;
+      }
 
       // One LLM call (+ optional tool execution inside stepOnce). Phase 5:
       // stepOnce returns toolOutputs as an array — single-tool turns get a

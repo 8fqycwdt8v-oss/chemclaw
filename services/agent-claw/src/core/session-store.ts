@@ -51,6 +51,18 @@ export interface SessionState {
   lastFinishReason: SessionFinishReason | null;
   awaitingQuestion: string | null;
   messageCount: number;
+  /**
+   * Phase B2 — checkpoint of the active Message[] array at the last
+   * persistTurnState. Rehydrated by reanimator + resume routes so a
+   * process restart mid-chain doesn't reset the model's working context.
+   * Null when the session has never been checkpointed yet (e.g. first
+   * turn before any state has been written).
+   */
+  messagesCheckpoint: Array<{
+    role: "system" | "user" | "assistant" | "tool";
+    content: string;
+    toolId?: string;
+  }> | null;
   todos: Todo[];
   /** Optimistic-concurrency token; regenerated on every UPDATE that
    * mutates user-facing state. saveSession with mismatched expectedEtag
@@ -88,6 +100,7 @@ interface SessionRow {
   last_finish_reason: SessionFinishReason | null;
   awaiting_question: string | null;
   message_count: number;
+  messages_checkpoint: SessionState["messagesCheckpoint"] | null;
   etag: string;
   session_input_tokens: string;  // BIGINT — pg returns string
   session_output_tokens: string;
@@ -164,6 +177,7 @@ export async function loadSession(
               last_finish_reason,
               awaiting_question,
               message_count,
+              messages_checkpoint,
               etag::text AS etag,
               session_input_tokens,
               session_output_tokens,
@@ -196,6 +210,7 @@ export async function loadSession(
       lastFinishReason: row.last_finish_reason,
       awaitingQuestion: row.awaiting_question,
       messageCount: row.message_count,
+      messagesCheckpoint: row.messages_checkpoint ?? null,
       etag: row.etag,
       sessionInputTokens: Number(row.session_input_tokens),
       sessionOutputTokens: Number(row.session_output_tokens),
@@ -232,6 +247,13 @@ export async function saveSession(
     lastFinishReason?: SessionFinishReason | null;
     awaitingQuestion?: string | null;
     messageCount?: number;
+    /**
+     * Phase B2 — full Message[] checkpoint for crash-safe resume. Pass
+     * undefined to leave the column unchanged; pass [] to clear it (rare;
+     * resume normally writes a new array). Caller is responsible for
+     * trimming to AGENT_CHAT_MAX_HISTORY before passing.
+     */
+    messagesCheckpoint?: SessionState["messagesCheckpoint"];
     sessionInputTokens?: number;
     sessionOutputTokens?: number;
     sessionSteps?: number;
@@ -271,6 +293,10 @@ export async function saveSession(
     if (patch.messageCount !== undefined) {
       sets.push(`message_count = $${params.length + 1}`);
       params.push(patch.messageCount);
+    }
+    if (patch.messagesCheckpoint !== undefined) {
+      sets.push(`messages_checkpoint = $${params.length + 1}::jsonb`);
+      params.push(JSON.stringify(patch.messagesCheckpoint));
     }
     if (patch.sessionInputTokens !== undefined) {
       sets.push(`session_input_tokens = $${params.length + 1}`);

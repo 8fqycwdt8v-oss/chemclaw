@@ -303,6 +303,12 @@ async function executeResume(
     signal: req.signal,
     requestId: req.id,
     maxAutoTurns: 1, // resume is one turn at a time; cron can call again
+    // Phase B2 — rehydrate the in-memory message array from the persisted
+    // checkpoint so a resume after a process restart recovers prior tool
+    // results and reasoning context. Without this, RESUME_CONTINUE_MESSAGES
+    // is a 1-element array and the model sees only "Continue with the next
+    // step on your todo list." — every prior tool result is lost.
+    useMessagesCheckpoint: true,
   });
 
   return await reply.code(200).send({

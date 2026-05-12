@@ -41,7 +41,55 @@ def test_build_domain_happy_path(client):
     body = r.json()
     assert body["n_inputs"] == 3
     assert body["n_outputs"] == 1
+    assert body["n_constraints"] == 0
     assert "inputs" in body["bofire_domain"]
+    # bofire_version is reported live, not the static default.
+    assert isinstance(body["bofire_version"], str) and body["bofire_version"] != "unknown"
+
+
+def test_build_domain_with_linear_constraint(client):
+    """Linear inequality constraint round-trips through the Domain JSON."""
+    r = client.post(
+        "/build_domain",
+        json={
+            "factors": [
+                {"name": "t", "type": "continuous", "range": [25, 120]},
+                {"name": "loading", "type": "continuous", "range": [1, 10]},
+            ],
+            "categorical_inputs": [],
+            "outputs": [{"name": "y", "direction": "maximize"}],
+            "constraints": [
+                {
+                    "type": "<=",
+                    "features": ["t", "loading"],
+                    "coefficients": [1, 5],
+                    "rhs": 200,
+                },
+            ],
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["n_constraints"] == 1
+    # Constraint section is present and non-empty in the canonical Domain JSON.
+    assert body["bofire_domain"].get("constraints", {}).get("constraints")
+
+
+def test_build_domain_constraint_features_coefficients_mismatch_returns_422(client):
+    r = client.post(
+        "/build_domain",
+        json={
+            "factors": [
+                {"name": "t", "type": "continuous", "range": [0, 1]},
+            ],
+            "categorical_inputs": [],
+            "outputs": [{"name": "y", "direction": "maximize"}],
+            "constraints": [
+                {"type": "<=", "features": ["t"], "coefficients": [1, 2], "rhs": 1},
+            ],
+        },
+    )
+    assert r.status_code == 422
 
 
 def test_build_domain_no_inputs_returns_422(client):
@@ -57,7 +105,7 @@ def test_build_domain_no_inputs_returns_422(client):
 
 
 def test_recommend_next_cold_start_returns_random(client):
-    """Empty measured_outcomes → random space-filling proposals."""
+    """Empty measured_outcomes → random space-filling proposals + fallback_reason set."""
     domain_resp = client.post(
         "/build_domain",
         json={
@@ -82,10 +130,43 @@ def test_recommend_next_cold_start_returns_random(client):
     assert len(body["proposals"]) == 5
     assert body["n_observations"] == 0
     assert body["used_bo"] is False
+    assert body["fallback_reason"] is not None
+    assert "cold_start" in body["fallback_reason"]
+    assert body["strategy"] == "SoboStrategy"
     # Cold start: source should reflect random.
-    assert all(
-        p["source"].startswith("random") for p in body["proposals"]
+    assert all(p["source"].startswith("random") for p in body["proposals"])
+
+
+def test_recommend_next_random_strategy_short_circuits_gp(client):
+    """RandomStrategy bypasses GP entirely regardless of measured count."""
+    domain_resp = client.post(
+        "/build_domain",
+        json={
+            "factors": [{"name": "t", "type": "continuous", "range": [25, 120]}],
+            "categorical_inputs": [{"name": "solvent", "values": ["EtOH", "Toluene"]}],
+            "outputs": [{"name": "y", "direction": "maximize"}],
+        },
     )
+    bofire_domain = domain_resp.json()["bofire_domain"]
+    measured = [
+        {"factor_values": {"t": 50, "solvent": "EtOH"}, "outputs": {"y": 60}},
+        {"factor_values": {"t": 80, "solvent": "EtOH"}, "outputs": {"y": 75}},
+        {"factor_values": {"t": 100, "solvent": "Toluene"}, "outputs": {"y": 85}},
+    ]
+    r = client.post(
+        "/recommend_next",
+        json={
+            "bofire_domain": bofire_domain,
+            "measured_outcomes": measured,
+            "n_candidates": 3,
+            "strategy": "RandomStrategy",
+            "acquisition": "qLogEI",
+        },
+    )
+    body = r.json()
+    assert body["used_bo"] is False
+    assert body["fallback_reason"] == "random_strategy"
+    assert all(p["source"] == "random_strategy" for p in body["proposals"])
 
 
 def test_recommend_next_with_observations(client):
@@ -136,6 +217,139 @@ def test_recommend_next_invalid_domain_returns_422(client):
     )
     assert r.status_code == 422
     assert "invalid_bofire_domain" in r.json().get("detail", "")
+
+
+def test_recommend_next_rejects_unknown_factor_key(client):
+    """measured_outcomes with a factor key not in Domain.inputs → 422."""
+    domain_resp = client.post(
+        "/build_domain",
+        json={
+            "factors": [{"name": "temperature_c", "type": "continuous", "range": [25, 120]}],
+            "categorical_inputs": [{"name": "solvent", "values": ["EtOH", "Toluene"]}],
+            "outputs": [{"name": "y", "direction": "maximize"}],
+        },
+    )
+    bofire_domain = domain_resp.json()["bofire_domain"]
+    r = client.post(
+        "/recommend_next",
+        json={
+            "bofire_domain": bofire_domain,
+            "measured_outcomes": [
+                {"factor_values": {"temp_c": 50, "solvent": "EtOH"}, "outputs": {"y": 70}},
+            ],
+            "n_candidates": 1,
+        },
+    )
+    assert r.status_code == 422
+    assert "factor keys" in r.json()["detail"]
+
+
+def test_recommend_next_rejects_non_finite_output(client):
+    """Non-finite outputs are blocked. inf is sent as a raw JSON token (Infinity)
+    so the explicit finite check on the server actually fires; NaN doesn't survive
+    JSON encoding so this exercises the more interesting path."""
+    domain_resp = client.post(
+        "/build_domain",
+        json={
+            "factors": [{"name": "t", "type": "continuous", "range": [25, 120]}],
+            "categorical_inputs": [],
+            "outputs": [{"name": "y", "direction": "maximize"}],
+        },
+    )
+    bofire_domain = domain_resp.json()["bofire_domain"]
+    raw = (
+        '{"bofire_domain":' + __import__("json").dumps(bofire_domain) + ","
+        '"measured_outcomes":[{"factor_values":{"t":50},"outputs":{"y":Infinity}}],'
+        '"n_candidates":1}'
+    )
+    r = client.post(
+        "/recommend_next",
+        content=raw,
+        headers={"content-type": "application/json"},
+    )
+    assert r.status_code == 422
+
+
+def test_recommend_next_multi_objective_route(client):
+    """Two outputs with mixed directions → MoboStrategy + qNEHVI path."""
+    domain_resp = client.post(
+        "/build_domain",
+        json={
+            "factors": [{"name": "t", "type": "continuous", "range": [25, 120]}],
+            "categorical_inputs": [{"name": "solvent", "values": ["EtOH", "Toluene"]}],
+            "outputs": [
+                {"name": "yield_pct", "direction": "maximize"},
+                {"name": "pmi", "direction": "minimize"},
+            ],
+        },
+    )
+    bofire_domain = domain_resp.json()["bofire_domain"]
+    measured = [
+        {"factor_values": {"t": 50, "solvent": "EtOH"}, "outputs": {"yield_pct": 60, "pmi": 30}},
+        {"factor_values": {"t": 80, "solvent": "EtOH"}, "outputs": {"yield_pct": 75, "pmi": 25}},
+        {"factor_values": {"t": 100, "solvent": "Toluene"}, "outputs": {"yield_pct": 85, "pmi": 50}},
+        {"factor_values": {"t": 110, "solvent": "Toluene"}, "outputs": {"yield_pct": 90, "pmi": 80}},
+    ]
+    r = client.post(
+        "/recommend_next",
+        json={
+            "bofire_domain": bofire_domain,
+            "measured_outcomes": measured,
+            "n_candidates": 3,
+            "seed": 7,
+            "strategy": "MoboStrategy",
+            "acquisition": "qNEHVI",
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["proposals"]) == 3
+    assert body["strategy"] == "MoboStrategy"
+    # Either the BO path succeeded (source == 'qNEHVI') or it degraded to a
+    # random_*_failed path. Both shapes are acceptable in CI; the contract is
+    # that fallback_reason is set in the failure case and proposals come back.
+    sources = {p["source"] for p in body["proposals"]}
+    if body["used_bo"]:
+        assert sources == {"qNEHVI"}
+        assert body["fallback_reason"] is None
+    else:
+        assert any(s.startswith("random_") for s in sources)
+        assert body["fallback_reason"]
+
+
+def test_recommend_next_coerces_incompatible_acquisition(client):
+    """Single-objective campaign with qNEHVI requested → coerced to qLogEI with reason."""
+    domain_resp = client.post(
+        "/build_domain",
+        json={
+            "factors": [{"name": "t", "type": "continuous", "range": [25, 120]}],
+            "categorical_inputs": [],
+            "outputs": [{"name": "y", "direction": "maximize"}],
+        },
+    )
+    bofire_domain = domain_resp.json()["bofire_domain"]
+    measured = [
+        {"factor_values": {"t": 30}, "outputs": {"y": 60}},
+        {"factor_values": {"t": 60}, "outputs": {"y": 75}},
+        {"factor_values": {"t": 100}, "outputs": {"y": 85}},
+    ]
+    r = client.post(
+        "/recommend_next",
+        json={
+            "bofire_domain": bofire_domain,
+            "measured_outcomes": measured,
+            "n_candidates": 2,
+            "strategy": "SoboStrategy",
+            "acquisition": "qNEHVI",
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    if body["used_bo"]:
+        # Coercion succeeded — the actual acquisition swap is reflected in
+        # the proposal source, which is qLogEI on the warm path.
+        assert {p["source"] for p in body["proposals"]} == {"qLogEI"}
+        assert body["fallback_reason"] and "coerced" in body["fallback_reason"]
 
 
 def test_domain_load_uses_model_validate_round_trip(client):

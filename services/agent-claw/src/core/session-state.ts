@@ -5,16 +5,52 @@
 // core/runtime.ts).
 
 import type { Pool } from "pg";
-import type { ToolContext } from "./types.js";
+import type { Message, ToolContext } from "./types.js";
 import {
   saveSession,
   type SessionFinishReason,
+  type SessionState,
 } from "./session-store.js";
 import type { Budget } from "./budget.js";
 import {
   redactString,
   type RedactReplacement,
 } from "./hooks/redact-secrets.js";
+
+/**
+ * Phase B2 — soft cap on the checkpointed Message[] before it lands in
+ * agent_sessions.messages_checkpoint. Trimming preserves the system
+ * message at index 0 + the most recent N-1 turns. Must align with
+ * AGENT_CHAT_MAX_HISTORY (40) so the checkpoint shape matches what the
+ * route would have built fresh.
+ */
+const MAX_CHECKPOINT_MESSAGES = 40;
+
+function trimCheckpoint(
+  messages: Message[],
+): SessionState["messagesCheckpoint"] {
+  if (messages.length === 0) return [];
+  // Always keep the system message (index 0). For the rest, take the tail.
+  const systemMsg = messages[0]?.role === "system" ? messages[0] : null;
+  const body = systemMsg ? messages.slice(1) : messages;
+  const tail = body.slice(-(MAX_CHECKPOINT_MESSAGES - (systemMsg ? 1 : 0)));
+  const out: SessionState["messagesCheckpoint"] = [];
+  if (systemMsg) {
+    out.push({
+      role: systemMsg.role,
+      content: systemMsg.content,
+      ...(systemMsg.toolId !== undefined ? { toolId: systemMsg.toolId } : {}),
+    });
+  }
+  for (const m of tail) {
+    out.push({
+      role: m.role,
+      content: m.content,
+      ...(m.toolId !== undefined ? { toolId: m.toolId } : {}),
+    });
+  }
+  return out;
+}
 
 /**
  * Re-bind `ctx.seenFactIds` to whatever Set currently lives at
@@ -97,6 +133,14 @@ export async function persistTurnState(
     expectedEtag?: string;
     messageCount?: number;
     priorSessionSteps?: number;
+    /**
+     * Phase B2 — current Message[] to checkpoint. When provided, the helper
+     * trims to MAX_CHECKPOINT_MESSAGES (preserving system at index 0) and
+     * writes to messages_checkpoint so reanimator + resume routes can
+     * rehydrate after a process restart. Omit to leave the column
+     * unchanged.
+     */
+    messages?: Message[];
   } = {},
 ): Promise<{ awaitingQuestion: string | null }> {
   const dump: Record<string, unknown> = {};
@@ -159,6 +203,8 @@ export async function persistTurnState(
     lastFinishReason: (finishReason as SessionFinishReason | null | undefined) ?? null,
     awaitingQuestion,
     messageCount: opts.messageCount,
+    messagesCheckpoint:
+      opts.messages !== undefined ? trimCheckpoint(opts.messages) : undefined,
     sessionInputTokens: sessTotals?.inputTokens,
     sessionOutputTokens: sessTotals?.outputTokens,
     sessionSteps:
