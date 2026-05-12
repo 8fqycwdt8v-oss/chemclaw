@@ -432,3 +432,35 @@ spec:
             - name: LITELLM_BASE_URL
               value: {{ printf "http://litellm:%d" (int .Values.litellm.port) | quote }}
 {{- end }}
+
+{{- if .Values.projectors.wikiPages.enabled }}
+---
+# wiki_pages — knowledge-wiki projection projector (ADR 012). Keeps
+# knowledge_articles in sync with which pages exist / need (re)synthesis.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wiki-pages
+  labels:
+    app: wiki-pages
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wiki-pages
+  template:
+    metadata:
+      labels:
+        app: wiki-pages
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: wiki-pages
+          image: {{ .Values.projectors.wikiPages.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+{{- end }}

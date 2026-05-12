@@ -156,6 +156,10 @@ run.reaction-vectorizer: ## Run the DRFP projector locally
 run.chunk-embedder: ## Run the chunk-embedder projector locally
 	$(VENV)/bin/python -m services.projectors.chunk_embedder.main
 
+.PHONY: run.wiki-pages
+run.wiki-pages: ## Run the knowledge-wiki projection projector locally (ADR 012)
+	$(VENV)/bin/python -m services.projectors.wiki_pages.main
+
 .PHONY: ingest.docs
 ingest.docs: ## Scan sample-data/documents and ingest all supported files
 	$(VENV)/bin/python -m services.ingestion.doc_ingester.cli scan

@@ -231,24 +231,55 @@ treat them right). The `wiki-human-block-guard` `pre_tool` hook rejects
   is exercised by the testcontainer integration suite — self-skips without
   Docker, same as the rest.)
 
-### Phase 2 — `wiki_pages` projector (mark-dirty + batch regen)
+### Phase 2a — `wiki_pages` projector (mark-dirty + stub creation, no LLM)  ✅ done
 
-* `services/projectors/wiki_pages/` — `BaseProjector` subclass; consumes
-  `kg_fact_written` / `fact_invalidated` / `document_ingested` /
-  `hypothesis_*` / `synthesis_campaign_*` (exact event names per
-  `ingestion_event_catalog`); resolves slugs; marks dirty / creates stubs; runs
-  the debounced LLM regen loop (LiteLLM, prompt mode `wiki.synthesis`);
-  recomputes `confidence_score`; appends `log`.
-* `config_settings` rows for the `wiki.regen.*` knobs; `prompt_registry` row
-  `wiki.synthesis` (in `db/seed/02_prompt_registry.sql`).
-* `docker-compose.yml` + `infra/helm/` wiring (profile flag).
-* Idempotency: deterministic stub bodies; `ON CONFLICT` guards; replay-safe
-  (`DELETE FROM projection_acks WHERE projector_name='wiki_pages'` re-derives).
-* pytest: stub creation, dirty-marking, regen writes a revision + citations,
-  human-block preservation, replay idempotency (LiteLLM mocked).
-* **Done when**: ingesting a document and writing a `:Compound` fact produces a
-  `compound/<inchikey>` page with cited facts; invalidating a cited fact marks
-  the page dirty; the page regenerates.
+* `services/projectors/wiki_pages/` (`main.py` + `__init__.py` + `requirements.txt`
+  + `Dockerfile`) — `BaseProjector` subclass; consumes the canonical-knowledge
+  events the `kg_*` projectors also consume (`document_ingested`,
+  `experiment_imported`, `hypothesis_proposed`/`_status_changed`,
+  `synthesis_campaign_created`/`_state_changed`, `fact_invalidated`) — no new
+  `kg_fact_written` event needed; reads the canonical row to derive the
+  affected entity. `_touch_page` does `INSERT ... ON CONFLICT (slug) DO UPDATE
+  SET dirty=true, dirty_reason=…` — creates a `dirty` stub (`body_md=''`,
+  `created_by='__system__'`, `group_id='__system__'`) if missing, else just
+  re-marks dirty. `fact_invalidated` walks the citation reverse-index and marks
+  every citing page `dirty` (`lint:stale_citation`). Replay-safe via
+  `projection_acks`; the `knowledge_article_created` event fires once on the
+  fresh insert. **Auto-stubs `project/`, `campaign/`, `document/` only** —
+  `compound/`, `reaction-family/` auto-stubbing waits for Phase 2b (needs
+  reaction-component derivation); for now those pages come from the agent's
+  `request_article`.
+* `db/init/59_wiki_pages_consumer.sql` — appends `wiki_pages` to the
+  `consumed_by` arrays of the seven events (idempotent `array_append` guard).
+* `docker-compose.yml` (`wiki-pages` service, `profiles: ["full"]`),
+  `infra/helm/values.yaml` + `core-deployments.yaml` (`projectors.wikiPages`),
+  `Makefile` (`make run.wiki-pages`).
+* pytest: `tests/unit/projectors/test_wiki_pages.py` — stub creation per event
+  type, missing-canonical-row → `PermanentHandlerError`, unscoped-hypothesis
+  no-op, `fact_invalidated` → citing-page UPDATE, replay issues the identical
+  idempotent statement. `.venv/bin/pytest tests/unit/projectors/ -q` → 44
+  passed; ruff + mypy clean.
+* **Done**: a `document_ingested` / `synthesis_campaign_created` / scoped-
+  `hypothesis_proposed` event creates the corresponding stub page; invalidating
+  a cited fact marks the citing page dirty; `read_article` returns the stub
+  with `stale: true`.
+
+### Phase 2b — the LLM body-synthesis loop
+
+* Debounced regen pass (cron or projector loop) picks `dirty` pages, pulls the
+  entity's KG facts + relevant chunks + hypotheses + artifacts, synthesises
+  `body_md` with inline `[fact:…]` citations via LiteLLM (`wiki.synthesis`
+  prompt-registry mode, seeded in `db/seed/02_prompt_registry.sql`), recomputes
+  `confidence_score` (recency/tier-weighted mean of cited facts), writes a
+  `knowledge_article_revisions` row (`author_kind='projector'`), preserves
+  `human:*` blocks verbatim, clears `dirty`, appends a `log` entry.
+* `config_settings` rows for `wiki.regen.{model,debounce_seconds,max_per_hour,on_read,on_read_timeout_ms}`.
+* `compound/<inchikey>` + `reaction-family/<rxno>` auto-stubbing in the
+  `wiki_pages` projector (reaction-component derivation from `experiment_imported`).
+* pytest: regen writes a revision + citations, human-block preservation,
+  replay idempotency (LiteLLM mocked).
+* **Done when**: a `dirty` `project/<internal_id>` stub regenerates into a
+  cited prose page; invalidating a cited fact re-dirties + re-regenerates it.
 
 ### Phase 3 — `wiki_kg` + `wiki_search_index` projectors
 
@@ -258,7 +289,7 @@ treat them right). The `wiki-human-block-guard` `pre_tool` hook rejects
   archive (à la `kg_hypotheses`).
 * `services/projectors/wiki_search_index/` — re-chunk (heading-aware, same
   chunker as `doc_ingester`), embed via `mcp-embedder`, upsert into a sibling
-  `wiki_chunks` table (`db/init/59_wiki_chunks.sql`) tagged `source_type='wiki'`
+  `wiki_chunks` table (`db/init/60_wiki_chunks.sql`) tagged `source_type='wiki'`
   + `article_id`/`slug` backlink; delete superseded-revision chunks in the same
   txn.
 * Extend `search_knowledge` / `retrieve_related` to include `wiki` hits in the

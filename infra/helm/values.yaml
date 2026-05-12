@@ -103,6 +103,12 @@ projectors:
     # LLM-context chunk-prefix projector. Requires LITELLM_BASE_URL.
     enabled: true
     image: chemclaw/contextual-chunker:latest
+  wikiPages:
+    # Knowledge-wiki projection projector (ADR 012): keeps knowledge_articles
+    # in sync with which pages exist / need (re)synthesis. Harmless when the
+    # `wiki.enabled` feature flag is off (writes stubs nobody reads).
+    enabled: true
+    image: chemclaw/wiki-pages:latest
 
 # ── Profile: chemistry ────────────────────────────────────────────────────────
 # Enable with: --set chemistry.enabled=true
