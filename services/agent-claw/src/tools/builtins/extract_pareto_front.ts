@@ -94,12 +94,19 @@ export function buildExtractParetoFrontTool(pool: Pool, optimizerUrl: string) {
           const dirs: Record<string, string> = {};
           for (const f of features) {
             const objType = f.objective?.type ?? "";
-            // BoFire serializes objectives as MaximizeObjective / MinimizeObjective
-            // (or qualified subtypes). Inspect class name suffix.
-            if (objType.startsWith("Min")) {
+            // Explicit allowlist. CloseToTargetObjective / SigmoidObjective /
+            // any future BoFire subclass can't be reduced to a single
+            // direction without ambiguity, so we fail loudly rather than
+            // silently mapping to maximize and producing a wrong frontier.
+            if (objType === "MaximizeObjective") {
+              dirs[f.key] = "maximize";
+            } else if (objType === "MinimizeObjective") {
               dirs[f.key] = "minimize";
             } else {
-              dirs[f.key] = "maximize";
+              throw new Error(
+                `unsupported_objective_type:${f.key}=${objType || "<empty>"}; ` +
+                  `extract_pareto_front only supports MaximizeObjective and MinimizeObjective`,
+              );
             }
           }
 

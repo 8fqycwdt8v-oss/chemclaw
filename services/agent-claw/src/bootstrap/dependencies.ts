@@ -264,7 +264,7 @@ function registerBuiltinTools(
     asTool(buildStartOptimizationCampaignTool(pool, cfg.MCP_REACTION_OPTIMIZER_URL)),
   );
   registry.registerBuiltin("recommend_next_batch", () =>
-    asTool(buildRecommendNextBatchTool(pool, cfg.MCP_REACTION_OPTIMIZER_URL)),
+    asTool(buildRecommendNextBatchTool(pool, cfg.MCP_REACTION_OPTIMIZER_URL, configRegistry)),
   );
   registry.registerBuiltin("ingest_campaign_results", () =>
     asTool(buildIngestCampaignResultsTool(pool)),

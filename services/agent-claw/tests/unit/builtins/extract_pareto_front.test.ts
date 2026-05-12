@@ -84,6 +84,36 @@ describe("buildExtractParetoFrontTool", () => {
     ).rejects.toThrow(/campaign_not_found/);
   });
 
+  it("rejects unsupported objective type instead of silently mapping to maximize", async () => {
+    const queryFn = vi.fn(async (sql: string) => {
+      if (sql.includes("FROM optimization_campaigns")) {
+        return {
+          rows: [
+            {
+              bofire_domain: {
+                outputs: {
+                  features: [
+                    { key: "y", objective: { type: "CloseToTargetObjective" } },
+                  ],
+                },
+              },
+            },
+          ],
+        };
+      }
+      return { rows: [] };
+    });
+    const pool = {
+      connect: vi.fn(async () => ({ query: queryFn, release: vi.fn() })),
+    };
+    const tool = buildExtractParetoFrontTool(pool as never, URL_);
+    await expect(
+      tool.execute(makeCtx(), {
+        campaign_id: "11111111-2222-3333-4444-555555555555",
+      }),
+    ).rejects.toThrow(/unsupported_objective_type/);
+  });
+
   it("returns empty Pareto when no measured outcomes", async () => {
     const queryFn = vi.fn(async (sql: string) => {
       if (sql.includes("FROM optimization_campaigns")) {

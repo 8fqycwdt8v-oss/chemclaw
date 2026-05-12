@@ -9,12 +9,13 @@ Endpoints:
                             BoFire Domain JSON (used at campaign creation).
   POST /recommend_next   — given Domain JSON + prior measured_outcomes,
                             returns n_candidates next-batch proposals.
+  POST /extract_pareto   — non-dominated subset of measured_outcomes.
 """
 from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from typing import Annotated, Any, AsyncIterator
+from typing import Annotated, Any, AsyncIterator, Literal
 
 from fastapi import Body, FastAPI, HTTPException
 from pydantic import BaseModel, Field
@@ -33,6 +34,14 @@ def _is_ready() -> bool:
         return True
     except ImportError:
         return False
+
+
+def _bofire_version() -> str:
+    try:
+        import bofire  # noqa: PLC0415
+        return getattr(bofire, "__version__", "unknown")
+    except ImportError:
+        return "unavailable"
 
 
 @asynccontextmanager
@@ -70,24 +79,45 @@ class OutputSpec(BaseModel):
     direction: str = Field(default="maximize", pattern="^(maximize|minimize)$")
 
 
+class LinearConstraintSpec(BaseModel):
+    """Linear inequality constraint over the continuous factors.
+
+    sum_i (coefficient_i * factor_i) <= rhs   (when type='<=')
+    sum_i (coefficient_i * factor_i) >= rhs   (when type='>=')
+    sum_i (coefficient_i * factor_i)  = rhs   (when type='==')
+    """
+    type: Literal["<=", ">=", "=="] = "<="
+    features: list[str] = Field(min_length=1, max_length=20)
+    coefficients: list[float] = Field(min_length=1, max_length=20)
+    rhs: float
+
+
 class BuildDomainIn(BaseModel):
     factors: list[ContinuousFactor] = Field(default_factory=list, max_length=20)
     categorical_inputs: list[CategoricalInputSpec] = Field(default_factory=list, max_length=20)
     outputs: list[OutputSpec] = Field(min_length=1, max_length=10)
+    constraints: list[LinearConstraintSpec] = Field(default_factory=list, max_length=20)
 
 
 class BuildDomainOut(BaseModel):
     bofire_domain: dict[str, Any]
     n_inputs: int
     n_outputs: int
+    n_constraints: int
+    bofire_version: str
 
 
 def _build_bofire_domain(
     factors: list[ContinuousFactor],
     cats: list[CategoricalInputSpec],
     outputs: list[OutputSpec],
+    constraints: list[LinearConstraintSpec],
 ) -> Any:
-    from bofire.data_models.domain.api import Domain, Inputs, Outputs
+    from bofire.data_models.constraints.api import (
+        LinearEqualityConstraint,
+        LinearInequalityConstraint,
+    )
+    from bofire.data_models.domain.api import Constraints, Domain, Inputs, Outputs
     from bofire.data_models.features.api import (
         CategoricalInput, ContinuousInput, ContinuousOutput,
     )
@@ -108,7 +138,33 @@ def _build_bofire_domain(
         else:
             outs.append(ContinuousOutput(key=o.name, objective=MinimizeObjective(w=1.0)))
 
-    return Domain(inputs=Inputs(features=feats), outputs=Outputs(features=outs))
+    cons: list[Any] = []
+    for con in constraints:
+        if len(con.features) != len(con.coefficients):
+            raise ValueError(
+                "constraint features and coefficients must have equal length"
+            )
+        if con.type == "==":
+            cons.append(LinearEqualityConstraint(
+                features=list(con.features),
+                coefficients=[float(x) for x in con.coefficients],
+                rhs=float(con.rhs),
+            ))
+        else:
+            # BoFire LinearInequalityConstraint encodes a*x <= rhs by default.
+            # Flip sign for >= so the same primitive serves both directions.
+            sign = 1.0 if con.type == "<=" else -1.0
+            cons.append(LinearInequalityConstraint(
+                features=list(con.features),
+                coefficients=[float(sign * x) for x in con.coefficients],
+                rhs=float(sign * con.rhs),
+            ))
+
+    return Domain(
+        inputs=Inputs(features=feats),
+        outputs=Outputs(features=outs),
+        constraints=Constraints(constraints=cons) if cons else Constraints(),
+    )
 
 
 @app.post("/build_domain", response_model=BuildDomainOut, tags=["reaction_optimizer"])
@@ -119,7 +175,7 @@ async def build_domain(req: Annotated[BuildDomainIn, Body(...)]) -> BuildDomainO
             detail="at least one factor or categorical_input must be provided",
         )
     try:
-        domain = _build_bofire_domain(req.factors, req.categorical_inputs, req.outputs)
+        domain = _build_bofire_domain(req.factors, req.categorical_inputs, req.outputs, req.constraints)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(status_code=422, detail=f"infeasible_domain: {exc}") from exc
 
@@ -127,6 +183,8 @@ async def build_domain(req: Annotated[BuildDomainIn, Body(...)]) -> BuildDomainO
         bofire_domain=_domain_dump(domain),
         n_inputs=len(req.factors) + len(req.categorical_inputs),
         n_outputs=len(req.outputs),
+        n_constraints=len(req.constraints),
+        bofire_version=_bofire_version(),
     )
 
 
@@ -158,11 +216,18 @@ class MeasuredItem(BaseModel):
     outputs: dict[str, float] = Field(default_factory=dict)
 
 
+SupportedStrategy = Literal["SoboStrategy", "MoboStrategy", "RandomStrategy", "QnehviStrategy"]
+SupportedAcquisition = Literal["qLogEI", "qLogNEI", "qNEHVI", "qEHVI", "random"]
+
+
 class RecommendNextIn(BaseModel):
     bofire_domain: dict[str, Any]
     measured_outcomes: list[MeasuredItem] = Field(default_factory=list, max_length=10_000)
     n_candidates: int = Field(default=8, ge=1, le=200)
     seed: int = Field(default=42)
+    strategy: SupportedStrategy = "SoboStrategy"
+    acquisition: SupportedAcquisition = "qLogEI"
+    min_observations_for_bo: int = Field(default=_opt.MIN_OBSERVATIONS_FOR_BO, ge=1, le=1000)
 
 
 class ProposalOut(BaseModel):
@@ -174,6 +239,9 @@ class RecommendNextOut(BaseModel):
     proposals: list[ProposalOut]
     n_observations: int
     used_bo: bool
+    fallback_reason: str | None = None
+    strategy: str
+    acquisition: str
 
 
 @app.post("/recommend_next", response_model=RecommendNextOut, tags=["reaction_optimizer"])
@@ -188,24 +256,60 @@ async def recommend_next(
             detail=f"invalid_bofire_domain: {exc}",
         ) from exc
 
+    # Validate measured factor / output keys against the Domain so a typo
+    # ("temp_c" instead of "temperature_c") fails loudly here instead of
+    # being silently dropped in measured_to_dataframe / strategy.tell.
+    declared_inputs = _opt.domain_input_keys(domain)
+    declared_outputs = _opt.domain_output_keys(domain)
+    for idx, item in enumerate(req.measured_outcomes):
+        unknown_inputs = set(item.factor_values.keys()) - declared_inputs
+        if unknown_inputs:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"measured_outcomes[{idx}] has factor keys "
+                    f"{sorted(unknown_inputs)} not in Domain.inputs (declared: "
+                    f"{sorted(declared_inputs)})"
+                ),
+            )
+        unknown_outputs = set(item.outputs.keys()) - declared_outputs
+        if unknown_outputs:
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"measured_outcomes[{idx}] has output keys "
+                    f"{sorted(unknown_outputs)} not in Domain.outputs (declared: "
+                    f"{sorted(declared_outputs)})"
+                ),
+            )
+        for name, val in item.outputs.items():
+            if not (val == val) or val in (float("inf"), float("-inf")):  # NaN/inf check
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"measured_outcomes[{idx}].outputs[{name!r}] is not finite",
+                )
+
     measured = [m.model_dump() for m in req.measured_outcomes]
-    proposals = _opt.recommend_next_batch(
+    proposals, fallback_reason = _opt.recommend_next_batch(
         domain=domain,
         measured_outcomes=measured,
         n_candidates=req.n_candidates,
         seed=req.seed,
+        strategy=req.strategy,
+        acquisition=req.acquisition,
+        min_observations_for_bo=req.min_observations_for_bo,
     )
-    # BO-derived proposals carry the acquisition name as `source`; multi-output
-    # campaigns route through MoboStrategy + qNEHVI, single-output through
-    # SoboStrategy + qLogEI. Cold-start / fallback paths use `random*`.
-    _bo_sources = {"qLogEI", "qLogNEI", "qNEHVI", "qEHVI"}
-    used_bo = len(measured) >= _opt.MIN_OBSERVATIONS_FOR_BO and any(
-        p["source"] in _bo_sources for p in proposals
+    used_bo = (
+        len(measured) >= req.min_observations_for_bo
+        and any(p["source"] in _opt.ALL_BO_ACQS for p in proposals)
     )
     return RecommendNextOut(
         proposals=[ProposalOut(**p) for p in proposals],
         n_observations=len(measured),
         used_bo=used_bo,
+        fallback_reason=fallback_reason,
+        strategy=req.strategy,
+        acquisition=req.acquisition,
     )
 
 

@@ -153,9 +153,17 @@ describe("start_synthesis_campaign", () => {
   });
 
   it("seeds the playbook + emits campaign_created when seed_playbook=true", async () => {
+    let stepSeq = 0;
     const { pool, captured } = makeRespondingPool((text) => {
       if (text.includes("FROM nce_projects")) return [{ id: PROJECT_ID }];
       if (text.includes("INSERT INTO synthesis_campaigns")) return [campaignRow()];
+      // Per-row INSERT with RETURNING id::text — each call returns a fresh id
+      // so the loop in start_synthesis_campaign can wire depends_on for the
+      // following step.
+      if (text.includes("INSERT INTO synthesis_campaign_steps")) {
+        stepSeq += 1;
+        return [{ id: `step-uuid-${stepSeq}` }];
+      }
       return undefined;
     });
     const tool = buildStartSynthesisCampaignTool(pool);
