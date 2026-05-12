@@ -72,20 +72,16 @@ def apply_config_overrides(dsn: str) -> None:
     DEMOTION_SUCCESS_RATE = reg.get_float(
         "optimizer.demotion_success_rate", _THRESHOLD_DEFAULTS["DEMOTION_SUCCESS_RATE"],
     )
-    # The mixed float/int dict literal infers as Mapping[str, float], so
-    # cast the int-typed defaults at the call site rather than splitting
-    # the defaults map (which would force every reset_for_test caller to
-    # juggle two dicts).
     MIN_RUNS = reg.get_int(
-        "optimizer.min_runs", int(_THRESHOLD_DEFAULTS["MIN_RUNS"]),
+        "optimizer.min_runs", _THRESHOLD_DEFAULTS["MIN_RUNS"],
     )
     MIN_PROJECTS_FOR_PROMOTION = reg.get_int(
         "optimizer.min_projects_for_promotion",
-        int(_THRESHOLD_DEFAULTS["MIN_PROJECTS_FOR_PROMOTION"]),
+        _THRESHOLD_DEFAULTS["MIN_PROJECTS_FOR_PROMOTION"],
     )
     MIN_EVIDENCE_COUNT = reg.get_int(
         "optimizer.min_evidence_count",
-        int(_THRESHOLD_DEFAULTS["MIN_EVIDENCE_COUNT"]),
+        _THRESHOLD_DEFAULTS["MIN_EVIDENCE_COUNT"],
     )
     logger.info(
         "promoter thresholds: promotion=%.2f demotion=%.2f min_runs=%d "
