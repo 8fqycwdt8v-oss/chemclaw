@@ -6,7 +6,7 @@
 -- into Neo4j :Document and :Chunk nodes; this migration updates the catalog
 -- so the consumer slot is accurate. Names match each projector class's
 -- `name` attribute (the projection_acks lookup key);
--- 53_projector_name_normalization repairs prior hyphen-cased rows.
+-- 56_projector_name_normalization repairs prior hyphen-cased rows.
 --
 -- Re-applicable: ON CONFLICT DO UPDATE refreshes the row in place.
 

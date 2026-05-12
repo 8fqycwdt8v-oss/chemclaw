@@ -1,4 +1,6 @@
--- 2026-05-10 review §1.5: reactions.invalidated was added in
+-- 2026-05-10 review §1.5 (originally landed as 54; renumbered to 57 to avoid
+-- a numbering collision with concurrently-merged 54_* migrations).
+-- reactions.invalidated was added in
 -- 17_unified_confidence_and_temporal.sql but is NEVER written by any
 -- projector or builtin. Invalidation actually lives at the Neo4j edge
 -- level: kg_hypotheses sets `invalidated_at` on :CITES edges, and

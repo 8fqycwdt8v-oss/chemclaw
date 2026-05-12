@@ -143,3 +143,170 @@ export async function advancePlan(
     );
   });
 }
+
+// ---------------------------------------------------------------------------
+// Mutable-plan operations (Phase A3 — adaptive replanning).
+//
+// The original advancePlan only mutated current_step_index + status. Plans
+// were write-once after approval: if step 3 turned out to be impossible, the
+// agent had no in-loop way to amend the plan and had to break out via
+// ask_user. These helpers let the agent decompose a stuck step, insert a
+// remedial step, or replace a wrong step in flight.
+//
+// All three preserve the invariant that current_step_index points at the
+// next un-executed step. When a mutation moves steps before the cursor,
+// the cursor doesn't shift; mutations at or after the cursor are positional.
+// Re-renumbers `step_number` so the linear plan walker in chained-harness
+// still works.
+// ---------------------------------------------------------------------------
+
+export async function replacePlanSteps(
+  pool: Pool,
+  userEntraId: string,
+  planId: string,
+  steps: PlanStep[],
+): Promise<DbPlan | null> {
+  return await withUserContext(pool, userEntraId, async (client) => {
+    const renumbered = _renumber(steps);
+    const r = await client.query<PlanRow>(
+      `UPDATE agent_plans
+          SET steps = $2::jsonb
+        WHERE id = $1::uuid
+        RETURNING id::text AS id,
+                  session_id::text AS session_id,
+                  steps,
+                  current_step_index,
+                  status,
+                  initial_messages,
+                  created_at,
+                  updated_at`,
+      [planId, JSON.stringify(renumbered)],
+    );
+    const row = r.rows[0];
+    return row ? rowToPlan(row) : null;
+  });
+}
+
+export async function insertPlanStepAt(
+  pool: Pool,
+  userEntraId: string,
+  planId: string,
+  insertAt: number,
+  step: Omit<PlanStep, "step_number">,
+): Promise<DbPlan | null> {
+  return await withUserContext(pool, userEntraId, async (client) => {
+    // SELECT FOR UPDATE inside the withUserContext transaction so two
+    // parallel insert/remove calls on the same plan_id serialise instead
+    // of read-modify-writing on stale snapshots. Without this, parallel
+    // manage_plan calls (chat tab + reanimator both resuming the same
+    // session) silently overwrite each other's edits — the second commit
+    // wins and the first's mutation is lost.
+    const r0 = await client.query<PlanRow>(
+      `SELECT id::text AS id,
+              session_id::text AS session_id,
+              steps,
+              current_step_index,
+              status,
+              initial_messages,
+              created_at,
+              updated_at
+         FROM agent_plans
+        WHERE id = $1::uuid
+        FOR UPDATE`,
+      [planId],
+    );
+    const row0 = r0.rows[0];
+    if (!row0) return null;
+    const before = row0.steps;
+    const idx = Math.max(0, Math.min(insertAt, before.length));
+    const next = [
+      ...before.slice(0, idx),
+      { step_number: 0, ...step },
+      ...before.slice(idx),
+    ];
+    const renumbered = _renumber(next);
+    const r1 = await client.query<PlanRow>(
+      `UPDATE agent_plans
+          SET steps = $2::jsonb
+        WHERE id = $1::uuid
+        RETURNING id::text AS id,
+                  session_id::text AS session_id,
+                  steps,
+                  current_step_index,
+                  status,
+                  initial_messages,
+                  created_at,
+                  updated_at`,
+      [planId, JSON.stringify(renumbered)],
+    );
+    const row1 = r1.rows[0];
+    return row1 ? rowToPlan(row1) : null;
+  });
+}
+
+export async function removePlanStepAt(
+  pool: Pool,
+  userEntraId: string,
+  planId: string,
+  removeAt: number,
+): Promise<DbPlan | null> {
+  return await withUserContext(pool, userEntraId, async (client) => {
+    // SELECT FOR UPDATE inside the withUserContext transaction so two
+    // parallel insert/remove calls on the same plan_id serialise instead
+    // of read-modify-writing on stale snapshots. Without this, parallel
+    // manage_plan calls (chat tab + reanimator both resuming the same
+    // session) silently overwrite each other's edits — the second commit
+    // wins and the first's mutation is lost.
+    const r0 = await client.query<PlanRow>(
+      `SELECT id::text AS id,
+              session_id::text AS session_id,
+              steps,
+              current_step_index,
+              status,
+              initial_messages,
+              created_at,
+              updated_at
+         FROM agent_plans
+        WHERE id = $1::uuid
+        FOR UPDATE`,
+      [planId],
+    );
+    const row0 = r0.rows[0];
+    if (!row0) return null;
+    const before = row0.steps;
+    if (removeAt < 0 || removeAt >= before.length) {
+      // Out-of-range removal is a no-op; return the unchanged plan so the
+      // caller can decide whether to surface a warning.
+      return rowToPlan(row0);
+    }
+    const next = [...before.slice(0, removeAt), ...before.slice(removeAt + 1)];
+    const renumbered = _renumber(next);
+    // If we removed a step before the cursor, shift the cursor left so it
+    // still points at the same logical "next un-executed" step.
+    const newIndex =
+      removeAt < row0.current_step_index
+        ? Math.max(0, row0.current_step_index - 1)
+        : row0.current_step_index;
+    const r1 = await client.query<PlanRow>(
+      `UPDATE agent_plans
+          SET steps = $2::jsonb,
+              current_step_index = $3
+        WHERE id = $1::uuid
+        RETURNING id::text AS id,
+                  session_id::text AS session_id,
+                  steps,
+                  current_step_index,
+                  status,
+                  initial_messages,
+                  created_at,
+                  updated_at`,
+      [planId, JSON.stringify(renumbered), newIndex],
+    );
+    const row1 = r1.rows[0];
+    return row1 ? rowToPlan(row1) : null;
+  });
+}
+
+function _renumber(steps: PlanStep[]): PlanStep[] {
+  return steps.map((s, i) => ({ ...s, step_number: i + 1 }));
+}

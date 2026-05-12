@@ -32,6 +32,9 @@ from services.mcp_tools.common.limits import MAX_SMILES_LEN
 from services.mcp_tools.common.qm_cache_db import lookup as qm_lookup
 from services.mcp_tools.common.qm_cache_db import store as qm_store
 from services.mcp_tools.common.settings import ToolSettings
+from services.mcp_tools.common.smiles import (
+    smiles_to_canonical_and_xyz as _smiles_to_canonical_and_xyz,
+)
 
 
 log = logging.getLogger("mcp-crest")
@@ -52,40 +55,6 @@ app = create_app(
     ready_check=_crest_available,
     required_scope="mcp_crest:invoke",
 )
-
-
-def _smiles_to_canonical_and_xyz(smiles: str) -> tuple[str, str, str | None]:
-    try:
-        from rdkit import Chem as _Chem  # noqa: PLC0415
-        from rdkit.Chem import AllChem as _AllChem  # noqa: PLC0415
-        from rdkit.Chem.inchi import MolToInchiKey as _ToInchiKey  # noqa: PLC0415
-    except ImportError as exc:
-        raise ImportError("rdkit required inside the Docker image") from exc
-
-    Chem: Any = _Chem
-    AllChem: Any = _AllChem
-    if not smiles or not smiles.strip():
-        raise ValueError("smiles must be a non-empty string")
-    mol = Chem.MolFromSmiles(smiles)
-    if mol is None:
-        raise ValueError(f"invalid SMILES: {smiles!r}")
-    canonical = Chem.MolToSmiles(mol)
-    try:
-        inchikey = _ToInchiKey(mol) or None
-    except Exception:  # noqa: BLE001
-        inchikey = None
-    mol = Chem.AddHs(mol)
-    if AllChem.EmbedMolecule(mol, AllChem.ETKDGv3()) == -1:
-        raise ValueError(f"RDKit could not embed SMILES: {smiles!r}")
-    AllChem.MMFFOptimizeMolecule(mol)
-    conf = mol.GetConformer()
-    lines = [str(mol.GetNumAtoms()), canonical]
-    for atom in mol.GetAtoms():
-        pos = conf.GetAtomPosition(atom.GetIdx())
-        lines.append(
-            f"{atom.GetSymbol():2s}  {pos.x:12.6f}  {pos.y:12.6f}  {pos.z:12.6f}"
-        )
-    return canonical, "\n".join(lines), inchikey
 
 
 def _run_crest(args: list[str], cwd: Path, timeout: int = _CREST_TIMEOUT) -> subprocess.CompletedProcess[str]:

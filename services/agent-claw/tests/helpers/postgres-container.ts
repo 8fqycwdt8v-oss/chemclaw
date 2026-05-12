@@ -130,6 +130,13 @@ export async function startTestPostgres(
     const filesToApply = [
       "13_agent_sessions.sql",
       "14_agent_session_extensions.sql",
+      // Phase B2 — adds messages_checkpoint JSONB column. loadSession
+      // queries it; without applying this the integration tests fail
+      // with `column "messages_checkpoint" does not exist`.
+      "52_agent_session_message_checkpoint.sql",
+      // Phase B3 — bumps auto_resume_cap default to 30 + backfills
+      // existing rows. Idempotent; safe to apply on a fresh testcontainer.
+      "53_agent_session_cap_bump.sql",
     ];
     for (const file of filesToApply) {
       const sql = readFileSync(resolve(dbInitDir, file), "utf8");

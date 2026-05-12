@@ -32,6 +32,18 @@ export interface BudgetOptions {
   /** Cross-turn budget — when set, every consumeStep also charges against
    * the session totals. Loaded from agent_sessions at turn start. */
   session?: SessionBudgetSnapshot;
+  /**
+   * Optional per-turn wall-clock cap (ms). When set, isWallClockExpired()
+   * returns true once the elapsed real time since Budget construction
+   * exceeds this. The harness checks it inside the loop alongside the step
+   * cap so a runaway turn (one tool stuck on a 30 min request) terminates
+   * cleanly instead of running forever within the step budget.
+   *
+   * Independent of the per-call AbortSignal — that handles client
+   * disconnects and explicit cancellation. This handles "we've spent too
+   * long; bail."
+   */
+  maxWallClockMs?: number;
 }
 
 export class Budget {
@@ -39,6 +51,9 @@ export class Budget {
   readonly maxPromptTokens: number;
   readonly maxCompletionTokens: number;
   readonly compactionThreshold: number;
+
+  readonly maxWallClockMs: number | undefined;
+  private readonly _startedAt: number;
 
   private _stepsUsed = 0;
   private _promptTokens = 0;
@@ -64,6 +79,24 @@ export class Budget {
     this.maxCompletionTokens = opts.maxCompletionTokens ?? 32_000;
     this.compactionThreshold = opts.compactionThreshold ?? 0.6;
     this._session = opts.session;
+    this.maxWallClockMs = opts.maxWallClockMs;
+    this._startedAt = Date.now();
+  }
+
+  /**
+   * Returns true when a wall-clock cap was configured and the elapsed real
+   * time since construction has exceeded it. No-op (false) when no cap was
+   * set so existing call sites that omit maxWallClockMs are unaffected.
+   */
+  isWallClockExpired(): boolean {
+    if (this.maxWallClockMs === undefined) return false;
+    return Date.now() - this._startedAt >= this.maxWallClockMs;
+  }
+
+  /** Elapsed wall-clock since this Budget was constructed (ms). Exposed for
+   *  termination-reason logging. */
+  get elapsedMs(): number {
+    return Date.now() - this._startedAt;
   }
 
   get stepsUsed(): number {

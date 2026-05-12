@@ -4,10 +4,16 @@ Re-fits a Strategy from {Domain JSON, prior measured outcomes} on every call
 and asks for the next batch of recommendations. No persistent surrogate;
 canonical state is in optimization_rounds.measured_outcomes.
 
-Single-objective via SoboStrategy + qLogEI. Multi-objective (Z6) via
-MoboStrategy + qNEHVI when the Domain has 2+ outputs. Pareto-front
-extraction available via pareto_front() — pure non-dominated sorting on
-measured outcomes.
+Strategy + acquisition routing follows the request, with sensible fallbacks
+for unsupported combinations:
+
+  * Single-objective:   Sobo + qLogEI / qLogNEI
+  * Multi-objective:    Mobo + qNEHVI / qEHVI
+  * RandomStrategy:     skip GP altogether and space-fill the Domain.
+
+Cold-start (< MIN_OBSERVATIONS_FOR_BO measured outcomes) → space-filling
+random, regardless of the requested strategy. The (per-round) seed is
+caller-provided so distinct campaigns don't all start with the same plate.
 """
 from __future__ import annotations
 
@@ -18,10 +24,16 @@ import pandas as pd
 
 log = logging.getLogger("mcp-reaction-optimizer.optimizer")
 
-# Below this many measured rows, fall back to space-filling random sampling.
-# GP fits are unstable below ~3-5 observations.
+# Default cold-start threshold. The actual value is read at the call site
+# (TS builtin) from ConfigRegistry key `bo.min_observations_for_bo` and
+# threaded through as `min_observations_for_bo` on the request, so per-org
+# / per-project tuning is possible without changing this default.
 MIN_OBSERVATIONS_FOR_BO = 3
 
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
 
 def measured_to_dataframe(
     domain: Any,
@@ -39,74 +51,162 @@ def measured_to_dataframe(
     return pd.DataFrame(rows)
 
 
+def domain_input_keys(domain: Any) -> set[str]:
+    """Return the set of input feature keys declared on a Domain.
+
+    Tolerates BoFire schema variants (features attribute vs. .get()).
+    Returns the empty set when the Domain has no inputs.
+    """
+    inputs = getattr(domain, "inputs", None)
+    if inputs is None:
+        return set()
+    feats = getattr(inputs, "features", None) or []
+    keys: set[str] = set()
+    for f in feats:
+        k = getattr(f, "key", None)
+        if isinstance(k, str):
+            keys.add(k)
+    return keys
+
+
+def domain_output_keys(domain: Any) -> set[str]:
+    """Return the set of output feature keys declared on a Domain."""
+    outputs = getattr(domain, "outputs", None)
+    if outputs is None:
+        return set()
+    feats = getattr(outputs, "features", None) or []
+    keys: set[str] = set()
+    for f in feats:
+        k = getattr(f, "key", None)
+        if isinstance(k, str):
+            keys.add(k)
+    return keys
+
+
+# Acquisitions valid for single- and multi-objective. The caller passes one
+# from the campaign row; unsupported combos fall back with a fallback_reason
+# so the agent can surface the mismatch instead of silently doing the wrong
+# thing.
+SINGLE_OBJ_ACQS = {"qLogEI", "qLogNEI"}
+MULTI_OBJ_ACQS = {"qNEHVI", "qEHVI"}
+ALL_BO_ACQS = SINGLE_OBJ_ACQS | MULTI_OBJ_ACQS
+
+
 def recommend_next_batch(
     domain: Any,
     measured_outcomes: list[dict[str, Any]],
     n_candidates: int,
     seed: int = 42,
-) -> list[dict[str, Any]]:
-    """Fit a SoboStrategy and ask for n_candidates next-batch recommendations.
+    *,
+    strategy: str = "SoboStrategy",
+    acquisition: str = "qLogEI",
+    min_observations_for_bo: int = MIN_OBSERVATIONS_FOR_BO,
+) -> tuple[list[dict[str, Any]], str | None]:
+    """Fit the requested Strategy and ask for n_candidates next-batch recommendations.
 
-    Cold-start (< MIN_OBSERVATIONS_FOR_BO measured outcomes) → space-filling
-    random samples from the Domain.
+    Returns ``(proposals, fallback_reason)``. ``fallback_reason`` is None when
+    the configured BO path was used; otherwise a short string identifying why
+    the loop degraded (cold start, RandomStrategy, BoFire missing, fit
+    failure, …). Callers MUST surface this so silent degradation is visible.
     """
     n_obs = len(measured_outcomes)
-    cold = n_obs < MIN_OBSERVATIONS_FOR_BO
+    cold = n_obs < max(1, int(min_observations_for_bo))
 
-    if cold:
-        df = domain.inputs.sample(n=n_candidates, seed=seed)
-        return _df_rows_to_proposals(df, source="random_cold_start")
-
-    # Single- vs multi-objective routing — count Domain outputs.
+    # Determine objective dimensionality up-front so we can pick the right
+    # default acquisition when the caller passed one that is incompatible
+    # with the Domain.
     try:
         n_outputs = len(domain.outputs.features) if hasattr(domain, "outputs") else 1
     except (TypeError, AttributeError):
         n_outputs = 1
     multi_objective = n_outputs >= 2
 
+    # RandomStrategy short-circuits the GP regardless of measured count.
+    if strategy == "RandomStrategy":
+        df = domain.inputs.sample(n=n_candidates, seed=seed)
+        return _df_rows_to_proposals(df, source="random_strategy"), "random_strategy"
+
+    if cold:
+        df = domain.inputs.sample(n=n_candidates, seed=seed)
+        return _df_rows_to_proposals(df, source="random_cold_start"), (
+            f"cold_start_n_obs={n_obs}<{int(min_observations_for_bo)}"
+        )
+
+    # Validate acquisition against the objective shape; coerce with a reason
+    # rather than throwing, so the campaign doesn't dead-stop on a stale row.
+    coerced_reason: str | None = None
+    if multi_objective and acquisition not in MULTI_OBJ_ACQS:
+        coerced_reason = (
+            f"acquisition={acquisition!r} unsupported for {n_outputs}-objective campaign; "
+            "coerced to qNEHVI."
+        )
+        acquisition = "qNEHVI"
+    elif (not multi_objective) and acquisition not in SINGLE_OBJ_ACQS:
+        coerced_reason = (
+            f"acquisition={acquisition!r} unsupported for single-objective campaign; "
+            "coerced to qLogEI."
+        )
+        acquisition = "qLogEI"
+
     try:
-        from bofire.data_models.acquisition_functions.api import qLogEI, qNEHVI
+        from bofire.data_models.acquisition_functions.api import (
+            qEHVI, qLogEI, qLogNEI, qNEHVI,
+        )
         from bofire.data_models.strategies.api import MoboStrategy, SoboStrategy
         from bofire.strategies.api import strategy_map
     except ImportError:
         df = domain.inputs.sample(n=n_candidates, seed=seed)
-        return _df_rows_to_proposals(df, source="random_fallback")
+        return _df_rows_to_proposals(df, source="random_fallback"), "bofire_import_failed"
 
-    if multi_objective:
-        try:
-            strategy_dm = MoboStrategy(domain=domain, acquisition_function=qNEHVI(), seed=seed)
-        except Exception as exc:  # noqa: BLE001
-            log.warning("MoboStrategy build failed (%s); falling back", exc)
-            df = domain.inputs.sample(n=n_candidates, seed=seed)
-            return _df_rows_to_proposals(df, source="random_mobo_build_failed")
-        source_label = "qNEHVI"
-    else:
-        strategy_dm = SoboStrategy(domain=domain, acquisition_function=qLogEI(), seed=seed)
-        source_label = "qLogEI"
+    acq_ctors = {
+        "qLogEI": qLogEI,
+        "qLogNEI": qLogNEI,
+        "qNEHVI": qNEHVI,
+        "qEHVI": qEHVI,
+    }
+    acq_ctor = acq_ctors[acquisition]
 
     try:
-        strategy = strategy_map(strategy_dm)
+        if multi_objective:
+            strategy_dm = MoboStrategy(domain=domain, acquisition_function=acq_ctor(), seed=seed)
+        else:
+            strategy_dm = SoboStrategy(domain=domain, acquisition_function=acq_ctor(), seed=seed)
+    except Exception as exc:  # noqa: BLE001
+        log.warning("strategy build failed (%s); falling back", exc)
+        df = domain.inputs.sample(n=n_candidates, seed=seed)
+        return _df_rows_to_proposals(df, source="random_strategy_build_failed"), (
+            f"strategy_build_failed: {exc}"
+        )
+
+    try:
+        strategy_obj = strategy_map(strategy_dm)
     except Exception as exc:  # noqa: BLE001
         log.warning("strategy_map failed (%s); falling back", exc)
         df = domain.inputs.sample(n=n_candidates, seed=seed)
-        return _df_rows_to_proposals(df, source="random_strategy_failed")
+        return _df_rows_to_proposals(df, source="random_strategy_failed"), (
+            f"strategy_map_failed: {exc}"
+        )
 
     measured_df = measured_to_dataframe(domain, measured_outcomes)
     try:
-        strategy.tell(measured_df)
+        strategy_obj.tell(measured_df)
     except Exception as exc:  # noqa: BLE001
         log.warning("strategy.tell failed (%s); falling back", exc)
         df = domain.inputs.sample(n=n_candidates, seed=seed)
-        return _df_rows_to_proposals(df, source="random_tell_failed")
+        return _df_rows_to_proposals(df, source="random_tell_failed"), (
+            f"strategy_tell_failed: {exc}"
+        )
 
     try:
-        candidates = strategy.ask(candidate_count=n_candidates)
+        candidates = strategy_obj.ask(candidate_count=n_candidates)
     except Exception as exc:  # noqa: BLE001
         log.warning("strategy.ask failed (%s); falling back", exc)
         df = domain.inputs.sample(n=n_candidates, seed=seed)
-        return _df_rows_to_proposals(df, source="random_ask_failed")
+        return _df_rows_to_proposals(df, source="random_ask_failed"), (
+            f"strategy_ask_failed: {exc}"
+        )
 
-    return _df_rows_to_proposals(candidates, source=source_label)
+    return _df_rows_to_proposals(candidates, source=acquisition), coerced_reason
 
 
 # ---------------------------------------------------------------------------

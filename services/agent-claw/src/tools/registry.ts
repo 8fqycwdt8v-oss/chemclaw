@@ -359,6 +359,25 @@ export class ToolRegistry {
     return this;
   }
 
+  /** Number of distinct builtin factories registered via registerBuiltin().
+   *
+   * Used by the startup gate (`MIN_EXPECTED_BUILTINS` in
+   * `bootstrap/start.ts`) to catch the silent-drift failure mode where a
+   * new builtin module is added under `tools/builtins/` but never wired
+   * into `registerBuiltinTools` — pre-this-counter the agent would boot
+   * green with the tool simply absent from the catalog.
+   */
+  get builtinCount(): number {
+    return this._builtinFactories.size;
+  }
+
+  /** Names of every builtin factory registered, alphabetised. Used for
+   * audit logging at startup so the registered set is queryable from
+   * structured logs without needing the full registry hydration. */
+  builtinNames(): string[] {
+    return [...this._builtinFactories.keys()].sort();
+  }
+
   // ---------------------------------------------------------------------------
   // DB-backed hydration (Phase A.2)
   // ---------------------------------------------------------------------------
@@ -416,6 +435,41 @@ export class ToolRegistry {
         });
       }
     }
+  }
+
+  /**
+   * Phase C3 — hot-register a single tool by name after a forge_tool
+   * persistence completes. Re-queries the DB row through the same join
+   * loadFromDb uses and upserts it into the in-memory registry. The
+   * caller can be confident the live ToolRegistry now exposes the new
+   * tool to the same chained-execution turn that forged it.
+   *
+   * Returns true on successful registration, false when the row was
+   * missing / disabled / had no factory or scripts_path. Errors propagate.
+   */
+  async hotRegisterByName(pool: Pool, name: string): Promise<boolean> {
+    const { rows } = await pool.query<ToolRow>(
+      `SELECT t.name, t.source, t.schema_json, t.mcp_url, t.mcp_endpoint, t.description,
+              sl.scripts_path,
+              sl.forged_by_role,
+              sl.forged_by_model,
+              sl.code_sha256
+         FROM tools t
+         LEFT JOIN skill_library sl
+               ON sl.name = t.name AND sl.kind = 'forged_tool'
+        WHERE t.name = $1 AND t.enabled = true
+        LIMIT 1`,
+      [name],
+    );
+    const row = rows[0];
+    if (!row) return false;
+    const tool = this._buildTool(row);
+    if (!tool) return false;
+    this.upsert(tool, {
+      forgedByRole: (row.forged_by_role as ModelRole | null) ?? null,
+      forgedByModel: row.forged_by_model ?? null,
+    });
+    return true;
   }
 
   private _buildTool(row: ToolRow): Tool | null {

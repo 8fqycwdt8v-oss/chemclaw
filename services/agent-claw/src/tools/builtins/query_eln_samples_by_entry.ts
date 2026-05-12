@@ -15,17 +15,10 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
-import { SampleSchema } from "./_eln_shared.js";
+import { SampleSchema, elnIdField } from "./_eln_shared.js";
 
 export const QueryElnSamplesByEntryIn = z.object({
-  entry_id: z
-    .string()
-    .min(1)
-    .max(128)
-    .regex(
-      /^[A-Za-z0-9_.:-]+$/,
-      "entry_id must match [A-Za-z0-9_-.:]+",
-    ),
+  entry_id: elnIdField("entry_id"),
 });
 export type QueryElnSamplesByEntryInput = z.infer<typeof QueryElnSamplesByEntryIn>;
 

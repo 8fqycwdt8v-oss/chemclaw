@@ -124,6 +124,25 @@ backfill the KG once that projector lands, `DELETE FROM projection_acks WHERE
 projector_name='kg_synthesis_campaigns'` and restart the projector — the
 existing `ingestion_events` rows replay deterministically.
 
+## Detecting orphaned step references
+
+`synthesis_campaign_steps.ref_table` + `ref_id` is a soft FK. Hard FKs
+aren't usable: refs span `public` and `mock_eln` schemas, and some
+target tables (`task_batches`, `mock_eln.entries`) are routinely cleaned
+up. The orphan-detection view materialises the integrity check on
+demand:
+
+```sql
+SELECT * FROM v_synthesis_campaign_step_orphans;
+```
+
+Empty result → healthy. Non-empty rows = step refs that no longer
+resolve. Wrap this in a daily cron and emit `error_events` on non-empty
+results. The view excludes `mock_eln.entries` / `mock_eln.samples`
+because the schema is testbed-only and isn't present on every
+deployment; testbed operators run an ad-hoc orphan query against those
+tables directly.
+
 ## Common failure modes
 
 | Symptom | Cause | Fix |

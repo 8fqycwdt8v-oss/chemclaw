@@ -1,4 +1,6 @@
--- 2026-05-10 review §1.6: ingestion_event_catalog.consumed_by used hyphen-cased
+-- 2026-05-10 review §1.6 (originally landed as 53; renumbered to 56 to avoid
+-- a numbering collision with concurrently-merged 53_* migrations).
+-- ingestion_event_catalog.consumed_by used hyphen-cased
 -- projector names ('kg-experiments', 'chunk-embedder', 'kg-documents', ...)
 -- but every projector class declares an underscore-cased `name` attribute,
 -- which is the value written to projection_acks.projector_name. The catalog

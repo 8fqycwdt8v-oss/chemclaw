@@ -227,7 +227,7 @@ Never `console.log` / `print` in service code. Both layers structure-log; never 
   const log = getLogger("ToolRegistry");
   log.warn({ toolId, reason }, "tool disabled");
   ```
-  Pino; level from `AGENT_LOG_LEVEL`; redacts `authorization` / `cookie` / `detail` only. **`err.message` and `err.stack` are NOT redacted today**; Postgres + MCP errors regularly carry SMILES + compound codes — scrub user-derived content explicitly. Tracked in 2026-05-03 deep-review backlog (cluster 6).
+  Pino; level from `AGENT_LOG_LEVEL`; path-redacts `authorization` / `cookie` / `detail` / `*.password` / `*.token`. The custom `err` / `error` / `err_msg` serializers in `services/agent-claw/src/observability/logger.ts` route `err.message`, `err.stack`, and the cause chain through `scrub()` (the same length-bounded regex pipeline as the egress redactor) so SMILES / compound codes / NCE-IDs embedded in driver error strings are masked before formatting. Cause-chain walk capped at depth 5 with a WeakSet cycle guard.
 - **Python** — `configure_logging` from `services.mcp_tools.common.logging`:
   ```py
   from services.mcp_tools.common.logging import configure_logging
@@ -254,6 +254,7 @@ DB-side audit: `error_events` (via `record_error_event`, `chemclaw_app` / `chemc
 - `docs/runbooks/post-v1.0.0-hardening.md`
 - `docs/runbooks/redaction-pattern-management.md`
 - `docs/runbooks/rotate-mcp-auth-key.md`
+- `docs/runbooks/synthesis-campaign-lifecycle.md`
 
 Read the relevant runbook BEFORE filing a feature that asks an admin to do anything new.
 
@@ -303,33 +304,43 @@ To replay: `DELETE FROM projection_acks WHERE projector_name='<name>'` and resta
 - **D**: E2B PTC sandbox; `run_program`; Paperclip-lite; Langfuse OTel; `/feedback` → DB; multi-model routing.
 - **D.5**: tool forging (`forge_tool`, `induce_forged_tool_from_trace`, `add_forged_tool_test`); `forged_tool_validation_runs`; weak-from-strong transfer; scope promotion. Lifecycle (forge → SHADOW → VALIDATING → ACTIVE → FORK / DEPRECATE): `docs/runbooks/forged-tool-lifecycle.md`.
 - **E**: DSPy GEPA nightly optimizer; golden + held-out promotion gate; skill promotion loop; shadow serving (`shadow_until`); `/eval` slash verb. Concrete paths: `services/optimizer/gepa_runner/{runner.py,gepa.py,metric.py}` (prompts → `prompt_registry` writes); `services/optimizer/skill_promoter/promoter.py` (skills → `skill_promotion_events` rows with EXPLORATORY → WORKING → FOUNDATION promotions); `services/optimizer/forged_tool_validator/runner.py` (forged-tool nightly validation, auto-disable on failure); manual artifact promotion via `POST /api/artifacts/:id/maturity` (`services/agent-claw/src/routes/artifacts.ts`).
-- **F.1**: chemistry MCPs on `chemistry` profile: askcos (8007), aizynth (8008), chemprop (8009), xtb (8010), synthegy-mech (8011), sirius (8012). admetlab removed. **synthegy-mech**: LLM-guided mechanism elucidation via A* over arrow-pushing primitives (Bran et al., *Matter* 2026, [10.1016/j.matt.2026.102812](https://doi.org/10.1016/j.matt.2026.102812)); vendored from `github.com/schwallergroup/steer` (MIT). Ionic only — radical/pericyclic surface a `warnings` entry. LLM traffic via central LiteLLM. Server-side wall-clock 270 s (30 s under agent-side `TIMEOUT_SYNTHEGY_MECH_MS = 300_000`). xTB intermediate-energy validation opt-in via `validate_energies=true`.
+- **F.1**: chemistry MCPs on `chemistry` profile: askcos (8007), aizynth (8008), chemprop (8009), xtb (8010), synthegy-mech (8011), sirius (8012). admetlab removed. **synthegy-mech**: LLM-guided mechanism elucidation via A* over arrow-pushing primitives (Bran et al., *Matter* 2026, [10.1016/j.matt.2026.102812](https://doi.org/10.1016/j.matt.2026.102812)); vendored from `github.com/schwallergroup/steer` (MIT). Ionic only — radical/pericyclic surface a `warnings` entry. LLM traffic via central LiteLLM. Server-side wall-clock 270 s (30 s under agent-side `TIMEOUT_SYNTHEGY_MECH_MS = 300_000`). xTB intermediate-energy validation opt-in via `validate_energies=true`. **Caveats**: g-xTB returns 501 — the standalone `gxtb` binary is not bundled in the image (intentional; previously the path silently fell back to GFN2 and poisoned the cache). REINVENT integration in `mcp_genchem` (`/reinvent_run`) likewise returns 501 until the library is bundled; use `scaffold_decorate` / `bioisostere_replace` / `fragment_grow` for now.
 - **F.2**: source-system MCPs replacing the deleted vendor adapters.
   - **`mcp_eln_local`** (port 8013, profile `testbed`): local Postgres-backed mock ELN. `mock_eln` schema seeded with ≥ 2000 deterministic experiments across 4 projects, 10 chemistry families, 10 OFAT campaigns. Five agent-claw builtins including OFAT-aware `query_eln_canonical_reactions` (collapses 200-row OFAT campaigns into one canonical row + `ofat_count`). Plan: `docs/plans/eln-mock-and-logs-sciy.md`.
-  - **`mcp_logs_sciy`** (port 8016, profile `sources`): LOGS-by-SciY adapter (HPLC/NMR/MS SDMS). Backends: `fake-postgres` (default; `fake_logs` schema, ~3000 datasets cross-linked to `mock_eln.samples`) and `real` (stub, gated on tenant access). Three builtins.
+  - **`mcp_logs_sciy`** (port 8016, profile `sources`): LOGS-by-SciY adapter (HPLC/NMR/MS SDMS). Backends: `fake-postgres` (default; `fake_logs` schema, ~3000 datasets cross-linked to `mock_eln.samples`) and `real` (stub, gated on tenant access — every endpoint raises `NotImplementedError` until a real LOGS tenant lands per plan §11 Q1). Three builtins.
   - The `source-cache` post-tool hook + `kg_source_cache` projector pick both up via the unchanged regex `/^(query|fetch)_(eln|lims|instrument)_/`.
   - `eln_json_importer` retired from live path; preserved as `services/ingestion/eln_json_importer.legacy/` for one-shot bulk migrations.
   - Helm chart: `infra/helm/` with profile flags. `services/agent/` deleted; Streamlit `AGENT_BASE_URL` defaults to :3101. ADRs: `docs/adr/004-harness-engineering.md`, `005-data-layer-revision.md`. Runbook: `docs/runbooks/harness-rollback.md`.
 - **Wave-2 audit (2026-05-04 → 05)**: PRs #87–#96 closed the 2026-05-04 deep-review drift list (Wave 1: DRIFT-A/B/C/D/E/F/I/K) and the A02–A14 cluster from the design-rule sweep (Wave 2: configure_logging in projectors, redaction stack-frame leakage, harness verification, reanimator audience binding, env-var reconciliation, chemistry-tool input validation, workflow_engine ingestion-event emit + poll-conn reuse, dead-code sweep, DNS-rebinding TOCTOU + traceback redaction + ReDoS scanner + CORS null-origin, compound-catalog RLS gap via `db/init/39_compound_catalog_rls.sql`, compound_classifier per-inchikey advisory lock). New supporting modules: `services/agent-claw/src/observability/redact-string.ts` (length-bounded redaction primitive shared by Pino logger and the post_turn hook). Tier 5 verification report: `docs/review/2026-05-05/99-final-verification.md`.
 - **Synthesis-campaign orchestration (2026-05-08)**: umbrella state machine for autonomous synthesis planning across `single_experiment | library_synthesis | screening | bo_campaign | bo_or_die`. New tables `synthesis_campaigns` / `synthesis_campaign_steps` / `synthesis_campaign_events` (`db/init/51_synthesis_campaigns.sql`), seven builtins (`start_synthesis_campaign`, `list_synthesis_campaigns`, `get_synthesis_campaign`, `add_synthesis_campaign_step`, `update_synthesis_campaign_step`, `advance_synthesis_campaign`, `record_synthesis_campaign_outcome`), `/synthesize` slash verb activating the new `synthesis_campaign_orchestrator` skill, and `agent.synthesis_planner` prompt mode. The DAG steps point at existing leaf artifacts (`optimization_campaigns`, `chemspace_screens`, `genchem_runs`, `task_batches`, `mock_eln.entries`) via `ref_table` + `ref_id` so no canonical state is duplicated. `bo_or_die` enforces a deterministic die-after-no-improvement / experiment-budget gate inside `advance_synthesis_campaign`. ADR: `docs/adr/011-synthesis-campaign-orchestration.md`. Runbook: `docs/runbooks/synthesis-campaign-lifecycle.md`.
-- **KG + knowledge-generation deep review (2026-05-10)**: full-branch sweep landing the structural fixes the review identified. Key changes: shared `services/projectors/common/neo4j_client.py` consolidating direct-driver projectors (`kg_hypotheses`, `kg_documents`, `qm_kg`); `kg_documents` wired into compose + helm (was built but undeployed); projector-name normalisation across the catalog (`db/init/53_projector_name_normalization.sql`); `reactions.invalidated` deprecated via COMMENT (BACKLOG drop); confidence thresholds + tool timeouts wired through `config_settings`; `fact-id-consistency-guard` post_tool hook; trigger-driven event emission documented + smoke-tested. Review document: `docs/review/2026-05-10/kg-and-knowledge-generation-deep-review.md`. Runbook: `docs/runbooks/forged-tool-lifecycle.md`.
+- **KG + knowledge-generation deep review (2026-05-10)**: full-branch sweep landing the structural fixes the review identified. Key changes: shared `services/projectors/common/neo4j_client.py` consolidating direct-driver projectors (`kg_hypotheses`, `kg_documents`, `qm_kg`); `kg_documents` wired into compose + helm (was built but undeployed); projector-name normalisation across the catalog (`db/init/56_projector_name_normalization.sql`); `reactions.invalidated` deprecated via COMMENT (BACKLOG drop); confidence thresholds + tool timeouts wired through `config_settings`; `fact-id-consistency-guard` post_tool hook; trigger-driven event emission documented + smoke-tested. Review document: `docs/review/2026-05-10/kg-and-knowledge-generation-deep-review.md`. Runbook: `docs/runbooks/forged-tool-lifecycle.md`.
 
 ## Test counts (current branch)
 
+Order-of-magnitude sanity check, not a contract. Regenerate with
+`make test-counts` (which counts `it()` / `test()` calls and `def test_`
+patterns; the actual `npm test` / `pytest` "passed" counts run a bit
+higher because each parametrised case counts as one).
+
 ```
-services/agent-claw  npm test           → 1367 passed (179 files)
+services/agent-claw  npm test           → 1458 passed | 12 skipped (191 files)
 services/agent-claw  npx tsc --noEmit   → ok
-services/paperclip   npm test           → 23 passed
-.venv/bin/pytest services/mcp_tools/common/tests/ -q  → 87 passed
-.venv/bin/pytest services/queue/tests services/workflow_engine/tests services/paperclip/tests -q  → 18 passed
+services/paperclip   npm test           → 43 it/test calls across 2 files
+.venv/bin/pytest services/mcp_tools/common/tests/ -q  → 91 passed
+.venv/bin/pytest services/queue/tests services/workflow_engine/tests services/paperclip/tests -q  → 60 passed
 npm audit (root)                         → 0 vulnerabilities
 ```
+
+`schema_version` is recorded by the `make db.init` loop (one row per
+applied init file, `ON CONFLICT DO NOTHING`); a handful of older init
+files also INSERT a row inside their body, which is redundant but
+harmless. The Makefile loop is the source of truth.
 
 The integration trio (`etag-conflict`, `chained-execution`, `reanimator-roundtrip`) needs Docker — the testcontainer harness in `services/agent-claw/tests/helpers/postgres-container.ts` self-skips when Docker is unavailable.
 
 ## Harness primitives
 
-The agent harness (`services/agent-claw/`) has 16 lifecycle hook points and 22 registered builtin hooks (`MIN_EXPECTED_HOOKS = 22`; the `fact-id-consistency-guard` lands as the most recent post_tool addition — review 2026-05-10 §2.6). **`loadHooks(lifecycle, deps)`** in `services/agent-claw/src/core/hook-loader.ts` is the **single registration path** at startup; YAML files in `hooks/` are the source of truth, and every hook name in YAML must have a matching `BUILTIN_REGISTRARS` entry. The orphan `buildDefaultLifecycle()` factory was removed in Phase 1B — every harness call path (`/api/chat`, `/api/chat/plan/approve`, `/api/sessions/:id/plan/run`, `/api/sessions/:id/resume`) plus sub-agents read the global lifecycle.
+The agent harness (`services/agent-claw/`) has 16 lifecycle hook points and 24 registered builtin hooks (`MIN_EXPECTED_HOOKS = 24`; recent additions: `detect-mcp-leakage` + `loop-detector`, then `fact-id-consistency-guard` as the most recent post_tool addition — review 2026-05-10 §2.6). **`loadHooks(lifecycle, deps)`** in `services/agent-claw/src/core/hook-loader.ts` is the **single registration path** at startup; YAML files in `hooks/` are the source of truth, and every hook name in YAML must have a matching `BUILTIN_REGISTRARS` entry. The orphan `buildDefaultLifecycle()` factory was removed in Phase 1B — every harness call path (`/api/chat`, `/api/chat/plan/approve`, `/api/sessions/:id/plan/run`, `/api/sessions/:id/resume`) plus sub-agents read the global lifecycle.
 
 | Hook | When | Built-ins |
 |---|---|---|

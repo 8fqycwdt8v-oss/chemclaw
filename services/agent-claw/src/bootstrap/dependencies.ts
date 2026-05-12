@@ -109,7 +109,15 @@ import { buildQueryInstrumentDatasetsTool } from "../tools/builtins/query_instru
 import { buildQueryInstrumentPersonsTool } from "../tools/builtins/query_instrument_persons.js";
 // Autonomy upgrade — Claude-Code-like plan mode.
 import { buildManageTodosTool } from "../tools/builtins/manage_todos.js";
+import { buildManagePlanTool } from "../tools/builtins/manage_plan.js";
 import { buildAskUserTool } from "../tools/builtins/ask_user.js";
+// Phase C — Claude-Code-class general builtins (filesystem + shell).
+// Default-OFF; only registered when AGENT_FS_TOOLS_ENABLED=true and
+// AGENT_FS_ROOT is configured.
+import { buildReadFileTool } from "../tools/builtins/read_file.js";
+import { buildWriteFileTool } from "../tools/builtins/write_file.js";
+import { buildListDirectoryTool } from "../tools/builtins/list_directory.js";
+import { buildRunShellTool } from "../tools/builtins/run_shell.js";
 import { buildStartSynthesisCampaignTool } from "../tools/builtins/start_synthesis_campaign.js";
 import { buildListSynthesisCampaignsTool } from "../tools/builtins/list_synthesis_campaigns.js";
 import { buildGetSynthesisCampaignTool } from "../tools/builtins/get_synthesis_campaign.js";
@@ -256,7 +264,7 @@ function registerBuiltinTools(
     asTool(buildStartOptimizationCampaignTool(pool, cfg.MCP_REACTION_OPTIMIZER_URL)),
   );
   registry.registerBuiltin("recommend_next_batch", () =>
-    asTool(buildRecommendNextBatchTool(pool, cfg.MCP_REACTION_OPTIMIZER_URL)),
+    asTool(buildRecommendNextBatchTool(pool, cfg.MCP_REACTION_OPTIMIZER_URL, configRegistry)),
   );
   registry.registerBuiltin("ingest_campaign_results", () =>
     asTool(buildIngestCampaignResultsTool(pool)),
@@ -379,7 +387,39 @@ function registerBuiltinTools(
   // every /api/chat POST in routes/chat.ts) and require a session_id in
   // ctx.scratchpad — which the chat route guarantees.
   registry.registerBuiltin("manage_todos", () => asTool(buildManageTodosTool(pool)));
+  // Adaptive replanning (Phase A3) — lets the agent insert / remove / replace
+  // plan steps mid-execution so a wrong plan doesn't force an ask_user break-out.
+  registry.registerBuiltin("manage_plan", () => asTool(buildManagePlanTool(pool)));
   registry.registerBuiltin("ask_user", () => asTool(buildAskUserTool()));
+
+  // Phase C — Claude-Code-class general builtins. Default OFF: this is a
+  // domain-specialized chemistry agent; registering filesystem / shell tools
+  // widens the trust boundary. Operators opt in via AGENT_FS_TOOLS_ENABLED
+  // and configure AGENT_FS_ROOT + AGENT_SHELL_ALLOWLIST. Permission policies
+  // stack on top — every fs/shell tool should also have an explicit allow
+  // rule in `permission_policies` for production deployments.
+  if (cfg.AGENT_FS_TOOLS_ENABLED) {
+    registry.registerBuiltin("read_file", () =>
+      asTool(buildReadFileTool(cfg.AGENT_FS_ROOT)),
+    );
+    registry.registerBuiltin("write_file", () =>
+      asTool(buildWriteFileTool(cfg.AGENT_FS_ROOT)),
+    );
+    registry.registerBuiltin("list_directory", () =>
+      asTool(buildListDirectoryTool(cfg.AGENT_FS_ROOT)),
+    );
+    registry.registerBuiltin("run_shell", () =>
+      asTool(
+        buildRunShellTool({
+          root: cfg.AGENT_FS_ROOT,
+          allowlist: cfg.AGENT_SHELL_ALLOWLIST.split(",")
+            .map((c) => c.trim())
+            .filter((c) => c.length > 0),
+          timeoutMs: cfg.AGENT_SHELL_TIMEOUT_MS,
+        }),
+      ),
+    );
+  }
 
   // ── Synthesis campaign orchestration ─────────────────────────────────────
   // Umbrella state machine for autonomous synthesis planning across
