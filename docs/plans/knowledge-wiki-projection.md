@@ -373,16 +373,44 @@ treat them right). The `wiki-human-block-guard` `pre_tool` hook rejects
 * **Done**: writing a page body re-chunks + re-embeds it into `wiki_chunks`
   (clearing the old chunks); archiving drops it from the index.
 
-### Phase 3c — retrieval / provenance wiring
+### Phase 3c — `search_knowledge` / `retrieve_related` wiki arm  ✅ done
 
-* Extend `search_knowledge` / `retrieve_related` (services/agent-claw) to query
-  `wiki_chunks` (dense + sparse) and fold `wiki` hits into the RRF tagged with
-  the article slug; extend `query_provenance` (or add an `mcp-kg` endpoint) to
-  walk `:Fact → GROUNDS ← :WikiPage`; optionally have `read_article` surface
-  "referenced by N facts in the KG".
-* vitest (+ pytest if an `mcp-kg` endpoint is added).
-* **Done when**: `search_knowledge("…")` returns a wiki page among the hits;
-  `query_provenance(fact_id)` lists the page that asserts it.
+* `core/types.ts` — added `"knowledge_article"` to the `Citation.source_kind`
+  union (source_uri is the page slug).
+* `search_knowledge` — new `include_wiki` input (default true). The
+  `withUserContext` block now also runs dense + sparse arms over `wiki_chunks`
+  (joined to `knowledge_articles` for slug/kind/title, `status='current'`,
+  RLS transitively scoped): in `hybrid` mode all four arms RRF-fuse together
+  (`chunk_id` is a UUID from disjoint tables — unambiguous key); in `dense` /
+  `sparse` mode the doc + wiki rows are score-merged + re-sorted. Each hit now
+  carries `kind: "document" | "wiki"`; wiki hits set `slug` / `article_id`,
+  `document_id: null`, `source_type` = the article kind, `document_title` = the
+  article title, and a `knowledge_article` citation. `KnowledgeHit` schema
+  gained `kind` / `article_id` / `slug` (all required); `document_id` is now
+  nullable.
+* `retrieve_related` — passes `include_wiki: true` to `search_knowledge`, so
+  wiki pages surface in its `kind:"chunk"` arm for free (a dedicated
+  `kind:"wiki"` item is a BACKLOG follow-up).
+* `query_provenance` — *not* changed this phase (the `:Fact → GROUNDS ←
+  :WikiPage` walk needs an `mcp-kg` endpoint or a direct Neo4j query — BACKLOG).
+* vitest: `tests/unit/builtins/search_knowledge.test.ts` gained "hybrid mode
+  (default include_wiki) surfaces a knowledge-wiki page hit" (asserts the
+  `kind:"wiki"` hit's slug/article_id/source_type/citation + that the
+  `wiki_chunks` SQL ran) and "include_wiki=false skips the wiki_chunks arm"
+  (asserts no `wiki_chunks` query). The existing dense/sparse tests are
+  unchanged — the extra wiki arms get empty results from the mock pool, so
+  their assertions still hold. `npm test --workspace services/agent-claw` →
+  1497 passed | 12 skipped; `npx tsc --noEmit` ok; `npm run lint` ok.
+* **Done**: `search_knowledge("…")` returns a `kind:"wiki"` hit among the
+  results; `retrieve_related` surfaces it too.
+
+### Phase 3c-followup — `query_provenance` ← `:WikiPage`
+
+* Extend `query_provenance` (or add an `mcp-kg` endpoint) to walk
+  `:Fact → GROUNDS ← :WikiPage`; optionally have `read_article` surface
+  "referenced by N facts in the KG"; give `retrieve_related` a dedicated
+  `kind:"wiki"` item.
+* **Done when**: `query_provenance(fact_id)` lists the page that asserts it.
 
 ### Phase 4 — linter cron + admin route + slash verb + skill
 
