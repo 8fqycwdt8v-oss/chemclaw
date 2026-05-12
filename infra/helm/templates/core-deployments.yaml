@@ -533,3 +533,35 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
 {{- end }}
+
+{{- if .Values.projectors.wikiSearchIndex.enabled }}
+---
+# wiki_search_index — index knowledge-wiki bodies for retrieval (ADR 012 Phase 3b):
+# re-chunk + embed article bodies into wiki_chunks. Needs MCP_EMBEDDER_URL.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wiki-search-index
+  labels:
+    app: wiki-search-index
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wiki-search-index
+  template:
+    metadata:
+      labels:
+        app: wiki-search-index
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: wiki-search-index
+          image: {{ .Values.projectors.wikiSearchIndex.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+{{- end }}

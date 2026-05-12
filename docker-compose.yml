@@ -382,6 +382,34 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # wiki_search_index — index knowledge-wiki bodies for retrieval (ADR 012 Phase 3b)
+  # Re-chunks + embeds each article body into wiki_chunks (BGE-M3, same as
+  # document_chunks) so search_knowledge can surface wiki pages.
+  # -------------------------------------------------------------
+  wiki-search-index:
+    build:
+      context: .
+      dockerfile: services/projectors/wiki_search_index/Dockerfile
+    container_name: chemclaw-wiki-search-index
+    restart: unless-stopped
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mcp-embedder:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      MCP_EMBEDDER_URL: http://mcp-embedder:8004
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # reaction_vectorizer — DRFP projector
   # -------------------------------------------------------------
   reaction-vectorizer:

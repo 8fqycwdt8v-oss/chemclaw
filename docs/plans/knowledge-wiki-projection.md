@@ -338,16 +338,49 @@ treat them right). The `wiki-human-block-guard` `pre_tool` hook rejects
 * **Done**: revising a page MERGEs the `:WikiPage` + `:GROUNDS` edges and closes
   the dropped ones; archiving closes them all.
 
-### Phase 3b — `wiki_search_index` projector + retrieval/provenance wiring
+### Phase 3b — `wiki_search_index` projector + `wiki_chunks` table  ✅ done
 
-* `services/projectors/wiki_search_index/` — re-chunk (heading-aware, same
-  chunker as `doc_ingester`), embed via `mcp-embedder`, upsert into a sibling
-  `wiki_chunks` table (new `db/init` file) tagged `source_type='wiki'` +
-  `article_id`/`slug` backlink; delete superseded-revision chunks in the same txn.
-* Extend `search_knowledge` / `retrieve_related` to include `wiki` hits in the
-  RRF; extend `query_provenance` (or add an `mcp-kg` endpoint) to walk
-  `:Fact → GROUNDS ← :WikiPage` so "which page asserts this fact" is answerable.
-* Compose + helm wiring; pytest + vitest.
+* `db/init/61_wiki_chunks.sql` — `wiki_chunks` table (sibling of
+  `document_chunks`, NOT a `source_type` discriminator): `article_id` FK, `slug`,
+  `revision`, `chunk_index`, `heading_path`, `text`, `embedding vector(1024)`,
+  `token_count`; HNSW (cosine) + trigram indexes; RLS transitive through the
+  parent article (FORCE-RLS'd); grants (`chemclaw_app` SELECT-only — the app
+  never writes it; `chemclaw_service` ALL); `schema_version` row.
+* `services/projectors/wiki_search_index/` (`main.py` + `__init__.py` +
+  `requirements.txt` + `Dockerfile`) — `BaseProjector` consuming
+  `knowledge_article_created`/`_revised`/`_archived`. On created/revised: reads
+  the article's *current* slug/revision/body/status (so a replayed old event
+  re-indexes the current page), `archived` status → DELETEs its chunks; else
+  heading-aware-chunks the body (`_chunk_markdown` — ATX-heading stack,
+  ~1.4 KB target, mid-section flush, no paragraph sub-split), embeds via
+  `mcp-embedder` (`/tools/embed_text`, batched, BGE-M3), then in one transaction
+  DELETEs the article's old `wiki_chunks` rows and INSERTs the fresh ones — so
+  `wiki_chunks` always holds exactly the current revision's chunks. A stub
+  (`body_md = ''`) → DELETE + 0 INSERT, no embed call. `_archived` → DELETE.
+  Embedder 4xx → permanent skip (ack), leave old chunks (stale > empty); 5xx /
+  network → propagate (retry). Idempotent; replay-safe.
+* `knowledge_article_*` `consumed_by` already lists `wiki_search_index` (`db/init/58`).
+* `docker-compose.yml` (`wiki-search-index`, `profiles: ["full"]`, `depends_on`
+  postgres + mcp-embedder, `MCP_EMBEDDER_URL` env), `infra/helm/values.yaml` +
+  `core-deployments.yaml` (`projectors.wikiSearchIndex`, default `enabled: true`),
+  `Makefile` (`make run.wiki-search-index`).
+* pytest: `tests/unit/projectors/test_wiki_search_index.py` — `_chunk_markdown`
+  (heading-path tracking, mid-section flush, empty body), DELETE-then-INSERT per
+  chunk with the right params + vector literal, stub → no-op-no-embed, archive
+  event → DELETE, archived-status → DELETE, embedder 4xx → leave old chunks,
+  missing row → no-op. `.venv/bin/pytest tests/unit/projectors/ -q` → 61 passed;
+  ruff + mypy clean.
+* **Done**: writing a page body re-chunks + re-embeds it into `wiki_chunks`
+  (clearing the old chunks); archiving drops it from the index.
+
+### Phase 3c — retrieval / provenance wiring
+
+* Extend `search_knowledge` / `retrieve_related` (services/agent-claw) to query
+  `wiki_chunks` (dense + sparse) and fold `wiki` hits into the RRF tagged with
+  the article slug; extend `query_provenance` (or add an `mcp-kg` endpoint) to
+  walk `:Fact → GROUNDS ← :WikiPage`; optionally have `read_article` surface
+  "referenced by N facts in the KG".
+* vitest (+ pytest if an `mcp-kg` endpoint is added).
 * **Done when**: `search_knowledge("…")` returns a wiki page among the hits;
   `query_provenance(fact_id)` lists the page that asserts it.
 

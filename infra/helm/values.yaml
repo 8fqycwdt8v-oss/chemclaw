@@ -115,6 +115,12 @@ projectors:
     # NEO4J_URI/USER/PASSWORD (same secret as the other kg-* projectors).
     enabled: true
     image: chemclaw/wiki-kg:latest
+  wikiSearchIndex:
+    # Re-chunks + embeds knowledge_articles bodies into wiki_chunks so
+    # search_knowledge can surface wiki pages (ADR 012 Phase 3b). Needs
+    # MCP_EMBEDDER_URL (same mcp-embedder as chunk-embedder).
+    enabled: true
+    image: chemclaw/wiki-search-index:latest
   wikiRegen:
     # Knowledge-wiki body-synthesis daemon (ADR 012 Phase 2b): LLM-fills the
     # dirty stubs the wikiPages projector creates. LLM-cost-incurring —

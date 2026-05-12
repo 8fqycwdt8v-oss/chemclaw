@@ -168,6 +168,10 @@ run.wiki-regen: ## Run the knowledge-wiki body-synthesis daemon locally (ADR 012
 run.wiki-kg: ## Run the knowledge-wiki → Neo4j projector locally (ADR 012 Phase 3a)
 	$(VENV)/bin/python -m services.projectors.wiki_kg.main
 
+.PHONY: run.wiki-search-index
+run.wiki-search-index: ## Run the knowledge-wiki search-index projector locally (ADR 012 Phase 3b)
+	$(VENV)/bin/python -m services.projectors.wiki_search_index.main
+
 .PHONY: ingest.docs
 ingest.docs: ## Scan sample-data/documents and ingest all supported files
 	$(VENV)/bin/python -m services.ingestion.doc_ingester.cli scan
