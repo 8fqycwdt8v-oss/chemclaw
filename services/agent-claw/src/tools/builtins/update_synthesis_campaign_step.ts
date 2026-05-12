@@ -1,6 +1,18 @@
 // update_synthesis_campaign_step — record a step transition (start, complete,
 // fail, skip) and attach outputs / a ref_table+ref_id pointer to the leaf
 // artifact (optimization_round id, chemspace_screen id, mock_eln entry id, …).
+//
+// Event emission caveat (review §2.3): unlike `synthesis_campaigns` (which has
+// `trg_synthesis_campaign_event` in db/init/51_synthesis_campaigns.sql:255
+// emitting `synthesis_campaign_state_changed` on parent-status changes),
+// `synthesis_campaign_steps` has NO trigger emitting per-step ingestion_events.
+// Downstream consumers that need per-step granularity must either:
+//   (a) LISTEN on `synthesis_campaign_state_changed` and re-query the steps
+//       table, or
+//   (b) read `synthesis_campaign_events` directly (`record_synthesis_campaign_outcome`
+//       and `advance_synthesis_campaign` write to it).
+// If a future projector needs row-level fanout, add a trigger here rather than
+// emitting from the builtin — keeps the event vs row write atomic.
 
 import { z } from "zod";
 import type { Pool } from "pg";

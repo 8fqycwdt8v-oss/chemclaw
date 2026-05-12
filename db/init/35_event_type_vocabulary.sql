@@ -39,11 +39,11 @@ INSERT INTO ingestion_event_catalog (event_type, description, emitted_by, consum
   ('experiment_imported',
    'A canonical experiment + reaction tree was inserted into Postgres.',
    'services/ingestion/eln_json_importer.legacy/importer.py',
-   ARRAY['kg-experiments', 'reaction-vectorizer', 'conditions-normalizer']),
+   ARRAY['kg_experiments', 'reaction_vectorizer', 'conditions_normalizer']),
   ('document_ingested',
    'A document plus its chunks were inserted; signals embedding + chunking work.',
    'services/ingestion/doc_ingester/importer.py',
-   ARRAY['chunk-embedder', 'contextual-chunker']),
+   ARRAY['chunk_embedder', 'contextual_chunker']),
   ('hypothesis_proposed',
    'Agent persisted a new hypothesis row.',
    'services/agent-claw/src/tools/builtins/propose_hypothesis.ts',
@@ -57,13 +57,13 @@ INSERT INTO ingestion_event_catalog (event_type, description, emitted_by, consum
    'Post-tool hook captured a structured fact from a source-system tool '
    '(query_eln_*, fetch_eln_*, fetch_instrument_*) and forwarded it for KG caching.',
    'services/agent-claw/src/core/hooks/source-cache.ts',
-   ARRAY['kg-source-cache']),
+   ARRAY['kg_source_cache']),
   ('qm_job_succeeded',
    'A QM/DFT/xTB job completed and its results were materialised. Currently '
    'broadcast on a custom NOTIFY channel (db/init/23_qm_results.sql) consumed by '
    'the qm_kg projector; Tranche 2 routes this through ingestion_events.',
    'db/init/23_qm_results.sql (legacy custom NOTIFY)',
-   ARRAY['qm-kg']),
+   ARRAY['qm_kg']),
   -- Reserved vocabulary for later tranches. Defined here so the catalog is
   -- the single source of truth for what event_types exist; emitters and
   -- consumers will be wired in Tranche 2 (cascade) and Tranche 5 (corrections).
@@ -71,24 +71,24 @@ INSERT INTO ingestion_event_catalog (event_type, description, emitted_by, consum
    'Reserved (Tranche 2). A KG fact was invalidated, e.g. cascading from a '
    'refuted hypothesis. Carries fact_id + reason in payload.',
    'reserved',
-   ARRAY['kg-source-cache']),
+   ARRAY['kg_source_cache']),
   ('reaction_corrected',
    'Reserved (Tranche 5). A canonical reaction row received a correction; '
    'downstream caches must invalidate.',
    'reserved',
-   ARRAY['reaction-vectorizer', 'kg-experiments']),
+   ARRAY['reaction_vectorizer', 'kg_experiments']),
   ('artifact_corrected',
    'Reserved (Tranche 5). An artifact row was superseded with a correction; '
    'confidence ensemble + KG facts derived from it must be re-evaluated.',
    'reserved',
-   ARRAY['kg-experiments']),
+   ARRAY['kg_experiments']),
   ('workflow_run_succeeded',
    'A workflow_runs row reached status=succeeded. Carries run_id + outputs '
    'in payload; downstream KG projectors materialise the workflow''s named '
    'outputs against the canonical state. Failed runs do NOT emit — they '
    'surface only via workflow_events.kind=step_failed/finish.',
    'services/workflow_engine/main.py:_finish',
-   ARRAY['kg-experiments'])
+   ARRAY['kg_experiments'])
 ON CONFLICT (event_type) DO UPDATE SET
   description = EXCLUDED.description,
   emitted_by  = EXCLUDED.emitted_by,

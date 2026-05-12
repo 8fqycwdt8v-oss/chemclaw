@@ -33,10 +33,11 @@ import {
 // task_created, task_completed, post_compact).
 // 22 = +detect-mcp-leakage (review §3.8 defense-in-depth tripwire).
 // 23 = +loop-detector (adaptive-replanning Phase A1).
+// 24 = +fact-id-consistency-guard (review 2026-05-10 §2.6).
 // Bump every time BUILTIN_REGISTRARS gains an entry so a silent failure to
 // load a new hook trips the startup gate instead of quietly downgrading
 // the safety net.
-const MIN_EXPECTED_HOOKS = 23;
+const MIN_EXPECTED_HOOKS = 24;
 
 // Builtins gate. Mirrors MIN_EXPECTED_HOOKS for tools/builtins/: a new
 // builtin module landing under `services/agent-claw/src/tools/builtins/`

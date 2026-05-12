@@ -1,24 +1,23 @@
 """Projector: canonical hypotheses → Neo4j :Hypothesis nodes + :CITES edges.
 
 Subscribes to `hypothesis_proposed` and `hypothesis_status_changed`.
-Idempotent via uniqueness constraint on fact_id (shared with kg-experiments).
+Idempotent via uniqueness constraint on fact_id (shared with kg_experiments).
 """
 from __future__ import annotations
 
 import asyncio
 import json
 import logging
-import os
 import uuid
 from typing import Any
 
 import psycopg
-from neo4j import AsyncGraphDatabase
 
 from services.projectors.common.base import (
     BaseProjector,
     ProjectorSettings,
 )
+from services.projectors.common.neo4j_client import Neo4jClient
 
 log = logging.getLogger("kg_hypotheses")
 
@@ -32,15 +31,15 @@ class KgHypothesesProjector(BaseProjector):
 
     def __init__(self, settings: ProjectorSettings) -> None:
         super().__init__(settings)
-        self._neo4j_uri = os.environ["NEO4J_URI"]
-        self._neo4j_user = os.environ.get("NEO4J_USER", "neo4j")
-        self._neo4j_password = os.environ["NEO4J_PASSWORD"]
-        self._driver = AsyncGraphDatabase.driver(
-            self._neo4j_uri, auth=(self._neo4j_user, self._neo4j_password),
-        )
+        # Direct-driver path (review §1.3): kg_hypotheses owns its own driver
+        # because mcp-kg's REST surface doesn't yet model :Hypothesis nodes
+        # or the :CITES → :Fact cascade. The shared Neo4jClient centralises
+        # env-var pickup + driver pinning so the three direct-driver
+        # projectors (this one, kg_documents, qm_kg) evolve together.
+        self._neo4j = Neo4jClient.from_env()
 
     async def close(self) -> None:
-        await self._driver.close()
+        await self._neo4j.close()
 
     async def handle(
         self,
@@ -102,7 +101,7 @@ class KgHypothesesProjector(BaseProjector):
             return
 
         node_fact_id = str(uuid.uuid5(NAMESPACE_HYPOTHESIS, h["id"]))
-        async with self._driver.session() as session:
+        async with self._neo4j.session() as session:
             await session.run(
                 """
                 MERGE (n:Hypothesis {fact_id: $fact_id})
@@ -153,7 +152,7 @@ class KgHypothesesProjector(BaseProjector):
             return
         status = row[0]
         node_fact_id = str(uuid.uuid5(NAMESPACE_HYPOTHESIS, hid))
-        async with self._driver.session() as session:
+        async with self._neo4j.session() as session:
             if status == "refuted":
                 # Idempotent: keep the original valid_to on replay so the
                 # bi-temporal "refuted at" timestamp doesn't drift forward

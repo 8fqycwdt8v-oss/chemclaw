@@ -84,6 +84,9 @@ projectors:
   kgHypotheses:
     enabled: true
     image: chemclaw/kg-hypotheses:latest
+  kgDocuments:
+    enabled: true
+    image: chemclaw/kg-documents:latest
   compoundFingerprinter:
     enabled: true
     image: chemclaw/compound-fingerprinter:latest

@@ -43,6 +43,7 @@ import { registerBudgetGuardHook } from "./hooks/budget-guard.js";
 import { registerInitScratchHook } from "./hooks/init-scratch.js";
 import { registerLoopDetectorHook } from "./hooks/loop-detector.js";
 import { registerAntiFabricationHook } from "./hooks/anti-fabrication.js";
+import { registerFactIdConsistencyGuardHook } from "./hooks/fact-id-consistency-guard.js";
 import { registerFoundationCitationGuardHook } from "./hooks/foundation-citation-guard.js";
 import { registerSourceCacheHook } from "./hooks/source-cache.js";
 import { registerCompactWindowHook } from "./hooks/compact-window.js";
@@ -147,6 +148,7 @@ const BUILTIN_REGISTRARS = new Map<string, BuiltinRegistrar>([
   // chained-harness reflection prompt.
   ["loop-detector", (lc) => { registerLoopDetectorHook(lc); }],
   ["anti-fabrication", (lc) => { registerAntiFabricationHook(lc); }],
+  ["fact-id-consistency-guard", (lc) => { registerFactIdConsistencyGuardHook(lc); }],
   ["foundation-citation-guard", (lc) => { registerFoundationCitationGuardHook(lc); }],
   ["source-cache", (lc, deps) => { registerSourceCacheHook(lc, deps.pool); }],
   [

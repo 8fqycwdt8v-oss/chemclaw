@@ -250,6 +250,36 @@ spec:
             allowPrivilegeEscalation: false
 {{- end }}
 
+{{- if .Values.projectors.kgDocuments.enabled }}
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kg-documents
+  labels:
+    app: kg-documents
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kg-documents
+  template:
+    metadata:
+      labels:
+        app: kg-documents
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: kg-documents
+          image: {{ .Values.projectors.kgDocuments.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+{{- end }}
+
 {{- if .Values.projectors.compoundFingerprinter.enabled }}
 ---
 apiVersion: apps/v1
