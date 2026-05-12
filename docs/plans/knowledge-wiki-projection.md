@@ -200,21 +200,36 @@ treat them right). The `wiki-human-block-guard` `pre_tool` hook rejects
   `ingestion_events` row (manual smoke). No code yet — the schema is inert
   until Phase 1, by design.
 
-### Phase 1 — agent read/write surface (no projector yet)
+### Phase 1 — agent read/write surface (no projector yet)  ✅ done
 
-* `services/agent-claw/src/tools/builtins/{read_article,list_articles,upsert_article,request_article}.ts`
-  + `McpClient`/db wiring (use `withUserContext` for RLS), register in the tool
-  registry, types.
-* `pre_tool` hook `wiki-human-block-guard` (impl + YAML + `BUILTIN_REGISTRARS`
-  + `MIN_EXPECTED_HOOKS` bump + vitest).
-* `PATCH /api/articles/:id`, `GET /api/articles/:id`, `GET /api/articles`
-  routes (RLS-scoped, etag-checked).
-* `feature_flags` row `wiki.enabled` (+ env fallback); builtins short-circuit
-  when disabled.
-* Vitest for each builtin (RLS happy/deny, etag conflict, human-block guard).
-* **Done when**: the agent can author a `topic/` page and read it back; a human
-  PATCH protects a `human:*` block; `npm test --workspace services/agent-claw`
-  green; `npx tsc --noEmit` ok.
+* `services/agent-claw/src/tools/builtins/_wiki_shared.ts` (schemas, the
+  inline-citation parser, `assertWikiEnabled`, row→view mappers) +
+  `{read_article,list_articles,upsert_article,request_article}.ts` — RLS via
+  `withUserContext`, registered in `bootstrap/dependencies.ts`,
+  `MIN_EXPECTED_BUILTINS` 86→90. `upsert_article` restricts to
+  agent-authorable kinds (`topic`/`glossary`/`contradiction`), refuses to
+  overwrite `has_human_edits` pages, parses inline `[fact:…]`/`[chunk:…]`
+  citations into `knowledge_article_citations`, writes a `knowledge_article_revisions`
+  row (`author_kind='agent'`). `request_article` creates/marks-dirty a stub.
+* `pre_tool` hook `wiki-human-block-guard` (`src/core/hooks/`, `hooks/*.yaml`,
+  `BUILTIN_REGISTRARS`, `MIN_EXPECTED_HOOKS` 24→25) — denies an `upsert_article`
+  body that authors a `<!-- human:begin ... -->` marker.
+* `src/routes/knowledge-articles.ts` — `GET /api/articles`, `GET /api/articles/:id`
+  (`?revision=N` for history), `PATCH /api/articles/:id` (human edit: sets
+  `has_human_edits`, bumps revision+etag, writes a revision row, parses
+  citations; 409 on etag conflict, 404 not found, 404 when `wiki.enabled` off);
+  wired in `bootstrap/routes.ts`.
+* `feature_flags` row `wiki.enabled` (`db/init/22_feature_flags.sql`, default
+  OFF; env fallback `WIKI_ENABLED`). Builtins call `assertWikiEnabled` first.
+* Vitest: `tests/unit/builtins/knowledge_articles.test.ts` (feature gate,
+  kind guard, human-block guard, SQL touchpoints, human-edits refusal),
+  `tests/unit/hooks-wiki-human-block-guard.test.ts`,
+  `tests/unit/knowledge-articles-route.test.ts` (200/400/404/409 paths);
+  `hook-loader-coverage.test.ts` counts bumped to 25.
+* **Done**: `npm test --workspace services/agent-claw` → 1495 passed | 12
+  skipped; `npm run typecheck` ok; `npm run lint` ok. (DB-backed end-to-end
+  is exercised by the testcontainer integration suite — self-skips without
+  Docker, same as the rest.)
 
 ### Phase 2 — `wiki_pages` projector (mark-dirty + batch regen)
 
