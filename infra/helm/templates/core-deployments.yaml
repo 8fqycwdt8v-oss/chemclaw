@@ -432,3 +432,136 @@ spec:
             - name: LITELLM_BASE_URL
               value: {{ printf "http://litellm:%d" (int .Values.litellm.port) | quote }}
 {{- end }}
+
+{{- if .Values.projectors.wikiPages.enabled }}
+---
+# wiki_pages — knowledge-wiki projection projector (ADR 012). Keeps
+# knowledge_articles in sync with which pages exist / need (re)synthesis.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wiki-pages
+  labels:
+    app: wiki-pages
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wiki-pages
+  template:
+    metadata:
+      labels:
+        app: wiki-pages
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: wiki-pages
+          image: {{ .Values.projectors.wikiPages.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+{{- end }}
+
+{{- if .Values.projectors.wikiRegen.enabled }}
+---
+# wiki_regen — knowledge-wiki body-synthesis daemon (ADR 012 Phase 2b).
+# LLM-cost-incurring; default-off in values.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wiki-regen
+  labels:
+    app: wiki-regen
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wiki-regen
+  template:
+    metadata:
+      labels:
+        app: wiki-regen
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: wiki-regen
+          image: {{ .Values.projectors.wikiRegen.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          env:
+            - name: LITELLM_BASE_URL
+              value: {{ printf "http://litellm:%d" (int .Values.litellm.port) | quote }}
+            - name: WIKI_REGEN_MODEL
+              value: {{ .Values.projectors.wikiRegen.model | quote }}
+{{- end }}
+
+{{- if .Values.projectors.wikiKg.enabled }}
+---
+# wiki_kg — project knowledge-wiki pages into Neo4j (ADR 012 Phase 3a):
+# :WikiPage nodes + :SUMMARIZES / :GROUNDS edges.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wiki-kg
+  labels:
+    app: wiki-kg
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wiki-kg
+  template:
+    metadata:
+      labels:
+        app: wiki-kg
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: wiki-kg
+          image: {{ .Values.projectors.wikiKg.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+{{- end }}
+
+{{- if .Values.projectors.wikiSearchIndex.enabled }}
+---
+# wiki_search_index — index knowledge-wiki bodies for retrieval (ADR 012 Phase 3b):
+# re-chunk + embed article bodies into wiki_chunks. Needs MCP_EMBEDDER_URL.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wiki-search-index
+  labels:
+    app: wiki-search-index
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wiki-search-index
+  template:
+    metadata:
+      labels:
+        app: wiki-search-index
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: wiki-search-index
+          image: {{ .Values.projectors.wikiSearchIndex.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+{{- end }}

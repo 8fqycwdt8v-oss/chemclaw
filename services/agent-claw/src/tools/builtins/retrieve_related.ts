@@ -150,6 +150,7 @@ export function buildRetrieveRelatedTool(
         k: armK,
         mode: "hybrid",
         source_types: parsed.source_types,
+        include_wiki: true,  // ADR 012 Phase 3c — surface knowledge-wiki pages too
       });
 
       const factPromise: Promise<QueryKgOutput | null> = parsed.entity

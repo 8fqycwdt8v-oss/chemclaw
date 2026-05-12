@@ -87,5 +87,14 @@ SELECT bootstrap_feature_flag(
   'Mirrors MOCK_ELN_ENABLED env var.',
   'seed:22_feature_flags.sql'
 );
+SELECT bootstrap_feature_flag(
+  'wiki.enabled', false,
+  'Enables the knowledge-wiki layer (ADR 012, db/init/58_knowledge_wiki.sql): '
+  'the read_article / list_articles / upsert_article / request_article builtins '
+  'and the /api/articles routes. Default OFF — the builtins are registered '
+  'either way and short-circuit with a clear error when this is off. '
+  'Mirrors WIKI_ENABLED env var.',
+  'seed:22_feature_flags.sql'
+);
 
 COMMIT;

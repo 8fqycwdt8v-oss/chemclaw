@@ -81,8 +81,11 @@ class Neo4jClient:
 
     @asynccontextmanager
     async def session(self, *, database: str | None = None) -> AsyncIterator[Any]:
-        kwargs = {"database": database} if database else {}
-        async with self._driver.session(**kwargs) as sess:
+        # Pass `database` as an explicit keyword rather than splatting a dict —
+        # neo4j 5.x types AsyncDriver.session()'s keyword params precisely, so a
+        # `**dict[str, str]` passthrough fails `mypy --strict` (arg-type).
+        cm = self._driver.session() if database is None else self._driver.session(database=database)
+        async with cm as sess:
             yield sess
 
     async def close(self) -> None:
@@ -116,8 +119,9 @@ class SyncNeo4jClient:
 
     @contextmanager
     def session(self, *, database: str | None = None) -> Iterator[Any]:
-        kwargs = {"database": database} if database else {}
-        with self._driver.session(**kwargs) as sess:
+        # See Neo4jClient.session — pass `database` explicitly, no dict splat.
+        cm = self._driver.session() if database is None else self._driver.session(database=database)
+        with cm as sess:
             yield sess
 
     def close(self) -> None:

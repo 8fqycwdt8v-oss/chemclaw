@@ -39,12 +39,12 @@ describe("hook loader coverage", () => {
     expect(skipsForMissingRegistrar).toEqual([]);
   });
 
-  it("registers all 24 known hook implementations at the right points", async () => {
+  it("registers all 25 known hook implementations at the right points", async () => {
     const lc = new Lifecycle();
     await loadHooks(lc, mockHookDeps(), hooksDir);
     // Exact counts — `>=` would hide accidental double-registration.
     expect(lc.count("pre_turn")).toBe(2); // init-scratch, apply-skills
-    expect(lc.count("pre_tool")).toBe(3); // budget-guard, foundation-citation-guard, loop-detector
+    expect(lc.count("pre_tool")).toBe(4); // budget-guard, foundation-citation-guard, loop-detector, wiki-human-block-guard
     expect(lc.count("post_tool")).toBe(5); // tag-maturity, anti-fabrication, source-cache, detect-mcp-leakage, fact-id-consistency-guard
     expect(lc.count("pre_compact")).toBe(1); // compact-window
     expect(lc.count("post_turn")).toBe(1); // redact-secrets
@@ -61,7 +61,7 @@ describe("hook loader coverage", () => {
     expect(lc.count("task_created")).toBe(1);
     expect(lc.count("task_completed")).toBe(1);
     expect(lc.count("post_compact")).toBe(1);
-    // Sanity sum: 2 + 3 + 5 + 1 + 1 + 1 + 1 + 9 + 1 = 24 hooks total.
+    // Sanity sum: 2 + 4 + 5 + 1 + 1 + 1 + 1 + 9 + 1 = 25 hooks total.
     const totalRegistered = (
       [
         "pre_turn",
@@ -82,7 +82,7 @@ describe("hook loader coverage", () => {
         "task_completed",
       ] as const
     ).reduce((sum, p) => sum + lc.count(p), 0);
-    expect(totalRegistered).toBe(24);
+    expect(totalRegistered).toBe(25);
   });
 
   it("each YAML file's `name` field is non-empty", async () => {

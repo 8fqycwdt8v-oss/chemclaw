@@ -129,6 +129,11 @@ import { buildAddSynthesisCampaignStepTool } from "../tools/builtins/add_synthes
 import { buildUpdateSynthesisCampaignStepTool } from "../tools/builtins/update_synthesis_campaign_step.js";
 import { buildAdvanceSynthesisCampaignTool } from "../tools/builtins/advance_synthesis_campaign.js";
 import { buildRecordSynthesisCampaignOutcomeTool } from "../tools/builtins/record_synthesis_campaign_outcome.js";
+// Knowledge-wiki — ADR 012 Phase 1 (gated by the `wiki.enabled` feature flag).
+import { buildReadArticleTool } from "../tools/builtins/read_article.js";
+import { buildListArticlesTool } from "../tools/builtins/list_articles.js";
+import { buildUpsertArticleTool } from "../tools/builtins/upsert_article.js";
+import { buildRequestArticleTool } from "../tools/builtins/request_article.js";
 // Code-mode orchestration via the Monty runtime.
 import { buildRunOrchestrationScriptTool } from "../tools/builtins/run_orchestration_script.js";
 import { getOrCreateMontyPool } from "../runtime/monty/pool-singleton.js";
@@ -457,6 +462,17 @@ function registerBuiltinTools(
     asTool(buildAdvanceSynthesisCampaignTool(pool)));
   registry.registerBuiltin("record_synthesis_campaign_outcome", () =>
     asTool(buildRecordSynthesisCampaignOutcomeTool(pool)));
+
+  // ── Knowledge wiki (ADR 012) ─────────────────────────────────────────────
+  // The human-readable, citation-traced face of the bi-temporal KG. Phase 1:
+  // the agent reads / lists / authors topic pages and requests entity-backed
+  // pages; the wiki_pages projector (Phase 2) fills the stubs. All four
+  // short-circuit with a clear error unless the `wiki.enabled` feature flag is
+  // on (default OFF — see db/init/22_feature_flags.sql).
+  registry.registerBuiltin("read_article", () => asTool(buildReadArticleTool(pool)));
+  registry.registerBuiltin("list_articles", () => asTool(buildListArticlesTool(pool)));
+  registry.registerBuiltin("upsert_article", () => asTool(buildUpsertArticleTool(pool)));
+  registry.registerBuiltin("request_article", () => asTool(buildRequestArticleTool(pool)));
 
   // ── Code-mode orchestration (Monty) ──────────────────────────────────────
   // run_orchestration_script lets the model emit a single Python script that

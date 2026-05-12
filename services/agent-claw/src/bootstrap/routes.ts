@@ -14,6 +14,7 @@ import { registerSkillsRoutes } from "../routes/skills.js";
 import { registerPlanRoutes } from "../routes/plan.js";
 import { registerDocumentsRoute } from "../routes/documents.js";
 import { registerArtifactsRoutes } from "../routes/artifacts.js";
+import { registerKnowledgeArticlesRoutes } from "../routes/knowledge-articles.js";
 import { registerLearnRoute } from "../routes/learn.js";
 import { registerFeedbackRoute } from "../routes/feedback.js";
 import { registerEvalRoute } from "../routes/eval.js";
@@ -53,6 +54,8 @@ export function registerAllRoutes(
   registerPlanRoutes(app, routeDeps);
   registerDocumentsRoute(app, { config: cfg, pool: deps.pool, getUser });
   registerArtifactsRoutes(app, { pool: deps.pool, getUser });
+  // ADR 012 — knowledge-wiki read + human-edit surface (gated by wiki.enabled).
+  registerKnowledgeArticlesRoutes(app, { pool: deps.pool, getUser });
   registerLearnRoute(app, { pool: deps.pool, llm: deps.llmProvider, getUser });
   registerFeedbackRoute(app, {
     pool: deps.pool,
