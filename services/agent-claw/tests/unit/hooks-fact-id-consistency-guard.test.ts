@@ -162,7 +162,7 @@ describe("factIdConsistencyGuardHook (post_tool)", () => {
         ctx,
         toolId: "weird_tool",
         input: {},
-        output: undefined as never,
+        output: undefined,
       }),
     ).resolves.toEqual({});
   });
