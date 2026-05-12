@@ -25,7 +25,7 @@ import asyncio
 import hashlib
 import logging
 import uuid
-from typing import Any, cast
+from typing import Any
 
 import httpx
 import psycopg
@@ -149,10 +149,7 @@ class KGExperimentsProjector(BaseProjector):
                 )
                 exp["reactions"] = await cur.fetchall()
 
-        # psycopg cursor with dict_row returns Any; narrow back to the
-        # declared return type. Pre-existing weakness exposed when
-        # transitive deps bumped the psycopg stubs.
-        return cast("dict[str, Any]", exp)
+        return exp
 
     # -----------------------------------------------------------------------
     # Handler
