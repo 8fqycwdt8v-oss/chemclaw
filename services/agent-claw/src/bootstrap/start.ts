@@ -49,11 +49,13 @@ const MIN_EXPECTED_HOOKS = 24;
 // gate trips, either add the missing registerBuiltin call or update
 // this number with intent. The 2026-05-09 code-completeness review
 // flagged this as an L3-5 hygiene gap. +1 for manage_plan
-// (adaptive-replanning Phase A3). The fs/shell builtins are NOT counted
-// here because they're conditionally registered behind
+// (adaptive-replanning Phase A3). +4 for the Phase Z6 chromatography
+// builtins (start_chrom_campaign, recommend_next_chrom_batch,
+// materialize_chrom_method, query_chrom_columns). The fs/shell builtins
+// are NOT counted here because they're conditionally registered behind
 // AGENT_FS_TOOLS_ENABLED — counting them would force the gate to fail
 // in default-config deployments.
-const MIN_EXPECTED_BUILTINS = 82;
+const MIN_EXPECTED_BUILTINS = 86;
 
 export async function startServer(
   app: FastifyInstance,

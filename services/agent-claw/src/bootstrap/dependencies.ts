@@ -72,6 +72,10 @@ import { buildStartOptimizationCampaignTool } from "../tools/builtins/start_opti
 import { buildRecommendNextBatchTool } from "../tools/builtins/recommend_next_batch.js";
 import { buildIngestCampaignResultsTool } from "../tools/builtins/ingest_campaign_results.js";
 import { buildExtractParetoFrontTool } from "../tools/builtins/extract_pareto_front.js";
+import { buildStartChromCampaignTool } from "../tools/builtins/start_chrom_campaign.js";
+import { buildRecommendNextChromBatchTool } from "../tools/builtins/recommend_next_chrom_batch.js";
+import { buildMaterializeChromMethodTool } from "../tools/builtins/materialize_chrom_method.js";
+import { buildQueryChromColumnsTool } from "../tools/builtins/query_chrom_columns.js";
 import { buildQueryKgTool } from "../tools/builtins/query_kg.js";
 import { buildQueryKgAtTimeTool } from "../tools/builtins/query_kg_at_time.js";
 import { buildQueryProvenanceTool } from "../tools/builtins/query_provenance.js";
@@ -271,6 +275,19 @@ function registerBuiltinTools(
   );
   registry.registerBuiltin("extract_pareto_front", () =>
     asTool(buildExtractParetoFrontTool(pool, cfg.MCP_REACTION_OPTIMIZER_URL)),
+  );
+  // Phase Z6 — chromatography method optimization.
+  registry.registerBuiltin("start_chrom_campaign", () =>
+    asTool(buildStartChromCampaignTool(pool, cfg.MCP_CHROM_METHOD_OPTIMIZER_URL)),
+  );
+  registry.registerBuiltin("recommend_next_chrom_batch", () =>
+    asTool(buildRecommendNextChromBatchTool(pool, cfg.MCP_CHROM_METHOD_OPTIMIZER_URL)),
+  );
+  registry.registerBuiltin("materialize_chrom_method", () =>
+    asTool(buildMaterializeChromMethodTool(pool, cfg.MCP_CHROM_METHOD_OPTIMIZER_URL)),
+  );
+  registry.registerBuiltin("query_chrom_columns", () =>
+    asTool(buildQueryChromColumnsTool(pool)),
   );
   registry.registerBuiltin("query_kg", () => asTool(buildQueryKgTool(cfg.MCP_KG_URL)));
   registry.registerBuiltin("query_kg_at_time", () =>
