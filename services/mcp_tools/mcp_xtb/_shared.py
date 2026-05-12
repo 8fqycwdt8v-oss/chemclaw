@@ -91,43 +91,18 @@ def solvent_flags(model: str | None, name: str | None) -> list[str]:
 # ---------------------------------------------------------------------------
 # SMILES → XYZ via RDKit
 # ---------------------------------------------------------------------------
+# Implementation moved to services.mcp_tools.common.smiles so mcp_crest and
+# any future QM tool share the same canonicalize-embed-optimize pipeline.
+# Re-exported here to avoid breaking the existing `from services.mcp_tools.
+# mcp_xtb._shared import smiles_to_canonical_and_xyz` import path.
 
-def smiles_to_canonical_and_xyz(smiles: str) -> tuple[str, str, str | None]:
-    """Return (canonical_smiles, xyz_block, inchikey_or_None) from a SMILES string."""
-    try:
-        from rdkit import Chem as _Chem  # noqa: PLC0415
-        from rdkit.Chem import AllChem as _AllChem  # noqa: PLC0415
-        from rdkit.Chem.inchi import MolToInchiKey as _ToInchiKey  # noqa: PLC0415
-    except ImportError as exc:
-        raise ImportError("rdkit required inside the Docker image") from exc
-
-    Chem: Any = _Chem
-    AllChem: Any = _AllChem
-    if not smiles or not smiles.strip():
-        raise ValueError("smiles must be a non-empty string")
-
-    mol = Chem.MolFromSmiles(smiles)
-    if mol is None:
-        raise ValueError(f"invalid SMILES: {smiles!r}")
-    canonical = Chem.MolToSmiles(mol)
-    try:
-        inchikey = _ToInchiKey(mol) or None  # type: ignore[no-untyped-call]
-    except Exception:  # noqa: BLE001
-        inchikey = None
-
-    mol = Chem.AddHs(mol)
-    if AllChem.EmbedMolecule(mol, AllChem.ETKDGv3()) == -1:
-        raise ValueError(f"RDKit could not embed SMILES: {smiles!r}")
-    AllChem.MMFFOptimizeMolecule(mol)
-
-    conf = mol.GetConformer()
-    lines = [str(mol.GetNumAtoms()), canonical]
-    for atom in mol.GetAtoms():
-        pos = conf.GetAtomPosition(atom.GetIdx())
-        lines.append(
-            f"{atom.GetSymbol():2s}  {pos.x:12.6f}  {pos.y:12.6f}  {pos.z:12.6f}"
-        )
-    return canonical, "\n".join(lines), inchikey
+# Explicit `name as name` re-export so mypy strict (implicit_reexport=False)
+# treats it as part of this module's public surface; mcp_xtb.main and any
+# future caller of `from ._shared import smiles_to_canonical_and_xyz` keeps
+# working through the legacy path.
+from services.mcp_tools.common.smiles import (  # noqa: E402, F401
+    smiles_to_canonical_and_xyz as smiles_to_canonical_and_xyz,
+)
 
 
 # ---------------------------------------------------------------------------

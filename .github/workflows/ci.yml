@@ -92,7 +92,7 @@ jobs:
           python3 -m pip install -r services/mcp_tools/mcp_reaction_optimizer/requirements.txt
           python3 -m pip install -r services/mcp_tools/mcp_chrom_method_optimizer/requirements.txt
           python3 -m pip install pytest pytest-asyncio coverage \
-            "mypy>=1.11" "ruff>=0.6,<0.7" "diff-cover>=9.0"
+            "mypy>=1.11,<2" "ruff>=0.6,<0.7" "diff-cover>=9.0"
       - name: Ruff
         run: ruff check .
       - name: Pytest with coverage

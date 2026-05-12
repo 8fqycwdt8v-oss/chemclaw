@@ -28,6 +28,8 @@ import type { LlmProvider, ModelRole } from "../../llm/provider.js";
 import type { SandboxClient } from "../../core/sandbox.js";
 import { wrapCode, parseOutputs } from "./run_program.js";
 import { withUserContext } from "../../db/with-user-context.js";
+import type { ToolRegistry } from "../registry.js";
+import { getLogger } from "../../observability/logger.js";
 
 // ---------------------------------------------------------------------------
 // Schemas
@@ -209,6 +211,15 @@ export function buildForgeToolTool(
   /** Which model role forged the tool (Phase D.5: weak-from-strong). */
   forgedByModel?: string,
   forgedByRole?: ModelRole,
+  /**
+   * Phase C3 — when supplied, the tool is hot-registered into the live
+   * ToolRegistry after the all-pass persistence so it becomes callable
+   * in the same chained turn that forged it. Without this, the tool is
+   * only available after the next process restart (when loadFromDb runs).
+   * Optional so test harnesses + the legacy /api/forge route that don't
+   * thread the registry through still work.
+   */
+  registry?: ToolRegistry,
 ) {
   return defineTool({
     id: "forge_tool",
@@ -493,6 +504,27 @@ export function buildForgeToolTool(
         });
 
         persisted = true;
+
+        // Phase C3 — hot-register so the new tool is callable in the same
+        // chained turn that forged it. Best-effort: a failure here doesn't
+        // unwind the persistence (the tool will still load on the next
+        // process restart), but we log so operators see registration drift.
+        if (registry) {
+          try {
+            const ok = await registry.hotRegisterByName(pool, input.name);
+            if (!ok) {
+              getLogger("agent-claw.forge_tool").warn(
+                { event: "forge_tool_hot_register_skipped", tool_name: input.name },
+                "forge_tool: hotRegisterByName returned false; tool will be available after restart",
+              );
+            }
+          } catch (err) {
+            getLogger("agent-claw.forge_tool").warn(
+              { err, event: "forge_tool_hot_register_failed", tool_name: input.name },
+              "forge_tool: hot register threw; tool will be available after restart",
+            );
+          }
+        }
       }
 
       return {

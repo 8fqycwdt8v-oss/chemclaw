@@ -21,9 +21,10 @@ function makePoolMock(opts: {
   bootstrapRows?: Array<{ rxn_smiles: string; yield_pct: number }>;
 }) {
   let yieldQueryCount = 0;
+  const auditInserts: Array<{ sql: string; params: unknown[] }> = [];
   const pool = {
     connect: vi.fn(async () => ({
-      query: vi.fn(async (sql: string, _params?: unknown[]) => {
+      query: vi.fn(async (sql: string, params?: unknown[]) => {
         if (typeof sql === "string" && sql.includes("drfp_vector <=>")) {
           return {
             rows:
@@ -40,12 +41,16 @@ function makePoolMock(opts: {
           }
           return { rows: opts.bootstrapRows ?? opts.calibrationRows };
         }
+        if (typeof sql === "string" && sql.includes("INSERT INTO admin_audit_log")) {
+          auditInserts.push({ sql, params: params ?? [] });
+          return { rows: [{ id: "00000000-0000-0000-0000-000000000001" }] };
+        }
         return { rows: [] };
       }),
       release: vi.fn(),
     })),
   };
-  return pool;
+  return Object.assign(pool, { auditInserts });
 }
 
 const ENCODED_VECTOR = Array.from({ length: 2048 }, () => 0);
@@ -165,6 +170,74 @@ describe("buildAssessApplicabilityDomainTool", () => {
 
     expect(result.used_global_fallback).toBe(true);
     expect(fetchMock).toHaveBeenCalledTimes(4);
+
+    // Bootstrap audit (kg-transfer-learning.md §7 Q6): the fallback path
+    // must write an admin_audit_log row tagged with the originating user
+    // and the supplied project id, with no SMILES in the payload.
+    expect(pool.auditInserts.length).toBe(1);
+    const audit = pool.auditInserts[0]!;
+    // Schema: actor, action, target, before, after, reason, request_id, trace_id
+    expect(audit.params[0]).toBe("test@example.com");
+    expect(audit.params[1]).toBe("ad.cross_project_bootstrap_used");
+    expect(audit.params[2]).toBe("PRJ-EMPTY");
+    const after = JSON.parse(audit.params[4] as string);
+    expect(after.calibration_size).toBe(40);
+    expect(after.project_internal_id_supplied).toBe(true);
+    // SMILES must not leak into the audit payload.
+    const allParams = audit.params.map((p) => (typeof p === "string" ? p : ""));
+    for (const p of allParams) {
+      expect(p).not.toContain("CC>>CC");
+    }
+  });
+
+  it("happy path does not write a bootstrap audit row", async () => {
+    const calibrationRows = Array.from({ length: 50 }, (_, i) => ({
+      rxn_smiles: `CC>>CC${i}`,
+      yield_pct: 50 + i,
+    }));
+    const pool = makePoolMock({ nearestDistance: 0.3, calibrationRows });
+
+    const fetchMock = vi.fn();
+    fetchMock.mockResolvedValueOnce({ ok: true, text: async () => JSON.stringify(FAKE_DRFP_RESPONSE) });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({
+        predictions: calibrationRows.map((r) => ({
+          rxn_smiles: r.rxn_smiles,
+          predicted_yield: r.yield_pct,
+          std: 1.0,
+          model_id: "y@v1",
+        })),
+      }),
+    });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({
+        calibration_id: "ok01",
+        calibration_size: 50,
+        cached_for_seconds: 1800,
+      }),
+    });
+    fetchMock.mockResolvedValueOnce({
+      ok: true,
+      text: async () => JSON.stringify({
+        verdict: "in_domain",
+        tanimoto_signal: { distance: 0.3, tanimoto: 0.7, threshold_in: 0.5, threshold_out: 0.7, in_band: true },
+        mahalanobis_signal: { mahalanobis: 100, threshold_in: 2150, threshold_out: 2200, in_band: true, stats_version: "v1", n_train: 1 },
+        conformal_signal: { alpha: 0.20, half_width: 5, calibration_size: 50, used_global_fallback: false, threshold_in: 30, threshold_out: 50, in_band: true },
+        used_global_fallback: false,
+      }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = buildAssessApplicabilityDomainTool(pool as never, URLS.drfp, URLS.chemprop, URLS.ad);
+    await tool.execute(makeCtx(), {
+      rxn_smiles: "CC.OO>>CC(=O)O",
+      project_internal_id: "PRJ-001",
+    });
+
+    // No fallback → no audit row.
+    expect(pool.auditInserts.length).toBe(0);
   });
 
   it("conformal abstain: cross-project total < 30 → empty residuals path", async () => {

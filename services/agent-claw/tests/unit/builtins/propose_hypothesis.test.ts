@@ -115,3 +115,75 @@ describe("buildProposeHypothesisTool — anti-fabrication guard", () => {
     expect(result.hypothesis_id).toBe(HYPO_UUID);
   });
 });
+
+// ---------------------------------------------------------------------------
+// Idempotency: duplicate cited_fact_ids must not abort the transaction
+// ---------------------------------------------------------------------------
+//
+// hypothesis_citations has PRIMARY KEY (hypothesis_id, fact_id). Pre-fix,
+// passing [fact1, fact2, fact1] would raise a PK-violation on the second
+// fact1 INSERT and roll back the whole transaction — losing the
+// hypothesis row that already INSERTed. ON CONFLICT DO NOTHING resolves
+// the conflict server-side; first citation_note wins.
+
+describe("buildProposeHypothesisTool — citation INSERT idempotency", () => {
+  it("uses ON CONFLICT DO NOTHING on the citation INSERT (review §3.8)", async () => {
+    const { pool, client } = mockPool();
+    client.queryResults.push(...makeDbResults(HYPO_UUID));
+
+    const tool = buildProposeHypothesisTool(pool);
+    const ctx = makeCtx("scientist@pharma.com", [FACT_UUID_1]);
+
+    await tool.execute(ctx, {
+      hypothesis_text: "Catalyst A gives higher yield when temp is below 100°C.",
+      cited_fact_ids: [FACT_UUID_1],
+      confidence: 0.75,
+    });
+
+    // Capture the citation INSERT (querySpy.mock.calls[i][0] is the SQL
+    // text or { text } config object passed to client.query).
+    const citationInsert = client.querySpy.mock.calls
+      .map((args) => {
+        const first = args[0];
+        return typeof first === "string" ? first : (first as { text: string }).text;
+      })
+      .find(
+        (text) =>
+          text.includes("INSERT INTO hypothesis_citations") &&
+          text.includes("ON CONFLICT"),
+      );
+    expect(
+      citationInsert,
+      "expected hypothesis_citations INSERT to use ON CONFLICT DO NOTHING",
+    ).toBeDefined();
+    expect(citationInsert).toContain("(hypothesis_id, fact_id) DO NOTHING");
+  });
+
+  it("survives duplicate fact_ids in cited_fact_ids without aborting", async () => {
+    const { pool, client } = mockPool();
+    // Three INSERT citation calls (one per loop iteration); the 2nd and 3rd
+    // both target FACT_UUID_1 so the second would normally PK-violate. With
+    // ON CONFLICT DO NOTHING the SQL is still issued but returns rowCount=0.
+    client.queryResults.push(
+      { rows: [], rowCount: 0 }, // BEGIN
+      { rows: [], rowCount: 0 }, // set_config
+      { rows: [{ id: HYPO_UUID, confidence_tier: "medium", created_at: "2025-01-01T00:00:00Z" }], rowCount: 1 },
+      { rows: [], rowCount: 0 }, // INSERT citation 1 (fact_1)
+      { rows: [], rowCount: 0 }, // INSERT citation 2 (fact_2)
+      { rows: [], rowCount: 0 }, // INSERT citation 3 (fact_1 dup — DO NOTHING)
+      { rows: [], rowCount: 0 }, // INSERT ingestion_events
+      { rows: [], rowCount: 0 }, // COMMIT
+    );
+
+    const tool = buildProposeHypothesisTool(pool);
+    const ctx = makeCtx("scientist@pharma.com", [FACT_UUID_1, FACT_UUID_2]);
+
+    const result = await tool.execute(ctx, {
+      hypothesis_text: "The agent batched its retrieval and accidentally cited fact_1 twice.",
+      cited_fact_ids: [FACT_UUID_1, FACT_UUID_2, FACT_UUID_1],
+      confidence: 0.6,
+    });
+
+    expect(result.hypothesis_id).toBe(HYPO_UUID);
+  });
+});

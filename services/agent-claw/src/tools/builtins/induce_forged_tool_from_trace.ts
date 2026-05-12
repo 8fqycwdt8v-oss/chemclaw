@@ -115,6 +115,10 @@ export function buildInduceForgedToolFromTraceTool(
   forgedToolsDir: string,
   userEntraId: string,
   traceReader?: LangfuseTraceReader,
+  /** Phase C3 — forwarded into the inner forge_tool so the induced tool
+   *  hot-registers into the live registry (callable in the same chained
+   *  turn). Optional for legacy callers that don't have a registry handle. */
+  registry?: import("../registry.js").ToolRegistry,
 ) {
   const reader = traceReader ?? makeLangfuseTraceReader();
 
@@ -199,6 +203,7 @@ Generalize this sequence into a single reusable Python tool.`;
         userEntraId,
         undefined, // forgedByModel
         "planner", // forgedByRole — induced tools are planner-level
+        registry, // hot-register into live ToolRegistry (Phase C3)
       );
 
       const testCases = (raw.test_cases as Array<{ input: unknown; expected_output: unknown }>).map(
