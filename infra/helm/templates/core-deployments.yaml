@@ -464,3 +464,40 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
 {{- end }}
+
+{{- if .Values.projectors.wikiRegen.enabled }}
+---
+# wiki_regen — knowledge-wiki body-synthesis daemon (ADR 012 Phase 2b).
+# LLM-cost-incurring; default-off in values.yaml.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wiki-regen
+  labels:
+    app: wiki-regen
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wiki-regen
+  template:
+    metadata:
+      labels:
+        app: wiki-regen
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: wiki-regen
+          image: {{ .Values.projectors.wikiRegen.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+          env:
+            - name: LITELLM_BASE_URL
+              value: {{ printf "http://litellm:%d" (int .Values.litellm.port) | quote }}
+            - name: WIKI_REGEN_MODEL
+              value: {{ .Values.projectors.wikiRegen.model | quote }}
+{{- end }}

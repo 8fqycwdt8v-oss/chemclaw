@@ -264,22 +264,45 @@ treat them right). The `wiki-human-block-guard` `pre_tool` hook rejects
   a cited fact marks the citing page dirty; `read_article` returns the stub
   with `stale: true`.
 
-### Phase 2b — the LLM body-synthesis loop
+### Phase 2b — the LLM body-synthesis loop  ✅ done
 
-* Debounced regen pass (cron or projector loop) picks `dirty` pages, pulls the
-  entity's KG facts + relevant chunks + hypotheses + artifacts, synthesises
-  `body_md` with inline `[fact:…]` citations via LiteLLM (`wiki.synthesis`
-  prompt-registry mode, seeded in `db/seed/02_prompt_registry.sql`), recomputes
-  `confidence_score` (recency/tier-weighted mean of cited facts), writes a
-  `knowledge_article_revisions` row (`author_kind='projector'`), preserves
-  `human:*` blocks verbatim, clears `dirty`, appends a `log` entry.
-* `config_settings` rows for `wiki.regen.{model,debounce_seconds,max_per_hour,on_read,on_read_timeout_ms}`.
-* `compound/<inchikey>` + `reaction-family/<rxno>` auto-stubbing in the
-  `wiki_pages` projector (reaction-component derivation from `experiment_imported`).
-* pytest: regen writes a revision + citations, human-block preservation,
-  replay idempotency (LiteLLM mocked).
-* **Done when**: a `dirty` `project/<internal_id>` stub regenerates into a
-  cited prose page; invalidating a cited fact re-dirties + re-regenerates it.
+* `services/optimizer/wiki_regen/` (`main.py` + `__init__.py` + `requirements.txt`
+  + `Dockerfile`) — a polling daemon (like `session_reanimator`): every
+  `WIKI_REGEN_POLL_SECONDS` it picks the oldest `dirty` entity-backed page that
+  has been dirty ≥ `WIKI_REGEN_DEBOUNCE_SECONDS` (burst-collapse), gathers a
+  compact Postgres context per kind (`document_digest` / `nce_project` /
+  `synthesis_campaign` / `compound` / `reaction_family` — one `_ctx_*` builder
+  each), reads the `wiki.synthesis` prompt from `prompt_registry` (built-in
+  `_FALLBACK_PROMPT` if absent), calls central LiteLLM (`WIKI_REGEN_MODEL`,
+  default `claude-haiku-4-5`), parses inline `[fact:…]`/`[experiment:…]`/…
+  citations, writes a `knowledge_article_revisions` row (`author_kind='projector'`),
+  preserves `human:*` blocks (re-appends any not present under a "Curator notes"
+  heading), clears `dirty`, prepends a line to the `log` page. Sliding-window
+  rate cap `WIKI_REGEN_MAX_PER_HOUR`; `WIKI_REGEN_BATCH_SIZE` per tick. Race-safe
+  (`UPDATE … WHERE dirty` no-ops if a human PATCH / concurrent regen won).
+* `db/seed/07_wiki_synthesis_prompt.sql` — seeds `wiki.synthesis` v1 (active);
+  the daemon's `_FALLBACK_PROMPT` mirrors it.
+* `db/init/60_wiki_regen_config.sql` — `config_settings` catalog rows for
+  `wiki.regen.{model,poll_seconds,debounce_seconds,max_per_hour,batch_size}`
+  (the daemon reads the matching env vars today — wiring it through
+  `ConfigRegistry` + adding `wiki.regen.on_read*` for `read_article` on-read
+  regen is a BACKLOG follow-up).
+* `docker-compose.yml` (`wiki-regen`, `profiles: ["full"]`),
+  `infra/helm/values.yaml` + `core-deployments.yaml` (`projectors.wikiRegen`,
+  default `enabled: false` — LLM-cost-incurring), `Makefile` (`make run.wiki-regen`).
+* pytest: `tests/unit/optimizer/test_wiki_regen.py` — citation parsing /
+  dedup, human-block extraction + re-insertion, `_synthesize` (stubbed httpx:
+  body + fence-strip; 4xx/empty → skip; human blocks in payload), the `_ctx_*`
+  builders (outline gather; missing-row → `_SkipPage`; bad entity_ref →
+  `_PermanentSkip`; project steps+hypotheses), `_apply_regen` (writes
+  UPDATE + revision + citations + log; no-op when no longer dirty),
+  `_load_prompt` (registry-then-fallback). 12 passed; ruff + mypy clean.
+* **Done**: a `dirty` entity-backed stub (`project/`, `campaign/`,
+  `document/`, or a `request_article`-created `compound/`) regenerates into a
+  cited prose page with a revision row + citation rows; invalidating a cited
+  fact re-dirties it and the next tick re-regenerates. Remaining 2b follow-ups
+  (compound/reaction-family auto-stubbing, ConfigRegistry wiring, page
+  `confidence_score` from cited-fact confidence, on-read regen) are in `BACKLOG.md`.
 
 ### Phase 3 — `wiki_kg` + `wiki_search_index` projectors
 

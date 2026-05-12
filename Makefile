@@ -160,6 +160,10 @@ run.chunk-embedder: ## Run the chunk-embedder projector locally
 run.wiki-pages: ## Run the knowledge-wiki projection projector locally (ADR 012)
 	$(VENV)/bin/python -m services.projectors.wiki_pages.main
 
+.PHONY: run.wiki-regen
+run.wiki-regen: ## Run the knowledge-wiki body-synthesis daemon locally (ADR 012 Phase 2b)
+	$(VENV)/bin/python -m services.optimizer.wiki_regen.main
+
 .PHONY: ingest.docs
 ingest.docs: ## Scan sample-data/documents and ingest all supported files
 	$(VENV)/bin/python -m services.ingestion.doc_ingester.cli scan

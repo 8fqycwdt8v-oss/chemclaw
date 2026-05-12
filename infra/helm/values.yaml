@@ -109,6 +109,13 @@ projectors:
     # `wiki.enabled` feature flag is off (writes stubs nobody reads).
     enabled: true
     image: chemclaw/wiki-pages:latest
+  wikiRegen:
+    # Knowledge-wiki body-synthesis daemon (ADR 012 Phase 2b): LLM-fills the
+    # dirty stubs the wikiPages projector creates. LLM-cost-incurring —
+    # default OFF; enable alongside the `wiki.enabled` feature flag.
+    enabled: false
+    image: chemclaw/wiki-regen:latest
+    model: claude-haiku-4-5
 
 # ── Profile: chemistry ────────────────────────────────────────────────────────
 # Enable with: --set chemistry.enabled=true
