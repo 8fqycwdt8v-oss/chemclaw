@@ -304,19 +304,49 @@ treat them right). The `wiki-human-block-guard` `pre_tool` hook rejects
   (compound/reaction-family auto-stubbing, ConfigRegistry wiring, page
   `confidence_score` from cited-fact confidence, on-read regen) are in `BACKLOG.md`.
 
-### Phase 3 — `wiki_kg` + `wiki_search_index` projectors
+### Phase 3a — `wiki_kg` projector  ✅ done
 
-* `services/projectors/wiki_kg/` — direct-driver (uses
-  `services/projectors/common/neo4j_client.py`); `:WikiPage` MERGE,
-  `:SUMMARIZES` / `:GROUNDS` edges, bi-temporal close on revision change /
-  archive (à la `kg_hypotheses`).
+* `services/projectors/wiki_kg/` (`main.py` + `__init__.py` + `requirements.txt`
+  + `Dockerfile`) — direct-driver (`services/projectors/common/neo4j_client.py`,
+  like `kg_documents` / `kg_hypotheses`). Consumes `knowledge_article_created` /
+  `_revised` / `_archived`. On created/revised it reads the page title + the
+  new revision's `fact:` citations from Postgres, then: MERGEs `(:WikiPage {slug})`
+  (sets title/kind/article_id/revision/group_id/recorded_at, clears `archived`);
+  `MATCH … MERGE`s `(:WikiPage)-[:SUMMARIZES]->(entity)` for entity-backed pages
+  whose `entity_ref.label` maps to a KG node the system already creates
+  (`Compound {inchikey}` / `NCEProject {internal_id}` / `Document {document_id}`
+  — `MATCH` returns zero rows when the node is absent, so no stub is created);
+  `MATCH … MERGE`s `(:WikiPage)-[:GROUNDS {fact_id: <uuidv5(slug,fact)>}]->(:Fact)`
+  for each `fact:` citation that matches an existing `:Fact` (re-cite resurrects
+  + restamps `cited_at_revision`), then closes any `:GROUNDS` edge with
+  `cited_at_revision < new` (bi-temporal `invalidated_at`). On `_archived` it
+  sets `wp.archived = true` and closes the page's live `:GROUNDS` edges. No
+  Postgres read on the archive path. Idempotent (deterministic edge ids + MERGE;
+  replay-safe via `projection_acks`).
+* `knowledge_article_*` `consumed_by` already lists `wiki_kg` (`db/init/58`).
+* `docker-compose.yml` (`wiki-kg`, `profiles: ["full"]`, `depends_on` postgres +
+  neo4j, `NEO4J_*` env), `infra/helm/values.yaml` + `core-deployments.yaml`
+  (`projectors.wikiKg`, default `enabled: true`), `Makefile` (`make run.wiki-kg`).
+* pytest: `tests/unit/projectors/test_wiki_kg.py` — `:WikiPage` MERGE params,
+  `:SUMMARIZES` Cypher for a mapped label (+ skip for an unmapped one),
+  `:GROUNDS` per fact with deterministic edge id, dropped-facts close on a
+  lower-revision regen, archive path (flag + close, no PG read), missing-slug /
+  row-gone no-ops, `_deterministic_edge_id` determinism, `_safe_group_id` guard.
+  `.venv/bin/pytest tests/unit/projectors/ -q` → 51 passed; ruff clean (mypy on
+  `wiki_kg/main.py` clean — the `neo4j_client.py` arg-type noise only shows up
+  with `neo4j` stubs installed locally, not in CI).
+* **Done**: revising a page MERGEs the `:WikiPage` + `:GROUNDS` edges and closes
+  the dropped ones; archiving closes them all.
+
+### Phase 3b — `wiki_search_index` projector + retrieval/provenance wiring
+
 * `services/projectors/wiki_search_index/` — re-chunk (heading-aware, same
   chunker as `doc_ingester`), embed via `mcp-embedder`, upsert into a sibling
-  `wiki_chunks` table (`db/init/60_wiki_chunks.sql`) tagged `source_type='wiki'`
-  + `article_id`/`slug` backlink; delete superseded-revision chunks in the same
-  txn.
+  `wiki_chunks` table (new `db/init` file) tagged `source_type='wiki'` +
+  `article_id`/`slug` backlink; delete superseded-revision chunks in the same txn.
 * Extend `search_knowledge` / `retrieve_related` to include `wiki` hits in the
-  RRF; extend `query_provenance` to walk `:Fact → GROUNDS ← :WikiPage`.
+  RRF; extend `query_provenance` (or add an `mcp-kg` endpoint) to walk
+  `:Fact → GROUNDS ← :WikiPage` so "which page asserts this fact" is answerable.
 * Compose + helm wiring; pytest + vitest.
 * **Done when**: `search_knowledge("…")` returns a wiki page among the hits;
   `query_provenance(fact_id)` lists the page that asserts it.

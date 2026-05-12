@@ -352,6 +352,36 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # wiki_kg — project knowledge-wiki pages into Neo4j (ADR 012 Phase 3a)
+  # Mirrors knowledge_articles rows as :WikiPage nodes + :SUMMARIZES /
+  # :GROUNDS edges so query_provenance / retrieve_related can use them.
+  # -------------------------------------------------------------
+  wiki-kg:
+    build:
+      context: .
+      dockerfile: services/projectors/wiki_kg/Dockerfile
+    container_name: chemclaw-wiki-kg
+    restart: unless-stopped
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-chemclaw_dev_neo4j_change_me}
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # reaction_vectorizer — DRFP projector
   # -------------------------------------------------------------
   reaction-vectorizer:

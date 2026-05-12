@@ -109,6 +109,12 @@ projectors:
     # `wiki.enabled` feature flag is off (writes stubs nobody reads).
     enabled: true
     image: chemclaw/wiki-pages:latest
+  wikiKg:
+    # Projects knowledge_articles rows into Neo4j as :WikiPage nodes +
+    # :SUMMARIZES / :GROUNDS edges (ADR 012 Phase 3a). Direct-driver — needs
+    # NEO4J_URI/USER/PASSWORD (same secret as the other kg-* projectors).
+    enabled: true
+    image: chemclaw/wiki-kg:latest
   wikiRegen:
     # Knowledge-wiki body-synthesis daemon (ADR 012 Phase 2b): LLM-fills the
     # dirty stubs the wikiPages projector creates. LLM-cost-incurring —

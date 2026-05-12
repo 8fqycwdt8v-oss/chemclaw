@@ -501,3 +501,35 @@ spec:
             - name: WIKI_REGEN_MODEL
               value: {{ .Values.projectors.wikiRegen.model | quote }}
 {{- end }}
+
+{{- if .Values.projectors.wikiKg.enabled }}
+---
+# wiki_kg — project knowledge-wiki pages into Neo4j (ADR 012 Phase 3a):
+# :WikiPage nodes + :SUMMARIZES / :GROUNDS edges.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wiki-kg
+  labels:
+    app: wiki-kg
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wiki-kg
+  template:
+    metadata:
+      labels:
+        app: wiki-kg
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: wiki-kg
+          image: {{ .Values.projectors.wikiKg.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+{{- end }}
