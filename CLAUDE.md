@@ -288,6 +288,15 @@ To replay: `DELETE FROM projection_acks WHERE projector_name='<name>'` and resta
 
 **Custom NOTIFY channels (DR-06).** Two projectors (`compound_classifier`, `compound_fingerprinter`) bypass the default `ingestion_events` drive: they LISTEN on a custom channel where the payload is a domain key (e.g., inchikey) rather than an ingestion_events row id. The bypass is via overriding `_connect_and_run` and leaving `interested_event_types = ()` so the base `_listen_loop` is skipped entirely. If you need this pattern, EITHER set `interested_event_types` and inherit the base behaviour, OR override `_connect_and_run` AND give the class a docstring that names the channel + payload semantics explicitly. No silent divergence.
 
+## Forging tools (best-effort hot-register contract)
+
+`forge_tool` (`services/agent-claw/src/tools/builtins/forge_tool.ts`) persists a forged tool through `withUserContext` (`tools`, `forged_tool_tests`, optional `skill_library` row), then calls `registry.hotRegisterByName(pool, name)` so the tool is callable in the same chained turn that forged it. The hot-register runs **OUTSIDE** the persistence transaction by design:
+
+- **Persistence is the source of truth.** A hot-register failure logs `forge_tool_hot_register_failed` / `forge_tool_hot_register_skipped` and returns — it does NOT unwind the persisted rows. The tool will load on the next agent restart via the normal registry boot scan.
+- **Don't move the hot-register inside the transaction.** A txn-scoped hot-register would (a) hold the DB row locks for the duration of code-load / sandbox-validation and (b) leak a registered-but-uncommitted tool if the txn rolls back later.
+- **`_sandboxClient` is required for forged-source rows.** A registry without a sandbox client can't validate forged code on hot-load; the call returns `false` (logged as `*_skipped`). Operators wiring a new agent process MUST call `registry.setSandboxClient(...)` before serving traffic, or every forged tool will be "available after restart" perpetually.
+- **Reading from forged-tool tables.** Treat `tools` + `skill_library` as authoritative; the in-memory registry is a cache that catches up on restart. Anything inspecting forged-tool state should read from the DB, not from the live registry.
+
 ## Off-repo references
 
 - Architectural spec: `~/.claude/plans/chemos-knowledge-intelligence-tranquil-marshmallow.md`.

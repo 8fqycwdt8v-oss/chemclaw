@@ -6,12 +6,16 @@ table.
 
 ## Status: Retired from live ingest path (Phase F.2)
 
-As of Phase F.2, new ELN entries flow through `mcp_eln_benchling` (read on-demand,
-cache-and-project semantics). This importer is **no longer started by Docker Compose**
-and is **not in the active CI path**.
+As of Phase F.2, new ELN entries flow through a source-system MCP adapter
+(`mcp_eln_local` today — a Postgres-backed mock ELN; a real vendor adapter
+would slot in at the same boundary) with read-on-demand, cache-and-project
+semantics. This importer is **no longer started by Docker Compose** and is
+**not in the active CI path** (excluded from diff-cover + ruff).
 
-The code is preserved for one-shot bulk migrations only — for example, backfilling
-historical data before a new deployment.
+The code is preserved for one-shot bulk migrations only — for example,
+backfilling historical data before a new deployment. `BACKLOG.md` has an
+open `[cleanup]` item to decide whether to keep or delete it; until that
+decision lands, treat this directory as cold storage.
 
 ## When to use this
 
