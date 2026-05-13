@@ -110,6 +110,8 @@ describe("start_chrom_campaign", () => {
         n_outputs: 1,
         gradient_scheme: "hold_ramp_hold",
         objective_mode: "single",
+        eluent_mode: "binary",
+        n_segments: 3,
       }),
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -145,6 +147,8 @@ describe("start_chrom_campaign", () => {
         n_outputs: 3,
         gradient_scheme: "hold_ramp_hold",
         objective_mode: "pareto",
+        eluent_mode: "binary",
+        n_segments: 3,
       }),
     });
     vi.stubGlobal("fetch", fetchMock);
@@ -168,6 +172,7 @@ describe("start_chrom_campaign", () => {
       text: async () => JSON.stringify({
         bofire_domain: {}, n_inputs: 1, n_outputs: 1,
         gradient_scheme: "hold_ramp_hold", objective_mode: "single",
+        eluent_mode: "binary", n_segments: 3,
       }),
     });
     vi.stubGlobal("fetch", fetchMock);

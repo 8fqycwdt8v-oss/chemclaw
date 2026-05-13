@@ -58,7 +58,9 @@ const MIN_EXPECTED_HOOKS = 25;
 // in default-config deployments. +4 for the knowledge-wiki builtins
 // (read_article, list_articles, upsert_article, request_article — ADR 012
 // Phase 1; registered unconditionally, gated at call time by `wiki.enabled`).
-const MIN_EXPECTED_BUILTINS = 90;
+// +3 for the Phase Z6 chromatography Phases 2-5 builtins
+// (ingest_chrom_results, extract_chrom_pareto_front, simulate_chrom_retention).
+const MIN_EXPECTED_BUILTINS = 93;
 
 export async function startServer(
   app: FastifyInstance,

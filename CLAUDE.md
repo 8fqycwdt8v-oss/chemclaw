@@ -247,6 +247,7 @@ DB-side audit: `error_events` (via `record_error_event`, `chemclaw_app` / `chemc
 - `docs/runbooks/autonomy-upgrade.md`
 - `docs/runbooks/backup-and-restore.md`
 - `docs/runbooks/change-llm-provider.md`
+- `docs/runbooks/chromatography-method-optimization.md`
 - `docs/runbooks/disable-tool.md`
 - `docs/runbooks/harness-rollback.md`
 - `docs/runbooks/local-dev.md`
