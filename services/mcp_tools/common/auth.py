@@ -93,7 +93,7 @@ def sign_mcp_token(
     # MCP_AUTH_SIGNING_KEY=" " cannot mint or verify tokens with a key
     # whose effective length is zero. Length check uses the stripped key
     # so "32 spaces" is rejected as too short.
-    key = (signing_key or os.environ.get("MCP_AUTH_SIGNING_KEY", "")).strip()
+    key = (signing_key or os.environ.get("MCP_AUTH_SIGNING_KEY") or "").strip()
     if not key:
         raise McpAuthError(
             "MCP_AUTH_SIGNING_KEY is empty; refusing to mint an unsigned token"
@@ -145,7 +145,7 @@ def verify_mcp_token(
     """
     # Mirror sign_mcp_token's whitespace handling so a misconfigured key
     # cannot pass verification either.
-    key = (signing_key or os.environ.get("MCP_AUTH_SIGNING_KEY", "")).strip()
+    key = (signing_key or os.environ.get("MCP_AUTH_SIGNING_KEY") or "").strip()
     if not key:
         raise McpAuthError("MCP_AUTH_SIGNING_KEY is empty; cannot verify token")
 
