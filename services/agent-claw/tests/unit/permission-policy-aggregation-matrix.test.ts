@@ -17,6 +17,7 @@ import type { Pool, QueryResult } from "pg";
 import {
   PermissionPolicyLoader,
   setPermissionPolicyLoader,
+  clearPermissionPolicyLoader,
   type PolicyDecision,
 } from "../../src/core/permissions/policy-loader.js";
 import { resolveDecision } from "../../src/core/permissions/resolver.js";
@@ -257,7 +258,7 @@ describe("permission hook + resolver — composed end-to-end", () => {
       expect(r.decision).toBe("deny");
     } finally {
       // Reset module-level singleton so adjacent tests don't see our row.
-      setPermissionPolicyLoader(null as never);
+      clearPermissionPolicyLoader();
     }
   });
 });
