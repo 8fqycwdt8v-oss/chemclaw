@@ -1,7 +1,10 @@
 // Phase A2 — reflection-prompt builder unit tests.
 
 import { describe, it, expect } from "vitest";
-import { buildReflectionPrompt } from "../../src/core/reflection-prompt.js";
+import {
+  buildReflectionPrompt,
+  MAX_REFLECTION_PROMPT_BYTES,
+} from "../../src/core/reflection-prompt.js";
 import { LOOP_WARNINGS_KEY, type LoopWarning } from "../../src/core/hooks/loop-detector.js";
 import type { ToolContext } from "../../src/core/types.js";
 import type { Todo } from "../../src/core/session-store.js";
@@ -98,5 +101,37 @@ describe("buildReflectionPrompt", () => {
     });
     expect(out).toContain("manage_plan");
     expect(out).toContain("ask_user");
+  });
+
+  it("truncates individual todo content past the per-item char cap", () => {
+    const big = "x".repeat(2000);
+    const out = buildReflectionPrompt({
+      ctx: makeCtx(),
+      openTodos: [todo(big, "pending", 1)],
+      previousFinishReason: "max_steps",
+    });
+    expect(out).not.toBeNull();
+    // Marker appears, full string does not.
+    expect(out!).toContain("…");
+    expect(out!).not.toContain(big);
+  });
+
+  it("caps the assembled prompt at MAX_REFLECTION_PROMPT_BYTES", () => {
+    // 10 todos × big content > 8 KiB even after the per-item cap, so the
+    // overall byte cap also fires.
+    const big = "x".repeat(500);
+    const todos = Array.from({ length: 10 }, (_, i) =>
+      todo(big + ` (#${i})`, "pending", i + 1),
+    );
+    const out = buildReflectionPrompt({
+      ctx: makeCtx(),
+      openTodos: todos,
+      previousFinishReason: "max_steps",
+    });
+    expect(out).not.toBeNull();
+    expect(Buffer.byteLength(out!, "utf8")).toBeLessThanOrEqual(
+      MAX_REFLECTION_PROMPT_BYTES,
+    );
+    expect(out!).toContain("[reflection prompt truncated]");
   });
 });
