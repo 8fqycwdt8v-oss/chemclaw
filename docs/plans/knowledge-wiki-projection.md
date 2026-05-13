@@ -412,19 +412,49 @@ treat them right). The `wiki-human-block-guard` `pre_tool` hook rejects
   `kind:"wiki"` item.
 * **Done when**: `query_provenance(fact_id)` lists the page that asserts it.
 
-### Phase 4 — linter cron + admin route + slash verb + skill
+### Phase 4a — `wiki_linter` cron (deterministic sweep)  ✅ done
 
-* `services/optimizer/wiki_linter/` (reuses the `services/optimizer/*` cron
-  pattern): stale-citation, orphan, missing-page, contradiction-page,
-  index/log rebuild; everything logged on the `log` page + structured logger.
+* `services/optimizer/wiki_linter/` (`main.py` + `__init__.py` +
+  `requirements.txt` + `Dockerfile`; reuses the `services/optimizer/*` cron
+  pattern, like `wiki_regen`) — every `WIKI_LINTER_POLL_HOURS` (default 6) it:
+  (1) **missing-page** — creates a `dirty` stub `project/<internal_id>` page for
+  any NCE project lacking one (`INSERT … ON CONFLICT (slug) DO NOTHING`,
+  `dirty_reason='lint:missing_page'`; the `wiki_regen` daemon then fills it);
+  (2) **orphan** — logs (warn) any agent-authored `topic/` page with no inbound
+  `[article:…]` citation (not auto-fixed — needs human judgement);
+  (3) **index rebuild** — regenerates the `index` page body: a Karpathy-style
+  catalog grouped by kind (slug · title · maturity · #sources · last-updated ·
+  `dirty?`/`human-edited?` flags), written only when it changed, never bumping
+  `revision` (it's a derived catalog, not a versioned doc);
+  (4) appends a one-line `## [date] lint | …` summary to the `log` page.
+  Pure-Postgres, **no LLM** (matching the "plumbing is deterministic" rule); per
+  sweep wrapped in try/except so one failure doesn't kill the loop; connects as
+  `chemclaw_service`. Wired into `docker-compose.yml` (`wiki-linter`,
+  `profiles: ["full"]`), `infra/helm` (`projectors.wikiLinter`), `Makefile`
+  (`make run.wiki-linter`); `services/optimizer/wiki_linter/*` added to the
+  coverage `omit` + `tests/unit/optimizer/test_wiki_linter.py` to the CI pytest
+  list (same as `wiki_regen`).
+* pytest: `tests/unit/optimizer/test_wiki_linter.py` — `_render_index`
+  (kind grouping/order, `article:` links, flags, summary truncation),
+  `_sweep_missing_project_pages` (creates dirty stubs / no-op), `_sweep_orphans`
+  (returns unlinked topic pages), `_rebuild_index` (writes when changed / no-op
+  when unchanged), `run_once` (stats + the `log` append). 7 passed; ruff + mypy
+  clean.
+* **Done**: a lint run creates a stub for a project that has no page yet,
+  rebuilds the `index`, and logs an entry.
+
+### Phase 4b — contradiction pages + admin route + `/wiki` verb + curator skill
+
+* Extend `wiki_linter`: a stale-citation backstop sweep (needs a Neo4j
+  connection to read `:Fact.invalidated_at`) and `contradiction/<slug>` page
+  generation for entities with ≥N `expert_disputed`/`invalidated` facts (needs
+  Neo4j + an LLM call via the new `wiki.contradiction` `prompt_registry` mode).
 * `POST /api/admin/articles/:id/maturity` — `guardAdmin`, `appendAudit`,
   cache-bust; runbook `docs/runbooks/knowledge-wiki-curation.md`.
 * `/wiki` slash verb (slash parser) + `skills/wiki-curator/SKILL.md` +
   `skill_library` seed row.
-* `prompt_registry` row `wiki.contradiction`.
-* **Done when**: a nightly lint run flags a stale page and rebuilds `index`; an
-  admin can promote a page to FOUNDATION (audited); `/wiki <slug>` opens the
-  curator skill.
+* **Done when**: a lint run spins up a `contradiction/` page; an admin can
+  promote a page to FOUNDATION (audited); `/wiki <slug>` opens the curator skill.
 
 ### Phase 5 — polish: confidence wiring, observability, docs
 

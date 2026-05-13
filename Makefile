@@ -172,6 +172,10 @@ run.wiki-kg: ## Run the knowledge-wiki → Neo4j projector locally (ADR 012 Phas
 run.wiki-search-index: ## Run the knowledge-wiki search-index projector locally (ADR 012 Phase 3b)
 	$(VENV)/bin/python -m services.projectors.wiki_search_index.main
 
+.PHONY: run.wiki-linter
+run.wiki-linter: ## Run the knowledge-wiki linter sweep locally (ADR 012 Phase 4a)
+	$(VENV)/bin/python -m services.optimizer.wiki_linter.main
+
 .PHONY: ingest.docs
 ingest.docs: ## Scan sample-data/documents and ingest all supported files
 	$(VENV)/bin/python -m services.ingestion.doc_ingester.cli scan

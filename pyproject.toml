@@ -190,6 +190,13 @@ omit = [
     # projectors are NOT omitted — their tests live under tests/unit/projectors/
     # which the CI pytest list already collects.
     "services/optimizer/wiki_regen/*",
+    # optimizer/wiki_linter/main.py — ADR 012 Phase 4a periodic-sweep daemon.
+    # Same situation as wiki_regen: direct unit tests in
+    # tests/unit/optimizer/test_wiki_linter.py (added to the ci.yml pytest list)
+    # but diff-cover counts new lines on a touched-file basis. Un-omit once its
+    # coverage is folded into the XML the way the projector tests are
+    # (BACKLOG: wiki/phase-3c followups).
+    "services/optimizer/wiki_linter/*",
     # queue/worker.py — deferred-D1 added the SIGTERM drain helper +
     # httpx aclose. The drain path needs a real LISTEN/NOTIFY round-trip
     # to test (testcontainer-bound; BACKLOG'd). Direct unit tests live
