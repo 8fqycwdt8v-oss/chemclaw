@@ -233,6 +233,6 @@ describe("simulate_chrom_retention", () => {
     await expect(tool.execute(makeCtx(), {
       gradient_program: [{ time_min: 0, pctB: 5 }, { time_min: 5, pctB: 95 }],
       t0_min: 1.0,
-    } as never)).rejects.toThrow();
+    })).rejects.toThrow();
   });
 });

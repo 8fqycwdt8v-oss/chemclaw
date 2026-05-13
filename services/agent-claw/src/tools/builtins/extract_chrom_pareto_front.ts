@@ -119,10 +119,11 @@ export function buildExtractChromParetoFrontTool(pool: Pool, optimizerUrl: strin
       let directions = input.output_directions ?? DEFAULT_DIRECTIONS;
       if (!input.output_directions) {
         const first = measured[0] as { outputs?: Record<string, unknown> };
-        const keys = Object.keys(first?.outputs ?? {});
+        const keys = Object.keys(first.outputs ?? {});
         const narrowed: Record<string, "maximize" | "minimize"> = {};
         for (const k of keys) {
-          if (k in DEFAULT_DIRECTIONS) narrowed[k] = DEFAULT_DIRECTIONS[k]!;
+          const dir = DEFAULT_DIRECTIONS[k];
+          if (dir !== undefined) narrowed[k] = dir;
           else if (k === "crf_total") narrowed[k] = "maximize";
         }
         if (Object.keys(narrowed).length > 0) directions = narrowed;
