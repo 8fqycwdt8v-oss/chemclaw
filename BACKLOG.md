@@ -20,7 +20,6 @@ Deferred follow-ups discovered while doing other work. One bullet per item, pref
 - [ci/mypy] restore `mcp_doc_fetcher` to mypy clean subset — ~10 errors (unused PyPDF2/pdf2image `type: ignore`, missing `dict[]` generics, `JSONResponse` return-type mismatches in FastAPI handlers)
 - [ci/mypy] restore `mcp_eln_local` to mypy clean subset — ~11 errors in `routes.py` (untyped `_acquire`, Row vs dict argument types, missing parameter annotations)
 - [ci/mypy] restore `ingestion/doc_ingester` to mypy clean subset — 2 untyped-decorator errors on `typer @app.command()` in `cli.py`
-- [ci/mypy] drop the narrow `# type: ignore[no-untyped-call]` on `services/mcp_tools/mcp_xtb/_shared.py:101` (`MolToInchiKey`) once RDKit ships type stubs or a partial stub package is added
 - [ci/diff-cover] add real tests for `services/queue/**` (worker LISTEN setup currently 0% covered; excluded from diff-cover in `.github/workflows/ci.yml`)
 - [ci/diff-cover] add tests covering `services/optimizer/session_reanimator/**`, `services/projectors/kg_hypotheses/**`, `services/mcp_tools/mcp_drfp/**`, `services/mcp_tools/mcp_rdkit/**` so the diff-cover excludes can be removed
 - [cleanup] decide fate of `services/ingestion/eln_json_importer.legacy/**` — currently excluded from diff-cover and ruff; either delete or re-enable
@@ -142,6 +141,57 @@ Deferred follow-ups discovered while doing other work. One bullet per item, pref
 - [agent-claw/admin-routes] tighten the audit-meta-invariant regex from `\b\w+\.${verb}\(` to anchor on the actual Fastify decorator name to eliminate false-positive risk if a non-Fastify `*.delete(` pattern lands in `routes/admin/`.
 - [synthesis-campaigns] add `kg_synthesis_campaigns` projector subscribed to `synthesis_campaign_created` + `synthesis_campaign_state_changed` (catalog entries already in `db/init/51_synthesis_campaigns.sql`); writes `:SynthesisCampaign` nodes + `OWNS_STEP` / `REFERENCES_LEAF` edges so analysts can query "which BO round fed which campaign" via Cypher.
 - [synthesis-campaigns] turn the `STEP_KIND_TO_TOOL_HINT` mapping into a hard permission filter via the permission resolver hook — today the orchestrator can dispatch any allow-listed tool even after `advance_synthesis_campaign` returns a narrower hint set.
+
+# Chemistry-agent feature gaps (2026-05-10, see docs/plans/2026-05-10-chemistry-agent-feature-gaps.md)
+
+- [agent-claw/optimizer] qNEHVI/qParEGO multi-objective in BoFire — gap-plan H0.1
+- [agent-claw/skills/retro] route-scoring vector (SAScore + SCScore + RAscore + iGAL + PMI) on every retrosynth result — H0.2
+- [mcp_green_chemistry] HSPiPy nearest-neighbour green-substitute via merged CHEM21+GSK+Pfizer table — H0.3
+- [DONE 2026-05-10 H0.4] `pubchem_ghs_lookup` builtin shipped (`tools/builtins/pubchem_ghs_lookup.ts`) — calls PubChem PUG-View `?heading=GHS+Classification`, returns hazard codes (H200-H499) + pictograms (GHS01-09) + signal word + cid; resolves SMILES via mcp-rdkit InChIKey roundtrip when InChIKey not supplied; 11 unit tests with hermetic fetch mock; `MIN_EXPECTED_BUILTINS` 81→82. Follow-up: wire as `pre_tool` advisory hook + cache CID lookups in a new `pubchem_ghs_cache` table.
+- [agent-claw/builtins] OPSIN name-to-structure builtin (closes literature-name → SMILES gap) — H0.5
+- [mcp_tools/common] `@with_conformal(coverage=...)` decorator for numeric tool outputs + `prediction_calibration` projector populated from validated experiments — H0.6
+- [agent-claw/hooks] reflexion `post_turn` hook with `config_settings` gate (subsumes future `/check`) — H0.7
+- [agent-claw/core] tool-RAG over MCP registry — embed tool descriptions, top-k retrieval per turn — H0.8
+- [DONE 2026-05-10 H0.9 partial] scheduled-substance-gate `pre_tool` hook shipped (`core/hooks/scheduled-substance-gate.ts`); curated catalog at `src/data/scheduled-substances.ts` (CWC Schedule-1 deny / DEA Schedule-I ask / EAR Cat 1C ask, ~14 entries); deep-walks tool input for verbatim canonical-SMILES + InChIKey matches; emits `permissionDecision: "deny"` for CWC, `"ask"` for DEA/EAR; tenant override path is a `permission_policies` allow-row (resolver runs before pre_tool dispatch). 15 unit tests; `MIN_EXPECTED_HOOKS` 21→22; `pre_tool` count 2→3. Follow-up: substructure SMARTS matching via `mcp_rdkit /tools/substructure_match` to catch tautomers/salts/Kekulé re-writes; tenant-scoped DB-backed catalog table.
+- [mcp_reaction_optimizer] Atlas / EDBO+ alternate backends for mixed continuous/categorical campaigns (catalysts, ligands, additives) — H0.10
+- [mcp_chemprop] upgrade to Chemprop v2 + bundle ADMET-AI 41-endpoint weights — H0.11
+- [config_settings] migrate ICH Q3A/Q3B/M7 thresholds + CWC/DEA/EAR lists from code to `config_settings` — H0.12
+- [mcp_boltz] new GPU MCP service with `cofold_and_score(target, ligand)` — joint structure + binding affinity (MIT) — H1.1
+- [mcp_seismiq] new MCP wrapping open SEISMiQ transformer for ≤0.1% drug-substance impurity ID — H1.2
+- [mcp_cfmid] new MCP for CFM-ID 4 in-silico MS/MS reference spectra — H1.2
+- [mcp_lhasa_nexus] vendor adapter for Derek + Sarah (file-drop interface; ICH M7 regulatory output) — H1.2
+- [skills] `impurity_id_agent` skill orchestrating SIRIUS + SEISMiQ + CFM-ID + Lhasa M7 vote — H1.2
+- [mcp_nmr_predict] new MCP for CASCADE-2.0 forward shift prediction + DP4-AI scoring — H1.3
+- [mcp_nmr_solver] new MCP for NMR-Solver de novo fallback with FAISS index in object storage (~373 GB) — H1.3
+- [skills] `verify_structure` skill (CASCADE-2.0 + DP4-AI + NMR-Solver fallback + LLM-as-judge HSQC re-rank) — H1.3
+- [mcp_logs_sciy] hard-pin `allotropy` library (MIT) and emit ASM JSON; new `asm_lc_runs` / `asm_ms_runs` / `asm_nmr_runs` / `asm_plate_reader_runs` projector chain — H1.4
+- [mcp_thermal_hazard] new MCP wrapping CHETAH-style group-additivity for `T_onset` / `ΔH_decomp` + RC1mx CSV ingest; `pre_tool` block on red-tier predicted hazard — H1.5
+- [mcp_pat] new MCP adapter for ReactIR / MATRIX-MF FT-IR via OPC-UA; `pat_events` partitioned table + `pat_spectrum_classifier` projector with closed loop into `advance_synthesis_campaign` — H1.6
+- [projectors/mermaid_extractor] new projector consuming figure chunks → MERMaid (VisualHeist + DataRaider + KGWizard) → `mcp_ord_io.import_reaction(...)` — H1.7
+- [mcp_degradant_proposer] new MCP with ~200 RDKit reaction SMARTS for canonical forced-degradation pathways — H1.8
+- [mcp_lhasa_zeneth] vendor adapter for Lhasa Zeneth 10.1 forced-degradation expert system — H1.8
+- [mcp_chemometrics] new MCP exposing `build_chemometric_model(method, target)` + `score_batch_against_golden(batch_id, golden_id)` returning Hotelling T² + DModX + contribution plot (PLS / OPLS / PCA / batch-MSPC) — H1.9
+- [projectors/memory_projector] Mem0-style cross-session memory projector + `agent_memories` table + `pre_turn` retrieval hook (RLS-respecting) — H1.10
+- [mcp_doc_fetcher] OpenChemIE + DECIMER 2.5 reaction-figure post-processor — H1.11
+- [mcp_polymorph] new MCP wrapping CCDC CSD Python API for HBP + scaffold lookup; FastCSP+UMA NNP track later — H1.12
+- [mcp_genchem] un-stub REINVENT 4 endpoint (Apache-2.0; weights bundle decision needed) — H1.13
+- [mcp_xtb] either bundle Grimme g-xTB binary or delete the 501 placeholder — H1.14
+- [infra/compose] new `gpu-chemistry` profile separate from `chemistry` for Boltz-2 / GenMol / REINVENT 4 / FastCSP / MACE-OFF23 / NNP-MD GPU containers — cross-cutting
+- [agent-claw/audit] `human_attestation` table + signed event per agent-aided decision (FDA/EMA Joint AI principles, Jan 2026) — H2.13
+- [skills] POPPER-style sequential-falsification skill with FDR control over `hypotheses` table — H2.14
+- [skills] Phoenix-equivalent skill pack (prior-art / cost / outcome) — competitive parity with FutureHouse — H2.15
+- [mcp_openfe] open-source alchemical RBFE pipeline (FEP+ replacement, 1.73 kcal/mol blinded RMSE) — H2.1
+- [mcp_nnp] MACE-OFF23 / MACE-MP-0 / AIMNet2 service replacing GFN2-xTB hot-path for organic conformer search — H2.2
+- [mcp_syntheseus] retrosynth router wrapping Syntheseus + Chimera ensemble for ≥6 single-step models behind one Python API — H2.3
+- [mcp_synformer] synthesizable-by-construction generative model — H2.4
+- [mcp_unipka] Uni-pKa + AIMNet2-charged for ionization-aware predictions (logD, formulation, dissolution) — H2.5
+- [mcp_mist] MIST + MIST-CF + DreaMS open MS/MS de novo skill stack (redundancy/fallback for SIRIUS) — H2.6
+- [mcp_stability] open ASAPprime equivalent (isoconversion-time + moisture-modified Arrhenius) — H2.7
+- [mcp_covalent] GNINA covalent docking + warhead reactivity QM/ML hybrid + LRE-normalized potency metric — H2.8
+- [mcp_protac] DiffPROTACs / SynPROTAC + PRosettaC ternary + oral-rule gate (eHBD ≤2, MW ≤950, HBD ≤3, rot bonds ≤12) — H2.9
+- [projectors/del_denoiser] deldenoiser projector for raw FASTQ counts → calibrated DEL activity probabilities — H2.10
+- [mcp_xrd_rietveld] Spotlight + GSAS-II Python scripting for autonomous Rietveld refinement during polymorph screens — H2.11
+- [agent-claw/cmc] `cmc_evidence_packs` table + `agent.cmc_author` prompt mode — Q8 design-space contour + Q9 FMEA + impurity rationale + PAT/RTRT bundle — H2.12
 - [synthesis-campaigns] enforce `policy.cost_cap_usd` against the budget-guard hook's running token / dollar total instead of just recording it on the campaign row.
 - [synthesis-campaigns] `advance_synthesis_campaign` reads campaign + steps in one transaction — the orchestrator's downstream `update_synthesis_campaign_step` can land between, leaving step counters momentarily stale across two callers; add an etag-based read-and-check across the two transactions (mirrors the analogous `recommend_next_batch` issue already on this list).
 - [synthesis-campaigns] add a dedicated `synthesis_plates` table for `hte_plate_design` step outputs so the well layout has a canonical home (today it lives in `synthesis_campaign_steps.outputs` JSONB).
