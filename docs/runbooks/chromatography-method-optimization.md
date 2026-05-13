@@ -90,6 +90,31 @@ temperature as the scouting runs.
   non-decreasing). Per-column flow / temperature caps are respected by
   narrowing the Domain bounds at campaign start.
 
+### Caveats / known limitations
+
+- **Multi-segment gradients are strictly non-decreasing in %B.** The
+  monotonicity `LinearInequalityConstraint`s rule out gradient programs
+  with deliberate dips mid-run (e.g. ramp to 60 %B, dip back to 40 %B
+  to elute a polar impurity, ramp again to 95 %B). Such reverse-gradient
+  patterns are uncommon in production methods but real in some
+  forced-degradation campaigns; the workaround is to run two
+  optimisation passes (one per monotonic sub-region) or drop to
+  `hold_ramp_hold` if a single inflection is enough.
+- **DAD-spectral peak tracking matches by cosine similarity ≥ 0.95.**
+  For UV-only campaigns where MS isn't available, attach a `spectrum`
+  field (flat absorbance array on a fixed wavelength grid) to each
+  target compound. Targets without a spectrum *and* without an m/z
+  fall back to elution-order in `unknown impurities` mode.
+- **LSS simulator assumes a constant plate count N** (default 10 000)
+  for peak width — gradient peaks are usually narrower than this
+  isocratic estimate (band compression), so the simulator
+  *under-resolves* relative to a real injection. Good enough for
+  *ranking* candidate gradients; do not trust absolute resolution
+  predictions.
+- **`CHROM_MIN_OBSERVATIONS_FOR_BO`** (env var) overrides the
+  cold-start / warm-BO boundary (default 5). Set this once empirical
+  data motivates a different value for a specific analyte class.
+
 ## Failure modes / troubleshooting
 
 | Symptom | Likely cause | Action |

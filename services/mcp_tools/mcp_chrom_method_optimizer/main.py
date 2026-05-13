@@ -2,20 +2,25 @@
 parameters (port 8019).
 
 Stateless math service. Canonical state lives in optimization_campaigns +
-optimization_rounds and analytical_methods (see db/init/54_*, 55_*). The
-agent-claw builtin reads / writes those tables (RLS-scoped) and passes
-Domain JSON + measured outcomes to this MCP.
+optimization_rounds and analytical_methods (see db/init/56_column_inventory.sql,
+57_analytical_methods.sql). The agent-claw builtin reads / writes those tables
+(RLS-scoped) and passes Domain JSON + measured outcomes to this MCP.
 
 Endpoints:
   POST /build_domain         — chromatography-aware sugar over a BoFire
                                  Domain build (column descriptors, gradient
-                                 scheme, monotonicity constraint).
+                                 scheme, monotonicity constraints, eluent mode).
   POST /recommend_next       — given Domain JSON + measured outcomes,
                                  returns n_candidates next-batch proposals.
   POST /materialize_method   — expand a proposal's gradient-shape factors
                                  into an explicit (time_min, pctB) gradient
                                  program ready for an instrument.
-  POST /score_chromatogram   — Phase 2; returns 501 in Phase 1.
+  POST /score_chromatogram   — Niezen-Desmet 2024 self-adaptive CRF + MO
+                                 objectives over a measured peak list.
+  POST /extract_pareto       — non-dominated subset over measured outcomes.
+  POST /simulate_retention   — LSS cheap-fidelity simulation from fitted or
+                                 isocratic-scouting LSS params.
+  POST /seed_candidates_lss  — rank candidate factor_values by simulated CRF.
 """
 from __future__ import annotations
 
@@ -70,8 +75,12 @@ class BuildDomainIn(BaseModel):
 
     gradient_scheme: str = Field(default="hold_ramp_hold")
     n_segments: int = Field(default=3, ge=1, le=5)
-    column_choices: list[str] = Field(min_length=1, max_length=50)
-    column_descriptors: list[list[float]] = Field(min_length=1, max_length=50)
+    # BoFire's CategoricalDescriptorInput / CategoricalInput both require
+    # ≥ 2 categories. Surface that at request validation rather than
+    # letting BoFire raise a confusing pydantic "List should have at least
+    # 2 items" error deep inside the Domain build.
+    column_choices: list[str] = Field(min_length=2, max_length=50)
+    column_descriptors: list[list[float]] = Field(min_length=2, max_length=50)
     # b_solvent_choices only used in binary eluent mode; default keeps the
     # binary path working when callers omit it in ternary mode.
     b_solvent_choices: list[str] = Field(default_factory=lambda: ["MeCN", "MeOH"], max_length=10)
@@ -299,6 +308,11 @@ async def materialize_method(
 class TargetCompound(BaseModel):
     name: str = Field(min_length=1, max_length=200)
     m_z: float | None = None
+    # Optional DAD-UV reference spectrum (flat array of absorbances at a
+    # fixed wavelength grid). The tracker matches by cosine similarity ≥
+    # spectrum_threshold when both target and peak carry one — the
+    # UV-only fallback for campaigns without an MS detector.
+    spectrum: list[float] | None = Field(default=None, max_length=1024)
 
 
 class ScoreChromatogramIn(BaseModel):
@@ -316,9 +330,16 @@ class ScoreChromatogramIn(BaseModel):
     # Method context for the runtime / solvent-PMI terms (optional).
     runtime_min: float | None = None
     b_solvent: str | None = None
+    # In ternary eluent mode (Phase 4), the B-channel is a MeCN/MeOH mix
+    # parameterised by b_meoh_fraction ∈ [0, 1]; the scorer uses the
+    # linear-weighted mix density for the PMI term when this is provided.
+    b_meoh_fraction: float | None = Field(default=None, ge=0.0, le=1.0)
     flow_mLmin: float | None = None
     avg_pctB: float | None = None
     mz_tolerance: float = Field(default=_pt.DEFAULT_MZ_TOLERANCE, gt=0)
+    spectrum_threshold: float = Field(
+        default=_pt.DEFAULT_SPECTRUM_COSINE_THRESHOLD, ge=0.0, le=1.0,
+    )
 
 
 class ScoreChromatogramOut(BaseModel):
@@ -344,7 +365,11 @@ async def score_chromatogram(
 ) -> ScoreChromatogramOut:
     targets = [t.model_dump() for t in req.targets]
     if targets:
-        m = _pt.match_targets(req.peaks, targets, mz_tolerance=req.mz_tolerance)
+        m = _pt.match_targets(
+            req.peaks, targets,
+            mz_tolerance=req.mz_tolerance,
+            spectrum_threshold=req.spectrum_threshold,
+        )
         scored_peaks = list(m["matched"].values())
         confidence = m["confidence"]
         unmatched = m["unmatched_targets"]
@@ -359,6 +384,7 @@ async def score_chromatogram(
         runtime_target_min=req.runtime_target_min,
         runtime_min=req.runtime_min,
         b_solvent=req.b_solvent,
+        b_meoh_fraction=req.b_meoh_fraction,
         flow_mLmin=req.flow_mLmin,
         avg_pctB=req.avg_pctB,
     )

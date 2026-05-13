@@ -15,18 +15,42 @@ Single-objective via SoboStrategy + qLogEI. Multi-objective via MoboStrategy
 from __future__ import annotations
 
 import logging
+import os
 from typing import Any
 
 import pandas as pd
 
 log = logging.getLogger("mcp-chrom-method-optimizer.optimizer")
 
-# Below this many measured rows we fall back to space-filling random sampling.
-# Bumped from the reaction-optimizer's 3 to 5: chromatography measurements
-# carry more nuisance variability per injection (peak detection, integration,
-# tracking) and the GP needs a slightly larger anchor before it stops
-# overfitting to noise.
-MIN_OBSERVATIONS_FOR_BO = 5
+
+def _read_min_observations_for_bo() -> int:
+    """Below this many measured rows, fall back to space-filling random.
+
+    Default 5 (raised from the reaction-optimizer's 3) — chromatography
+    measurements carry more nuisance variability per injection (peak
+    detection, integration, tracking) so the GP needs a slightly larger
+    anchor before it stops overfitting to noise. Override at deploy time
+    via CHROM_MIN_OBSERVATIONS_FOR_BO once empirical data motivates it
+    (e.g. the Boelrijk-2023 benchmark suggests a different cold-start
+    boundary for a specific analyte class).
+    """
+    raw = os.environ.get("CHROM_MIN_OBSERVATIONS_FOR_BO", "").strip()
+    if raw:
+        try:
+            v = int(raw)
+            if v >= 1:
+                return v
+            log.warning(
+                "CHROM_MIN_OBSERVATIONS_FOR_BO=%r is < 1; falling back to default", raw,
+            )
+        except ValueError:
+            log.warning(
+                "CHROM_MIN_OBSERVATIONS_FOR_BO=%r is not an int; falling back to default", raw,
+            )
+    return 5
+
+
+MIN_OBSERVATIONS_FOR_BO = _read_min_observations_for_bo()
 
 
 def measured_to_dataframe(

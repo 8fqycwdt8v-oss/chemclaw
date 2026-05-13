@@ -109,3 +109,58 @@ def test_simulate_chromatogram_sorts_and_drops_non_eluters():
     assert names == ["fast", "slow"]     # which, with these params, is name order
     for p in peaks:
         assert p["width_baseline_min"] > 0
+
+
+# ── Vectorised simulate_chromatogram (Fix #5) ───────────────────────────
+
+def test_vectorised_simulator_agrees_with_scalar_march():
+    """simulate_chromatogram (vectorised) must produce t_R within a few %
+    of the scalar simulate_retention_gradient on the same gradient/analyte.
+    Larger difference would mean the cumsum vs incremental march
+    integration drifted past acceptable numerical error."""
+    log10_kw, S, t0 = 3.0, 5.0, 0.8
+    gp = [
+        {"time_min": 0.0,  "pctB": 5.0},
+        {"time_min": 12.0, "pctB": 95.0},
+        {"time_min": 14.0, "pctB": 95.0},
+    ]
+    scalar_tr = _lss.simulate_retention_gradient(
+        log10_kw, S, gp, t0, march_step_min=0.001,
+    )
+    vec_peaks = _lss.simulate_chromatogram(
+        {"X": (log10_kw, S)}, gp, t0, march_step_min=0.001,
+    )
+    assert scalar_tr is not None
+    assert len(vec_peaks) == 1
+    assert vec_peaks[0]["rt_min"] == pytest.approx(scalar_tr, rel=1e-2)
+
+
+def test_vectorised_simulator_isocratic_limit():
+    """At a flat gradient at φ=0.4, simulate_chromatogram must recover
+    t_R = t0·(1 + k(0.4)) within 2 % (same envelope as the scalar test)."""
+    import math
+    log10_kw, S, t0 = 2.0, 4.0, 1.0
+    phi = 0.4
+    k = 10.0 ** (log10_kw - S * phi)
+    expected = t0 * (1.0 + k)
+    gp = [{"time_min": 0.0, "pctB": phi * 100}, {"time_min": 60.0, "pctB": phi * 100}]
+    peaks = _lss.simulate_chromatogram(
+        {"X": (log10_kw, S)}, gp, t0, march_step_min=0.001,
+    )
+    assert len(peaks) == 1
+    assert peaks[0]["rt_min"] == pytest.approx(expected, rel=2e-2)
+
+
+def test_vectorised_simulator_drops_non_eluting():
+    lss = {
+        "fast":  (1.5, 4.0),
+        "stuck": (12.0, 0.1),
+    }
+    gp = [
+        {"time_min": 0.0,  "pctB": 5.0},
+        {"time_min": 12.0, "pctB": 95.0},
+        {"time_min": 14.0, "pctB": 95.0},
+    ]
+    peaks = _lss.simulate_chromatogram(lss, gp, t0_min=1.0)
+    names = [p["name"] for p in peaks]
+    assert names == ["fast"]

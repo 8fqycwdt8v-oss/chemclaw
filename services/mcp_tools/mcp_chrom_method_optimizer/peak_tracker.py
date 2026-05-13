@@ -1,29 +1,34 @@
 """Peak tracking across chromatographic runs.
 
 Pure functions. Matches detected peaks to a set of known target compounds
-(by name or m/z) so the optimizer's resolution objective refers to the
-*same* critical pairs from one injection to the next even when selectivity
-shifts. When no target set is supplied the caller falls back to the
-"unknown impurities" mode (all adjacent peaks are critical) handled in
+so the optimizer's resolution objective refers to the *same* critical
+pairs from one injection to the next even when selectivity shifts. When
+no target set is supplied the caller falls back to the "unknown
+impurities" mode (all adjacent peaks are critical) handled in
 ``scorer.py``.
 
 Matching priority:
   1. exact (case-/whitespace-insensitive) name match
   2. m/z within ``mz_tolerance`` (default ±0.5 Da — unit-resolution MS;
      pass a tighter tolerance for hi-res)
-  3. unmatched targets are reported so the caller can flag a low-confidence
-     scoring run (a target that disappeared usually means co-elution or a
-     selectivity inversion the agent should surface, not silently score)
-
-This is deliberately conservative: name + m/z only. DAD-spectral-correlation
-matching (cosine ≥ 0.95) and retention-window priors are a follow-up — see
-BACKLOG / docs/plans/bo-chromatography-implementation-plan.md Phase 2.
+  3. DAD-UV spectrum cosine similarity ≥ ``spectrum_threshold`` (default
+     0.95) when both target and peak carry a ``spectrum`` field — the
+     UV-only fallback for campaigns without an MS detector. The spectrum
+     is a flat array of absorbances (or DAD intensities at fixed
+     wavelengths); the caller is responsible for ensuring all spectra in
+     one campaign share the same wavelength grid.
+  4. unmatched targets are reported so the caller can flag a low-
+     confidence scoring run (a target that disappeared usually means
+     co-elution or a selectivity inversion the agent should surface, not
+     silently score)
 """
 from __future__ import annotations
 
+import math
 from typing import Any, Sequence
 
 DEFAULT_MZ_TOLERANCE = 0.5
+DEFAULT_SPECTRUM_COSINE_THRESHOLD = 0.95
 
 
 def _norm_name(s: Any) -> str | None:
@@ -33,15 +38,48 @@ def _norm_name(s: Any) -> str | None:
     return n or None
 
 
+def _as_spectrum_vector(value: Any) -> list[float] | None:
+    """Coerce ``value`` to a non-trivial spectrum vector or return None."""
+    if not isinstance(value, (list, tuple)) or len(value) < 2:
+        return None
+    out: list[float] = []
+    for v in value:
+        if not isinstance(v, (int, float)) or not math.isfinite(v):
+            return None
+        out.append(float(v))
+    return out
+
+
+def _cosine_similarity(a: Sequence[float], b: Sequence[float]) -> float | None:
+    """Cosine similarity of two equal-length spectrum vectors, in [-1, 1].
+
+    Returns None if either is zero-vector or lengths differ — defensive
+    against mis-aligned wavelength grids and noise-only baselines."""
+    if len(a) != len(b):
+        return None
+    dot = 0.0
+    na = 0.0
+    nb = 0.0
+    for x, y in zip(a, b):
+        dot += x * y
+        na += x * x
+        nb += y * y
+    if na <= 0 or nb <= 0:
+        return None
+    return dot / math.sqrt(na * nb)
+
+
 def match_targets(
     peaks: Sequence[dict[str, Any]],
     targets: Sequence[dict[str, Any]],
     *,
     mz_tolerance: float = DEFAULT_MZ_TOLERANCE,
+    spectrum_threshold: float = DEFAULT_SPECTRUM_COSINE_THRESHOLD,
 ) -> dict[str, Any]:
-    """Match peaks to named/typed target compounds.
+    """Match peaks to named / typed target compounds.
 
-    ``targets`` items: ``{"name": str, "m_z": float | None}`` (m_z optional).
+    ``targets`` items: ``{"name": str, "m_z": float | None,
+    "spectrum": list[float] | None}`` (m_z and spectrum optional).
     Returns:
       {
         "matched":   {target_name: peak_dict, ...},
@@ -87,6 +125,24 @@ def match_targets(
                 matched[tname] = best
                 used_ids.add(id(best))
                 continue
+        # 3. DAD-UV spectrum cosine-similarity match (UV-only fallback)
+        t_spec = _as_spectrum_vector(t.get("spectrum"))
+        if t_spec is not None:
+            best_spec: dict[str, Any] | None = None
+            best_cos = spectrum_threshold
+            for p in peaks:
+                if id(p) in used_ids:
+                    continue
+                p_spec = _as_spectrum_vector(p.get("spectrum"))
+                if p_spec is None:
+                    continue
+                cos = _cosine_similarity(t_spec, p_spec)
+                if cos is not None and cos >= best_cos:
+                    best_spec, best_cos = p, cos
+            if best_spec is not None:
+                matched[tname] = best_spec
+                used_ids.add(id(best_spec))
+                continue
         unmatched.append(tname)
 
     extra = [p for p in peaks if id(p) not in used_ids]
@@ -103,6 +159,7 @@ def critical_pair_peaks(
     targets: Sequence[dict[str, Any]] | None,
     *,
     mz_tolerance: float = DEFAULT_MZ_TOLERANCE,
+    spectrum_threshold: float = DEFAULT_SPECTRUM_COSINE_THRESHOLD,
 ) -> tuple[list[dict[str, Any]], str]:
     """Return (peaks_to_use, confidence).
 
@@ -113,5 +170,8 @@ def critical_pair_peaks(
     """
     if not targets:
         return list(peaks), "high"
-    m = match_targets(peaks, targets, mz_tolerance=mz_tolerance)
+    m = match_targets(
+        peaks, targets,
+        mz_tolerance=mz_tolerance, spectrum_threshold=spectrum_threshold,
+    )
     return list(m["matched"].values()), m["confidence"]
