@@ -406,6 +406,24 @@ export class ToolRegistry {
         ORDER BY t.name`,
     );
 
+    // Boot-time precondition check: a registry without setSandboxClient()
+    // can't load any forged tool, and the per-row skip warnings further
+    // down get lost in normal startup chatter. If forged rows are present
+    // and the sandbox client is missing, surface that as one ERROR-level
+    // line at startup naming the count — operators see it without grep.
+    if (!this._sandboxClient) {
+      const forgedCount = rows.filter((r) => r.source === "forged").length;
+      if (forgedCount > 0) {
+        getLogger("agent-claw.tools.registry").error(
+          {
+            event: "forged_tools_present_but_no_sandbox",
+            forged_count: forgedCount,
+          },
+          `forged tools in DB (${forgedCount}) but setSandboxClient() was not called — none will load; call registry.setSandboxClient(...) before loadFromDb`,
+        );
+      }
+    }
+
     for (const row of rows) {
       // Precedence: programmatically-registered builtins win over DB rows
       // with the same name. The DB row may be stale (a forged tool that
@@ -463,6 +481,21 @@ export class ToolRegistry {
     );
     const row = rows[0];
     if (!row) return false;
+    // Precondition: forged rows need a sandbox client to load. _buildTool
+    // also catches this and warns, but at hot-register time the operator
+    // just shipped a forge action and needs an operator-facing signal,
+    // not a per-row WARN buried in the load logs. Trip ERROR with the
+    // actionable fix and bail before _buildTool's quieter skip.
+    if (row.source === "forged" && !this._sandboxClient) {
+      getLogger("agent-claw.tools.registry").error(
+        {
+          event: "hot_register_no_sandbox",
+          tool_name: name,
+        },
+        `cannot hot-register forged tool '${name}' — setSandboxClient() was not called; tool persists in DB and will load on the next agent restart if the sandbox client is wired before loadFromDb`,
+      );
+      return false;
+    }
     const tool = this._buildTool(row);
     if (!tool) return false;
     this.upsert(tool, {

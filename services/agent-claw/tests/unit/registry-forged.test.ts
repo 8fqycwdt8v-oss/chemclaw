@@ -62,6 +62,45 @@ describe("ToolRegistry — setSandboxClient", () => {
   });
 });
 
+describe("ToolRegistry.hotRegisterByName — _sandboxClient precondition", () => {
+  it("returns false and does not register when sandbox client is missing on a forged row", async () => {
+    const pool = {
+      query: vi.fn().mockResolvedValue({ rows: [makeForgedRow()] }),
+    } as unknown as Pool;
+
+    const registry = new ToolRegistry();
+    // Deliberately skip setSandboxClient.
+    const ok = await registry.hotRegisterByName(pool, "my_forged_tool");
+
+    expect(ok).toBe(false);
+    expect(registry.get("my_forged_tool")).toBeUndefined();
+  });
+
+  it("returns true and registers when sandbox client is set on a forged row", async () => {
+    const { tmpdir } = await import("os");
+    const { join } = await import("path");
+    const { promises: fsp } = await import("fs");
+
+    const dir = join(tmpdir(), `registry-hot-${Date.now()}`);
+    await fsp.mkdir(dir, { recursive: true });
+    const pyPath = join(dir, "hot.py");
+    await fsp.writeFile(pyPath, "value = 1\n", "utf-8");
+
+    const pool = {
+      query: vi.fn().mockResolvedValue({ rows: [makeForgedRow(pyPath)] }),
+    } as unknown as Pool;
+
+    const registry = new ToolRegistry();
+    registry.setSandboxClient(makeMockSandboxClient());
+    const ok = await registry.hotRegisterByName(pool, "my_forged_tool");
+
+    expect(ok).toBe(true);
+    expect(registry.get("my_forged_tool")).toBeDefined();
+
+    await fsp.rm(dir, { recursive: true, force: true });
+  });
+});
+
 describe("ToolRegistry.loadFromDb — source='forged' skipped without sandbox", () => {
   it("skips forged tool when setSandboxClient was not called", async () => {
     const pool = {
