@@ -43,8 +43,10 @@ import { registerBudgetGuardHook } from "./hooks/budget-guard.js";
 import { registerInitScratchHook } from "./hooks/init-scratch.js";
 import { registerLoopDetectorHook } from "./hooks/loop-detector.js";
 import { registerAntiFabricationHook } from "./hooks/anti-fabrication.js";
+import { registerFactIdConsistencyGuardHook } from "./hooks/fact-id-consistency-guard.js";
 import { registerFoundationCitationGuardHook } from "./hooks/foundation-citation-guard.js";
 import { registerScheduledSubstanceGateHook } from "./hooks/scheduled-substance-gate.js";
+import { registerWikiHumanBlockGuardHook } from "./hooks/wiki-human-block-guard.js";
 import { registerSourceCacheHook } from "./hooks/source-cache.js";
 import { registerCompactWindowHook } from "./hooks/compact-window.js";
 import { registerApplySkillsHook } from "./hooks/apply-skills.js";
@@ -148,10 +150,14 @@ const BUILTIN_REGISTRARS = new Map<string, BuiltinRegistrar>([
   // chained-harness reflection prompt.
   ["loop-detector", (lc) => { registerLoopDetectorHook(lc); }],
   ["anti-fabrication", (lc) => { registerAntiFabricationHook(lc); }],
+  ["fact-id-consistency-guard", (lc) => { registerFactIdConsistencyGuardHook(lc); }],
   ["foundation-citation-guard", (lc) => { registerFoundationCitationGuardHook(lc); }],
   // gap-plan H0.9: scheduled-substance deny-list. Runs early (order=50 in
   // YAML) so a CWC Schedule-1 hit fails fast before budget-guard / etc.
   ["scheduled-substance-gate", (lc) => { registerScheduledSubstanceGateHook(lc); }],
+  // ADR 012: deny upsert_article calls that author `<!-- human:begin -->`
+  // markers — those blocks are reserved for human edits via the route.
+  ["wiki-human-block-guard", (lc) => { registerWikiHumanBlockGuardHook(lc); }],
   ["source-cache", (lc, deps) => { registerSourceCacheHook(lc, deps.pool); }],
   [
     "compact-window",

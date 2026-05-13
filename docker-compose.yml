@@ -290,6 +290,126 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # wiki_pages — knowledge-wiki projection projector (ADR 012 Phase 2a)
+  # Keeps knowledge_articles in sync with "which pages exist / need
+  # (re)synthesis" — creates dirty stubs, marks pages dirty, propagates
+  # fact_invalidated to citing pages. The LLM body-synthesis loop is Phase 2b.
+  # -------------------------------------------------------------
+  wiki-pages:
+    build:
+      context: .
+      dockerfile: services/projectors/wiki_pages/Dockerfile
+    container_name: chemclaw-wiki-pages
+    restart: unless-stopped
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      # System workers connect as chemclaw_service (LOGIN BYPASSRLS).
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # wiki_regen — knowledge-wiki body-synthesis daemon (ADR 012 Phase 2b)
+  # Polls knowledge_articles for `dirty` entity-backed pages, gathers context
+  # from Postgres, asks the `wiki.synthesis` prompt (via central LiteLLM) to
+  # write a cited Markdown body, records citations + a revision row, preserves
+  # human:* blocks. LLM-cost-incurring — only does work when there are dirty
+  # entity-backed pages (i.e. the wiki feature is in use).
+  # -------------------------------------------------------------
+  wiki-regen:
+    build:
+      context: .
+      dockerfile: services/optimizer/wiki_regen/Dockerfile
+    container_name: chemclaw-wiki-regen
+    restart: unless-stopped
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-chemclaw-dev-master-change-me}
+      WIKI_REGEN_MODEL: ${WIKI_REGEN_MODEL:-claude-haiku-4-5}
+      WIKI_REGEN_POLL_SECONDS: ${WIKI_REGEN_POLL_SECONDS:-120}
+      WIKI_REGEN_DEBOUNCE_SECONDS: ${WIKI_REGEN_DEBOUNCE_SECONDS:-300}
+      WIKI_REGEN_MAX_PER_HOUR: ${WIKI_REGEN_MAX_PER_HOUR:-200}
+      WIKI_REGEN_BATCH_SIZE: ${WIKI_REGEN_BATCH_SIZE:-8}
+      LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # wiki_kg — project knowledge-wiki pages into Neo4j (ADR 012 Phase 3a)
+  # Mirrors knowledge_articles rows as :WikiPage nodes + :SUMMARIZES /
+  # :GROUNDS edges so query_provenance / retrieve_related can use them.
+  # -------------------------------------------------------------
+  wiki-kg:
+    build:
+      context: .
+      dockerfile: services/projectors/wiki_kg/Dockerfile
+    container_name: chemclaw-wiki-kg
+    restart: unless-stopped
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-chemclaw_dev_neo4j_change_me}
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # wiki_search_index — index knowledge-wiki bodies for retrieval (ADR 012 Phase 3b)
+  # Re-chunks + embeds each article body into wiki_chunks (BGE-M3, same as
+  # document_chunks) so search_knowledge can surface wiki pages.
+  # -------------------------------------------------------------
+  wiki-search-index:
+    build:
+      context: .
+      dockerfile: services/projectors/wiki_search_index/Dockerfile
+    container_name: chemclaw-wiki-search-index
+    restart: unless-stopped
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mcp-embedder:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      MCP_EMBEDDER_URL: http://mcp-embedder:8004
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # reaction_vectorizer — DRFP projector
   # -------------------------------------------------------------
   reaction-vectorizer:
@@ -509,6 +629,34 @@ services:
       POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
       # System workers connect as chemclaw_service (LOGIN BYPASSRLS) so they
       # can read/write across all projects.
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      NEO4J_URI: bolt://neo4j:7687
+      NEO4J_USER: ${NEO4J_USER:-neo4j}
+      NEO4J_PASSWORD: ${NEO4J_PASSWORD:-chemclaw_dev_neo4j_change_me}
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # kg_documents — projector: document_ingested → :Document/:Chunk in Neo4j
+  # -------------------------------------------------------------
+  kg-documents:
+    build:
+      context: .
+      dockerfile: services/projectors/kg_documents/Dockerfile
+    container_name: chemclaw-kg-documents
+    user: "1001:1001"
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      neo4j:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
       POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
       POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
       NEO4J_URI: bolt://neo4j:7687
@@ -1196,6 +1344,31 @@ services:
       LOG_LEVEL: ${LOG_LEVEL:-INFO}
     healthcheck:
       test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8018/readyz',timeout=5).status==200 else 1)\""]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # mcp-chrom-method-optimizer — BoFire BO over HPLC method parameters (port 8019)
+  # -------------------------------------------------------------
+  mcp-chrom-method-optimizer:
+    build:
+      context: .
+      dockerfile: services/mcp_tools/mcp_chrom_method_optimizer/Dockerfile
+    container_name: chemclaw-mcp-chrom-method-optimizer
+    restart: unless-stopped
+    profiles: ["chemistry"]
+    ports:
+      - "8019:8019"
+    environment:
+      MCP_AUTH_SIGNING_KEY: ${MCP_AUTH_SIGNING_KEY:-}
+      MCP_AUTH_REQUIRED: ${MCP_AUTH_REQUIRED:-}
+      MCP_AUTH_DEV_MODE: ${MCP_AUTH_DEV_MODE:-}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    healthcheck:
+      test: ["CMD-SHELL", "python -c \"import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8019/readyz',timeout=5).status==200 else 1)\""]
       interval: 30s
       timeout: 5s
       retries: 3

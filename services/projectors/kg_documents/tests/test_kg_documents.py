@@ -89,7 +89,7 @@ async def test_handle_creates_document_and_chunk_nodes_with_edges() -> None:
 
     proj = KgDocumentsProjector.__new__(KgDocumentsProjector)
     proj.settings = settings  # type: ignore[attr-defined]
-    proj._driver = _FakeDriver()  # type: ignore[attr-defined]
+    proj._neo4j = _FakeDriver()  # type: ignore[attr-defined]
 
     pg = _pg_doc_connection()
 
@@ -105,7 +105,7 @@ async def test_handle_creates_document_and_chunk_nodes_with_edges() -> None:
             payload={},
         )
 
-    runs = proj._driver.session_obj.runs  # type: ignore[attr-defined]
+    runs = proj._neo4j.session_obj.runs  # type: ignore[attr-defined]
     # 1 Document MERGE + 2 Chunk MERGEs = 3 total Cypher calls.
     assert len(runs) == 3, [r[0][:60] for r in runs]
 
@@ -138,7 +138,7 @@ async def test_handle_uses_metadata_group_id_when_available() -> None:
 
     proj = KgDocumentsProjector.__new__(KgDocumentsProjector)
     proj.settings = settings  # type: ignore[attr-defined]
-    proj._driver = _FakeDriver()  # type: ignore[attr-defined]
+    proj._neo4j = _FakeDriver()  # type: ignore[attr-defined]
 
     pg = _pg_doc_connection(metadata_group_id="proj-NCE-007")
 
@@ -154,7 +154,7 @@ async def test_handle_uses_metadata_group_id_when_available() -> None:
             payload={},
         )
 
-    runs = proj._driver.session_obj.runs  # type: ignore[attr-defined]
+    runs = proj._neo4j.session_obj.runs  # type: ignore[attr-defined]
     # Every node + edge carries the project-scoped group_id.
     for _query, params in runs:
         assert params.get("group_id") == "proj-NCE-007"
@@ -167,7 +167,7 @@ async def test_handle_truncates_chunk_text_preview() -> None:
 
     proj = KgDocumentsProjector.__new__(KgDocumentsProjector)
     proj.settings = settings  # type: ignore[attr-defined]
-    proj._driver = _FakeDriver()  # type: ignore[attr-defined]
+    proj._neo4j = _FakeDriver()  # type: ignore[attr-defined]
 
     long_text = "x" * 1500
     cur = AsyncMock()
@@ -199,7 +199,7 @@ async def test_handle_truncates_chunk_text_preview() -> None:
             payload={},
         )
 
-    runs = proj._driver.session_obj.runs  # type: ignore[attr-defined]
+    runs = proj._neo4j.session_obj.runs  # type: ignore[attr-defined]
     chunk_run = next(r for r in runs if "MERGE (c:Chunk" in r[0])
     assert len(chunk_run[1]["preview"]) == 500
 
@@ -210,7 +210,7 @@ async def test_handle_skips_when_event_type_unrecognised() -> None:
     settings.postgres_dsn = "postgresql://stub"
     proj = KgDocumentsProjector.__new__(KgDocumentsProjector)
     proj.settings = settings  # type: ignore[attr-defined]
-    proj._driver = _FakeDriver()  # type: ignore[attr-defined]
+    proj._neo4j = _FakeDriver()  # type: ignore[attr-defined]
 
     await proj.handle(
         event_id="evt-1",
@@ -219,4 +219,4 @@ async def test_handle_skips_when_event_type_unrecognised() -> None:
         source_row_id=DOC_ID,
         payload={},
     )
-    assert proj._driver.session_obj.runs == []  # type: ignore[attr-defined]
+    assert proj._neo4j.session_obj.runs == []  # type: ignore[attr-defined]

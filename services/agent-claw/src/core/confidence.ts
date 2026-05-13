@@ -16,6 +16,7 @@
 //
 // Output: ConfidenceEnsemble JSONB shape stored in artifacts.confidence_ensemble.
 
+import { type ConfigContext, getConfigRegistry } from "../config/registry.js";
 import { getLogger } from "../observability/logger.js";
 
 // ---------------------------------------------------------------------------
@@ -79,17 +80,37 @@ export interface ConfidenceSignal {
 }
 
 /**
+ * Tunable thresholds for the confidence label. Defaults align with the
+ * maturity tier convention (FOUNDATION / WORKING / EXPLORATORY); operators
+ * can override per-tenant via config_settings keys
+ * `confidence.threshold.foundational`, `confidence.threshold.high`,
+ * `confidence.threshold.medium` (resolved by `loadConfidenceThresholds`).
+ */
+export interface ConfidenceThresholds {
+  foundational: number;
+  high: number;
+  medium: number;
+}
+
+export const DEFAULT_CONFIDENCE_THRESHOLDS: ConfidenceThresholds = {
+  foundational: 0.85,
+  high: 0.65,
+  medium: 0.40,
+};
+
+/**
  * Map a numeric ensemble score to its categorical confidence label.
  *
- * Thresholds chosen so the label aligns with the maturity tier convention
- * (FOUNDATION / WORKING / EXPLORATORY): an ensemble in the foundational
- * band should be safe to cite as a FOUNDATION artifact; the medium / low
- * bands map to EXPLORATORY where the agent should hedge.
+ * Thresholds default to DEFAULT_CONFIDENCE_THRESHOLDS; pass an explicit
+ * override resolved from config_settings if the caller has tenant context.
  */
-export function confidenceLabel(overall: number): ConfidenceLabel {
-  if (overall >= 0.85) return "foundational";
-  if (overall >= 0.65) return "high";
-  if (overall >= 0.40) return "medium";
+export function confidenceLabel(
+  overall: number,
+  thresholds: ConfidenceThresholds = DEFAULT_CONFIDENCE_THRESHOLDS,
+): ConfidenceLabel {
+  if (overall >= thresholds.foundational) return "foundational";
+  if (overall >= thresholds.high) return "high";
+  if (overall >= thresholds.medium) return "medium";
   return "low";
 }
 
@@ -383,6 +404,8 @@ export function composeEnsemble(opts: {
   bayesian: BayesianPosterior | null;
   calibrated: number | null;
   brier_estimate?: number;
+  /** Optional tenant-resolved thresholds; defaults applied when omitted. */
+  thresholds?: ConfidenceThresholds;
 }): ConfidenceEnsemble {
   const VERBALIZED_WEIGHT = 0.3;
   const CROSS_MODEL_WEIGHT = 0.25;
@@ -441,8 +464,57 @@ export function composeEnsemble(opts: {
     bayesian: opts.bayesian,
     calibrated: opts.calibrated,
     overall: roundedOverall,
-    confidence_label: confidenceLabel(roundedOverall),
+    confidence_label: confidenceLabel(roundedOverall, opts.thresholds),
     signals,
     brier_estimate: opts.brier_estimate,
   };
+}
+
+// ---------------------------------------------------------------------------
+// Config-settings integration (review §2.1)
+// ---------------------------------------------------------------------------
+
+/**
+ * Resolve confidence-label thresholds from `config_settings` for the given
+ * scope, falling back to DEFAULT_CONFIDENCE_THRESHOLDS for any missing key.
+ *
+ * Pass the resolved object to composeEnsemble({ ..., thresholds }) so the
+ * label respects per-tenant calibration. Cached for 60 s by ConfigRegistry.
+ */
+export async function loadConfidenceThresholds(
+  ctx: ConfigContext,
+): Promise<ConfidenceThresholds> {
+  const reg = getConfigRegistry();
+  const [foundational, high, medium] = await Promise.all([
+    reg.getNumber("confidence.threshold.foundational", ctx, DEFAULT_CONFIDENCE_THRESHOLDS.foundational),
+    reg.getNumber("confidence.threshold.high",         ctx, DEFAULT_CONFIDENCE_THRESHOLDS.high),
+    reg.getNumber("confidence.threshold.medium",       ctx, DEFAULT_CONFIDENCE_THRESHOLDS.medium),
+  ]);
+  return { foundational, high, medium };
+}
+
+/**
+ * Emit a single structured-log line recording which signals contributed to
+ * the ensemble, for GEPA recalibration. Without this, the optimizer has no
+ * data on the actual mix — a per-signal `present` flag is shipped on the
+ * ensemble but never aggregated. Review §2.1.
+ */
+export function logEnsembleSignals(
+  ensemble: ConfidenceEnsemble,
+  ctx: { artifact_id?: string; tool_id?: string } = {},
+): void {
+  const log = getLogger("ConfidenceEnsemble");
+  const present = ensemble.signals.filter((s) => s.present).map((s) => s.name);
+  log.info(
+    {
+      event: "ensemble_signals_recorded",
+      artifact_id: ctx.artifact_id,
+      tool_id: ctx.tool_id,
+      overall: ensemble.overall,
+      label: ensemble.confidence_label,
+      signals_present: present,
+      signals_present_count: present.length,
+    },
+    "ensemble signals recorded",
+  );
 }

@@ -1,0 +1,16 @@
+name: fact-id-consistency-guard
+lifecycle: post_tool
+enabled: true
+order: 110  # after anti-fabrication (default 100) so seenFactIds is populated
+definition:
+  description: |
+    Internal-consistency check on tool outputs that declare surfaced_fact_ids[].
+    Every declared fact_id must also appear in the same output's facts[] /
+    items[] / contradictions[] payload — otherwise the declaration is
+    self-inconsistent (likely a buggy tool wrapper, a corrupted upstream
+    result, or a forged tool returning a hallucinated declaration).
+
+    On mismatch, emits a structured warning log line bound to component
+    "fact-id-consistency-guard"; takes no other action (low-risk start,
+    per 2026-05-10 review §2.6). Adopters who want to block tool calls
+    on mismatch can swap the registrar with a denying variant.
