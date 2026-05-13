@@ -1,5 +1,18 @@
 """Unified error envelope for MCP tool services.
 
+STATUS (2026-05-12): NOT WIRED into production. `services/mcp_tools/common/app.py`
+still emits the legacy flat `{"error": <code>, "detail": ...}` shape via its
+own `JSONResponse` constructions (search `ERROR_CODE_*` in app.py). The
+`make_envelope` + `ErrorCode` machinery here is fully tested
+(`tests/test_error_envelope.py`) and additive on the wire (new fields sit
+alongside `error` / `detail`), but no FastAPI handler calls it.
+
+`BACKLOG.md` `[mcp_tools/common]` tracks the open decision: wire this into
+`app.py`'s `handle_value_error` / `handle_http_exception` /
+`handle_unhandled_exception` handlers so every MCP tool returns the richer
+envelope, OR drop this module + `error_codes.py`. Don't add a third
+in-the-wild error shape — pick one of the two.
+
 Pairs with `services/agent-claw/src/errors/envelope.ts`. Keeps the wire
 shape additive over the existing flat `{error, detail}` so legacy
 callers continue to parse it; new fields (`message`, `trace_id`,
