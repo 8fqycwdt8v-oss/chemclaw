@@ -1,0 +1,23 @@
+name: scheduled-substance-gate
+lifecycle: pre_tool
+enabled: true
+# Run early — fail-fast on a deny match before budget-guard / foundation-
+# citation-guard wastes any work. Lower `order` fires first within a phase.
+order: 50
+# No script — uses the built-in TypeScript implementation in
+# services/agent-claw/src/core/hooks/scheduled-substance-gate.ts
+definition:
+  description: >
+    Defense-in-depth deny-list against tool calls that reference a verbatim
+    canonical SMILES or InChIKey on the curated CWC Schedule-1 / DEA
+    Schedule-I / EAR Cat 1C list (services/agent-claw/src/data/scheduled-
+    substances.ts). Returns permissionDecision='deny' for chemical-warfare
+    agents (CWC Schedule-1) and permissionDecision='ask' for legitimate-
+    research-with-attestation lists (DEA / EAR). Tenant overrides via
+    permission_policies row with decision='allow' short-circuit this gate
+    because the resolver runs before pre_tool dispatch.
+
+    Limitations: verbatim canonical-SMILES equality only — does not catch
+    tautomers, salts, isotopologues, or alternate Kekulé writes. Substructure
+    matching against class SMARTS is the next layer (BACKLOG H0.9 follow-up,
+    via mcp_rdkit's /tools/substructure_match endpoint).
