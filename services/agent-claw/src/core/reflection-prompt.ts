@@ -32,8 +32,9 @@ export const MAX_REFLECTION_PROMPT_BYTES = 8192;
  * Per-item cap on user-supplied content rendered into the prompt
  * (todo.content; loop-warning argsHash is already a fingerprint). Bounds the
  * worst-case prompt size before the overall cap kicks in so the truncation
- * marker is rare. Characters, not bytes — JS substring is char-based; the
- * overall byte cap downstream handles the multibyte edge.
+ * marker is rare. UTF-16-code-unit count, not bytes — JS String#slice is
+ * code-unit-based; the overall byte cap downstream handles the multibyte
+ * edge.
  */
 const MAX_TODO_CONTENT_CHARS = 500;
 
@@ -136,15 +137,20 @@ export function buildReflectionPrompt(
   // but a session with 10 todos at full 500-char content + multibyte UTF-8
   // glyphs can still push the prompt above the budget. Truncate on a UTF-8
   // boundary via Buffer and append a marker so the model sees that some
-  // tail was cut.
+  // tail was cut. The 4-byte safety margin covers the worst case where the
+  // byte cut lands inside a 4-byte UTF-8 sequence and `toString("utf8")`
+  // emits a 3-byte U+FFFD replacement char in its place — without the
+  // margin the output could exceed MAX by up to 2 bytes.
   if (Buffer.byteLength(assembled, "utf8") <= MAX_REFLECTION_PROMPT_BYTES) {
     return assembled;
   }
   const marker = "\n…[reflection prompt truncated]";
   const markerBytes = Buffer.byteLength(marker, "utf8");
-  const buf = Buffer.from(assembled, "utf8").subarray(
+  const SAFETY_MARGIN = 4;
+  const sliceBytes = Math.max(
     0,
-    MAX_REFLECTION_PROMPT_BYTES - markerBytes,
+    MAX_REFLECTION_PROMPT_BYTES - markerBytes - SAFETY_MARGIN,
   );
+  const buf = Buffer.from(assembled, "utf8").subarray(0, sliceBytes);
   return buf.toString("utf8") + marker;
 }
