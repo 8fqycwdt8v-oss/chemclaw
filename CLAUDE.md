@@ -244,6 +244,7 @@ DB-side audit: `error_events` (via `record_error_event`, `chemclaw_app` / `chemc
 ### Runbooks
 
 - `docs/runbooks/add-tenant.md`
+- `docs/runbooks/agent-filesystem-tools.md`
 - `docs/runbooks/autonomy-upgrade.md`
 - `docs/runbooks/backup-and-restore.md`
 - `docs/runbooks/change-llm-provider.md`
