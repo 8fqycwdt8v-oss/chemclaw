@@ -11,6 +11,7 @@ import { registerAdminConfigRoutes } from "./admin-config.js";
 import { registerAdminFlagsRoutes } from "./admin-flags.js";
 import { registerAdminRedactionRoutes } from "./admin-redaction.js";
 import { registerAdminPermissionRoutes } from "./admin-permissions.js";
+import { registerAdminArticlesRoutes } from "./admin-articles.js";
 
 export function registerAdminRoutes(
   app: FastifyInstance,
@@ -23,6 +24,7 @@ export function registerAdminRoutes(
   registerAdminFlagsRoutes(app, pool, getUserEntraId);
   registerAdminRedactionRoutes(app, pool, getUserEntraId);
   registerAdminPermissionRoutes(app, pool, getUserEntraId);
+  registerAdminArticlesRoutes(app, pool, getUserEntraId);
 }
 
 export { isAdmin, requireAdmin, guardAdmin, AdminPermissionError } from "../../middleware/require-admin.js";

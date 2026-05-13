@@ -21,6 +21,9 @@
 //   /synthesize <description> — start (or resume) an autonomous synthesis
 //     campaign; activates the synthesis_campaign_orchestrator skill which
 //     creates a synthesis_campaigns row and walks the per-kind playbook.
+//   /wiki <query> — activate the wiki_curator skill (ADR 012 Phase 4b-i):
+//     find/read/draft a knowledge-wiki page. Read-first; only writes
+//     agent-authorable kinds (topic/glossary/contradiction).
 
 // ---------------------------------------------------------------------------
 // Result type returned by parseSlash.
@@ -44,7 +47,7 @@ const SHORT_CIRCUIT_VERBS = new Set(["help", "skills", "feedback", "check", "lea
 // is streamable because the user expects assistant text on the same SSE
 // connection (the synopsis is written back into the message history, then
 // the harness produces the actual response against the compacted window).
-const STREAMABLE_VERBS = new Set(["plan", "dr", "retro", "qc", "forge", "compact", "synthesize"]);
+const STREAMABLE_VERBS = new Set(["plan", "dr", "retro", "qc", "forge", "compact", "synthesize", "wiki"]);
 
 // All known verbs.
 const ALL_VERBS = new Set([...SHORT_CIRCUIT_VERBS, ...STREAMABLE_VERBS]);
@@ -108,7 +111,8 @@ export const HELP_TEXT = `Available commands:
   /eval golden                        — run active prompts against held-out fixture; per-class breakdown (Phase E)
   /eval shadow <prompt_name>          — show shadow_run_scores summary for a shadow prompt (Phase E)
   /compact [instructions]             — manually compact the message window before the next turn
-  /synthesize <description>           — start or resume an autonomous synthesis campaign (single experiment, library, screening, BO, BO-or-die)`;
+  /synthesize <description>           — start or resume an autonomous synthesis campaign (single experiment, library, screening, BO, BO-or-die)
+  /wiki <query>                       — curate the knowledge wiki: find/read/draft a page (topic/glossary/contradiction)`;
 
 // ---------------------------------------------------------------------------
 // /forged sub-command parser (Phase D.5)
