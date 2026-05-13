@@ -111,14 +111,24 @@ async def _sweep_missing_project_pages(conn: psycopg.AsyncConnection[dict[str, A
                  json.dumps(entity_ref), r["project_id"], _SYSTEM, _SYSTEM),
             )
             created += cur.rowcount
+    # Commit unconditionally — even when every INSERT hit the conflict path
+    # (created == 0) we still want the SELECT's read transaction closed before
+    # the next sweep runs, matching wiki_regen's "commit after each phase".
+    await conn.commit()
     if created:
-        await conn.commit()
         log.info("wiki-linter: created %d missing project page stub(s)", created)
     return created
 
 
 async def _sweep_orphans(conn: psycopg.AsyncConnection[dict[str, Any]]) -> list[str]:
-    """Log agent-authored topic pages with no inbound [article:…] citation."""
+    """Log agent-authored topic pages with no inbound [article:…] citation.
+
+    Counts citations across *all* revisions (no current-revision filter) — so
+    this is conservative: a topic page cited only by a since-rewritten revision
+    of some other page won't be flagged. It's a `log.warning` only; over- vs
+    under-reporting an orphan here is low-stakes, and conservative beats
+    false-flagging.
+    """
     async with conn.cursor() as cur:
         await cur.execute(
             """
@@ -142,6 +152,11 @@ async def _sweep_orphans(conn: psycopg.AsyncConnection[dict[str, Any]]) -> list[
 
 
 def _render_index(rows: list[dict[str, Any]]) -> str:
+    # Links use `[`slug`](article:slug)` — the `article:` URL scheme is for a
+    # renderer/UI to route, NOT the inline-citation grammar (`[article:slug]`,
+    # bare-bracketed) that parseInlineCitations / wiki_regen recognise. That's
+    # fine: the `index` page is excluded from wiki_search_index / wiki_kg, so
+    # its links are never parsed as citations.
     by_kind: dict[str, list[dict[str, Any]]] = {}
     for r in rows:
         by_kind.setdefault(r["kind"], []).append(r)
