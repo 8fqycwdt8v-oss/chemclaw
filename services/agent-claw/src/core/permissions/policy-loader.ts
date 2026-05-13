@@ -195,6 +195,15 @@ export function setPermissionPolicyLoader(loader: PermissionPolicyLoader): void 
   _instance = loader;
 }
 
+/**
+ * Reset the module-level singleton. Tests that set a loader in a fixture
+ * should call this in their teardown rather than `setPermissionPolicyLoader(null as never)`.
+ * Production code does NOT call this; the loader is set once during bootstrap.
+ */
+export function clearPermissionPolicyLoader(): void {
+  _instance = null;
+}
+
 export function getPermissionPolicyLoader(): PermissionPolicyLoader | null {
   return _instance;
 }

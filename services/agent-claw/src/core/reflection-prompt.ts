@@ -20,6 +20,29 @@ import type { Todo } from "./session-store.js";
 import type { LoopWarning } from "./hooks/loop-detector.js";
 import { LOOP_WARNINGS_KEY } from "./hooks/loop-detector.js";
 
+/**
+ * Hard byte cap for the assembled reflection prompt. Keeps the prompt under
+ * a single chat-completion message budget even when a session has many open
+ * todos with long content. Trips truncation with a marker rather than
+ * silently dropping the next-action choices.
+ */
+export const MAX_REFLECTION_PROMPT_BYTES = 8192;
+
+/**
+ * Per-item cap on user-supplied content rendered into the prompt
+ * (todo.content; loop-warning argsHash is already a fingerprint). Bounds the
+ * worst-case prompt size before the overall cap kicks in so the truncation
+ * marker is rare. UTF-16-code-unit count, not bytes — JS String#slice is
+ * code-unit-based; the overall byte cap downstream handles the multibyte
+ * edge.
+ */
+const MAX_TODO_CONTENT_CHARS = 500;
+
+function truncateChars(s: string, max: number): string {
+  if (s.length <= max) return s;
+  return s.slice(0, max) + "…";
+}
+
 export interface ReflectionPromptInput {
   /** ctx whose scratchpad carries loop_warnings (set by loop-detector). */
   ctx: ToolContext;
@@ -83,7 +106,9 @@ export function buildReflectionPrompt(
     // Cap at 10 so the prompt stays bounded; the model has the full list
     // available via manage_todos action="list" if it needs more.
     for (const t of open.slice(0, 10)) {
-      lines.push(`  - [${t.status}] (${t.ordering}) ${t.content}`);
+      lines.push(
+        `  - [${t.status}] (${t.ordering}) ${truncateChars(t.content, MAX_TODO_CONTENT_CHARS)}`,
+      );
     }
     if (open.length > 10) {
       lines.push(`  ... and ${open.length - 10} more (call manage_todos action="list" to see all).`);
@@ -107,5 +132,25 @@ export function buildReflectionPrompt(
   lines.push("");
   lines.push("Stop when the work is complete or you've called ask_user.");
 
-  return lines.join("\n");
+  const assembled = lines.join("\n");
+  // Overall byte-cap belt: per-item char caps make this rare in practice,
+  // but a session with 10 todos at full 500-char content + multibyte UTF-8
+  // glyphs can still push the prompt above the budget. Truncate on a UTF-8
+  // boundary via Buffer and append a marker so the model sees that some
+  // tail was cut. The 4-byte safety margin covers the worst case where the
+  // byte cut lands inside a 4-byte UTF-8 sequence and `toString("utf8")`
+  // emits a 3-byte U+FFFD replacement char in its place — without the
+  // margin the output could exceed MAX by up to 2 bytes.
+  if (Buffer.byteLength(assembled, "utf8") <= MAX_REFLECTION_PROMPT_BYTES) {
+    return assembled;
+  }
+  const marker = "\n…[reflection prompt truncated]";
+  const markerBytes = Buffer.byteLength(marker, "utf8");
+  const SAFETY_MARGIN = 4;
+  const sliceBytes = Math.max(
+    0,
+    MAX_REFLECTION_PROMPT_BYTES - markerBytes - SAFETY_MARGIN,
+  );
+  const buf = Buffer.from(assembled, "utf8").subarray(0, sliceBytes);
+  return buf.toString("utf8") + marker;
 }

@@ -41,8 +41,17 @@ export const RunShellOut = z.object({
   /** UTF-8 stdout, capped at 256 KiB; `stdout_truncated=true` when capped. */
   stdout: z.string(),
   stdout_truncated: z.boolean(),
+  /**
+   * Bytes the child wrote to stdout AFTER the 256 KiB cap was reached. 0 when
+   * not truncated. Lets the model decide whether to escalate (re-run with
+   * narrower scope, redirect to a file) instead of guessing whether the
+   * dropped tail was 1 KB or 100 MB.
+   */
+  stdout_discarded_bytes: z.number(),
   stderr: z.string(),
   stderr_truncated: z.boolean(),
+  /** Bytes the child wrote to stderr AFTER the cap was reached. 0 when not truncated. */
+  stderr_discarded_bytes: z.number(),
   duration_ms: z.number(),
 });
 export type RunShellOutput = z.infer<typeof RunShellOut>;
@@ -67,7 +76,9 @@ export function buildRunShellTool(opts: RunShellOptions) {
       "`command` must be in AGENT_SHELL_ALLOWLIST. `args` are passed through " +
       "literally — pipes, redirection, $VAR expansion DO NOT WORK. Use " +
       "stdout / stderr from the response. Hard timeout per AGENT_SHELL_TIMEOUT_MS. " +
-      "Both streams are capped at 256 KiB.",
+      "Both streams are capped at 256 KiB; `stdout_truncated` / `stderr_truncated` " +
+      "flag truncation, and `stdout_discarded_bytes` / `stderr_discarded_bytes` " +
+      "report how much of the tail was dropped so you can re-run with narrower scope.",
     inputSchema: RunShellIn,
     outputSchema: RunShellOut,
     annotations: { readOnly: false },
@@ -129,12 +140,15 @@ export function buildRunShellTool(opts: RunShellOptions) {
         let stderrBytes = 0;
         let stdoutTruncated = false;
         let stderrTruncated = false;
+        let stdoutDiscarded = 0;
+        let stderrDiscarded = 0;
         const stdoutChunks: Buffer[] = [];
         const stderrChunks: Buffer[] = [];
 
         child.stdout.on("data", (chunk: Buffer) => {
           if (stdoutBytes >= MAX_STREAM_BYTES) {
             stdoutTruncated = true;
+            stdoutDiscarded += chunk.length;
             return;
           }
           const remaining = MAX_STREAM_BYTES - stdoutBytes;
@@ -142,6 +156,7 @@ export function buildRunShellTool(opts: RunShellOptions) {
             stdoutChunks.push(chunk.subarray(0, remaining));
             stdoutBytes = MAX_STREAM_BYTES;
             stdoutTruncated = true;
+            stdoutDiscarded += chunk.length - remaining;
           } else {
             stdoutChunks.push(chunk);
             stdoutBytes += chunk.length;
@@ -150,6 +165,7 @@ export function buildRunShellTool(opts: RunShellOptions) {
         child.stderr.on("data", (chunk: Buffer) => {
           if (stderrBytes >= MAX_STREAM_BYTES) {
             stderrTruncated = true;
+            stderrDiscarded += chunk.length;
             return;
           }
           const remaining = MAX_STREAM_BYTES - stderrBytes;
@@ -157,6 +173,7 @@ export function buildRunShellTool(opts: RunShellOptions) {
             stderrChunks.push(chunk.subarray(0, remaining));
             stderrBytes = MAX_STREAM_BYTES;
             stderrTruncated = true;
+            stderrDiscarded += chunk.length - remaining;
           } else {
             stderrChunks.push(chunk);
             stderrBytes += chunk.length;
@@ -190,8 +207,10 @@ export function buildRunShellTool(opts: RunShellOptions) {
             timed_out: timedOut,
             stdout: Buffer.concat(stdoutChunks).toString("utf8"),
             stdout_truncated: stdoutTruncated,
+            stdout_discarded_bytes: stdoutDiscarded,
             stderr: Buffer.concat(stderrChunks).toString("utf8"),
             stderr_truncated: stderrTruncated,
+            stderr_discarded_bytes: stderrDiscarded,
             duration_ms: Date.now() - start,
           });
         });
