@@ -13,6 +13,7 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
+import { getToolTimeoutMs } from "../../config/tool-timeouts.js";
 import { RunXtbWorkflowOut } from "./run_xtb_workflow.js";
 
 // ---------- Schemas ----------------------------------------------------------
@@ -51,7 +52,8 @@ export type ComputeConformerEnsembleOutput = z.infer<typeof ComputeConformerEnse
 
 // CREST + per-conformer opt fits comfortably inside the 1800 s server-side
 // ceiling for typical molecules; the wider cap matches run_xtb_workflow.
-const TIMEOUT_MS = 1830 * 1000;
+const DEFAULT_TIMEOUT_MS = 1830 * 1000;
+const TOOL_ID = "compute_conformer_ensemble";
 
 // ---------- Factory ----------------------------------------------------------
 
@@ -59,7 +61,7 @@ export function buildComputeConformerEnsembleTool(mcpXtbUrl: string) {
   const base = mcpXtbUrl.replace(/\/$/, "");
 
   return defineTool({
-    id: "compute_conformer_ensemble",
+    id: TOOL_ID,
     description:
       "Generate a Boltzmann-weighted conformer ensemble for a SMILES using GFN2-xTB + CREST. " +
       "Use for stereo, atropisomerism, or ring-flip questions. Latency ~30-60 s.",
@@ -67,7 +69,8 @@ export function buildComputeConformerEnsembleTool(mcpXtbUrl: string) {
     outputSchema: ComputeConformerEnsembleOut,
     annotations: { readOnly: true },
 
-    execute: async (_ctx, input) => {
+    execute: async (ctx, input) => {
+      const timeoutMs = await getToolTimeoutMs(TOOL_ID, { user: ctx.userEntraId }, DEFAULT_TIMEOUT_MS);
       const result = await postJson(
         `${base}/run_workflow`,
         {
@@ -79,7 +82,7 @@ export function buildComputeConformerEnsembleTool(mcpXtbUrl: string) {
           },
         },
         RunXtbWorkflowOut,
-        TIMEOUT_MS,
+        timeoutMs,
         "mcp-xtb",
       );
       if (!result.success) {

@@ -27,16 +27,15 @@ from __future__ import annotations
 
 import asyncio
 import logging
-import os
 import re
 import uuid
 from typing import Any
 
 import psycopg
-from neo4j import AsyncGraphDatabase
 
 from services.mcp_tools.common.logging import configure_logging
 from services.projectors.common.base import BaseProjector, ProjectorSettings
+from services.projectors.common.neo4j_client import SYSTEM_GROUP_ID, Neo4jClient
 
 
 log = logging.getLogger("projector.kg_documents")
@@ -54,7 +53,7 @@ _MAX_CHUNK_TEXT = 500
 # Tenant scope. Documents are shared across the org by design today;
 # project-scoped documents would land here as `metadata->>'group_id'` once
 # upstream ingestion adds that field (BACKLOG: ingestion/doc_ingester).
-_DEFAULT_GROUP_ID = "__system__"
+_DEFAULT_GROUP_ID = SYSTEM_GROUP_ID
 
 # Defense-in-depth on the group_id (Tranche 1 convention). We don't import
 # the mcp-kg helper here because the projector connects to Neo4j directly,
@@ -78,20 +77,19 @@ def _safe_group_id(group_id: str) -> str:
 
 
 class KgDocumentsProjector(BaseProjector):
-    name = "kg-documents"
+    name = "kg_documents"
     interested_event_types = ("document_ingested",)
 
     def __init__(self, settings: ProjectorSettings) -> None:
         super().__init__(settings)
-        self._neo4j_uri = os.environ["NEO4J_URI"]
-        self._neo4j_user = os.environ.get("NEO4J_USER", "neo4j")
-        self._neo4j_password = os.environ["NEO4J_PASSWORD"]
-        self._driver = AsyncGraphDatabase.driver(
-            self._neo4j_uri, auth=(self._neo4j_user, self._neo4j_password),
-        )
+        # Direct-driver path (review §1.3): kg_documents writes :Document and
+        # :Chunk nodes which mcp-kg's REST surface doesn't model today. The
+        # shared Neo4jClient centralises driver creation across the three
+        # direct-driver projectors (kg_hypotheses, kg_documents, qm_kg).
+        self._neo4j = Neo4jClient.from_env()
 
     async def close(self) -> None:
-        await self._driver.close()
+        await self._neo4j.close()
 
     async def handle(
         self,
@@ -124,7 +122,7 @@ class KgDocumentsProjector(BaseProjector):
         )
 
         doc_fact_id = _deterministic_fact_id(NAMESPACE_DOCUMENT, bundle["id"])
-        async with self._driver.session() as session:
+        async with self._neo4j.session() as session:
             await session.run(
                 """
                 MERGE (d:Document {fact_id: $fact_id})

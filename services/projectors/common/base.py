@@ -50,6 +50,12 @@ _CATCHUP_BATCH = 1000  # rows per iteration; loop until drained
 _NOTIFY_POLL_TIMEOUT_S = 5.0  # how often we check the shutdown flag while idle
 
 
+async def _anext_notify(gen: Any) -> Any:
+    # asyncio.create_task() requires a Coroutine, but AsyncGenerator.__anext__()
+    # returns Awaitable; wrap it in a coroutine so mypy accepts the call site.
+    return await gen.__anext__()
+
+
 class ProjectorSettings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -316,7 +322,7 @@ class BaseProjector(ABC):
             while not self._shutdown.is_set():
                 if next_notify_task is None or next_notify_task.done():
                     next_notify_task = asyncio.create_task(
-                        notify_gen.__anext__(), name="next_notify"
+                        _anext_notify(notify_gen), name="next_notify"
                     )
 
                 done, _pending = await asyncio.wait(

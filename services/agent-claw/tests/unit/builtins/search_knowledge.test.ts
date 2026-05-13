@@ -112,6 +112,69 @@ describe("buildSearchKnowledgeTool", () => {
     const r = tool.inputSchema.safeParse({ query: "x".repeat(4001), k: 5 });
     expect(r.success).toBe(false);
   });
+
+  // ADR 012 Phase 3c — the knowledge-wiki arm.
+
+  const DB_WIKI_ROW = {
+    chunk_id: "99999999-1111-2222-3333-444444444444",
+    article_id: "aaaaaaaa-1111-2222-3333-444444444444",
+    slug: "project/NCE-0042",
+    article_kind: "nce_project",
+    article_title: "Project Aurora",
+    heading_path: "Synthetic route",
+    text: "The Buchwald amination step gave 92% yield.",
+    distance: 0.12,
+  };
+
+  it("hybrid mode (default include_wiki) surfaces a knowledge-wiki page hit", async () => {
+    vi.stubGlobal("fetch", mockFetchEmbed(EMBED_RESPONSE));
+    const { pool, client } = mockPool();
+    // BEGIN, set_config, [denseDoc, sparseDoc, denseWiki, sparseWiki], COMMIT
+    client.queryResults.push(
+      { rows: [], rowCount: 0 }, // BEGIN
+      { rows: [], rowCount: 0 }, // set_config
+      { rows: [DB_CHUNK_ROW], rowCount: 1 },        // denseDoc
+      { rows: [], rowCount: 0 },                    // sparseDoc
+      { rows: [DB_WIKI_ROW], rowCount: 1 },         // denseWiki
+      { rows: [], rowCount: 0 },                    // sparseWiki
+      { rows: [], rowCount: 0 }, // COMMIT
+    );
+
+    const tool = buildSearchKnowledgeTool(pool, MCP_EMBEDDER_URL);
+    const result = await tool.execute(makeCtx(), { query: "buchwald yield", k: 10, mode: "hybrid" });
+
+    const docHit = result.hits.find((h) => h.kind === "document");
+    const wikiHit = result.hits.find((h) => h.kind === "wiki");
+    expect(docHit?.document_id).toBe(DB_CHUNK_ROW.document_id);
+    expect(docHit?.citation.source_kind).toBe("document_chunk");
+    expect(wikiHit?.slug).toBe("project/NCE-0042");
+    expect(wikiHit?.article_id).toBe(DB_WIKI_ROW.article_id);
+    expect(wikiHit?.document_id).toBeNull();
+    expect(wikiHit?.source_type).toBe("nce_project");
+    expect(wikiHit?.document_title).toBe("Project Aurora");
+    expect(wikiHit?.citation.source_kind).toBe("knowledge_article");
+    expect(wikiHit?.citation.source_uri).toBe("project/NCE-0042");
+    // The wiki arm SQL was executed.
+    expect(client.querySpy.mock.calls.some((c) => String(c[0]).includes("wiki_chunks"))).toBe(true);
+  });
+
+  it("include_wiki=false skips the wiki_chunks arm entirely", async () => {
+    vi.stubGlobal("fetch", mockFetchEmbed(EMBED_RESPONSE));
+    const { pool, client } = mockPool();
+    client.queryResults.push(
+      { rows: [], rowCount: 0 }, // BEGIN
+      { rows: [], rowCount: 0 }, // set_config
+      { rows: [DB_CHUNK_ROW], rowCount: 1 }, // denseDoc
+      { rows: [], rowCount: 0 },             // sparseDoc
+      { rows: [], rowCount: 0 }, // COMMIT
+    );
+
+    const tool = buildSearchKnowledgeTool(pool, MCP_EMBEDDER_URL);
+    const result = await tool.execute(makeCtx(), { query: "x", k: 5, mode: "hybrid", include_wiki: false });
+
+    expect(result.hits.every((h) => h.kind === "document")).toBe(true);
+    expect(client.querySpy.mock.calls.some((c) => String(c[0]).includes("wiki_chunks"))).toBe(false);
+  });
 });
 
 // ---------- RRF unit tests ---------------------------------------------------

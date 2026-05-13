@@ -444,11 +444,12 @@ export interface Citation {
 
   /** Kind of source — determines how source_uri should be interpreted. */
   source_kind:
-    | "document_chunk"   // pgvector document_chunks row
-    | "kg_fact"          // Neo4j bi-temporal fact node
-    | "reaction"         // reactions table row (with DRFP)
-    | "external_url"     // arbitrary HTTPS URL
-    | "original_doc";    // Phase B: fetch_original_document return — signed URI to raw file
+    | "document_chunk"     // pgvector document_chunks row
+    | "knowledge_article"  // knowledge-wiki page chunk (wiki_chunks) — ADR 012; source_uri is the article slug
+    | "kg_fact"            // Neo4j bi-temporal fact node
+    | "reaction"           // reactions table row (with DRFP)
+    | "external_url"       // arbitrary HTTPS URL
+    | "original_doc";      // Phase B: fetch_original_document return — signed URI to raw file
 
   /**
    * URI pointing to the source:

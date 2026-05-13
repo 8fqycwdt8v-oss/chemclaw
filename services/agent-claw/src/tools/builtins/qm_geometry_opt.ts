@@ -3,6 +3,7 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
+import { getToolTimeoutMs } from "../../config/tool-timeouts.js";
 import { QmRequestBase, QmResponseBase } from "./_qm_base.js";
 
 export const QmGeometryOptIn = QmRequestBase.extend({
@@ -18,12 +19,13 @@ export const QmGeometryOptOut = QmResponseBase.extend({
 });
 export type QmGeometryOptOutput = z.infer<typeof QmGeometryOptOut>;
 
-const TIMEOUT_MS = 120_000;
+const DEFAULT_TIMEOUT_MS = 120_000;
+const TOOL_ID = "qm_geometry_opt";
 
 export function buildQmGeometryOptTool(mcpXtbUrl: string) {
   const base = mcpXtbUrl.replace(/\/$/, "");
   return defineTool({
-    id: "qm_geometry_opt",
+    id: TOOL_ID,
     description:
       "Optimize molecular geometry with the chosen tight-binding method. " +
       "Returns the optimized XYZ block, energy (Hartree), gradient norm, and " +
@@ -33,12 +35,13 @@ export function buildQmGeometryOptTool(mcpXtbUrl: string) {
     inputSchema: QmGeometryOptIn,
     outputSchema: QmGeometryOptOut,
     annotations: { readOnly: true },
-    execute: async (_ctx, input) => {
+    execute: async (ctx, input) => {
+      const timeoutMs = await getToolTimeoutMs(TOOL_ID, { user: ctx.userEntraId }, DEFAULT_TIMEOUT_MS);
       return await postJson(
         `${base}/geometry_opt`,
         input,
         QmGeometryOptOut,
-        TIMEOUT_MS,
+        timeoutMs,
         "mcp-xtb",
       );
     },

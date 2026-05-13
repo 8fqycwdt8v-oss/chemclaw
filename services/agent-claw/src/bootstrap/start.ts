@@ -31,12 +31,15 @@ import {
 // + 9 lifecycle-telemetry stubs (cluster F: session_end, user_prompt_submit,
 // post_tool_failure, post_tool_batch, subagent_start, subagent_stop,
 // task_created, task_completed, post_compact).
-// 22 = +detect-mcp-leakage (review §3.8 defense-in-depth tripwire).
-// 23 = +loop-detector (adaptive-replanning Phase A1).
+// 22 = +detect-mcp-leakage post_tool (review §3.8 defense-in-depth tripwire).
+// 23 = +loop-detector pre_tool (adaptive-replanning Phase A1).
+// 24 = +fact-id-consistency-guard (review 2026-05-10 §2.6).
+// 25 = +wiki-human-block-guard pre_tool (ADR 012 Phase 1 — knowledge wiki).
+// 26 = +scheduled-substance-gate pre_tool (gap-plan H0.9, 2026-05-10).
 // Bump every time BUILTIN_REGISTRARS gains an entry so a silent failure to
 // load a new hook trips the startup gate instead of quietly downgrading
 // the safety net.
-const MIN_EXPECTED_HOOKS = 23;
+const MIN_EXPECTED_HOOKS = 26;
 
 // Builtins gate. Mirrors MIN_EXPECTED_HOOKS for tools/builtins/: a new
 // builtin module landing under `services/agent-claw/src/tools/builtins/`
@@ -48,11 +51,18 @@ const MIN_EXPECTED_HOOKS = 23;
 // gate trips, either add the missing registerBuiltin call or update
 // this number with intent. The 2026-05-09 code-completeness review
 // flagged this as an L3-5 hygiene gap. +1 for manage_plan
-// (adaptive-replanning Phase A3). The fs/shell builtins are NOT counted
-// here because they're conditionally registered behind
-// AGENT_FS_TOOLS_ENABLED — counting them would force the gate to fail
-// in default-config deployments.
-const MIN_EXPECTED_BUILTINS = 82;
+// (adaptive-replanning Phase A3). +4 for the Phase Z6 chromatography
+// builtins (start_chrom_campaign, recommend_next_chrom_batch,
+// materialize_chrom_method, query_chrom_columns). +4 for the
+// knowledge-wiki builtins (read_article, list_articles, upsert_article,
+// request_article — ADR 012 Phase 1; registered unconditionally, gated
+// at call time by `wiki.enabled`). +1 for pubchem_ghs_lookup (gap-plan
+// H0.4, 2026-05-10). +3 for the Phase Z6 chromatography Phases 2-5
+// builtins (ingest_chrom_results, extract_chrom_pareto_front,
+// simulate_chrom_retention). The fs/shell builtins are NOT counted here
+// because they're conditionally registered behind AGENT_FS_TOOLS_ENABLED
+// — counting them would force the gate to fail in default-config deployments.
+const MIN_EXPECTED_BUILTINS = 94;
 
 export async function startServer(
   app: FastifyInstance,

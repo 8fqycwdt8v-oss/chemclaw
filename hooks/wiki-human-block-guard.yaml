@@ -1,0 +1,13 @@
+name: wiki-human-block-guard
+lifecycle: pre_tool
+enabled: true
+# No script — built-in TypeScript implementation in
+# services/agent-claw/src/core/hooks/wiki-human-block-guard.ts
+definition:
+  description: >
+    Knowledge-wiki guard (ADR 012). Denies an `upsert_article` tool call whose
+    body contains a `<!-- human:begin ... -->` marker — those fenced blocks are
+    reserved for human edits via PATCH /api/articles/:id and must never be
+    authored by an agent. The builtin's own execute path additionally refuses
+    to overwrite any page with has_human_edits set (that check needs the DB
+    row, so it lives in the builtin rather than this hook).

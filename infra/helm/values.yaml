@@ -84,6 +84,9 @@ projectors:
   kgHypotheses:
     enabled: true
     image: chemclaw/kg-hypotheses:latest
+  kgDocuments:
+    enabled: true
+    image: chemclaw/kg-documents:latest
   compoundFingerprinter:
     enabled: true
     image: chemclaw/compound-fingerprinter:latest
@@ -100,6 +103,36 @@ projectors:
     # LLM-context chunk-prefix projector. Requires LITELLM_BASE_URL.
     enabled: true
     image: chemclaw/contextual-chunker:latest
+  wikiPages:
+    # Knowledge-wiki projection projector (ADR 012): keeps knowledge_articles
+    # in sync with which pages exist / need (re)synthesis. Harmless when the
+    # `wiki.enabled` feature flag is off (writes stubs nobody reads).
+    enabled: true
+    image: chemclaw/wiki-pages:latest
+  wikiKg:
+    # Projects knowledge_articles rows into Neo4j as :WikiPage nodes +
+    # :SUMMARIZES / :GROUNDS edges (ADR 012 Phase 3a). Direct-driver — needs
+    # NEO4J_URI/USER/PASSWORD (same secret as the other kg-* projectors).
+    enabled: true
+    image: chemclaw/wiki-kg:latest
+  wikiSearchIndex:
+    # Re-chunks + embeds knowledge_articles bodies into wiki_chunks so
+    # search_knowledge can surface wiki pages (ADR 012 Phase 3b). Needs
+    # MCP_EMBEDDER_URL (same mcp-embedder as chunk-embedder).
+    enabled: true
+    image: chemclaw/wiki-search-index:latest
+  wikiLinter:
+    # Periodic deterministic sweep (ADR 012 Phase 4a): missing project-page
+    # stubs, orphan logging, `index` page rebuild. No LLM, Postgres-only.
+    enabled: true
+    image: chemclaw/wiki-linter:latest
+  wikiRegen:
+    # Knowledge-wiki body-synthesis daemon (ADR 012 Phase 2b): LLM-fills the
+    # dirty stubs the wikiPages projector creates. LLM-cost-incurring —
+    # default OFF; enable alongside the `wiki.enabled` feature flag.
+    enabled: false
+    image: chemclaw/wiki-regen:latest
+    model: claude-haiku-4-5
 
 # ── Profile: chemistry ────────────────────────────────────────────────────────
 # Enable with: --set chemistry.enabled=true

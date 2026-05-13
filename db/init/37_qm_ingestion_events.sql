@@ -64,7 +64,7 @@ INSERT INTO ingestion_event_catalog (event_type, description, emitted_by, consum
    'release of backward compat), (2) canonical ingestion_events row with id = '
    'qm_jobs.id so generic projectors LISTENing on ingestion_events also catch it.',
    'db/init/37_qm_ingestion_events.sql (trigger trg_notify_qm_job_succeeded)',
-   ARRAY['qm-kg'])
+   ARRAY['qm_kg'])
 ON CONFLICT (event_type) DO UPDATE SET
   description = EXCLUDED.description,
   emitted_by  = EXCLUDED.emitted_by,

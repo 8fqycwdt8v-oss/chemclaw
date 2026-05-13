@@ -108,6 +108,8 @@ const ConfigSchema = z.object({
   MCP_ORD_IO_URL: z.string().url().default("http://localhost:8021"),
   // Phase Z5 — closed-loop BoFire BO.
   MCP_REACTION_OPTIMIZER_URL: z.string().url().default("http://localhost:8018"),
+  // Phase Z6 — closed-loop BoFire BO over HPLC method parameters.
+  MCP_CHROM_METHOD_OPTIMIZER_URL: z.string().url().default("http://localhost:8019"),
   MCP_XTB_URL: z.string().url().default("http://localhost:8010"),
   MCP_SYNTHEGY_MECH_URL: z.string().url().default("http://localhost:8011"),
   MCP_SIRIUS_URL: z.string().url().default("http://localhost:8012"),

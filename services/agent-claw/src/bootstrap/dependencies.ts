@@ -27,6 +27,7 @@ import {
 // Chemistry / KG (URL-only).
 import { buildCanonicalizeSmilesTool } from "../tools/builtins/canonicalize_smiles.js";
 import { buildInchikeyFromSmilesTool } from "../tools/builtins/inchikey_from_smiles.js";
+import { buildPubchemGhsLookupTool } from "../tools/builtins/pubchem_ghs_lookup.js";
 import { buildCheckContradictionsTool } from "../tools/builtins/check_contradictions.js";
 import { buildComputeConformerEnsembleTool } from "../tools/builtins/compute_conformer_ensemble.js";
 import { buildRunXtbWorkflowTool } from "../tools/builtins/run_xtb_workflow.js";
@@ -72,6 +73,13 @@ import { buildStartOptimizationCampaignTool } from "../tools/builtins/start_opti
 import { buildRecommendNextBatchTool } from "../tools/builtins/recommend_next_batch.js";
 import { buildIngestCampaignResultsTool } from "../tools/builtins/ingest_campaign_results.js";
 import { buildExtractParetoFrontTool } from "../tools/builtins/extract_pareto_front.js";
+import { buildStartChromCampaignTool } from "../tools/builtins/start_chrom_campaign.js";
+import { buildRecommendNextChromBatchTool } from "../tools/builtins/recommend_next_chrom_batch.js";
+import { buildMaterializeChromMethodTool } from "../tools/builtins/materialize_chrom_method.js";
+import { buildQueryChromColumnsTool } from "../tools/builtins/query_chrom_columns.js";
+import { buildIngestChromResultsTool } from "../tools/builtins/ingest_chrom_results.js";
+import { buildExtractChromParetoFrontTool } from "../tools/builtins/extract_chrom_pareto_front.js";
+import { buildSimulateChromRetentionTool } from "../tools/builtins/simulate_chrom_retention.js";
 import { buildQueryKgTool } from "../tools/builtins/query_kg.js";
 import { buildQueryKgAtTimeTool } from "../tools/builtins/query_kg_at_time.js";
 import { buildQueryProvenanceTool } from "../tools/builtins/query_provenance.js";
@@ -125,6 +133,11 @@ import { buildAddSynthesisCampaignStepTool } from "../tools/builtins/add_synthes
 import { buildUpdateSynthesisCampaignStepTool } from "../tools/builtins/update_synthesis_campaign_step.js";
 import { buildAdvanceSynthesisCampaignTool } from "../tools/builtins/advance_synthesis_campaign.js";
 import { buildRecordSynthesisCampaignOutcomeTool } from "../tools/builtins/record_synthesis_campaign_outcome.js";
+// Knowledge-wiki — ADR 012 Phase 1 (gated by the `wiki.enabled` feature flag).
+import { buildReadArticleTool } from "../tools/builtins/read_article.js";
+import { buildListArticlesTool } from "../tools/builtins/list_articles.js";
+import { buildUpsertArticleTool } from "../tools/builtins/upsert_article.js";
+import { buildRequestArticleTool } from "../tools/builtins/request_article.js";
 // Code-mode orchestration via the Monty runtime.
 import { buildRunOrchestrationScriptTool } from "../tools/builtins/run_orchestration_script.js";
 import { getOrCreateMontyPool } from "../runtime/monty/pool-singleton.js";
@@ -213,6 +226,9 @@ function registerBuiltinTools(
   // Chemistry / KG (URL-only).
   registry.registerBuiltin("canonicalize_smiles", () => asTool(buildCanonicalizeSmilesTool(cfg.MCP_RDKIT_URL)));
   registry.registerBuiltin("inchikey_from_smiles", () => asTool(buildInchikeyFromSmilesTool(cfg.MCP_RDKIT_URL)));
+  // gap-plan H0.4: PubChem GHS pre-screen. Public PUG-View REST; resolves
+  // SMILES → InChIKey via mcp-rdkit, then fetches the GHS section.
+  registry.registerBuiltin("pubchem_ghs_lookup", () => asTool(buildPubchemGhsLookupTool(cfg.MCP_RDKIT_URL)));
   registry.registerBuiltin("check_contradictions", () => asTool(buildCheckContradictionsTool(cfg.MCP_KG_URL)));
   registry.registerBuiltin("compute_conformer_ensemble", () => asTool(buildComputeConformerEnsembleTool(cfg.MCP_XTB_URL)));
   registry.registerBuiltin("run_xtb_workflow", () => asTool(buildRunXtbWorkflowTool(cfg.MCP_XTB_URL)));
@@ -264,13 +280,35 @@ function registerBuiltinTools(
     asTool(buildStartOptimizationCampaignTool(pool, cfg.MCP_REACTION_OPTIMIZER_URL)),
   );
   registry.registerBuiltin("recommend_next_batch", () =>
-    asTool(buildRecommendNextBatchTool(pool, cfg.MCP_REACTION_OPTIMIZER_URL)),
+    asTool(buildRecommendNextBatchTool(pool, cfg.MCP_REACTION_OPTIMIZER_URL, configRegistry)),
   );
   registry.registerBuiltin("ingest_campaign_results", () =>
     asTool(buildIngestCampaignResultsTool(pool)),
   );
   registry.registerBuiltin("extract_pareto_front", () =>
     asTool(buildExtractParetoFrontTool(pool, cfg.MCP_REACTION_OPTIMIZER_URL)),
+  );
+  // Phase Z6 — chromatography method optimization.
+  registry.registerBuiltin("start_chrom_campaign", () =>
+    asTool(buildStartChromCampaignTool(pool, cfg.MCP_CHROM_METHOD_OPTIMIZER_URL)),
+  );
+  registry.registerBuiltin("recommend_next_chrom_batch", () =>
+    asTool(buildRecommendNextChromBatchTool(pool, cfg.MCP_CHROM_METHOD_OPTIMIZER_URL)),
+  );
+  registry.registerBuiltin("materialize_chrom_method", () =>
+    asTool(buildMaterializeChromMethodTool(pool, cfg.MCP_CHROM_METHOD_OPTIMIZER_URL)),
+  );
+  registry.registerBuiltin("query_chrom_columns", () =>
+    asTool(buildQueryChromColumnsTool(pool)),
+  );
+  registry.registerBuiltin("ingest_chrom_results", () =>
+    asTool(buildIngestChromResultsTool(pool, cfg.MCP_CHROM_METHOD_OPTIMIZER_URL)),
+  );
+  registry.registerBuiltin("extract_chrom_pareto_front", () =>
+    asTool(buildExtractChromParetoFrontTool(pool, cfg.MCP_CHROM_METHOD_OPTIMIZER_URL)),
+  );
+  registry.registerBuiltin("simulate_chrom_retention", () =>
+    asTool(buildSimulateChromRetentionTool(cfg.MCP_CHROM_METHOD_OPTIMIZER_URL)),
   );
   registry.registerBuiltin("query_kg", () => asTool(buildQueryKgTool(cfg.MCP_KG_URL)));
   registry.registerBuiltin("query_kg_at_time", () =>
@@ -440,6 +478,17 @@ function registerBuiltinTools(
     asTool(buildAdvanceSynthesisCampaignTool(pool)));
   registry.registerBuiltin("record_synthesis_campaign_outcome", () =>
     asTool(buildRecordSynthesisCampaignOutcomeTool(pool)));
+
+  // ── Knowledge wiki (ADR 012) ─────────────────────────────────────────────
+  // The human-readable, citation-traced face of the bi-temporal KG. Phase 1:
+  // the agent reads / lists / authors topic pages and requests entity-backed
+  // pages; the wiki_pages projector (Phase 2) fills the stubs. All four
+  // short-circuit with a clear error unless the `wiki.enabled` feature flag is
+  // on (default OFF — see db/init/22_feature_flags.sql).
+  registry.registerBuiltin("read_article", () => asTool(buildReadArticleTool(pool)));
+  registry.registerBuiltin("list_articles", () => asTool(buildListArticlesTool(pool)));
+  registry.registerBuiltin("upsert_article", () => asTool(buildUpsertArticleTool(pool)));
+  registry.registerBuiltin("request_article", () => asTool(buildRequestArticleTool(pool)));
 
   // ── Code-mode orchestration (Monty) ──────────────────────────────────────
   // run_orchestration_script lets the model emit a single Python script that

@@ -3,6 +3,7 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
+import { getToolTimeoutMs } from "../../config/tool-timeouts.js";
 import { QmRequestBase, QmResponseBase } from "./_qm_base.js";
 
 export const QmFrequenciesIn = QmRequestBase;
@@ -15,12 +16,13 @@ export const QmFrequenciesOut = QmResponseBase.extend({
 });
 export type QmFrequenciesOutput = z.infer<typeof QmFrequenciesOut>;
 
-const TIMEOUT_MS = 300_000;
+const DEFAULT_TIMEOUT_MS = 300_000;
+const TOOL_ID = "qm_frequencies";
 
 export function buildQmFrequenciesTool(mcpXtbUrl: string) {
   const base = mcpXtbUrl.replace(/\/$/, "");
   return defineTool({
-    id: "qm_frequencies",
+    id: TOOL_ID,
     description:
       "Vibrational frequencies, IR intensities, and thermochemistry " +
       "(ZPE / H298 / G298 / S298 / Cv) for a SMILES. Imaginary frequencies " +
@@ -29,12 +31,13 @@ export function buildQmFrequenciesTool(mcpXtbUrl: string) {
     inputSchema: QmFrequenciesIn,
     outputSchema: QmFrequenciesOut,
     annotations: { readOnly: true },
-    execute: async (_ctx, input) => {
+    execute: async (ctx, input) => {
+      const timeoutMs = await getToolTimeoutMs(TOOL_ID, { user: ctx.userEntraId }, DEFAULT_TIMEOUT_MS);
       return await postJson(
         `${base}/frequencies`,
         input,
         QmFrequenciesOut,
-        TIMEOUT_MS,
+        timeoutMs,
         "mcp-xtb",
       );
     },

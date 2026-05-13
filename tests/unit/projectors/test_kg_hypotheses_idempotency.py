@@ -71,7 +71,7 @@ async def test_refuted_status_uses_idempotent_valid_to_guard() -> None:
 
     proj = KgHypothesesProjector.__new__(KgHypothesesProjector)
     proj.settings = settings  # type: ignore[attr-defined]
-    proj._driver = _FakeDriver()  # type: ignore[attr-defined]
+    proj._neo4j = _FakeDriver()  # type: ignore[attr-defined]
 
     hid = str(uuid.uuid4())
 
@@ -94,7 +94,7 @@ async def test_refuted_status_uses_idempotent_valid_to_guard() -> None:
         await proj._handle_status_changed({"hypothesis_id": hid}, hid)
         await proj._handle_status_changed({"hypothesis_id": hid}, hid)
 
-    runs = proj._driver.session_obj.runs  # type: ignore[attr-defined]
+    runs = proj._neo4j.session_obj.runs  # type: ignore[attr-defined]
     # The Tranche 2 / C5 cascade adds a second Cypher per replay (the :CITES
     # walk + RETURN), so we now expect 4 runs total — 2 valid_to updates +
     # 2 cascade queries. The original assertion is preserved as "the

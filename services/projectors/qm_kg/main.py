@@ -33,7 +33,6 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-import os
 import signal
 from typing import Any
 
@@ -46,6 +45,13 @@ from services.projectors.common.base import (
     PermanentHandlerError,
     ProjectorSettings,
 )
+from services.projectors.common.neo4j_client import SyncNeo4jClient
+
+
+async def _anext_notify(gen: Any) -> Any:
+    # asyncio.create_task() requires a Coroutine, but AsyncGenerator.__anext__()
+    # returns Awaitable; wrap it in a coroutine so mypy accepts the call site.
+    return await gen.__anext__()
 
 
 log = logging.getLogger("qm_kg")
@@ -65,18 +71,22 @@ class QmKgProjector(BaseProjector):
     """Project succeeded `qm_jobs` rows into the Neo4j knowledge graph."""
 
     name = "qm_kg"
-    # We rely on the dedicated `qm_job_succeeded` channel rather than
-    # `ingestion_events`, so we accept all event types that surface QM data.
-    interested_event_types = ("qm_job_succeeded",)
+    # Driven entirely by the custom `qm_job_succeeded` NOTIFY channel — see
+    # `_connect_and_run` below and DR-06 in CLAUDE.md. The base loop is not
+    # used, so `interested_event_types` is empty (matches the
+    # compound_fingerprinter / compound_classifier convention).
+    interested_event_types = ()
 
     def __init__(self, settings: QmKgProjectorSettings) -> None:
         super().__init__(settings)
-        self._neo4j_driver: Any = None
+        self._neo4j_driver: SyncNeo4jClient | None = None
         self.qm_settings = settings
 
-    # The base class subscribes to `ingestion_events`. For QM we want the
-    # dedicated `qm_job_succeeded` channel too — override `_connect_and_run`
-    # to issue both LISTENs on the same connection.
+    # Override the base class's `ingestion_events`-driven loop. Custom channel:
+    # `qm_job_succeeded` (declared in db/init/37_qm_ingestion_events.sql);
+    # payload = qm_jobs.id (UUID string). 37 also dual-emits to ingestion_events
+    # for OTHER consumers; this projector intentionally only watches the custom
+    # channel because the catch-up scan in `_catch_up_qm` walks qm_jobs directly.
     async def _connect_and_run(self) -> None:
         async with await psycopg.AsyncConnection.connect(
             self.settings.postgres_dsn,
@@ -133,7 +143,7 @@ class QmKgProjector(BaseProjector):
             while not self._shutdown.is_set():
                 if next_notify_task is None or next_notify_task.done():
                     next_notify_task = asyncio.create_task(
-                        notify_gen.__anext__(), name="next_notify"
+                        _anext_notify(notify_gen), name="next_notify"
                     )
                 done, _pending = await asyncio.wait(
                     {next_notify_task, shutdown_task},
@@ -261,24 +271,28 @@ class QmKgProjector(BaseProjector):
         await work_conn.commit()
 
     # ─── neo4j ──────────────────────────────────────────────────────────────
-    def _get_driver(self) -> Any:
+    def _get_client(self) -> SyncNeo4jClient:
+        # Lazy: tests + envs without the neo4j driver shouldn't crash on
+        # projector import. SyncNeo4jClient defers the `from neo4j import
+        # GraphDatabase` until __init__, raising the same RuntimeError shape
+        # as the previous inline path on driver-missing.
         if self._neo4j_driver is not None:
             return self._neo4j_driver
         try:
-            from neo4j import GraphDatabase  # noqa: PLC0415
+            self._neo4j_driver = SyncNeo4jClient(
+                uri=self.qm_settings.neo4j_uri,
+                user=self.qm_settings.neo4j_user,
+                password=self.qm_settings.neo4j_password,
+            )
         except ImportError as exc:
             raise RuntimeError("neo4j driver not installed") from exc
-        self._neo4j_driver = GraphDatabase.driver(
-            self.qm_settings.neo4j_uri,
-            auth=(self.qm_settings.neo4j_user, self.qm_settings.neo4j_password),
-        )
         return self._neo4j_driver
 
     def _merge_into_neo4j(
         self, row: dict[str, Any], conformers: list[dict[str, Any]]
     ) -> None:
-        driver = self._get_driver()
-        with driver.session(database=self.qm_settings.neo4j_database) as sess:
+        client = self._get_client()
+        with client.session(database=self.qm_settings.neo4j_database) as sess:
             # Close any prior live calculation edges for the same (method,task)
             # pair so we keep one live calculation per pair per compound.
             #
