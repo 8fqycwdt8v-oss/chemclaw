@@ -117,15 +117,23 @@ describe("buildReflectionPrompt", () => {
   });
 
   it("caps the assembled prompt at MAX_REFLECTION_PROMPT_BYTES", () => {
-    // 10 todos × big content > 8 KiB even after the per-item cap, so the
-    // overall byte cap also fires.
-    const big = "x".repeat(500);
-    const todos = Array.from({ length: 10 }, (_, i) =>
-      todo(big + ` (#${i})`, "pending", i + 1),
-    );
+    // The per-item char cap on todo.content (500) is enough that even 10
+    // full-length todos can't push the assembled prompt past 8 KiB on its
+    // own — that's the whole point of the per-item cap. To exercise the
+    // overall byte-cap belt we use long loop-warning argsHashes, which
+    // aren't individually truncated; five of them at 5 KB each blow past
+    // 8 KiB cleanly.
+    const fatHash = "h".repeat(5000);
+    const warnings: LoopWarning[] = Array.from({ length: 5 }, (_, i) => ({
+      toolId: `tool_${i}`,
+      argsHash: fatHash,
+      occurrences: 3 + i,
+      firstSeen: "2026-05-09T00:00:00Z",
+      lastSeen: "2026-05-09T00:01:00Z",
+    }));
     const out = buildReflectionPrompt({
-      ctx: makeCtx(),
-      openTodos: todos,
+      ctx: makeCtx(warnings),
+      openTodos: [],
       previousFinishReason: "max_steps",
     });
     expect(out).not.toBeNull();
