@@ -165,22 +165,27 @@ def test_descriptor_shape_mismatch_raises():
     with pytest.raises(ValueError, match="Tanaka 6-axis"):
         _db.build_chrom_domain(
             gradient_scheme=_db.GradientScheme.HOLD_RAMP_HOLD,
-            column_choices=["A"],
-            column_descriptors=[[1.0, 2.0]],   # only 2 of 6 descriptors
+            column_choices=["A", "B"],
+            column_descriptors=[[1.0, 2.0], [3.0, 4.0]],   # only 2 of 6 descriptors
             b_solvent_choices=MIN_BSOL,
             additive_choices=MIN_ADD,
         )
 
 
-def test_empty_column_choices_raises():
-    with pytest.raises(ValueError, match="column_choices"):
-        _db.build_chrom_domain(
-            gradient_scheme=_db.GradientScheme.HOLD_RAMP_HOLD,
-            column_choices=[],
-            column_descriptors=[],
-            b_solvent_choices=MIN_BSOL,
-            additive_choices=MIN_ADD,
-        )
+def test_column_choices_below_two_raises():
+    """BoFire's CategoricalDescriptorInput / CategoricalInput require ≥ 2
+    categories; we surface that at the domain-builder layer rather than
+    deep inside BoFire's pydantic validation."""
+    for n in (0, 1):
+        cols = ["X"] * n
+        with pytest.raises(ValueError, match="at least 2 columns"):
+            _db.build_chrom_domain(
+                gradient_scheme=_db.GradientScheme.HOLD_RAMP_HOLD,
+                column_choices=cols,
+                column_descriptors=[[3.0, 1.0, 1.5, 0.4, 0.1, 0.3]] * n,
+                b_solvent_choices=MIN_BSOL,
+                additive_choices=MIN_ADD,
+            )
 
 
 def test_inverted_flow_bounds_raises():

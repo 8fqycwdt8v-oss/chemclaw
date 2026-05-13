@@ -230,6 +230,9 @@ describe("simulate_chrom_retention", () => {
 
   it("rejects input with neither lss_by_analyte nor scouting_observations", async () => {
     const tool = buildSimulateChromRetentionTool(URL_);
+    // The Zod refine() constraint is runtime-only; both optional fields
+    // are absent here so the type checker is happy, but the schema parse
+    // throws.
     await expect(tool.execute(makeCtx(), {
       gradient_program: [{ time_min: 0, pctB: 5 }, { time_min: 5, pctB: 95 }],
       t0_min: 1.0,

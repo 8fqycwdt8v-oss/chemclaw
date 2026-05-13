@@ -73,3 +73,52 @@ def test_each_peak_matched_at_most_once():
     m = _pt.match_targets(peaks, targets, mz_tolerance=0.5)
     assert "shared" in m["matched"]
     assert "other" in m["unmatched_targets"]
+
+
+# ── DAD-UV spectral matching (Fix #6) ───────────────────────────────────
+
+def test_spectrum_cosine_match_when_name_and_mz_absent():
+    """UV-only campaign: a target with a reference spectrum matches the
+    peak with the closest spectrum (cosine ≥ threshold)."""
+    spec_a = [0.0, 0.5, 1.0, 0.8, 0.3]
+    spec_b = [0.0, 0.1, 0.2, 0.9, 1.0]
+    peaks = [
+        {"rt_min": 2.0, "spectrum": [0.0, 0.51, 1.01, 0.79, 0.31]},  # ≈ spec_a
+        {"rt_min": 3.0, "spectrum": [0.0, 0.1,  0.21, 0.9,  1.0]},   # ≈ spec_b
+    ]
+    targets = [
+        {"name": "A", "spectrum": spec_a},
+        {"name": "B", "spectrum": spec_b},
+    ]
+    m = _pt.match_targets(peaks, targets, spectrum_threshold=0.99)
+    assert m["matched"]["A"]["rt_min"] == 2.0
+    assert m["matched"]["B"]["rt_min"] == 3.0
+    assert m["confidence"] == "high"
+
+
+def test_spectrum_threshold_rejects_dissimilar_spectra():
+    """Below the cosine threshold the target is reported unmatched."""
+    peaks = [{"rt_min": 2.0, "spectrum": [1.0, 0.0, 0.0]}]
+    targets = [{"name": "A", "spectrum": [0.0, 0.0, 1.0]}]   # orthogonal
+    m = _pt.match_targets(peaks, targets, spectrum_threshold=0.95)
+    assert m["unmatched_targets"] == ["A"]
+    assert m["confidence"] == "partial"
+
+
+def test_spectrum_mismatched_lengths_skipped():
+    peaks = [{"rt_min": 2.0, "spectrum": [1.0, 0.0]}]
+    targets = [{"name": "A", "spectrum": [1.0, 0.0, 0.0]}]   # length 3 vs 2
+    m = _pt.match_targets(peaks, targets, spectrum_threshold=0.5)
+    assert m["unmatched_targets"] == ["A"]
+
+
+def test_name_match_wins_over_spectrum_match():
+    """Priority order: name > m/z > spectrum. A name match should take
+    the peak even if a higher-cosine spectrum match exists on another."""
+    peaks = [
+        {"rt_min": 2.0, "name": "API", "spectrum": [1.0, 0.0]},
+        {"rt_min": 3.0, "spectrum": [0.5, 0.5]},
+    ]
+    targets = [{"name": "API", "spectrum": [0.5, 0.5]}]      # spectrum closer to peak #2
+    m = _pt.match_targets(peaks, targets, spectrum_threshold=0.99)
+    assert m["matched"]["API"]["rt_min"] == 2.0

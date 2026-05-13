@@ -54,8 +54,35 @@ _SOLVENT_DENSITY_G_PER_ML: dict[str, float] = {
     "2-PrOH": 0.786,
     "MeOH:MeCN_50:50": 0.789,
 }
+_DENSITY_MECN_G_PER_ML = 0.786
+_DENSITY_MEOH_G_PER_ML = 0.792
+_DENSITY_FALLBACK_G_PER_ML = 0.79
 # Re-equilibration multiplier — total solvent ≈ runtime × (1 + this).
 _REEQUIL_FACTOR = 0.75
+
+
+def _resolve_b_solvent_density(
+    b_solvent: str | None, b_meoh_fraction: float | None,
+) -> float:
+    """Density of the B-channel solvent in g/mL.
+
+    In ternary mode the B-channel is a continuous MeCN/MeOH mix
+    parameterised by `b_meoh_fraction ∈ [0, 1]` — its density is
+    well-approximated by the linear weighting of pure-component densities
+    (a < 1 % error vs. the measured Redlich-Kister-corrected mix density
+    over this composition range — fine for a PMI estimate). Otherwise
+    look up the categorical table; fall back to the rough 0.79 g/mL only
+    when nothing matches.
+    """
+    if b_meoh_fraction is not None:
+        x = max(0.0, min(1.0, float(b_meoh_fraction)))
+        return (
+            (1.0 - x) * _DENSITY_MECN_G_PER_ML
+            + x * _DENSITY_MEOH_G_PER_ML
+        )
+    if b_solvent is None:
+        return _DENSITY_FALLBACK_G_PER_ML
+    return _SOLVENT_DENSITY_G_PER_ML.get(b_solvent, _DENSITY_FALLBACK_G_PER_ML)
 
 # Default CRF knobs (callers may override).
 DEFAULT_RS_TARGET = 1.5
@@ -142,6 +169,7 @@ def score_chromatogram(
     runtime_target_min: float = DEFAULT_RUNTIME_TARGET_MIN,
     runtime_min: float | None = None,
     b_solvent: str | None = None,
+    b_meoh_fraction: float | None = None,
     flow_mLmin: float | None = None,
     avg_pctB: float | None = None,
     lambda_max: float = DEFAULT_LAMBDA_MAX,
@@ -192,11 +220,14 @@ def score_chromatogram(
     crf_total = resolution_term + lam * time_term + peak_bonus * n_peaks
 
     # Solvent PMI (grams of organic per injection, ×(1+reequil)).
+    # In ternary mode the B-channel density is a linear-weighted mix
+    # (MeCN/MeOH) — see _resolve_b_solvent_density.
     solvent_pmi_g = 0.0
     if (
-        flow_mLmin is not None and rt_total > 0 and b_solvent is not None
+        flow_mLmin is not None and rt_total > 0
+        and (b_solvent is not None or b_meoh_fraction is not None)
     ):
-        rho = _SOLVENT_DENSITY_G_PER_ML.get(b_solvent, 0.79)
+        rho = _resolve_b_solvent_density(b_solvent, b_meoh_fraction)
         frac_b = (avg_pctB / 100.0) if avg_pctB is not None else 0.5
         solvent_pmi_g = (
             float(flow_mLmin) * rt_total * rho * frac_b * (1.0 + _REEQUIL_FACTOR)

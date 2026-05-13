@@ -315,8 +315,12 @@ def _validate_inputs(
     eluent_mode: EluentMode,
     n_segments: int,
 ) -> None:
-    if not column_choices:
-        raise ValueError("column_choices must be non-empty")
+    if len(column_choices) < 2:
+        raise ValueError(
+            "column_choices must contain at least 2 columns "
+            "(BoFire CategoricalDescriptorInput / CategoricalInput require "
+            "≥ 2 categories)"
+        )
     if len(column_choices) != len(column_descriptors):
         raise ValueError(
             f"column_descriptors length ({len(column_descriptors)}) must match "

@@ -92,3 +92,88 @@ def test_fwhm_width_field_is_used():
     # baseline width = fwhm·(4/2.3548) = 0.05·1.6986 = 0.08493 each;
     # Rs = 2·0.5 / (2·0.08493) = 5.887
     assert out["resolutions"][0] == pytest.approx(5.887, rel=1e-2)
+
+
+# ── Ternary solvent PMI (Fix #8) ────────────────────────────────────────
+
+def test_pmi_uses_weighted_density_in_ternary_mode():
+    peaks = [_gauss_peak(2.0, 100.0, 0.02), _gauss_peak(2.5, 100.0, 0.02)]
+    # x_meoh = 1.0 → pure MeOH (ρ = 0.792). Same flow / runtime / avg_pctB.
+    pure_meoh = _s.score_chromatogram(
+        peaks, runtime_min=10.0, flow_mLmin=0.4, avg_pctB=50.0,
+        b_meoh_fraction=1.0,
+    )
+    # x_meoh = 0.0 → pure MeCN (ρ = 0.786).
+    pure_mecn = _s.score_chromatogram(
+        peaks, runtime_min=10.0, flow_mLmin=0.4, avg_pctB=50.0,
+        b_meoh_fraction=0.0,
+    )
+    assert pure_meoh["solvent_pmi_g"] > pure_mecn["solvent_pmi_g"]
+    # Mix at x=0.5 should sit between the pure values.
+    mix = _s.score_chromatogram(
+        peaks, runtime_min=10.0, flow_mLmin=0.4, avg_pctB=50.0,
+        b_meoh_fraction=0.5,
+    )
+    assert pure_mecn["solvent_pmi_g"] < mix["solvent_pmi_g"] < pure_meoh["solvent_pmi_g"]
+
+
+def test_pmi_b_meoh_overrides_b_solvent_lookup():
+    """When b_meoh_fraction is set, it takes precedence over a string match."""
+    peaks = [_gauss_peak(2.0, 100.0, 0.02), _gauss_peak(2.5, 100.0, 0.02)]
+    # b_solvent string says MeCN (0.786) but x_meoh=1.0 should win → 0.792.
+    overridden = _s.score_chromatogram(
+        peaks, runtime_min=10.0, flow_mLmin=0.4, avg_pctB=50.0,
+        b_solvent="MeCN", b_meoh_fraction=1.0,
+    )
+    pure_meoh = _s.score_chromatogram(
+        peaks, runtime_min=10.0, flow_mLmin=0.4, avg_pctB=50.0,
+        b_solvent="MeOH",
+    )
+    assert overridden["solvent_pmi_g"] == pytest.approx(pure_meoh["solvent_pmi_g"], rel=1e-6)
+
+
+# ── Adversarial CRF: pathologies must rank below reasonable methods ─────
+
+def test_collapsed_peak_pathology_scores_below_resolved():
+    """A method that fuses three peaks into one broad peak must NOT win
+    against a method that resolves them — the cap on resolution_term plus
+    the peak_bonus per resolved peak makes this fail-safe."""
+    collapsed = [_gauss_peak(3.0, 300.0, 0.30)]              # one fat peak
+    resolved = [
+        _gauss_peak(2.0, 100.0, 0.02),
+        _gauss_peak(2.6, 100.0, 0.02),
+        _gauss_peak(3.4, 100.0, 0.02),
+    ]
+    s_col = _s.score_chromatogram(collapsed, rs_target=1.5)
+    s_res = _s.score_chromatogram(resolved, rs_target=1.5)
+    assert s_res["crf_total"] > s_col["crf_total"]
+    assert s_res["min_resolution"] > s_col["min_resolution"]
+
+
+def test_dead_volume_dumping_pathology_does_not_win():
+    """All peaks dumped at the void volume (no separation) scores below a
+    properly-resolved gradient even if the runtime is shorter."""
+    dumped = [
+        _gauss_peak(1.0, 100.0, 0.02),
+        _gauss_peak(1.0 + 0.01, 100.0, 0.02),
+        _gauss_peak(1.0 + 0.02, 100.0, 0.02),
+    ]
+    resolved = [
+        _gauss_peak(2.0, 100.0, 0.02),
+        _gauss_peak(2.6, 100.0, 0.02),
+        _gauss_peak(3.4, 100.0, 0.02),
+    ]
+    s_dump = _s.score_chromatogram(dumped, rs_target=1.5, runtime_target_min=8.0)
+    s_res  = _s.score_chromatogram(resolved, rs_target=1.5, runtime_target_min=8.0)
+    assert s_res["crf_total"] > s_dump["crf_total"]
+    assert s_dump["resolution_target_met"] is False
+
+
+def test_over_resolved_does_not_beat_well_resolved_with_faster_runtime():
+    """Over-resolution beyond Rs_target gives no extra reward (capped); a
+    method that hits the target faster should win."""
+    slow_over = [_gauss_peak(t, 100.0, 0.05) for t in (5.0, 9.0, 13.0)]
+    fast_at_target = [_gauss_peak(t, 100.0, 0.05) for t in (2.0, 2.6, 3.3)]
+    s_slow = _s.score_chromatogram(slow_over, rs_target=1.5, runtime_target_min=8.0)
+    s_fast = _s.score_chromatogram(fast_at_target, rs_target=1.5, runtime_target_min=8.0)
+    assert s_fast["crf_total"] > s_slow["crf_total"]

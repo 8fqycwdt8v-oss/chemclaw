@@ -23,6 +23,10 @@ const Peak = z.record(z.unknown());
 const TargetCompound = z.object({
   name: z.string().min(1).max(200),
   m_z: z.number().nullable().optional(),
+  // Optional DAD-UV reference spectrum (flat array of absorbances at a
+  // fixed wavelength grid); the MCP matches by cosine similarity ≥ 0.95
+  // when both target and detected peak carry one.
+  spectrum: z.array(z.number()).max(1024).optional(),
 });
 
 const MeasuredRun = z.object({
@@ -30,9 +34,12 @@ const MeasuredRun = z.object({
   peaks: z.array(Peak).max(2000),
   targets: z.array(TargetCompound).max(200).default([]),
   // Optional method context — if omitted, runtime falls back to the last
-  // peak's retention time and the solvent-PMI objective is 0.
+  // peak's retention time and the solvent-PMI objective is 0. b_solvent
+  // / b_meoh_fraction are auto-pulled from the proposal's factor_values
+  // when this run object omits them.
   runtime_min: z.number().positive().optional(),
   b_solvent: z.string().max(50).optional(),
+  b_meoh_fraction: z.number().min(0).max(1).optional(),
   flow_mLmin: z.number().positive().optional(),
   avg_pctB: z.number().min(0).max(100).optional(),
 });
@@ -125,7 +132,10 @@ export function buildIngestChromResultsTool(pool: Pool, optimizerUrl: string) {
       }
       const proposals = lookup.proposals as Array<{ factor_values?: unknown }>;
 
-      // 2. Score each run via the MCP.
+      // 2. Score each run via the MCP. When the caller omits method
+      //    context, fall back to the proposal's factor_values — that way
+      //    the chemist doesn't have to re-state b_solvent / flow / T per
+      //    run.
       const measured: Array<{ factor_values: unknown; outputs: Record<string, number> }> = [];
       const scored: IngestChromResultsOutput["scored"] = [];
       for (const run of input.runs) {
@@ -133,6 +143,18 @@ export function buildIngestChromResultsTool(pool: Pool, optimizerUrl: string) {
         if (proposal === undefined) {
           throw new Error(`proposal_index_out_of_range:${run.proposal_index}`);
         }
+        const fv = (proposal.factor_values ?? {}) as Record<string, unknown>;
+        const pickStr = (k: string): string | null => {
+          const v = fv[k];
+          return typeof v === "string" ? v : null;
+        };
+        const pickNum = (k: string): number | null => {
+          const v = fv[k];
+          return typeof v === "number" ? v : null;
+        };
+        const b_solvent = run.b_solvent ?? pickStr("b_solvent");
+        const b_meoh_fraction = run.b_meoh_fraction ?? pickNum("b_meoh_fraction");
+        const flow_mLmin = run.flow_mLmin ?? pickNum("flow_mLmin");
         const s = await postJson(
           `${base}/score_chromatogram`,
           {
@@ -141,8 +163,9 @@ export function buildIngestChromResultsTool(pool: Pool, optimizerUrl: string) {
             rs_target: input.rs_target,
             runtime_target_min: input.runtime_target_min,
             runtime_min: run.runtime_min ?? null,
-            b_solvent: run.b_solvent ?? null,
-            flow_mLmin: run.flow_mLmin ?? null,
+            b_solvent,
+            b_meoh_fraction,
+            flow_mLmin,
             avg_pctB: run.avg_pctB ?? null,
           },
           ScoreOut,
