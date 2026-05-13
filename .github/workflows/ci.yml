@@ -109,6 +109,7 @@ jobs:
             tests/unit/optimizer/test_skill_promoter.py \
             tests/unit/optimizer/test_audit_partition_maintainer.py \
             tests/unit/optimizer/test_wiki_regen.py \
+            tests/unit/optimizer/test_wiki_linter.py \
             tests/unit/mcp_kg/ \
             tests/unit/projectors/ \
             services/mcp_tools/common/tests/ \

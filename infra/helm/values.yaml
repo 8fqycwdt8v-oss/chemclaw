@@ -121,6 +121,11 @@ projectors:
     # MCP_EMBEDDER_URL (same mcp-embedder as chunk-embedder).
     enabled: true
     image: chemclaw/wiki-search-index:latest
+  wikiLinter:
+    # Periodic deterministic sweep (ADR 012 Phase 4a): missing project-page
+    # stubs, orphan logging, `index` page rebuild. No LLM, Postgres-only.
+    enabled: true
+    image: chemclaw/wiki-linter:latest
   wikiRegen:
     # Knowledge-wiki body-synthesis daemon (ADR 012 Phase 2b): LLM-fills the
     # dirty stubs the wikiPages projector creates. LLM-cost-incurring —

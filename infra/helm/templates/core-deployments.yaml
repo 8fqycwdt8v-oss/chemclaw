@@ -565,3 +565,35 @@ spec:
           securityContext:
             allowPrivilegeEscalation: false
 {{- end }}
+
+{{- if .Values.projectors.wikiLinter.enabled }}
+---
+# wiki_linter — periodic deterministic sweep of the knowledge wiki (ADR 012 Phase 4a):
+# missing project-page stubs, orphan logging, `index` page rebuild. No LLM.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: wiki-linter
+  labels:
+    app: wiki-linter
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: wiki-linter
+  template:
+    metadata:
+      labels:
+        app: wiki-linter
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: wiki-linter
+          image: {{ .Values.projectors.wikiLinter.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+{{- end }}
