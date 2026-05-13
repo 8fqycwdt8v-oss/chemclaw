@@ -68,11 +68,13 @@ function analyseFile(absPath: string): FileMetrics {
     const line = lines[i]!;
     for (const verb of MUTATION_VERBS) {
       // Match `app.post(`, `app.put(`, etc. — Fastify route registrations.
-      // Whitespace tolerant; doesn't match generic `*.post()` calls because
-      // the leading `app.` constraint is specific to Fastify's instance
-      // method (or its decorated alias `server.post`, which we cover by
-      // also accepting any identifier-then-dot prefix).
-      const re = new RegExp(`\\b\\w+\\.${verb}\\s*\\(`);
+      // Anchored on the actual decorator name `app` (every admin route in
+      // this directory uses `app.<verb>`; grep confirms zero `server.` /
+      // `router.` call sites). Anchoring eliminates false positives from
+      // unrelated `*.delete(` / `*.post(` patterns that may land here
+      // later (e.g. `pool.delete(key)`, `array.post('x')` typo). If a
+      // future Fastify rename lands, broaden the alternation here.
+      const re = new RegExp(`\\bapp\\.${verb}\\s*\\(`);
       if (re.test(line)) {
         registrations++;
         registrationLines.push(i + 1);
