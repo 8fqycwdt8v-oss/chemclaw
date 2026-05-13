@@ -38,7 +38,11 @@ def smiles_to_canonical_and_xyz(smiles: str) -> tuple[str, str, str | None]:
         raise ValueError(f"invalid SMILES: {smiles!r}")
     canonical = Chem.MolToSmiles(mol)
     try:
-        inchikey = _ToInchiKey(mol) or None  # pragma: no cover — best-effort, no CI test
+        # rdkit's MolToInchiKey is shipped without type stubs, so mypy
+        # flags this as no-untyped-call when rdkit is installed in the
+        # CI mypy environment (e.g. via a transitive bofire dep). The
+        # return type is `str` per upstream docs; suppress the gate.
+        inchikey = _ToInchiKey(mol) or None  # type: ignore[no-untyped-call]  # pragma: no cover — best-effort, no CI test
     except Exception:  # noqa: BLE001 — InChI gen is best-effort
         inchikey = None
 
