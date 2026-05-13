@@ -22,6 +22,7 @@ export const MaterializeChromMethodIn = z.object({
   detection_mode: z.enum(["DAD", "MS", "ELSD", "CAD", "RID", "MS-DAD"]).default("DAD"),
   technique: z.enum(["RP-HPLC", "RP-UHPLC", "HILIC", "SFC"]).default("RP-UHPLC"),
   gradient_scheme: z.enum(["linear", "hold_ramp_hold", "multi_segment"]).default("hold_ramp_hold"),
+  n_segments: z.number().int().min(1).max(5).default(3),
   injection_volume_uL: z.number().min(0.1).max(50.0).default(2.0),
 });
 export type MaterializeChromMethodInput = z.infer<typeof MaterializeChromMethodIn>;
@@ -115,6 +116,7 @@ export function buildMaterializeChromMethodTool(pool: Pool, optimizerUrl: string
         {
           factor_values: factorValues,
           gradient_scheme: input.gradient_scheme,
+          n_segments: input.n_segments,
           detection_mode: input.detection_mode,
           technique: input.technique,
         },

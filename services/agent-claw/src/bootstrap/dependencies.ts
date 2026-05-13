@@ -77,6 +77,9 @@ import { buildStartChromCampaignTool } from "../tools/builtins/start_chrom_campa
 import { buildRecommendNextChromBatchTool } from "../tools/builtins/recommend_next_chrom_batch.js";
 import { buildMaterializeChromMethodTool } from "../tools/builtins/materialize_chrom_method.js";
 import { buildQueryChromColumnsTool } from "../tools/builtins/query_chrom_columns.js";
+import { buildIngestChromResultsTool } from "../tools/builtins/ingest_chrom_results.js";
+import { buildExtractChromParetoFrontTool } from "../tools/builtins/extract_chrom_pareto_front.js";
+import { buildSimulateChromRetentionTool } from "../tools/builtins/simulate_chrom_retention.js";
 import { buildQueryKgTool } from "../tools/builtins/query_kg.js";
 import { buildQueryKgAtTimeTool } from "../tools/builtins/query_kg_at_time.js";
 import { buildQueryProvenanceTool } from "../tools/builtins/query_provenance.js";
@@ -297,6 +300,15 @@ function registerBuiltinTools(
   );
   registry.registerBuiltin("query_chrom_columns", () =>
     asTool(buildQueryChromColumnsTool(pool)),
+  );
+  registry.registerBuiltin("ingest_chrom_results", () =>
+    asTool(buildIngestChromResultsTool(pool, cfg.MCP_CHROM_METHOD_OPTIMIZER_URL)),
+  );
+  registry.registerBuiltin("extract_chrom_pareto_front", () =>
+    asTool(buildExtractChromParetoFrontTool(pool, cfg.MCP_CHROM_METHOD_OPTIMIZER_URL)),
+  );
+  registry.registerBuiltin("simulate_chrom_retention", () =>
+    asTool(buildSimulateChromRetentionTool(cfg.MCP_CHROM_METHOD_OPTIMIZER_URL)),
   );
   registry.registerBuiltin("query_kg", () => asTool(buildQueryKgTool(cfg.MCP_KG_URL)));
   registry.registerBuiltin("query_kg_at_time", () =>

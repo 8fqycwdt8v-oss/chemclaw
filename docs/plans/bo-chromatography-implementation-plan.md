@@ -7,6 +7,19 @@ under what merge gate.
 Branch: `claude/bo-chromatography-optimization-203xg`. Target: PR into `main`
 once Phase 1 lands (Phases 2–6 ship as follow-up PRs).
 
+**Status (2026-05-13):** Phases 0+1 merged in PR #155. Phases 2–5 merged in
+the follow-up PR — peak tracker + Niezen-Desmet CRF scorer (`/score_chromatogram`
+live, `ingest_chrom_results` builtin), Pareto extraction (`/extract_pareto`,
+`extract_chrom_pareto_front` builtin), multi-segment gradients (chained
+monotonicity constraints) + ternary eluent (`eluent_mode`), and LSS
+cheap-fidelity simulation (`retention_lss.py`, `/simulate_retention`,
+`/seed_candidates_lss`, `simulate_chrom_retention` builtin). Phase 6
+(hardware-in-loop via `mcp_instrument_<vendor>` adapter) remains open —
+needs real instrument access; see `docs/runbooks/chromatography-method-optimization.md`.
+Deferred follow-ups: DAD-spectral peak tracking, cost-aware MFBO acquisition,
+gradient-scouting LSS fit, the Boelrijk-2023 synthetic-mixture benchmark
+(BACKLOG).
+
 ## Success criteria (per CLAUDE.md hard rule 3)
 
 A "Phase N done" gate is **observable** behaviour, not "I wrote the file":

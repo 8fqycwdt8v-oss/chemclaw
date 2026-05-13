@@ -195,17 +195,6 @@ def test_inverted_flow_bounds_raises():
         )
 
 
-def test_multi_segment_scheme_not_implemented_yet():
-    with pytest.raises(NotImplementedError, match="Phase 4"):
-        _db.build_chrom_domain(
-            gradient_scheme=_db.GradientScheme.MULTI_SEGMENT,
-            column_choices=MIN_COLS,
-            column_descriptors=MIN_DESC,
-            b_solvent_choices=MIN_BSOL,
-            additive_choices=MIN_ADD,
-        )
-
-
 def test_close_to_target_objective_not_implemented_yet():
     with pytest.raises(NotImplementedError):
         _db.build_chrom_domain(
@@ -271,3 +260,131 @@ def test_materialize_program_is_monotonic_in_time_and_pctB():
     pctBs = [r["pctB"] for r in program]
     assert times == sorted(times)
     assert pctBs == sorted(pctBs)
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Phase 4 — multi-segment gradients
+# ───────────────────────────────────────────────────────────────────────
+
+def test_multi_segment_domain_has_2N_plus_2_gradient_inputs():
+    domain = _db.build_chrom_domain(
+        gradient_scheme=_db.GradientScheme.MULTI_SEGMENT,
+        column_choices=MIN_COLS,
+        column_descriptors=MIN_DESC,
+        b_solvent_choices=MIN_BSOL,
+        additive_choices=MIN_ADD,
+        n_segments=3,
+    )
+    keys = {f.key for f in domain.inputs.features}
+    # pctB_init + 3·(t_break_i, pctB_break_i) + t_hold_final_min = 8 gradient
+    # inputs, plus column + b_solvent + additive + flow + T = 13 total.
+    assert "pctB_init" in keys
+    assert {"t_break1_min", "pctB_break1", "t_break2_min", "pctB_break2",
+            "t_break3_min", "pctB_break3", "t_hold_final_min"} <= keys
+    assert "pctB_final" not in keys  # multi_segment has no separate final
+
+
+def test_multi_segment_monotonicity_constraints():
+    domain = _db.build_chrom_domain(
+        gradient_scheme=_db.GradientScheme.MULTI_SEGMENT,
+        column_choices=MIN_COLS,
+        column_descriptors=MIN_DESC,
+        b_solvent_choices=MIN_BSOL,
+        additive_choices=MIN_ADD,
+        n_segments=3,
+    )
+    cs = domain.constraints.constraints
+    # 2 time-chain (t1≤t2, t2≤t3) + 3 %B-chain (init≤b1, b1≤b2, b2≤b3) = 5
+    assert len(cs) == 5
+    feat_pairs = {tuple(c.features) for c in cs}
+    assert ("t_break1_min", "t_break2_min") in feat_pairs
+    assert ("t_break2_min", "t_break3_min") in feat_pairs
+    assert ("pctB_init", "pctB_break1") in feat_pairs
+    assert ("pctB_break1", "pctB_break2") in feat_pairs
+    assert ("pctB_break2", "pctB_break3") in feat_pairs
+    for c in cs:
+        assert list(c.coefficients) == [1.0, -1.0]
+        assert c.rhs == 0.0
+
+
+def test_multi_segment_n_segments_out_of_range_raises():
+    for bad in (0, 6, -1):
+        with pytest.raises(ValueError, match="n_segments out of range"):
+            _db.build_chrom_domain(
+                gradient_scheme=_db.GradientScheme.MULTI_SEGMENT,
+                column_choices=MIN_COLS,
+                column_descriptors=MIN_DESC,
+                b_solvent_choices=MIN_BSOL,
+                additive_choices=MIN_ADD,
+                n_segments=bad,
+            )
+
+
+def test_materialize_multi_segment_program():
+    program = _db.materialize_gradient_program(
+        factor_values={
+            "pctB_init":        5.0,
+            "t_break1_min":     2.0, "pctB_break1": 25.0,
+            "t_break2_min":     6.0, "pctB_break2": 60.0,
+            "t_break3_min":    10.0, "pctB_break3": 95.0,
+            "t_hold_final_min": 1.5,
+        },
+        scheme=_db.GradientScheme.MULTI_SEGMENT,
+        n_segments=3,
+    )
+    assert program == [
+        {"time_min": 0.0,  "pctB":  5.0},
+        {"time_min": 2.0,  "pctB": 25.0},
+        {"time_min": 6.0,  "pctB": 60.0},
+        {"time_min": 10.0, "pctB": 95.0},
+        {"time_min": 11.5, "pctB": 95.0},
+    ]
+    times = [r["time_min"] for r in program]
+    pctBs = [r["pctB"] for r in program]
+    assert times == sorted(times)
+    assert pctBs == sorted(pctBs)
+
+
+# ───────────────────────────────────────────────────────────────────────
+# Phase 4 — ternary eluent
+# ───────────────────────────────────────────────────────────────────────
+
+def test_ternary_eluent_swaps_b_solvent_for_b_meoh_fraction():
+    domain = _db.build_chrom_domain(
+        gradient_scheme=_db.GradientScheme.HOLD_RAMP_HOLD,
+        column_choices=MIN_COLS,
+        column_descriptors=MIN_DESC,
+        b_solvent_choices=MIN_BSOL,        # ignored in ternary mode
+        additive_choices=MIN_ADD,
+        eluent_mode=_db.EluentMode.TERNARY,
+    )
+    keys = {f.key for f in domain.inputs.features}
+    assert "b_meoh_fraction" in keys
+    assert "b_solvent" not in keys
+    frac = next(f for f in domain.inputs.features if f.key == "b_meoh_fraction")
+    assert tuple(frac.bounds) == (0.0, 1.0)
+
+
+def test_binary_eluent_requires_b_solvent_choices():
+    with pytest.raises(ValueError, match="b_solvent_choices"):
+        _db.build_chrom_domain(
+            gradient_scheme=_db.GradientScheme.HOLD_RAMP_HOLD,
+            column_choices=MIN_COLS,
+            column_descriptors=MIN_DESC,
+            b_solvent_choices=[],
+            additive_choices=MIN_ADD,
+            eluent_mode=_db.EluentMode.BINARY,
+        )
+
+
+def test_ternary_eluent_tolerates_empty_b_solvent_choices():
+    # In ternary mode b_solvent_choices is unused — must not raise.
+    domain = _db.build_chrom_domain(
+        gradient_scheme=_db.GradientScheme.HOLD_RAMP_HOLD,
+        column_choices=MIN_COLS,
+        column_descriptors=MIN_DESC,
+        b_solvent_choices=[],
+        additive_choices=MIN_ADD,
+        eluent_mode=_db.EluentMode.TERNARY,
+    )
+    assert any(f.key == "b_meoh_fraction" for f in domain.inputs.features)

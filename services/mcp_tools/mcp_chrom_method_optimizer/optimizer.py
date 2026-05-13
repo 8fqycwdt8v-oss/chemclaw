@@ -111,6 +111,53 @@ def recommend_next_batch(
     return _df_rows_to_proposals(candidates, source=source_label)
 
 
+# ---------------------------------------------------------------------------
+# Pareto-front extraction (Phase 3) — pure function, no BoFire required.
+# ---------------------------------------------------------------------------
+
+def pareto_front(
+    measured_outcomes: list[dict[str, Any]],
+    output_directions: dict[str, str],
+) -> list[dict[str, Any]]:
+    """Return the non-dominated subset of measured_outcomes.
+
+    output_directions maps each output name to "maximize" or "minimize".
+    A point p dominates q iff p is at least as good as q on every objective
+    AND strictly better on at least one. Mirrors mcp_reaction_optimizer's
+    pareto_front so the chromatography MO loop is self-contained.
+    """
+    if not measured_outcomes or not output_directions:
+        return []
+    points: list[tuple[list[float], dict[str, Any]]] = []
+    for item in measured_outcomes:
+        outputs = item.get("outputs") or {}
+        scores: list[float] = []
+        valid = True
+        for name, direction in output_directions.items():
+            val = outputs.get(name)
+            if not isinstance(val, (int, float)):
+                valid = False
+                break
+            scores.append(float(val) if direction == "maximize" else -float(val))
+        if valid:
+            points.append((scores, item))
+
+    pareto: list[dict[str, Any]] = []
+    for i, (scores_i, item_i) in enumerate(points):
+        dominated = False
+        for j, (scores_j, _) in enumerate(points):
+            if i == j:
+                continue
+            ge_all = all(sj >= si for sj, si in zip(scores_j, scores_i))
+            gt_any = any(sj > si for sj, si in zip(scores_j, scores_i))
+            if ge_all and gt_any:
+                dominated = True
+                break
+        if not dominated:
+            pareto.append(item_i)
+    return pareto
+
+
 def _df_rows_to_proposals(df: pd.DataFrame, source: str) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for _, row in df.iterrows():

@@ -29,6 +29,9 @@ export const StartChromCampaignIn = z.object({
   gradient_scheme: z
     .enum(["linear", "hold_ramp_hold", "multi_segment"])
     .default("hold_ramp_hold"),
+  // Number of intermediate breakpoints for the multi_segment scheme
+  // (ignored for linear / hold_ramp_hold).
+  n_segments: z.number().int().min(1).max(5).default(3),
   // Each entry pairs a column id (string used as the categorical level)
   // with its Tanaka 6-vector. The agent typically sources these from
   // query_chrom_columns and forwards them verbatim.
@@ -41,11 +44,15 @@ export const StartChromCampaignIn = z.object({
     )
     .min(1)
     .max(50),
-  b_solvent_choices: z.array(z.string().min(1).max(50)).min(1).max(10),
+  // Used only in binary eluent mode; safe default lets ternary callers omit it.
+  b_solvent_choices: z.array(z.string().min(1).max(50)).max(10).default(["MeCN", "MeOH"]),
   additive_choices: z.array(z.string().min(1).max(50)).min(1).max(10),
   flow_bounds_mLmin: z.tuple([z.number(), z.number()]).default([0.2, 1.0]),
   T_bounds_C: z.tuple([z.number(), z.number()]).default([25.0, 55.0]),
   objective_mode: z.enum(["single", "pareto"]).default("single"),
+  // binary: B = a chosen organic (b_solvent_choices). ternary: B-channel is
+  // a continuous MeCN/MeOH mix (b_meoh_fraction); b_solvent categorical dropped.
+  eluent_mode: z.enum(["binary", "ternary"]).default("binary"),
 });
 export type StartChromCampaignInput = z.infer<typeof StartChromCampaignIn>;
 
@@ -57,6 +64,8 @@ export const StartChromCampaignOut = z.object({
   n_outputs: z.number().int(),
   gradient_scheme: z.string(),
   objective_mode: z.string(),
+  eluent_mode: z.string(),
+  n_segments: z.number().int(),
 });
 export type StartChromCampaignOutput = z.infer<typeof StartChromCampaignOut>;
 
@@ -66,6 +75,8 @@ const BuildDomainOut = z.object({
   n_outputs: z.number().int(),
   gradient_scheme: z.string(),
   objective_mode: z.string(),
+  eluent_mode: z.string(),
+  n_segments: z.number().int(),
 });
 
 const TIMEOUT_MS = 30_000;
@@ -99,6 +110,7 @@ export function buildStartChromCampaignTool(pool: Pool, optimizerUrl: string) {
         `${base}/build_domain`,
         {
           gradient_scheme: input.gradient_scheme,
+          n_segments: input.n_segments,
           column_choices,
           column_descriptors,
           b_solvent_choices: input.b_solvent_choices,
@@ -106,6 +118,7 @@ export function buildStartChromCampaignTool(pool: Pool, optimizerUrl: string) {
           flow_bounds_mLmin: input.flow_bounds_mLmin,
           T_bounds_C: input.T_bounds_C,
           objective_mode: input.objective_mode,
+          eluent_mode: input.eluent_mode,
         },
         BuildDomainOut,
         TIMEOUT_MS,
@@ -164,6 +177,8 @@ export function buildStartChromCampaignTool(pool: Pool, optimizerUrl: string) {
         n_outputs: domain.n_outputs,
         gradient_scheme: domain.gradient_scheme,
         objective_mode: domain.objective_mode,
+        eluent_mode: domain.eluent_mode,
+        n_segments: domain.n_segments,
       });
     },
   });
