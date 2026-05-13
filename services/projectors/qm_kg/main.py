@@ -48,6 +48,12 @@ from services.projectors.common.base import (
 from services.projectors.common.neo4j_client import SyncNeo4jClient
 
 
+async def _anext_notify(gen: Any) -> Any:
+    # asyncio.create_task() requires a Coroutine, but AsyncGenerator.__anext__()
+    # returns Awaitable; wrap it in a coroutine so mypy accepts the call site.
+    return await gen.__anext__()
+
+
 log = logging.getLogger("qm_kg")
 
 
@@ -137,7 +143,7 @@ class QmKgProjector(BaseProjector):
             while not self._shutdown.is_set():
                 if next_notify_task is None or next_notify_task.done():
                     next_notify_task = asyncio.create_task(
-                        notify_gen.__anext__(), name="next_notify"
+                        _anext_notify(notify_gen), name="next_notify"
                     )
                 done, _pending = await asyncio.wait(
                     {next_notify_task, shutdown_task},
