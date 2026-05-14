@@ -36,10 +36,12 @@ import {
 // 24 = +fact-id-consistency-guard (review 2026-05-10 §2.6).
 // 25 = +wiki-human-block-guard pre_tool (ADR 012 Phase 1 — knowledge wiki).
 // 26 = +scheduled-substance-gate pre_tool (gap-plan H0.9, 2026-05-10).
+// 27 = +redact-tool-output post_tool (Tranche 1 / Task G — defense-in-depth
+// scrub of tool outputs before they enter the next-turn LLM context).
 // Bump every time BUILTIN_REGISTRARS gains an entry so a silent failure to
 // load a new hook trips the startup gate instead of quietly downgrading
 // the safety net.
-const MIN_EXPECTED_HOOKS = 26;
+const MIN_EXPECTED_HOOKS = 27;
 
 // Builtins gate. Mirrors MIN_EXPECTED_HOOKS for tools/builtins/: a new
 // builtin module landing under `services/agent-claw/src/tools/builtins/`
