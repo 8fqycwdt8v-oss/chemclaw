@@ -145,8 +145,19 @@ def verify_mcp_token(
     """
     # Mirror sign_mcp_token's whitespace handling so a misconfigured key
     # cannot pass verification either.
-    key = (signing_key or os.environ.get("MCP_AUTH_SIGNING_KEY") or "").strip()
-    if not key:
+    # Dual-key verify (A6): accept tokens signed under either the primary
+    # MCP_AUTH_SIGNING_KEY or the rotation-window MCP_AUTH_SIGNING_KEY_NEXT.
+    # Mint stays single-key (always primary); this only widens verification
+    # so a service that has rolled its primary can still be accepted by
+    # peers that have only loaded the new key as _NEXT.
+    primary = (signing_key or os.environ.get("MCP_AUTH_SIGNING_KEY") or "").strip()
+    next_key = (os.environ.get("MCP_AUTH_SIGNING_KEY_NEXT") or "").strip()
+    # An explicit `signing_key=` override (used by unit tests) suppresses
+    # the env-derived _NEXT — the caller is asking to verify against ONE
+    # specific key, not the rotation set.
+    if signing_key is not None:
+        next_key = ""
+    if not primary:
         raise McpAuthError("MCP_AUTH_SIGNING_KEY is empty; cannot verify token")
 
     parts = token.split(".")
@@ -155,12 +166,23 @@ def verify_mcp_token(
     h_b64, p_b64, sig_b64 = parts
 
     signing_input = f"{h_b64}.{p_b64}".encode("ascii")
-    expected_sig = hmac.new(key.encode("utf-8"), signing_input, hashlib.sha256).digest()
     try:
         actual_sig = _b64url_decode(sig_b64)
     except Exception as exc:  # noqa: BLE001
         raise McpAuthError(f"malformed signature: {exc}") from exc
-    if not hmac.compare_digest(expected_sig, actual_sig):
+
+    def _matches(key: str) -> bool:
+        expected = hmac.new(key.encode("utf-8"), signing_input, hashlib.sha256).digest()
+        return hmac.compare_digest(expected, actual_sig)
+
+    if _matches(primary):
+        pass  # primary verified
+    elif next_key and _matches(next_key):
+        log.info(
+            "mcp_auth_verify_via_next_key",
+            extra={"event": "mcp_auth_verify_via_next_key"},
+        )
+    else:
         raise McpAuthError("bad signature")
 
     try:
