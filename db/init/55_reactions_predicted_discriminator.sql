@@ -47,5 +47,9 @@ END $$;
 CREATE INDEX IF NOT EXISTS idx_reactions_predicted
   ON reactions (predictor_tool_id, created_at DESC)
   WHERE is_predicted = TRUE;
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename, applied_at)
+  VALUES ('55_reactions_predicted_discriminator.sql', NOW())
+  ON CONFLICT (filename) DO NOTHING;
 
 COMMIT;

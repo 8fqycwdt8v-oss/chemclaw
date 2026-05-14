@@ -166,5 +166,9 @@ ON CONFLICT (event_type) DO UPDATE SET
   description = EXCLUDED.description,
   emitted_by  = EXCLUDED.emitted_by,
   consumed_by = EXCLUDED.consumed_by;
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename, applied_at)
+  VALUES ('56_compute_results.sql', NOW())
+  ON CONFLICT (filename) DO NOTHING;
 
 COMMIT;

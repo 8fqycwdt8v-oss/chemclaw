@@ -15,12 +15,6 @@ import psycopg
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from fastapi import FastAPI
 
-from services.optimizer.common.db import (
-    assert_bypass_rls,
-    enforce_bypass_rls_check_enabled,
-    get_dsn,
-)
-
 from .promoter import run_promotion_pass, run_prompt_promotion_pass
 
 logger = logging.getLogger(__name__)
@@ -32,10 +26,16 @@ _last_events: list[dict[str, Any]] = []
 
 def _get_dsn() -> str:
     """Back-compat shim — prefer ``services.optimizer.common.db.get_dsn``."""
+    from services.optimizer.common.db import get_dsn
     return get_dsn()
 
 
 async def run_skill_promoter_job() -> None:
+    from services.optimizer.common.db import (
+        assert_bypass_rls,
+        enforce_bypass_rls_check_enabled,
+    )
+
     global _last_run_at, _last_run_status, _last_events
 
     _last_run_at = datetime.now(tz=timezone.utc)

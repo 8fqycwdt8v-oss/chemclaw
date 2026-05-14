@@ -82,3 +82,8 @@ WHERE s.ref_table IS NOT NULL
 
 COMMENT ON VIEW v_synthesis_campaign_step_orphans IS
   'Steps whose soft-FK (ref_table, ref_id) no longer resolves. Empty in a healthy DB.';
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename, applied_at)
+  VALUES ('53_synthesis_campaign_orphans.sql', NOW())
+  ON CONFLICT (filename) DO NOTHING;

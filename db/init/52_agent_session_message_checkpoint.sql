@@ -45,5 +45,9 @@ BEGIN
   RETURN NEW;
 END;
 $$ LANGUAGE plpgsql;
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename, applied_at)
+  VALUES ('52_agent_session_message_checkpoint.sql', NOW())
+  ON CONFLICT (filename) DO NOTHING;
 
 COMMIT;

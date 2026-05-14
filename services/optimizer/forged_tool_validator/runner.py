@@ -19,12 +19,6 @@ import psycopg
 from psycopg.rows import dict_row
 from apscheduler.schedulers.blocking import BlockingScheduler
 
-from services.optimizer.common.db import (
-    assert_bypass_rls,
-    enforce_bypass_rls_check_enabled,
-    get_dsn,
-)
-
 from .sandbox_client import LocalSubprocessSandbox, SandboxClient
 from .validator import ForgedTool, ForgedToolValidator, TestCase, ValidationResult
 
@@ -37,6 +31,7 @@ logger = logging.getLogger(__name__)
 
 def _get_dsn() -> str:
     """Back-compat shim — prefer ``services.optimizer.common.db.get_dsn``."""
+    from services.optimizer.common.db import get_dsn
     return get_dsn()
 
 
@@ -183,6 +178,11 @@ def _write_validation_run(conn: Any, result: ValidationResult) -> None:
 def run_validation(sandbox: SandboxClient | None = None) -> list[ValidationResult]:
     if sandbox is None:
         sandbox = LocalSubprocessSandbox()
+
+    from services.optimizer.common.db import (
+        assert_bypass_rls,
+        enforce_bypass_rls_check_enabled,
+    )
 
     conn = psycopg.connect(_get_dsn())
     try:
