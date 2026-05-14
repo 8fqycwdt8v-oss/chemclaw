@@ -131,8 +131,8 @@ END $$;
 -- ─────────────────────────────────────────────────────────────────────
 -- schema_version
 -- ─────────────────────────────────────────────────────────────────────
-INSERT INTO schema_version (filename)
-VALUES ('62_facts_table.sql')
-ON CONFLICT DO NOTHING;
+INSERT INTO schema_version (filename, applied_at)
+VALUES ('62_facts_table.sql', NOW())
+ON CONFLICT (filename) DO NOTHING;
 
 COMMIT;

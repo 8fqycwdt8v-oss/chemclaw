@@ -1,9 +1,9 @@
-"""Schema + RLS unit tests for the canonical ``facts`` table (Phase 0).
+"""Schema + RLS integration tests for the canonical ``facts`` table (Phase 0).
 
 Skipped unless ``POSTGRES_HOST`` is set in the environment. Use:
 
     POSTGRES_HOST=localhost POSTGRES_PASSWORD=<pw> \\
-        .venv/bin/pytest tests/unit/db/test_facts_table_schema.py -v
+        .venv/bin/pytest tests/integration/test_facts_table_schema.py -v -m integration
 
 Requires ``docker compose up -d postgres && make db.init`` to be running
 first. Mirrors the gating convention used by
@@ -24,10 +24,13 @@ import psycopg
 import pytest
 
 
-pytestmark = pytest.mark.skipif(
-    not os.getenv("POSTGRES_HOST"),
-    reason="set POSTGRES_HOST (and POSTGRES_PASSWORD) to run Postgres schema tests",
-)
+pytestmark = [
+    pytest.mark.integration,
+    pytest.mark.skipif(
+        not os.getenv("POSTGRES_HOST"),
+        reason="POSTGRES_HOST not set; skipping integration test",
+    ),
+]
 
 
 def _dsn() -> str:
