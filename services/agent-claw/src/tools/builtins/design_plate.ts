@@ -7,6 +7,7 @@ import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { MAX_RXN_SMILES_LEN, MAX_SMILES_LEN } from "../_limits.js";
+import { PredictYieldWithUqOut } from "./predict_yield_with_uq.js";
 
 const ContinuousFactor = z.object({
   name: z.string().min(1).max(64),
@@ -69,23 +70,6 @@ const PlateOut = z.object({
   wells: z.array(Well),
   domain_json: z.record(z.unknown()),
   design_metadata: z.record(z.unknown()),
-});
-
-const YieldPrediction = z.object({
-  predictions: z.array(
-    z.object({
-      rxn_smiles: z.string(),
-      ensemble_mean: z.number(),
-      ensemble_std: z.number(),
-      components: z.object({
-        chemprop_mean: z.number(),
-        chemprop_std: z.number(),
-        xgboost_mean: z.number(),
-      }),
-      used_global_fallback: z.boolean(),
-      model_id: z.string().nullable(),
-    }),
-  ),
 });
 
 export const DesignPlateOut = PlateOut.extend({
@@ -153,7 +137,7 @@ export function buildDesignPlateTool(
               rxn_smiles_list: [uniqueRxn],
               project_internal_id: input.project_internal_id,
             },
-            YieldPrediction,
+            PredictYieldWithUqOut,
             TIMEOUT_MS,
             "mcp-yield-baseline",
           );
