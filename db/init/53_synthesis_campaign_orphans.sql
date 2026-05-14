@@ -71,8 +71,9 @@ WHERE s.ref_table IS NOT NULL
      WHERE s.ref_table = 'task_batches' AND x.id::text = s.ref_id
   )
   AND NOT EXISTS (
+    -- qm_results.job_id is the PK (FK to qm_jobs.id), not a column called `id`.
     SELECT 1 FROM qm_results x
-     WHERE s.ref_table = 'qm_results' AND x.id::text = s.ref_id
+     WHERE s.ref_table = 'qm_results' AND x.job_id::text = s.ref_id
   )
   AND NOT EXISTS (
     SELECT 1 FROM reactions x
