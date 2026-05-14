@@ -215,6 +215,19 @@ export function buildRecommendNextBatchTool(
           throw new Error("round_index_conflict");
         }
 
+        // Bump the parent campaign's etag inside the same advisory-lock'd txn
+        // so an external consumer holding a snapshot can detect that a new
+        // round landed. Placed AFTER the round INSERT so a rollback before
+        // INSERT leaves etag unchanged. The advisory lock already serialises
+        // concurrent writers, so this is single-writer by construction.
+        await client.query(
+          `UPDATE optimization_campaigns
+              SET etag = etag + 1,
+                  updated_at = NOW()
+            WHERE id = $1::uuid`,
+          [input.campaign_id],
+        );
+
         // Surface BoFire failures durably so a campaign that has degraded to
         // random isn't invisible. Cold-start is benign (the loop is
         // designed for it); only `random_*_failed` paths are recorded.
