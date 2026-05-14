@@ -12,6 +12,8 @@ import { buildWorkflowReplayTool } from "../../../src/tools/builtins/workflow_re
 function makeCtx() {
   return {
     userEntraId: "test@example.com",
+    orgId: null,
+    nceProjectId: null,
     scratchpad: new Map<string, unknown>([["seenFactIds", new Set<string>()]]),
     seenFactIds: new Set<string>(),
   };

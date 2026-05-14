@@ -154,6 +154,53 @@ describe("PermissionPolicyLoader.match — cross-scope aggregation matrix", () =
   );
 });
 
+// Task F — orgId nullability matrix. Pin the contract that an org-scoped
+// policy fires only when ctx.org matches; a null ctx.org never matches an
+// org-scoped row. Global rows are unaffected by ctx.org.
+describe("PermissionPolicyLoader.match — orgId × policy.scope matrix", () => {
+  interface OrgCase {
+    ctxOrg: string | null;
+    policyScope: "global" | "org";
+    expectedDecision: PolicyDecision | null;
+  }
+  const orgCases: OrgCase[] = [
+    // Global policies fire regardless of ctx.org.
+    { ctxOrg: null,    policyScope: "global", expectedDecision: "deny" },
+    { ctxOrg: "acme",  policyScope: "global", expectedDecision: "deny" },
+    // Org-scoped policy fires ONLY when ctx.org matches.
+    { ctxOrg: null,    policyScope: "org",    expectedDecision: null },
+    { ctxOrg: "acme",  policyScope: "org",    expectedDecision: "deny" },
+    { ctxOrg: "other", policyScope: "org",    expectedDecision: null },
+  ];
+  it.each(orgCases)(
+    "ctxOrg=$ctxOrg policyScope=$policyScope → $expectedDecision",
+    async ({ ctxOrg, policyScope, expectedDecision }) => {
+      state.rows.push(
+        row({
+          id: `${policyScope}-deny`,
+          scope: policyScope,
+          scope_id: policyScope === "org" ? "acme" : "",
+          decision: "deny",
+          tool_pattern: "Bash",
+        }),
+      );
+      const loader = new PermissionPolicyLoader(pool);
+      await loader.refreshIfStale();
+      const m = loader.match({
+        toolId: "Bash",
+        inputJson: "{}",
+        org: ctxOrg,
+        project: null,
+      });
+      if (expectedDecision === null) {
+        expect(m).toBeNull();
+      } else {
+        expect(m?.decision).toBe(expectedDecision);
+      }
+    },
+  );
+});
+
 // ---------- (2) WARN log on enforce-mode no-policy fall-through ----------
 
 describe("resolver enforce-mode no-policy fall-through emits WARN", () => {

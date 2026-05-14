@@ -73,6 +73,8 @@ export function registerPlanRoutes(app: FastifyInstance, deps: PlanRouteDeps): v
     // the harness's own backfill at harness.ts:57-59 runs.
     const ctx: ToolContext = {
       userEntraId: user,
+      orgId: null,
+      nceProjectId: null,
       seenFactIds,
       scratchpad,
       lifecycle,

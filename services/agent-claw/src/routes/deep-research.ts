@@ -149,6 +149,8 @@ async function handleDeepResearch(
   );
   const ctx: ToolContext = {
     userEntraId: user,
+    orgId: null,
+    nceProjectId: null,
     seenFactIds,
     scratchpad,
   };

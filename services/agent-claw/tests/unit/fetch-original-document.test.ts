@@ -26,7 +26,13 @@ const DOC_FETCHER_URL = "http://mcp-doc-fetcher:8006";
 function makeCtx(userId = "chemist@example.com") {
   const seenFactIds = new Set<string>();
   const scratchpad = new Map<string, unknown>([["seenFactIds", seenFactIds]]);
-  return { userEntraId: userId, scratchpad, seenFactIds };
+  return {
+    userEntraId: userId,
+    orgId: null,
+    nceProjectId: null,
+    scratchpad,
+    seenFactIds,
+  };
 }
 
 // Build a mock Pool that returns a fixed set of rows.
