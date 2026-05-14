@@ -1,9 +1,9 @@
-# ADR 013 — Anthropic Agent SDK as Agent Backend: Fresh-Start Evaluation
+# ADR 013 — Claude Agent SDK as Agent Backend: Fresh-Start Evaluation
 
 **Status:** Informational — evaluation only, not adopted. The current
 production agent stays on the custom harness (ADRs 004, 007, 008, 009,
 010). This ADR records the answer to "if we were building ChemClaw fresh
-today, would we keep the custom loop or use the Anthropic Agent SDK?" so
+today, would we keep the custom loop or use the Claude Agent SDK?" so
 the question can be answered from this artifact next time instead of
 re-derived.
 
@@ -55,7 +55,7 @@ sibling project pick it up without re-running the discovery.
 
 For a greenfield ChemClaw-equivalent built today, the recommendation is:
 
-  * **Anthropic Agent SDK (TypeScript)** as the agent loop. Hooks,
+  * **Claude Agent SDK (TypeScript)** as the agent loop. Hooks,
     sub-agents, MCP, sessions, prompt caching, extended thinking, plan
     mode — all delegated.
   * **Anthropic models direct.** Skip LiteLLM. Egress redaction runs as
@@ -162,11 +162,16 @@ is spending on the generic part.
 
 ## LOC accounting
 
-Rough estimate for the agent layer in a fresh-start build, vs. today.
+Order-of-magnitude estimate for the agent layer in a fresh-start build,
+vs. today. Numbers are not measured with `cloc`; they are sanity-check
+ratios derived from reading the harness and projecting the same hooks
+onto the SDK shape. Treat as a comparison aid, not a contract — the
+point is the *ratio* (roughly half), not the absolute counts.
 
 | Component | Today | Fresh-start |
 |---|---|---|
-| Loop + lifecycle + step.ts + hook-loader | ~1000 | 0 (Anthropic ships it) |
+| Loop + lifecycle + step.ts + hook-loader + hook-output | ~600 | 0 (Anthropic ships it) |
+| Compactor + permissions resolver + budget + runtime | ~400 | 0 (SDK provides equivalents) |
 | 16 real hooks → SDK lifecycle | ~400 | ~400 (unchanged) |
 | 9 telemetry stubs | ~150 | ~150 |
 | Session machinery (etag, plan store, reanimator wiring) | ~150 | ~100 (`SessionStore` adapter) |
@@ -255,7 +260,7 @@ without committing to a real workflow engine.
 
 ## Alternatives considered
 
-  * **A — Anthropic Agent SDK** *(chosen for hypothetical fresh-start)*:
+  * **A — Claude Agent SDK** *(chosen for hypothetical fresh-start)*:
     above.
   * **B — OpenAI Agents SDK**: peer maturity, equivalent feature surface
     (handoffs, guardrails, sessions, tracing). No specific advantage for
@@ -370,5 +375,8 @@ harness is unchanged.
   * ADR 009 — Permission and Decision Contract (the `deny > defer > ask
     > allow` aggregation; the SDK supports `deny > ask > allow` plus
     `defer` as a decision type for plan mode and async resume).
+  * ADR 010 — Deferred Phases (the precedent for shipping incrementally
+    and recording what was *not* built; this ADR follows the same
+    "record the path not taken" pattern).
   * ADR 011 — Synthesis-Campaign Orchestration (the workload that
     motivates v2 durable workflow engine adoption).
