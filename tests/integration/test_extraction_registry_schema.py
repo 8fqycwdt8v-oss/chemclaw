@@ -46,8 +46,8 @@ def test_extraction_registry_pk_is_composite(conn):
 
 
 def test_extraction_registry_source_kind_check(conn):
-    with conn.cursor(), pytest.raises(psycopg.errors.CheckViolation):
-        conn.cursor().execute(
+    with conn.cursor() as cur, pytest.raises(psycopg.errors.CheckViolation):
+        cur.execute(
             "INSERT INTO extraction_registry "
             "(source_kind, source_name, result_schema_id, extractor_module) "
             "VALUES ('bogus', 't', 'v1', 'm')"

@@ -27,6 +27,12 @@ COMMENT ON TABLE extraction_registry IS
   'for a new source = (1) write extract() in a Python module, (2) INSERT a '
   'row here. No code change in the projector itself.';
 
+COMMENT ON COLUMN extraction_registry.promote_default IS
+  'Whether extracted facts from this source auto-flow into the KG. '
+  'Defaults TRUE for ordinary extractors; Phase 1 seed files set FALSE '
+  'explicitly for volume-bombing sources (e.g. genchem candidate libraries) '
+  'so promotion requires the per-call `promote_to_kg=true` arg.';
+
 -- Global read; chemclaw_service write. No RLS — registry is metadata.
 DO $$
 BEGIN
