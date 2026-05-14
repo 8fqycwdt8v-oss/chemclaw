@@ -1,6 +1,8 @@
 # ADR 012 — Knowledge-wiki projection layer
 
-Status: accepted (2026-05-12)
+Status: accepted (2026-05-12) — Phases 0 → 4b-ii shipped; Phase 5 (page
+`confidence_score` ensemble wiring + Grafana dashboards) is the only
+remaining tranche, tracked in `BACKLOG.md`.
 
 ## Context
 

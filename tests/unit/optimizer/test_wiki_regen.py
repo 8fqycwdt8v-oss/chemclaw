@@ -14,15 +14,18 @@ import pytest
 
 from services.optimizer.wiki_regen.main import (
     Settings,
+    _FALLBACK_CONTRADICTION_PROMPT,
     _FALLBACK_PROMPT,
     _PermanentSkip,
     _SkipPage,
     _apply_regen,
     _ctx_compound,
+    _ctx_contradiction,
     _ctx_document,
     _ctx_project,
     _ensure_human_blocks,
     _human_blocks,
+    _load_contradiction_prompt,
     _load_prompt,
     _parse_citations,
     _synthesize,
@@ -262,7 +265,112 @@ async def test_apply_regen_returns_none_when_no_longer_dirty() -> None:
 
 @pytest.mark.asyncio
 async def test_load_prompt_prefers_registry_else_fallback() -> None:
-    conn1 = _FakeConn([("FROM prompt_registry WHERE prompt_name = 'wiki.synthesis'", [{"template": "SEEDED PROMPT"}])])
+    # Phase 4b-i refactored _load_prompt to use a parameterised
+    # `prompt_name = %s` so the SQL matches both `wiki.synthesis` and
+    # `wiki.contradiction` lookups; the params carry which name.
+    conn1 = _FakeConn([("FROM prompt_registry WHERE prompt_name = %s", [{"template": "SEEDED PROMPT"}])])
     assert await _load_prompt(conn1) == "SEEDED PROMPT"  # type: ignore[arg-type]
-    conn2 = _FakeConn([("FROM prompt_registry WHERE prompt_name = 'wiki.synthesis'", [])])
+    conn2 = _FakeConn([("FROM prompt_registry WHERE prompt_name = %s", [])])
     assert await _load_prompt(conn2) == _FALLBACK_PROMPT  # type: ignore[arg-type]
+
+
+# ---------------------------------------------------------------------------
+# Phase 4b-ii: _ctx_contradiction + contradiction prompt loader
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_ctx_contradiction_builds_claim_pair() -> None:
+    """The linter stamps everything _ctx_contradiction needs into entity_ref;
+    no Neo4j call from this builder."""
+    conn = _FakeConn([])
+    page = {
+        "id": "ffffffff-ffff-ffff-ffff-ffffffffffff",
+        "slug": "contradiction/compound/abc/has_yield",
+        "kind": "contradiction",
+        "title": "C: ABC HAS_YIELD",
+        "entity_ref": {
+            "label": "Contradiction",
+            "id_property": "slug",
+            "id_value": "contradiction/compound/abc/has_yield",
+            "subject_label": "Compound",
+            "subject_id_value": "ABC",
+            "predicate": "HAS_YIELD",
+            "objects": ["0.62", "0.74"],
+            "fact_ids": [
+                "11111111-1111-1111-1111-111111111111",
+                "22222222-2222-2222-2222-222222222222",
+            ],
+        },
+    }
+    ctx = await _ctx_contradiction(conn, page)  # type: ignore[arg-type]
+    assert ctx["page_kind"] == "contradiction"
+    assert ctx["subject_label"] == "Compound"
+    assert ctx["predicate"] == "HAS_YIELD"
+    # claim_a and claim_b are aligned by index with the linter's fact_ids/objects.
+    assert ctx["claim_a"]["cite"] == "fact:11111111-1111-1111-1111-111111111111"
+    assert ctx["claim_a"]["object_id_value"] == "0.62"
+    assert ctx["claim_b"]["cite"] == "fact:22222222-2222-2222-2222-222222222222"
+    assert ctx["claim_b"]["object_id_value"] == "0.74"
+    assert ctx["further_disagreements"] == []
+    # No DB calls — the builder pulls everything from entity_ref.
+    assert conn.calls == []
+
+
+@pytest.mark.asyncio
+async def test_ctx_contradiction_missing_entity_ref_raises_permanent() -> None:
+    conn = _FakeConn([])
+    page = {"id": "x", "slug": "contradiction/none", "kind": "contradiction", "title": "x", "entity_ref": None}
+    with pytest.raises(_PermanentSkip):
+        await _ctx_contradiction(conn, page)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_ctx_contradiction_resolved_pair_raises_skip() -> None:
+    """If a sibling projector invalidated all but one side, the linter still
+    has the stub on file — _ctx_contradiction should defer until the linter
+    catches up rather than synthesise a degenerate one-claim page."""
+    conn = _FakeConn([])
+    page = {
+        "id": "x", "slug": "contradiction/lone", "kind": "contradiction", "title": "x",
+        "entity_ref": {
+            "subject_label": "Compound", "subject_id_value": "ABC", "predicate": "HAS_X",
+            "objects": ["only_one"], "fact_ids": ["11111111-1111-1111-1111-111111111111"],
+        },
+    }
+    with pytest.raises(_SkipPage):
+        await _ctx_contradiction(conn, page)  # type: ignore[arg-type]
+
+
+@pytest.mark.asyncio
+async def test_ctx_contradiction_handles_three_or_more_sides() -> None:
+    conn = _FakeConn([])
+    page = {
+        "id": "x", "slug": "contradiction/triple", "kind": "contradiction", "title": "x",
+        "entity_ref": {
+            "subject_label": "Compound", "subject_id_value": "ABC", "predicate": "HAS_X",
+            "objects": ["a", "b", "c"],
+            "fact_ids": [
+                "11111111-1111-1111-1111-111111111111",
+                "22222222-2222-2222-2222-222222222222",
+                "33333333-3333-3333-3333-333333333333",
+            ],
+        },
+    }
+    ctx = await _ctx_contradiction(conn, page)  # type: ignore[arg-type]
+    assert len(ctx["further_disagreements"]) == 1
+    assert ctx["further_disagreements"][0]["cite"] == "fact:33333333-3333-3333-3333-333333333333"
+
+
+@pytest.mark.asyncio
+async def test_load_contradiction_prompt_returns_seed_if_present() -> None:
+    conn = _FakeConn([("prompt_registry", [{"template": "SEEDED CONTRADICTION PROMPT"}])])
+    prompt = await _load_contradiction_prompt(conn)  # type: ignore[arg-type]
+    assert prompt == "SEEDED CONTRADICTION PROMPT"
+
+
+@pytest.mark.asyncio
+async def test_load_contradiction_prompt_falls_back_when_seed_missing() -> None:
+    conn = _FakeConn([])
+    prompt = await _load_contradiction_prompt(conn)  # type: ignore[arg-type]
+    assert prompt == _FALLBACK_CONTRADICTION_PROMPT

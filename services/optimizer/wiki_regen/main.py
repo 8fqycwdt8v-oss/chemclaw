@@ -13,12 +13,16 @@ to write a cited markdown page, records the inline `[fact:…]` / `[experiment:�
 and prepends a line to the `log` page.
 
 Scope: regenerates entity-backed kinds (`document_digest`, `nce_project`,
-`synthesis_campaign`, `compound`, `reaction_family`). `topic` / `glossary` /
-`index` / `log` / `contradiction` pages have `entity_ref IS NULL` and are NOT
-auto-regenerated (agent-/human-authored, or owned by the Phase-4 linter).
-`compound` / `reaction_family` pages today only exist via the agent's
-`request_article` (their auto-stubbing waits for reaction-component derivation —
-see BACKLOG); when they do exist this daemon regenerates them best-effort.
+`synthesis_campaign`, `compound`, `reaction_family`). `topic` / `glossary` are
+agent-authored and have `entity_ref IS NULL`, so the dirty filter below skips
+them. `index` / `log` pages are owned by the wiki_linter (Postgres-only).
+`contradiction` pages (Phase 4b-ii) ARE regenerated here — the wiki_linter
+creates the stub with `entity_ref` populated (subject_label / predicate /
+fact_ids) and `wiki_regen` synthesises the body via the `wiki.contradiction`
+prompt. `compound` / `reaction_family` pages today only exist via the
+agent's `request_article` (their auto-stubbing waits for reaction-component
+derivation — see BACKLOG); when they do exist this daemon regenerates them
+best-effort.
 
 Rate-limited to `max_per_hour` regens (a sliding window) and `batch_size` per
 tick. All LLM traffic goes through the central LiteLLM endpoint.
@@ -161,17 +165,57 @@ async def _fetch_all(conn: psycopg.AsyncConnection[dict[str, Any]], sql: str, pa
         return list(await cur.fetchall())
 
 
-async def _load_prompt(conn: psycopg.AsyncConnection[dict[str, Any]]) -> str:
+async def _load_prompt_named(
+    conn: psycopg.AsyncConnection[dict[str, Any]], name: str, fallback: str,
+) -> str:
     row = await _fetch_one(
         conn,
-        "SELECT template FROM prompt_registry WHERE prompt_name = 'wiki.synthesis' AND active ORDER BY version DESC LIMIT 1",
-        (),
+        "SELECT template FROM prompt_registry WHERE prompt_name = %s AND active ORDER BY version DESC LIMIT 1",
+        (name,),
     )
     if row is not None:
         template: object = row.get("template")
         if isinstance(template, str) and template.strip():
             return template
-    return _FALLBACK_PROMPT
+    return fallback
+
+
+async def _load_prompt(conn: psycopg.AsyncConnection[dict[str, Any]]) -> str:
+    return await _load_prompt_named(conn, "wiki.synthesis", _FALLBACK_PROMPT)
+
+
+# Built-in fallback for the contradiction prompt — mirrors
+# db/seed/08_wiki_contradiction_prompt.sql so the daemon stays functional
+# even when the seed hasn't been applied.
+_FALLBACK_CONTRADICTION_PROMPT = """\
+You are the editor of a pharmaceutical chemical & analytical-development
+knowledge wiki. You will be given a `claim_a` and `claim_b` (each with
+predicate, object, source citation, confidence tier, valid_from), plus
+an optional `human_blocks` array. Write a neutral, citation-traced
+`contradiction/<slug>` page in Markdown.
+
+Hard rules:
+- Use ONLY the supplied context. Do not infer mechanism or experimenter intent.
+- Cite each side inline with the exact bracket form from the context
+  (`[fact:<uuid>]`, `[experiment:<id>]`, `[reaction:<id>]`,
+  `[hypothesis:<id>]`, `[artifact:<id>]`, `[document:<sha>]`,
+  `[article:<slug>]`). Both sides must be cited. Don't cite generic background.
+- Reproduce `human_blocks` verbatim. Never author new `<!-- human:begin … -->`
+  markers.
+- Be neutral. Don't pick a winner unless one side is `expert_validated` or the
+  other has been explicitly `refuted_at`. Report timestamps / maturity /
+  confidence; let the reader judge.
+- No arithmetic. Output ONLY the Markdown body — no preamble, no fences.
+  ≤ ~800 words.
+
+Shape: one-line summary; Claim A; Claim B; What we know about the gap;
+Resolution status (`unresolved` / `resolved-by-time` / `resolved-by-expert` /
+`working-hypothesis`, cite the deciding row if any); Open questions.
+"""
+
+
+async def _load_contradiction_prompt(conn: psycopg.AsyncConnection[dict[str, Any]]) -> str:
+    return await _load_prompt_named(conn, "wiki.contradiction", _FALLBACK_CONTRADICTION_PROMPT)
 
 
 # ---------------------------------------------------------------------------
@@ -303,12 +347,93 @@ async def _ctx_reaction_family(conn: psycopg.AsyncConnection[dict[str, Any]], pa
     }
 
 
+async def _ctx_contradiction(
+    conn: psycopg.AsyncConnection[dict[str, Any]], page: dict[str, Any],
+) -> dict[str, Any]:
+    """Build a `claim_a` / `claim_b` context for a `contradiction/<slug>` page.
+
+    The `wiki_linter._sweep_contradictions` stamps `entity_ref` with
+    `subject_label` / `subject_id_value` / `predicate` / `fact_ids` —
+    everything the prompt needs comes from there. No Neo4j call from the
+    daemon (the linter has already done the discovery work); we only do
+    a Postgres `:Fact` lookup if a sibling projector wrote them to a table
+    (which today's KG does not — facts live in Neo4j). Concrete data the
+    daemon needs (confidence_tier / valid_from / object_id_value) is read
+    from `entity_ref.objects` and the `fact_ids` array.
+
+    `wiki_regen` is not a Neo4j-aware projector by design (see ADR 012),
+    so we keep the contradiction-page synthesis context-source-agnostic:
+    the linter's `entity_ref` payload is the contract.
+    """
+    er = page.get("entity_ref") or {}
+    if not isinstance(er, dict):
+        raise _PermanentSkip(f"page {page['slug']} has no entity_ref")
+    subject_label = er.get("subject_label")
+    subject_id_value = er.get("subject_id_value")
+    predicate = er.get("predicate")
+    objects = er.get("objects") or []
+    fact_ids = er.get("fact_ids") or []
+    if not (
+        isinstance(subject_label, str)
+        and isinstance(subject_id_value, str)
+        and isinstance(predicate, str)
+        and isinstance(objects, list)
+        and isinstance(fact_ids, list)
+    ):
+        raise _PermanentSkip(
+            f"page {page['slug']} entity_ref missing required contradiction fields"
+        )
+    if len(objects) < 2 or len(fact_ids) < 2:
+        # The contradiction has been resolved out from under us (another
+        # projector may have invalidated all but one side). Don't synthesize
+        # — let the linter pick this up again later, or a human archive it.
+        raise _SkipPage(
+            f"contradiction {page['slug']} now has <2 sides "
+            f"(objects={len(objects)} fact_ids={len(fact_ids)}); skipping until linter re-checks"
+        )
+
+    # Pair fact_ids with objects in declaration order — the linter emitted
+    # them aligned-by-index. Truncate to the first two for the claim_a /
+    # claim_b shape the wiki.contradiction prompt expects; extra sides
+    # become a "further-disagreements" appendix in the context payload.
+    claims = []
+    for fid, obj in zip(fact_ids, objects):
+        claims.append(
+            {
+                "cite": f"fact:{fid}",
+                "object_id_value": obj,
+                # Confidence / valid_from are not in entity_ref (the linter
+                # doesn't carry them through); the prompt instructs the
+                # model to say "not in context" rather than invent values.
+            }
+        )
+
+    return {
+        "page_kind": "contradiction",
+        "subject_label": subject_label,
+        "subject_id_value": subject_id_value,
+        "predicate": predicate,
+        "claim_a": claims[0],
+        "claim_b": claims[1],
+        "further_disagreements": claims[2:] if len(claims) > 2 else [],
+    }
+
+
 _CTX_BUILDERS = {
     "document_digest": _ctx_document,
     "nce_project": _ctx_project,
     "synthesis_campaign": _ctx_campaign,
     "compound": _ctx_compound,
     "reaction_family": _ctx_reaction_family,
+    "contradiction": _ctx_contradiction,
+}
+
+
+# Per-kind prompt selector. Most kinds share `wiki.synthesis`;
+# `contradiction` uses the dedicated `wiki.contradiction` prompt seeded
+# in db/seed/08_wiki_contradiction_prompt.sql (Phase 4b-i).
+_KIND_TO_PROMPT_LOADER = {
+    "contradiction": _load_contradiction_prompt,
 }
 
 
@@ -466,13 +591,27 @@ async def _apply_regen(
 
 
 async def _process_page(
-    conn: psycopg.AsyncConnection[dict[str, Any]], client: httpx.AsyncClient, settings: Settings, prompt: str, page: dict[str, Any],
+    conn: psycopg.AsyncConnection[dict[str, Any]],
+    client: httpx.AsyncClient,
+    settings: Settings,
+    prompts: dict[str, str],
+    page: dict[str, Any],
 ) -> bool:
-    """Returns True if a regen was applied (counts toward the rate limit)."""
+    """Returns True if a regen was applied (counts toward the rate limit).
+
+    `prompts` is keyed by prompt name (`'wiki.synthesis'`, `'wiki.contradiction'`)
+    so the daemon picks the right system prompt for the page kind.
+    """
     builder = _CTX_BUILDERS.get(page["kind"])
     if builder is None:
         log.warning("page %s: no context builder for kind=%s — leaving dirty", page["slug"], page["kind"])
         return False
+    # Per-kind prompt selection. Contradiction pages use a different shape and
+    # need a different system prompt; everything else uses `wiki.synthesis`.
+    if page["kind"] == "contradiction":
+        prompt = prompts.get("wiki.contradiction") or prompts["wiki.synthesis"]
+    else:
+        prompt = prompts["wiki.synthesis"]
     # Phase 1 — gather context in its own short read transaction, then commit
     # so the (slow) LiteLLM call below doesn't hold a transaction open.
     try:
@@ -525,7 +664,10 @@ async def amain() -> None:  # pragma: no cover — process entrypoint
             errors = 0
             try:
                 async with await psycopg.AsyncConnection.connect(settings.postgres_dsn, row_factory=dict_row) as conn:
-                    prompt = await _load_prompt(conn)
+                    prompts = {
+                        "wiki.synthesis": await _load_prompt(conn),
+                        "wiki.contradiction": await _load_contradiction_prompt(conn),
+                    }
                     pages = await _fetch_all(conn, _FIND_DIRTY_SQL, (settings.wiki_regen_debounce_seconds, settings.wiki_regen_batch_size))
                     for page in pages:
                         # Sliding-window rate limit.
@@ -536,7 +678,7 @@ async def amain() -> None:  # pragma: no cover — process entrypoint
                             log.info("wiki-regen rate cap reached (%d/h) — pausing until next tick", settings.wiki_regen_max_per_hour)
                             break
                         try:
-                            if await _process_page(conn, client, settings, prompt, page):
+                            if await _process_page(conn, client, settings, prompts, page):
                                 regenerated += 1
                                 window.append(time.time())
                         except Exception as exc:  # noqa: BLE001 — keep the batch alive

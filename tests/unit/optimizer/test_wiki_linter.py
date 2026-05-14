@@ -16,10 +16,14 @@ import pytest
 
 from services.optimizer.wiki_linter.main import (
     Settings,
+    _contradiction_slug,
     _render_index,
     _rebuild_index,
+    _slugify,
+    _sweep_contradictions,
     _sweep_missing_project_pages,
     _sweep_orphans,
+    _sweep_stale_citations,
     run_once,
 )
 
@@ -221,3 +225,163 @@ async def test_run_once_collects_stats() -> None:
     assert stats["errors"] == 0
     # A `log` page entry was appended.
     assert any("'log', 'log'" in s and "ON CONFLICT (slug) DO UPDATE" in s for (s, _p) in conn.calls)
+
+
+# ---------------------------------------------------------------------------
+# Phase 4b-ii: _slugify / _contradiction_slug
+# ---------------------------------------------------------------------------
+
+
+def test_slugify_lowercases_and_replaces_unsafe_chars() -> None:
+    assert _slugify("Compound XYZ-123") == "compound-xyz-123"
+    assert _slugify("Buchwald & Hartwig") == "buchwald-hartwig"
+    # Collapses runs of separators, trims edges.
+    assert _slugify("---foo!!!bar---") == "foo-bar"
+
+
+def test_contradiction_slug_is_stable_and_safe() -> None:
+    a = _contradiction_slug("Compound", "RYY-VLZ-VUVIJVGH", "HAS_PROPERTY")
+    b = _contradiction_slug("Compound", "RYY-VLZ-VUVIJVGH", "HAS_PROPERTY")
+    assert a == b  # determinism
+    assert a.startswith("contradiction/")
+    # No empty segments, no // collapses, fits the DB length cap (256).
+    assert "//" not in a
+    assert not a.endswith("/")
+    assert len(a) <= 256
+
+
+# ---------------------------------------------------------------------------
+# Phase 4b-ii: _sweep_stale_citations (Neo4j-backed)
+# ---------------------------------------------------------------------------
+
+
+class _FakeNeo4jResult:
+    def __init__(self, rows: list[dict[str, Any]]) -> None:
+        self._rows = rows
+
+    def __aiter__(self) -> "_FakeNeo4jResult":
+        self._i = 0
+        return self
+
+    async def __anext__(self) -> dict[str, Any]:
+        if self._i >= len(self._rows):
+            raise StopAsyncIteration
+        row = self._rows[self._i]
+        self._i += 1
+        return row
+
+
+class _FakeNeo4jSession:
+    def __init__(self, parent: "_FakeNeo4jClient") -> None:
+        self._parent = parent
+
+    async def __aenter__(self) -> "_FakeNeo4jSession":
+        return self
+
+    async def __aexit__(self, *_a: Any) -> bool:
+        return False
+
+    async def run(self, cypher: str, **params: Any) -> _FakeNeo4jResult:
+        self._parent.runs.append((cypher, params))
+        # Substring-keyed responder.
+        for needle, rows in self._parent.responders:
+            if needle in cypher:
+                return _FakeNeo4jResult(rows)
+        return _FakeNeo4jResult([])
+
+
+class _FakeNeo4jClient:
+    def __init__(self, responders: list[tuple[str, list[dict[str, Any]]]]) -> None:
+        self.runs: list[tuple[str, dict[str, Any]]] = []
+        self.responders = responders
+        self.closed = False
+
+    def session(self) -> _FakeNeo4jSession:
+        # _sweep_* call `async with client.session() as sess:`; need an async CM.
+        return _FakeNeo4jSession(self)
+
+    async def close(self) -> None:
+        self.closed = True
+
+
+@pytest.mark.asyncio
+async def test_sweep_stale_citations_marks_pages_dirty() -> None:
+    fact_a = "11111111-1111-1111-1111-111111111111"
+    fact_b = "22222222-2222-2222-2222-222222222222"  # never invalidated
+    conn = _FakeConn([(
+        "FROM knowledge_article_citations c",
+        [
+            {"article_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "slug": "compound/abc", "fact_id": fact_a},
+            {"article_id": "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb", "slug": "topic/clean", "fact_id": fact_b},
+        ],
+    )], rowcount=1)
+    neo = _FakeNeo4jClient([("MATCH (f:Fact {fact_id: fid})", [{"fact_id": fact_a}])])
+    redirtied = await _sweep_stale_citations(conn, neo, limit=100)  # type: ignore[arg-type]
+    assert redirtied == 1
+    # The UPDATE only fires for the article that cites the invalidated fact.
+    updates = conn.sql_with("UPDATE knowledge_articles")
+    assert len(updates) == 1
+    assert "'lint:stale_citation'" in updates[0][0]
+    assert updates[0][1] == ("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",)
+
+
+@pytest.mark.asyncio
+async def test_sweep_stale_citations_no_facts_short_circuits() -> None:
+    conn = _FakeConn([("FROM knowledge_article_citations c", [])])
+    neo = _FakeNeo4jClient([])
+    redirtied = await _sweep_stale_citations(conn, neo, limit=100)  # type: ignore[arg-type]
+    assert redirtied == 0
+    assert neo.runs == []  # never even talks to Neo4j
+
+
+# ---------------------------------------------------------------------------
+# Phase 4b-ii: _sweep_contradictions (Neo4j-backed)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_sweep_contradictions_creates_stub() -> None:
+    conn = _FakeConn([], rowcount=1)
+    neo = _FakeNeo4jClient([(
+        "MATCH (f:Fact)",
+        [{
+            "subject_label": "Compound",
+            "subject_id_value": "RYYVLZVUVIJVGH",
+            "predicate": "HAS_YIELD",
+            "objects": ["0.62", "0.74"],
+            "fact_ids": [
+                "11111111-1111-1111-1111-111111111111",
+                "22222222-2222-2222-2222-222222222222",
+            ],
+        }],
+    )])
+    created = await _sweep_contradictions(conn, neo, min_objects=2, limit=10)  # type: ignore[arg-type]
+    assert created == 1
+    ins = conn.sql_with("INSERT INTO knowledge_articles")
+    assert len(ins) == 1
+    # Slug + kind + dirty_reason as expected.
+    params = ins[0][1]
+    # `_` is slug-safe (per the DB convention) so HAS_YIELD lowercases to has_yield.
+    assert params[0].startswith("contradiction/compound/ryyvlzvuvijvgh/has_yield")
+    er = json.loads(params[2])
+    assert er["subject_label"] == "Compound"
+    assert er["predicate"] == "HAS_YIELD"
+    assert len(er["fact_ids"]) == 2
+    assert "'lint:contradiction'" in ins[0][0]
+
+
+@pytest.mark.asyncio
+async def test_sweep_contradictions_respects_limit_and_min() -> None:
+    conn = _FakeConn([], rowcount=1)
+    # Return 5 groups; cap to 2 via limit.
+    rows = [
+        {
+            "subject_label": "Compound", "subject_id_value": f"S{i}",
+            "predicate": "HAS_X", "objects": ["a", "b"],
+            "fact_ids": [f"00000000-0000-0000-0000-00000000000{i}", f"11111111-1111-1111-1111-11111111111{i}"],
+        }
+        for i in range(5)
+    ]
+    neo = _FakeNeo4jClient([("MATCH (f:Fact)", rows)])
+    created = await _sweep_contradictions(conn, neo, min_objects=2, limit=2)  # type: ignore[arg-type]
+    assert created == 2
