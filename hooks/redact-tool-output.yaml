@@ -2,8 +2,8 @@ name: redact-tool-output
 # Registrar wires this at post_tool (defense-in-depth scrub of tool outputs
 # before they enter the next-turn LLM context). Pre-fix only the outbound
 # assistant text was scrubbed (post_turn redact-secrets); tool responses
-# flowed back to the model UNREDACTED, leaking SMILES / compound codes /
-# NCE-IDs / emails embedded in free-text fields.
+# from SOURCE-SYSTEM adapters flowed back to the model UNREDACTED, leaking
+# SMILES / compound codes / NCE-IDs / emails embedded in free-text fields.
 lifecycle: post_tool
 enabled: true
 # Order 200 places this AFTER the existing post_tool hooks (defaults +
@@ -18,14 +18,20 @@ order: 200
 # services/agent-claw/src/core/hooks/redact-tool-output.ts
 definition:
   description: >
-    Defense-in-depth scrub of tool outputs before they enter the LLM
-    context. Walks every output object / array / string and applies the
-    length-bounded redactString to every string leaf. The earlier
-    post_tool hooks (anti-fabrication, tag-maturity, source-cache,
-    detect-mcp-leakage, fact-id-consistency-guard) see the unredacted
-    output for fact-ID harvesting / artifact stamping / source caching;
-    the model sees the redacted form via the post_tool aggregator.
-    Idempotent — re-running on already-redacted text is a no-op.
+    Defense-in-depth scrub of source-system tool outputs before they enter
+    the LLM context. Scope: ONLY source-system tool IDs matching
+    `^(query|fetch)_(eln|lims|instrument)_` (mirrors the source-cache hook
+    regex). Chemistry compute tools (canonicalize_smiles,
+    find_similar_compounds, propose_retrosynthesis, recommend_next_batch,
+    etc.) are PASSED THROUGH UNCHANGED — the LLM must reason over their
+    SMILES output to chain calls. Walks every matched output object /
+    array / string and applies the length-bounded redactString to every
+    string leaf. The earlier post_tool hooks (anti-fabrication,
+    tag-maturity, source-cache, detect-mcp-leakage,
+    fact-id-consistency-guard) see the unredacted output for fact-ID
+    harvesting / artifact stamping / source caching; the model sees the
+    redacted form via the post_tool aggregator. Idempotent — re-running
+    on already-redacted text is a no-op.
   patterns:
     - name: rxn_smiles
       description: Reaction SMILES with two > separators

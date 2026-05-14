@@ -159,10 +159,21 @@ export function verifyMcpToken(
   // An explicit `signingKey` override (used by unit tests) suppresses the
   // env-derived _NEXT — the caller is asking to verify against ONE specific
   // key, not the rotation set.
-  const nextKey =
+  const rawNext =
     opts.signingKey !== undefined
       ? ""
       : (process.env.MCP_AUTH_SIGNING_KEY_NEXT ?? "").trim();
+  // Treat a too-short _NEXT as unset, matching the sign-time guard
+  // (cycle-3 review d988baa). A misconfigured _NEXT='abc' would otherwise
+  // silently widen the verifier to accept brute-forceable HMACs.
+  let nextKey = rawNext;
+  if (rawNext && rawNext.length < 32) {
+    getLogger("McpTokens").warn(
+      { event: "mcp_auth_next_key_too_short", length: rawNext.length },
+      "MCP_AUTH_SIGNING_KEY_NEXT is shorter than 32 chars — ignoring",
+    );
+    nextKey = "";
+  }
   if (!primary) {
     throw new McpAuthError("MCP_AUTH_SIGNING_KEY is empty; cannot verify token");
   }

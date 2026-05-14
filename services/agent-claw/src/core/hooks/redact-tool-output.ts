@@ -35,6 +35,14 @@ import type { Lifecycle } from "../lifecycle.js";
 import type { HookJSONOutput } from "../hook-output.js";
 import { scrub } from "../../observability/redact-string.js";
 
+// Source-system tool IDs that may carry PII / unredacted SMILES from external
+// systems. Mirror the source-cache hook's regex (CLAUDE.md: post-tool source
+// cache). Chemistry compute tools (canonicalize_smiles, find_similar_compounds,
+// propose_retrosynthesis, recommend_next_batch, etc.) are EXCLUDED — the LLM
+// must reason over their SMILES output to chain calls; redacting them would
+// break the agent.
+const SOURCE_SYSTEM_TOOL_RE = /^(query|fetch)_(eln|lims|instrument)_/;
+
 /**
  * Walk an arbitrary JSON-shaped value and return a structurally identical
  * value where every string leaf has been passed through `scrub`. Mutation-
@@ -73,6 +81,13 @@ export async function redactToolOutputHook(
   _toolUseID?: string,
   _options?: { signal: AbortSignal },
 ): Promise<HookJSONOutput> {
+  // Scope to source-system tool IDs only. Chemistry compute tools return
+  // SMILES in structured fields and the LLM must reason over them to chain
+  // calls — a blanket scrub would break canonicalize_smiles /
+  // find_similar_compounds / propose_retrosynthesis / recommend_next_batch.
+  // See BACKLOG.md line 208 (scoped scrubbing of mcp-eln-local / mcp-logs-sciy
+  // payloads only).
+  if (!SOURCE_SYSTEM_TOOL_RE.test(payload.toolId)) return {};
   payload.output = scrubValue(payload.output);
   return {};
 }
