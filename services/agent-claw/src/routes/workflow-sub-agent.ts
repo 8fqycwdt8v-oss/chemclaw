@@ -122,6 +122,8 @@ export async function handleWorkflowSubAgent(
   // across workflow runs.
   const parentCtx: ToolContext = {
     userEntraId: claimedUser,
+    orgId: null,
+    nceProjectId: null,
     seenFactIds: new Set<string>(),
     scratchpad: new Map<string, unknown>(),
   };

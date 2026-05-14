@@ -205,7 +205,14 @@ async function _runChainedHarnessInner(
         sessionId,
         cfg.AGENT_TOKEN_BUDGET,
       );
-      const ctx: ToolContext = { userEntraId: user, seenFactIds, scratchpad, lifecycle };
+      const ctx: ToolContext = {
+        userEntraId: user,
+        orgId: null,
+        nceProjectId: null,
+        seenFactIds,
+        scratchpad,
+        lifecycle,
+      };
 
       // Phase 4B: dispatch session_start once at the top of the chain. Both
       // chain entry points (POST /plan/run and POST /resume) operate on a
@@ -453,6 +460,8 @@ async function _runChainedHarnessInner(
       }
       const endCtx: ToolContext = {
         userEntraId: user,
+        orgId: null,
+        nceProjectId: null,
         seenFactIds: endSeenFactIds,
         scratchpad: endScratchpad,
         lifecycle,

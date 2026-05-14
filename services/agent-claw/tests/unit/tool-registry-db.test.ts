@@ -89,7 +89,13 @@ describe("ToolRegistry.loadFromDb()", () => {
     await registry.loadFromDb(pool);
     const tool = registry.getOrThrow("echo_tool");
     const seenFactIds = new Set<string>();
-    const ctx = { userEntraId: "test", scratchpad: new Map<string, unknown>([["seenFactIds", seenFactIds]]), seenFactIds };
+    const ctx = {
+      userEntraId: "test",
+      orgId: null,
+      nceProjectId: null,
+      scratchpad: new Map<string, unknown>([["seenFactIds", seenFactIds]]),
+      seenFactIds,
+    };
     await tool.execute(ctx, { msg: "hello" });
 
     expect(executeSpy).toHaveBeenCalledOnce();
@@ -123,7 +129,13 @@ describe("ToolRegistry.loadFromDb()", () => {
     await registry.loadFromDb(pool);
     const tool = registry.getOrThrow("canonicalize_smiles");
     const seenFactIds = new Set<string>();
-    const ctx = { userEntraId: "test", scratchpad: new Map<string, unknown>([["seenFactIds", seenFactIds]]), seenFactIds };
+    const ctx = {
+      userEntraId: "test",
+      orgId: null,
+      nceProjectId: null,
+      scratchpad: new Map<string, unknown>([["seenFactIds", seenFactIds]]),
+      seenFactIds,
+    };
 
     await tool.execute(ctx, { smiles: "c1ccccc1" });
 

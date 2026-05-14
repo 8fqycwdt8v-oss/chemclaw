@@ -14,6 +14,19 @@ import type { StreamSink } from "./streaming-sink.js";
 export interface ToolContext {
   /** Entra-ID (or dev email) of the calling user; threads RLS. */
   userEntraId: string;
+  /**
+   * Org-id of the calling user, when known. Required-nullable so that
+   * org-scoped permission policies can match deterministically; the
+   * resolver WARNs if a policy could match but this is null. Routes
+   * populate this from the session / request body (Phase F.3).
+   */
+  orgId: string | null;
+  /**
+   * NCE project id of the calling user, when known. Same nullability
+   * contract as orgId. Routes populate from the session / request body
+   * (Phase F.3).
+   */
+  nceProjectId: string | null;
   /** Per-turn scratch space for hooks and tools to share state. */
   scratchpad: Map<string, unknown>;
   /**

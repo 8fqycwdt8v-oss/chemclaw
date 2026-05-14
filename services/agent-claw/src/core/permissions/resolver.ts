@@ -34,6 +34,7 @@ import type {
   ToolContext,
 } from "../types.js";
 import { getLogger } from "../../observability/logger.js";
+import { getPermissionPolicyLoader } from "./policy-loader.js";
 
 export interface ResolveDecisionInput {
   tool: Tool;
@@ -136,6 +137,29 @@ export async function resolveDecision(
     });
     if (enforceResult.decision) {
       return { decision: enforceResult.decision, reason: enforceResult.reason };
+    }
+    // Task F — surface the case where an org-scoped policy COULD have
+    // matched the tool pattern, but ctx.orgId is null (the route hasn't
+    // bound a tenant identity yet). Phase F.3 will wire route-level
+    // population; this WARN gives operators a Loki signal to drive that
+    // work BEFORE org-scoped policies start silently failing in
+    // production. Logged once per enforce-mode no-match path on a
+    // tool whose pattern matches an org-scoped policy.
+    if (input.ctx.orgId === null) {
+      const loader = getPermissionPolicyLoader();
+      if (loader) {
+        const matchableOrg = loader.countMatchableOrgPolicies(tool.id);
+        if (matchableOrg > 0) {
+          getLogger("agent-claw.core.permissions.resolver").warn(
+            {
+              event: "permission_org_scoped_policy_unbound_ctx",
+              tool_id: tool.id,
+              policy_count: matchableOrg,
+            },
+            "org-scoped permission policy could match but ctx.orgId is null — route is not binding tenant identity (Phase F.3)",
+          );
+        }
+      }
     }
     getLogger("agent-claw.core.permissions.resolver").warn(
       {

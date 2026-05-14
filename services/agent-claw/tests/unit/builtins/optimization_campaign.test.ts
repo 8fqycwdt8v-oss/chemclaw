@@ -322,6 +322,53 @@ describe("recommend_next_batch", () => {
     expect(body.acquisition).toBe("qLogEI");
   });
 
+  it("bumps optimization_campaigns.etag after a successful round INSERT", async () => {
+    const pool = makePoolMock({
+      campaignSelect: [
+        {
+          bofire_domain: { type: "Domain" },
+          status: "active",
+          strategy: "SoboStrategy",
+          acquisition: "qLogEI",
+          seed: 1234,
+          nce_project_id: "00000000-0000-0000-0000-000000000001",
+        },
+      ],
+      rounds: [],
+    });
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      text: async () =>
+        JSON.stringify({
+          proposals: [{ factor_values: { t: 50 }, source: "random_cold_start" }],
+          n_observations: 0,
+          used_bo: false,
+          fallback_reason: "cold_start_n_obs=0<3",
+          strategy: "SoboStrategy",
+          acquisition: "qLogEI",
+        }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = buildRecommendNextBatchTool(pool as never, URL_, stubConfigRegistry());
+    await tool.execute(makeCtx(), {
+      campaign_id: "aaaaaaaa-1111-2222-3333-444444444444",
+      n_candidates: 1,
+    });
+
+    // The advisory-lock txn must include a campaign-etag bump after the round INSERT.
+    // Assert ORDER: the UPDATE comes AFTER the round INSERT so a rollback on
+    // the INSERT path leaves etag unchanged.
+    const insertIdx = pool.queries.findIndex((s) =>
+      s.includes("INSERT INTO optimization_rounds"),
+    );
+    const etagIdx = pool.queries.findIndex((s) =>
+      s.includes("UPDATE optimization_campaigns") && s.includes("etag = etag + 1"),
+    );
+    expect(insertIdx, "INSERT INTO optimization_rounds expected in queries").toBeGreaterThanOrEqual(0);
+    expect(etagIdx, "UPDATE optimization_campaigns SET etag = etag + 1 expected").toBeGreaterThan(insertIdx);
+  });
+
   it("BoFire fallback to random_*_failed records an error_event", async () => {
     const pool = makePoolMock({
       campaignSelect: [

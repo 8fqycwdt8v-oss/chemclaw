@@ -7,6 +7,7 @@ Tools:
 from __future__ import annotations
 
 import logging
+import os
 from typing import Annotated
 
 from fastapi import Body
@@ -27,6 +28,16 @@ if settings.hf_home:
 
 def _build_encoder() -> Encoder:
     if settings.embed_model_name == "stub-encoder":
+        dev_mode = os.environ.get("CHEMCLAW_DEV_MODE", "").strip().lower() == "true"
+        if not dev_mode:
+            raise RuntimeError(
+                "mcp_embedder refused to start: embed_model_name='stub-encoder' "
+                "outside CHEMCLAW_DEV_MODE=true. Stub embeddings are deterministic "
+                "hash-seeded and produce semantically meaningless vectors; allowing "
+                "them in production would poison pgvector indexes. Set EMBED_MODEL_NAME "
+                "to a real model (e.g. BAAI/bge-m3) or set CHEMCLAW_DEV_MODE=true for "
+                "local dev."
+            )
         log.warning("Using stub encoder (dev-only — not semantic)")
         return StubEncoder()
     return BGEM3Encoder(settings.embed_model_name, settings.embed_device)

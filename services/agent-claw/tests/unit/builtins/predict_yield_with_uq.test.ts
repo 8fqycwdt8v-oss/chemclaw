@@ -8,7 +8,13 @@ const URL_ = "http://mcp-yield-baseline:8015";
 function makeCtx() {
   const seenFactIds = new Set<string>();
   const scratchpad = new Map<string, unknown>([["seenFactIds", seenFactIds]]);
-  return { userEntraId: "test@example.com", scratchpad, seenFactIds };
+  return {
+    userEntraId: "test@example.com",
+    orgId: null,
+    nceProjectId: null,
+    scratchpad,
+    seenFactIds,
+  };
 }
 
 function makePoolMock(rows: Array<{ rxn_smiles: string; yield_pct: number }>) {

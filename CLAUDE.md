@@ -353,7 +353,7 @@ The integration trio (`etag-conflict`, `chained-execution`, `reanimator-roundtri
 
 ## Harness primitives
 
-The agent harness (`services/agent-claw/`) has 16 lifecycle hook points and 25 registered builtin hooks (`MIN_EXPECTED_HOOKS = 25`; recent additions: `detect-mcp-leakage` + `loop-detector`, then `fact-id-consistency-guard` (post_tool, review 2026-05-10 §2.6), then `wiki-human-block-guard` as the most recent pre_tool addition — ADR 012 Phase 1, knowledge wiki). **`loadHooks(lifecycle, deps)`** in `services/agent-claw/src/core/hook-loader.ts` is the **single registration path** at startup; YAML files in `hooks/` are the source of truth, and every hook name in YAML must have a matching `BUILTIN_REGISTRARS` entry. The orphan `buildDefaultLifecycle()` factory was removed in Phase 1B — every harness call path (`/api/chat`, `/api/chat/plan/approve`, `/api/sessions/:id/plan/run`, `/api/sessions/:id/resume`) plus sub-agents read the global lifecycle.
+The agent harness (`services/agent-claw/`) has 16 lifecycle hook points and 27 registered builtin hooks (`MIN_EXPECTED_HOOKS = 27`; recent additions: `detect-mcp-leakage` + `loop-detector`, then `fact-id-consistency-guard` (post_tool, review 2026-05-10 §2.6), then `wiki-human-block-guard` (pre_tool, ADR 012 Phase 1), then `scheduled-substance-gate` (pre_tool, gap-plan H0.9), then `redact-tool-output` (post_tool, order 200, Tranche 1 2026-05-14 — defense-in-depth scrub of tool outputs before they enter the LLM context). **`loadHooks(lifecycle, deps)`** in `services/agent-claw/src/core/hook-loader.ts` is the **single registration path** at startup; YAML files in `hooks/` are the source of truth, and every hook name in YAML must have a matching `BUILTIN_REGISTRARS` entry. The orphan `buildDefaultLifecycle()` factory was removed in Phase 1B — every harness call path (`/api/chat`, `/api/chat/plan/approve`, `/api/sessions/:id/plan/run`, `/api/sessions/:id/resume`) plus sub-agents read the global lifecycle.
 
 | Hook | When | Built-ins |
 |---|---|---|
@@ -361,8 +361,8 @@ The agent harness (`services/agent-claw/`) has 16 lifecycle hook points and 25 r
 | `session_end` | Session finalisation | `session-end-telemetry` ‡ |
 | `user_prompt_submit` | Before a user turn | `user-prompt-submit-telemetry` ‡ (length-only — never logs prompt body) |
 | `pre_turn` | Before LLM call | `init-scratch`, `apply-skills` |
-| `pre_tool` | Before a tool runs | `budget-guard`, `foundation-citation-guard`, `wiki-human-block-guard` (denies `upsert_article` bodies authoring `<!-- human:begin -->` markers — ADR 012) |
-| `post_tool` | After a tool returns | `anti-fabrication`, `tag-maturity`, `source-cache` |
+| `pre_tool` | Before a tool runs | `budget-guard`, `foundation-citation-guard`, `wiki-human-block-guard` (denies `upsert_article` bodies authoring `<!-- human:begin -->` markers — ADR 012), `scheduled-substance-gate` (denies CWC Schedule-1 / asks DEA Schedule-I + EAR Cat 1C — gap-plan H0.9), `loop-detector` |
+| `post_tool` | After a tool returns | `anti-fabrication`, `tag-maturity`, `source-cache`, `detect-mcp-leakage`, `fact-id-consistency-guard`, `redact-tool-output` (order 200 — runs LAST so the others see unredacted output for fact-ID harvesting / artifact stamping / source caching; Tranche 1 2026-05-14) |
 | `post_tool_failure` | After a tool throws | `post-tool-failure-telemetry` ‡ (warn level) |
 | `post_tool_batch` | After a parallel readonly batch resolves | `post-tool-batch-telemetry` ‡ |
 | `permission_request` | Resolver in `core/permissions/resolver.ts` (Phase 6) | `permission` (no-op default). Resolver wired in `core/step.ts` and engaged on every harness call site (`chat.ts`, `chained-harness.ts`, `sub-agent.ts`, `deep-research.ts`, `plan.ts`) since the 2026-05-04 baseline. |

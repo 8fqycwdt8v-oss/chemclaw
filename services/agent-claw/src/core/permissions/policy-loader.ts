@@ -43,8 +43,16 @@ function patternMatches(pattern: string, value: string): boolean {
 export interface PolicyMatchContext {
   toolId: string;
   inputJson: string; // JSON.stringify of tool input
-  org?: string;
-  project?: string;
+  /**
+   * Org-id of the calling user, or null when the route hasn't bound it.
+   * Required-nullable (not optional) so that callers can't silently skip
+   * passing it and have org-scoped policies fail to match. The resolver
+   * WARNs in enforce mode when this is null AND an org-scoped policy
+   * could match the tool pattern (see countMatchableOrgPolicies).
+   */
+  org: string | null;
+  /** Project id of the calling user, or null when unbound. Same contract as org. */
+  project: string | null;
 }
 
 export class PermissionPolicyLoader {
@@ -152,6 +160,24 @@ export class PermissionPolicyLoader {
   }
 
   /**
+   * Returns the count of currently-cached, enabled, non-broken org-scoped
+   * policies whose tool_pattern matches the given toolId. Used by the
+   * resolver to decide whether to emit the
+   * `permission_org_scoped_policy_unbound_ctx` WARN: if a policy COULD
+   * match but ctx.orgId is null, the WARN surfaces the gap so operators
+   * can wire route-level org binding (Phase F.3). Returns 0 before the
+   * first refresh.
+   */
+  countMatchableOrgPolicies(toolId: string): number {
+    if (this.cache === null) return 0;
+    return this.cache.filter((p) => {
+      if (p.scope !== "org") return false;
+      if (p.compiledBroken) return false;
+      return patternMatches(p.toolPattern, toolId);
+    }).length;
+  }
+
+  /**
    * Returns the strongest applicable decision under the deny>ask>allow
    * aggregator, or null when no policy matches. Caller decides what to do
    * with null (the lifecycle treats it as "no opinion" → resolver falls
@@ -172,8 +198,11 @@ export class PermissionPolicyLoader {
           return false;
         }
       }
-      if (p.scope === "org"     && p.scopeId !== ctx.org)     return false;
-      if (p.scope === "project" && p.scopeId !== ctx.project) return false;
+      // org / project scoped policies fail to match when the ctx is unbound
+      // (null). The resolver's enforce-mode path emits a structured WARN in
+      // that case so the unbound-ctx → silent-no-match gap is observable.
+      if (p.scope === "org"     && (ctx.org === null     || p.scopeId !== ctx.org))     return false;
+      if (p.scope === "project" && (ctx.project === null || p.scopeId !== ctx.project)) return false;
       return true;
     });
 

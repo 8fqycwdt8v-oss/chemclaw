@@ -224,6 +224,99 @@ def test_expired_token_rejected(monkeypatch, client_factory):
     assert "expired" in response.json()["detail"].lower()
 
 
+# ---------------------------------------------------------------------------
+# Dual-key verify (MCP_AUTH_SIGNING_KEY_NEXT) — A6 rotation window
+#
+# Mint stays single-key (always uses MCP_AUTH_SIGNING_KEY). Verify accepts
+# tokens signed with either the primary or the next key, enabling
+# zero-downtime rotation: set _NEXT on all verifiers, then promote _NEXT
+# to primary on signers, then clear _NEXT.
+# ---------------------------------------------------------------------------
+
+
+def test_verify_accepts_token_signed_with_next_key(monkeypatch):
+    """A token minted under MCP_AUTH_SIGNING_KEY_NEXT verifies during rotation window."""
+    primary = "p" * 32
+    next_key = "n" * 32
+    # Mint with the NEXT key (simulating a service that already rotated).
+    monkeypatch.setenv("MCP_AUTH_SIGNING_KEY", next_key)
+    token = sign_mcp_token(
+        sandbox_id="sbx_001",
+        user_entra_id="u@example.com",
+        scopes=["mcp_kg:read"],
+        ttl_seconds=60,
+    )
+    # Restore primary; next_key now lives in MCP_AUTH_SIGNING_KEY_NEXT.
+    monkeypatch.setenv("MCP_AUTH_SIGNING_KEY", primary)
+    monkeypatch.setenv("MCP_AUTH_SIGNING_KEY_NEXT", next_key)
+    claims = verify_mcp_token(token)
+    assert claims.user == "u@example.com"
+    assert claims.sub == "sbx_001"
+
+
+def test_verify_rejects_token_signed_with_unknown_key(monkeypatch):
+    """A token signed with a third key (neither primary nor next) is rejected."""
+    monkeypatch.setenv("MCP_AUTH_SIGNING_KEY", "p" * 32)
+    monkeypatch.setenv("MCP_AUTH_SIGNING_KEY_NEXT", "n" * 32)
+    # Mint with an unrelated key.
+    monkeypatch.setenv("MCP_AUTH_SIGNING_KEY", "x" * 32)
+    token = sign_mcp_token(
+        sandbox_id="sbx_001",
+        user_entra_id="u@example.com",
+        scopes=["mcp_kg:read"],
+        ttl_seconds=60,
+    )
+    monkeypatch.setenv("MCP_AUTH_SIGNING_KEY", "p" * 32)
+    with pytest.raises(McpAuthError):
+        verify_mcp_token(token)
+
+
+def test_verify_works_with_no_next_key(monkeypatch):
+    """When MCP_AUTH_SIGNING_KEY_NEXT is unset, behaviour is identical to single-key mode."""
+    monkeypatch.setenv("MCP_AUTH_SIGNING_KEY", "p" * 32)
+    monkeypatch.delenv("MCP_AUTH_SIGNING_KEY_NEXT", raising=False)
+    token = sign_mcp_token(
+        sandbox_id="sbx_001",
+        user_entra_id="u@example.com",
+        scopes=["mcp_kg:read"],
+        ttl_seconds=60,
+    )
+    claims = verify_mcp_token(token)
+    assert claims.user == "u@example.com"
+
+
+def test_verify_treats_too_short_next_key_as_unset(monkeypatch, caplog):
+    """A misconfigured MCP_AUTH_SIGNING_KEY_NEXT shorter than 32 chars is treated as unset.
+
+    The primary key enforces len >= 32 at sign time (cycle-3 d988baa) to
+    prevent weak-key brute-force. The dual-key verify path must apply the
+    same gate to _NEXT — a misconfigured `MCP_AUTH_SIGNING_KEY_NEXT='abc'`
+    would otherwise silently widen the verifier to accept brute-forceable
+    HMACs. Verifies BOTH:
+      1) primary-signed tokens continue to verify (no breakage), and
+      2) a WARN log line fires so operators surface the misconfig in Loki.
+    """
+    import logging
+
+    primary = "p" * 32
+    monkeypatch.setenv("MCP_AUTH_SIGNING_KEY", primary)
+    monkeypatch.setenv("MCP_AUTH_SIGNING_KEY_NEXT", "abc")  # 3 chars — too short
+    token = sign_mcp_token(
+        sandbox_id="sbx_001",
+        user_entra_id="u@example.com",
+        scopes=["mcp_kg:read"],
+        ttl_seconds=60,
+    )
+    with caplog.at_level(logging.WARNING, logger="mcp.auth"):
+        claims = verify_mcp_token(token)
+    assert claims.user == "u@example.com"
+    assert any(
+        "mcp_auth_next_key_too_short" in (rec.message or "")
+        or getattr(rec, "event", "") == "mcp_auth_next_key_too_short"
+        for rec in caplog.records
+    ), f"expected mcp_auth_next_key_too_short WARN; got {[r.message for r in caplog.records]}"
+
+
 def test_scope_mismatch_rejected(monkeypatch, client_factory):
     """A token with the wrong scope is rejected for endpoints requiring a different scope.
 

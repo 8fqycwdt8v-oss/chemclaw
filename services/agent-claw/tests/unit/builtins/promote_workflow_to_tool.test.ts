@@ -7,11 +7,15 @@ import { buildPromoteWorkflowToToolTool } from "../../../src/tools/builtins/prom
 // the builtin (default param values fire on `undefined` passes).
 function makeCtx(userEntraId: string | undefined): {
   userEntraId: string | undefined;
+  orgId: string | null;
+  nceProjectId: string | null;
   scratchpad: Map<string, unknown>;
   seenFactIds: Set<string>;
 } {
   return {
     userEntraId,
+    orgId: null,
+    nceProjectId: null,
     scratchpad: new Map<string, unknown>([["seenFactIds", new Set<string>()]]),
     seenFactIds: new Set<string>(),
   };

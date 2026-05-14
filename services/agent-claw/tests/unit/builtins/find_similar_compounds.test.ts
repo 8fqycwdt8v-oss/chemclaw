@@ -8,6 +8,8 @@ const RDKIT = "http://mcp-rdkit:8001";
 function makeCtx() {
   return {
     userEntraId: "test@example.com",
+    orgId: null,
+    nceProjectId: null,
     scratchpad: new Map<string, unknown>([["seenFactIds", new Set<string>()]]),
     seenFactIds: new Set<string>(),
   };

@@ -129,6 +129,8 @@ export async function spawnSubAgent(
   const subCtx: ToolContext = {
     // RLS scope inherited from parent — immutable.
     userEntraId: parentCtx.userEntraId,
+    orgId: parentCtx.orgId,
+    nceProjectId: parentCtx.nceProjectId,
     seenFactIds: subSeenFactIds,
     scratchpad: subScratchpad,
   };
