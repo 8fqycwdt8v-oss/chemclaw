@@ -55,4 +55,9 @@ BEGIN
     ON agent_todos (session_id, ordering);
 END $$;
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('19_agent_todos_unique_ordering.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

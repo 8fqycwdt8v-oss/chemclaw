@@ -42,4 +42,9 @@ CREATE POLICY projection_acks_admin_select ON projection_acks
   FOR SELECT
   USING (current_user_is_admin());
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('41_event_log_rls.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

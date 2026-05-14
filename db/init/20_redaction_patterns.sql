@@ -112,4 +112,9 @@ CREATE POLICY redaction_patterns_admin_write ON redaction_patterns
   USING (current_user_is_admin())
   WITH CHECK (current_user_is_admin());
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('20_redaction_patterns.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

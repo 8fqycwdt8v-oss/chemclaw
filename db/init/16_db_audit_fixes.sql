@@ -388,12 +388,18 @@ END $$;
 
 -- mock_eln.entries.schema_kind enumeration.
 DO $$
+DECLARE
+  rel oid := to_regclass('mock_eln.entries');
 BEGIN
-  IF to_regclass('mock_eln.entries') IS NOT NULL
+  -- Use a local variable so the regclass cast only happens when the
+  -- relation exists (psql -v ON_ERROR_STOP=1 aborts the whole apply on
+  -- the planner-time cast failure that an inline 'mock_eln.entries'::regclass
+  -- triggers when 30_mock_eln_schema.sql hasn't run yet).
+  IF rel IS NOT NULL
      AND NOT EXISTS (
        SELECT 1 FROM pg_constraint
         WHERE conname  = 'mock_eln_entries_schema_kind_check'
-          AND conrelid = 'mock_eln.entries'::regclass
+          AND conrelid = rel
      )
   THEN
     ALTER TABLE mock_eln.entries
@@ -474,4 +480,9 @@ BEGIN
   END IF;
 END $$;
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('16_db_audit_fixes.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

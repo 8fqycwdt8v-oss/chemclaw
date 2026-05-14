@@ -20,5 +20,9 @@ ALTER TABLE agent_sessions
 UPDATE agent_sessions
    SET auto_resume_cap = 30
  WHERE auto_resume_cap = 10;
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename, applied_at)
+  VALUES ('53_agent_session_cap_bump.sql', NOW())
+  ON CONFLICT (filename) DO NOTHING;
 
 COMMIT;

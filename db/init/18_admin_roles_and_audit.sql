@@ -167,4 +167,9 @@ BEGIN
   END LOOP;
 END $$;
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('18_admin_roles_and_audit.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

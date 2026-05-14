@@ -40,4 +40,9 @@ CREATE INDEX IF NOT EXISTS idx_tools_source_forged
   ON tools(source)
   WHERE source = 'forged';
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('08_forged_tools.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

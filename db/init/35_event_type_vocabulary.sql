@@ -144,4 +144,9 @@ CREATE TRIGGER trg_hypotheses_status_event
   WHEN (OLD.status IS DISTINCT FROM NEW.status)
   EXECUTE FUNCTION emit_hypothesis_status_changed();
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('35_event_type_vocabulary.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

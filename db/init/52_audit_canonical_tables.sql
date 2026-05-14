@@ -45,5 +45,9 @@ BEGIN
     END LOOP;
 END;
 $$;
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename, applied_at)
+  VALUES ('52_audit_canonical_tables.sql', NOW())
+  ON CONFLICT (filename) DO NOTHING;
 
 COMMIT;

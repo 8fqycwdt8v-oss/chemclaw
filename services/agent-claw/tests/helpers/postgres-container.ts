@@ -128,6 +128,10 @@ export async function startTestPostgres(
     // ---- Apply only the schema files the integration tests touch. ----
     const dbInitDir = resolve(repoRoot, "db", "init");
     const filesToApply = [
+      // schema_version must come first: every other init file now self-records
+      // into it via the standard footer (added in 2026-05-09 cold-start lints).
+      // Without 00, the INSERT INTO schema_version in 13/14/52/53 hits 42P01.
+      "00_schema_version.sql",
       "13_agent_sessions.sql",
       "14_agent_session_extensions.sql",
       // Phase B2 — adds messages_checkpoint JSONB column. loadSession

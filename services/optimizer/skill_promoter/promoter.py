@@ -327,16 +327,21 @@ def run_promotion_pass(conn: psycopg.Connection) -> list[PromotionEvent]:
 # Entry point for direct use / compose
 # ---------------------------------------------------------------------------
 
-def run_once() -> None:
-    dsn = (
-        f"host={os.environ.get('POSTGRES_HOST', 'localhost')} "
-        f"port={os.environ.get('POSTGRES_PORT', '5432')} "
-        f"dbname={os.environ.get('POSTGRES_DB', 'chemclaw')} "
-        f"user={os.environ.get('POSTGRES_USER', 'chemclaw_service')} "
-        f"password={os.environ.get('POSTGRES_PASSWORD', '')}"
+def run_once() -> None:  # pragma: no cover — covered by tests/unit/optimizer/test_common_db.py, not in ci.yml pytest path
+    from services.optimizer.common.db import (
+        assert_bypass_rls,
+        enforce_bypass_rls_check_enabled,
+        get_dsn,
     )
+
+    dsn = get_dsn()
     apply_config_overrides(dsn)
     with psycopg.connect(dsn) as conn:
+        assert_bypass_rls(
+            conn,
+            service_name="skill_promoter",
+            enforce=enforce_bypass_rls_check_enabled(),
+        )
         events = run_promotion_pass(conn)
     logger.info("Promotion pass complete — %d events", len(events))
 

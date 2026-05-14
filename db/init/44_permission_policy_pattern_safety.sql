@@ -34,4 +34,9 @@ BEGIN
 END
 $$;
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('44_permission_policy_pattern_safety.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

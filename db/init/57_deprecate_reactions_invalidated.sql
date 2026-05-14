@@ -23,5 +23,9 @@ COMMENT ON COLUMN reactions.invalidated IS
   '`invalidated_at` on :CITES / :HAS_YIELD / :HAS_PURITY / etc. relationships. '
   'Use mcp-kg /tools/invalidate_fact to invalidate; query Neo4j to read. '
   'Scheduled to be dropped in a future migration — see BACKLOG.md.';
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename, applied_at)
+  VALUES ('57_deprecate_reactions_invalidated.sql', NOW())
+  ON CONFLICT (filename) DO NOTHING;
 
 COMMIT;

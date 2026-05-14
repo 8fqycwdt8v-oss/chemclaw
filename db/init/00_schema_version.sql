@@ -10,4 +10,9 @@ CREATE TABLE IF NOT EXISTS schema_version (
   applied_at  TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('00_schema_version.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

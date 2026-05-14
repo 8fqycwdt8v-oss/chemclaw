@@ -123,4 +123,9 @@ COMMENT ON FUNCTION bootstrap_config_setting(TEXT, TEXT, TEXT, JSONB, TEXT, TEXT
 COMMENT ON FUNCTION bootstrap_feature_flag(TEXT, BOOLEAN, TEXT, TEXT) IS
   'Seed-time feature_flags INSERT via SECURITY DEFINER. Idempotent.';
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('22_admin_rls_bootstrap_helpers.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

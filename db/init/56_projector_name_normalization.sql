@@ -22,5 +22,9 @@ UPDATE ingestion_event_catalog
    SELECT 1 FROM unnest(consumed_by) AS t(name)
     WHERE name LIKE '%-%'
  );
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename, applied_at)
+  VALUES ('56_projector_name_normalization.sql', NOW())
+  ON CONFLICT (filename) DO NOTHING;
 
 COMMIT;

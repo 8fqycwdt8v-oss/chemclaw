@@ -114,4 +114,9 @@ CREATE POLICY config_settings_admin_write ON config_settings
   USING (current_user_is_admin())
   WITH CHECK (current_user_is_admin());
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('19_config_settings.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

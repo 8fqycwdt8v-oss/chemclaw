@@ -22,4 +22,9 @@ COMMENT ON COLUMN document_chunks.page_number IS
   'Page number (1-indexed) within the source PDF. NULL for non-PDF documents '
   'or chunks ingested before Phase C.2 backfill.';
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('05_contextual_chunks.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

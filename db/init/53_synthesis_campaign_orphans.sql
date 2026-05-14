@@ -47,25 +47,33 @@ WHERE s.ref_table IS NOT NULL
     SELECT 1 FROM chemspace_screens x
      WHERE s.ref_table = 'chemspace_screens' AND x.id::text = s.ref_id
   )
-  AND NOT EXISTS (
-    SELECT 1 FROM chemspace_results x
-     WHERE s.ref_table = 'chemspace_results' AND x.id::text = s.ref_id
-  )
+  -- chemspace_results uses a composite PK (screen_id, inchikey) with no single
+  -- id column, so the `x.id::text = s.ref_id` pattern can't work here. The
+  -- list of allowed ref_table values in 51_synthesis_campaigns.sql lets
+  -- chemspace_results through; orphan detection for that target needs a
+  -- different encoding of ref_id (e.g. 'screen_id||:||inchikey') before this
+  -- view can cover it. Tracked as a BACKLOG follow-up.
   AND NOT EXISTS (
     SELECT 1 FROM workflow_runs x
      WHERE s.ref_table = 'workflow_runs' AND x.id::text = s.ref_id
   )
   AND NOT EXISTS (
-    SELECT 1 FROM genchem_runs x
-     WHERE s.ref_table = 'genchem_runs' AND x.id::text = s.ref_id
+    -- 51_synthesis_campaigns.sql's ref_table list calls this 'genchem_runs'
+    -- in its docstring, but the actual table created in 26_genchem.sql is
+    -- `gen_runs`. Use the real name here; treat ref_table='gen_runs' AND
+    -- ref_table='genchem_runs' as the same target so existing rows tagged
+    -- with either string resolve correctly.
+    SELECT 1 FROM gen_runs x
+     WHERE s.ref_table IN ('gen_runs', 'genchem_runs') AND x.id::text = s.ref_id
   )
   AND NOT EXISTS (
     SELECT 1 FROM task_batches x
      WHERE s.ref_table = 'task_batches' AND x.id::text = s.ref_id
   )
   AND NOT EXISTS (
+    -- qm_results.job_id is the PK (FK to qm_jobs.id), not a column called `id`.
     SELECT 1 FROM qm_results x
-     WHERE s.ref_table = 'qm_results' AND x.id::text = s.ref_id
+     WHERE s.ref_table = 'qm_results' AND x.job_id::text = s.ref_id
   )
   AND NOT EXISTS (
     SELECT 1 FROM reactions x
@@ -78,7 +86,17 @@ WHERE s.ref_table IS NOT NULL
   -- can't gate parser-time table resolution. Operators on the testbed
   -- profile run a separate query when they need orphan detection for
   -- mock_eln refs (see docs/runbooks/synthesis-campaign-lifecycle.md).
-  AND s.ref_table NOT IN ('mock_eln.entries', 'mock_eln.samples');
+  AND s.ref_table NOT IN (
+    -- mock_eln.* live in the testbed-only `mock_eln` schema (see above).
+    'mock_eln.entries', 'mock_eln.samples',
+    -- chemspace_results lacks a single-id column; see comment above.
+    'chemspace_results'
+  );
 
 COMMENT ON VIEW v_synthesis_campaign_step_orphans IS
   'Steps whose soft-FK (ref_table, ref_id) no longer resolves. Empty in a healthy DB.';
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename, applied_at)
+  VALUES ('53_synthesis_campaign_orphans.sql', NOW())
+  ON CONFLICT (filename) DO NOTHING;

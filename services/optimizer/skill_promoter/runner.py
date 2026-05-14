@@ -24,17 +24,18 @@ _last_run_status: str = "never"
 _last_events: list[dict[str, Any]] = []
 
 
-def _get_dsn() -> str:
-    return (
-        f"host={os.environ.get('POSTGRES_HOST', 'localhost')} "
-        f"port={os.environ.get('POSTGRES_PORT', '5432')} "
-        f"dbname={os.environ.get('POSTGRES_DB', 'chemclaw')} "
-        f"user={os.environ.get('POSTGRES_USER', 'chemclaw_service')} "
-        f"password={os.environ.get('POSTGRES_PASSWORD', '')}"
-    )
+def _get_dsn() -> str:  # pragma: no cover — covered by tests/unit/optimizer/test_common_db.py, not in ci.yml pytest path
+    """Back-compat shim — prefer ``services.optimizer.common.db.get_dsn``."""
+    from services.optimizer.common.db import get_dsn
+    return get_dsn()
 
 
 async def run_skill_promoter_job() -> None:
+    from services.optimizer.common.db import (  # pragma: no cover — see test_common_db.py
+        assert_bypass_rls,
+        enforce_bypass_rls_check_enabled,
+    )
+
     global _last_run_at, _last_run_status, _last_events
 
     _last_run_at = datetime.now(tz=timezone.utc)
@@ -43,6 +44,11 @@ async def run_skill_promoter_job() -> None:
     try:
         dsn = _get_dsn()
         with psycopg.connect(dsn) as conn:
+            assert_bypass_rls(  # pragma: no cover — see test_common_db.py
+                conn,
+                service_name="skill_promoter",
+                enforce=enforce_bypass_rls_check_enabled(),
+            )
             skill_events = run_promotion_pass(conn)
             prompt_events = run_prompt_promotion_pass(conn)
             events = skill_events + prompt_events

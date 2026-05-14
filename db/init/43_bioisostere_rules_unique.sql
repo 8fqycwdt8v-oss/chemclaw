@@ -42,4 +42,9 @@ BEGIN
 END
 $$;
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('43_bioisostere_rules_unique.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;

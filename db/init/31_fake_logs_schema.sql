@@ -162,4 +162,9 @@ ALTER DEFAULT PRIVILEGES IN SCHEMA fake_logs
 ALTER DEFAULT PRIVILEGES IN SCHEMA fake_logs
   GRANT ALL ON SEQUENCES TO chemclaw_service;
 
+
+-- Self-record for schema_version (Makefile loop is belt-and-suspenders).
+INSERT INTO schema_version (filename)
+VALUES ('31_fake_logs_schema.sql')
+ON CONFLICT DO NOTHING;
 COMMIT;
