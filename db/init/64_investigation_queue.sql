@@ -30,6 +30,34 @@ COMMENT ON TABLE investigation_queue IS
 CREATE INDEX IF NOT EXISTS idx_investigation_queue_pending
   ON investigation_queue (score DESC) WHERE picked_at IS NULL;
 
+-- ─────────────────────────────────────────────────────────────────────
+-- RLS — project-scoped data. SELECT gated on user_project_access
+-- (mirrors facts_project_visibility in 62_facts_table.sql; NULL
+-- project_id is treated as org-wide / shared). Writes happen as
+-- chemclaw_service (BYPASSRLS) via the explicit policy below;
+-- chemclaw_app has no write policy → cannot INSERT/UPDATE/DELETE.
+-- ─────────────────────────────────────────────────────────────────────
+ALTER TABLE investigation_queue ENABLE ROW LEVEL SECURITY;
+ALTER TABLE investigation_queue FORCE  ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS investigation_queue_project_visibility ON investigation_queue;
+CREATE POLICY investigation_queue_project_visibility ON investigation_queue
+  FOR SELECT
+  USING (
+    project_id IS NULL
+    OR EXISTS (
+      SELECT 1 FROM user_project_access upa
+       WHERE upa.nce_project_id = investigation_queue.project_id
+         AND upa.user_entra_id = current_setting('app.current_user_entra_id', true)
+    )
+  );
+
+DROP POLICY IF EXISTS investigation_queue_service_write ON investigation_queue;
+CREATE POLICY investigation_queue_service_write ON investigation_queue
+  FOR ALL
+  TO chemclaw_service
+  USING (true) WITH CHECK (true);
+
 DO $$
 BEGIN
   IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'chemclaw_app') THEN

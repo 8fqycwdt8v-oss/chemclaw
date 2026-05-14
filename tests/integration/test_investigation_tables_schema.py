@@ -43,15 +43,32 @@ def test_investigation_queue_pending_index(conn):
 
 
 def test_investigation_queue_fact_fk(conn):
-    """FK from investigation_queue.fact_id to facts.id."""
+    """FK from investigation_queue.fact_id -> facts.id."""
     with conn.cursor() as cur:
         cur.execute(
-            "SELECT conname FROM pg_constraint "
-            "WHERE conrelid='investigation_queue'::regclass "
-            "  AND contype='f'"
+            "SELECT c.confrelid::regclass::text "
+            "FROM pg_constraint c "
+            "WHERE c.conrelid='investigation_queue'::regclass "
+            "  AND c.contype='f' "
+            "  AND c.conkey = ARRAY["
+            "    (SELECT attnum FROM pg_attribute "
+            "     WHERE attrelid='investigation_queue'::regclass "
+            "       AND attname='fact_id')"
+            "  ]::smallint[]"
         )
-        fks = [r[0] for r in cur.fetchall()]
-    assert any("fact" in fk.lower() for fk in fks), f"expected FK to facts; got {fks}"
+        row = cur.fetchone()
+    assert row is not None and row[0] == "facts", f"expected FK->facts; got {row}"
+
+
+def test_investigation_queue_rls_enabled(conn):
+    with conn.cursor() as cur:
+        cur.execute(
+            "SELECT relrowsecurity, relforcerowsecurity FROM pg_class "
+            "WHERE relname='investigation_queue'"
+        )
+        rls_enabled, rls_forced = cur.fetchone()
+    assert rls_enabled is True
+    assert rls_forced is True
 
 
 def test_investigation_budget_usage_exists(conn):
