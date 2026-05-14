@@ -252,11 +252,16 @@ export function buildAdvanceSynthesisCampaignTool(pool: Pool) {
           );
           stepRow.status = "in_progress";
           stepRow.started_at ??= new Date().toISOString();
-          // Bump campaign etag so a snapshot consumer sees the step claim.
-          // The other three state-mutating branches (die, completed, proposed→active)
-          // already bump etag — this restores symmetry. Conditional on rowCount > 0
-          // so a no-op claim (step already in_progress under a race) doesn't churn etag.
-          if ((claimResult.rowCount ?? 0) > 0) {
+          // Bump campaign etag so a snapshot consumer sees the step claim,
+          // restoring symmetry with the other state-mutating branches (die,
+          // completed, proposed→active) that already bump etag. Two guards:
+          //   - rowCount > 0: skip on a no-op claim (step already in_progress
+          //     under a race) so etag doesn't churn.
+          //   - status !== "proposed": skip when the downstream proposed→active
+          //     UPDATE will bump etag anyway, avoiding a double-bump on the
+          //     default fresh-campaign first-step path (claim defaults to true;
+          //     new campaigns start as 'proposed').
+          if ((claimResult.rowCount ?? 0) > 0 && campaign.status !== "proposed") {
             await client.query(
               `UPDATE synthesis_campaigns SET etag = etag + 1 WHERE id = $1::uuid`,
               [campaign.id],
