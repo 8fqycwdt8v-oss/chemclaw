@@ -58,8 +58,13 @@ WHERE s.ref_table IS NOT NULL
      WHERE s.ref_table = 'workflow_runs' AND x.id::text = s.ref_id
   )
   AND NOT EXISTS (
-    SELECT 1 FROM genchem_runs x
-     WHERE s.ref_table = 'genchem_runs' AND x.id::text = s.ref_id
+    -- 51_synthesis_campaigns.sql's ref_table list calls this 'genchem_runs'
+    -- in its docstring, but the actual table created in 26_genchem.sql is
+    -- `gen_runs`. Use the real name here; treat ref_table='gen_runs' AND
+    -- ref_table='genchem_runs' as the same target so existing rows tagged
+    -- with either string resolve correctly.
+    SELECT 1 FROM gen_runs x
+     WHERE s.ref_table IN ('gen_runs', 'genchem_runs') AND x.id::text = s.ref_id
   )
   AND NOT EXISTS (
     SELECT 1 FROM task_batches x
