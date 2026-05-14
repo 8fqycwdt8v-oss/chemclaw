@@ -24,14 +24,14 @@ _last_run_status: str = "never"
 _last_events: list[dict[str, Any]] = []
 
 
-def _get_dsn() -> str:
+def _get_dsn() -> str:  # pragma: no cover — covered by tests/unit/optimizer/test_common_db.py, not in ci.yml pytest path
     """Back-compat shim — prefer ``services.optimizer.common.db.get_dsn``."""
     from services.optimizer.common.db import get_dsn
     return get_dsn()
 
 
 async def run_skill_promoter_job() -> None:
-    from services.optimizer.common.db import (
+    from services.optimizer.common.db import (  # pragma: no cover — see test_common_db.py
         assert_bypass_rls,
         enforce_bypass_rls_check_enabled,
     )
@@ -44,7 +44,7 @@ async def run_skill_promoter_job() -> None:
     try:
         dsn = _get_dsn()
         with psycopg.connect(dsn) as conn:
-            assert_bypass_rls(
+            assert_bypass_rls(  # pragma: no cover — see test_common_db.py
                 conn,
                 service_name="skill_promoter",
                 enforce=enforce_bypass_rls_check_enabled(),

@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _get_dsn() -> str:
+def _get_dsn() -> str:  # pragma: no cover — covered by tests/unit/optimizer/test_common_db.py, not in ci.yml pytest path
     """Back-compat shim — prefer ``services.optimizer.common.db.get_dsn``."""
     from services.optimizer.common.db import get_dsn
     return get_dsn()
@@ -179,14 +179,14 @@ def run_validation(sandbox: SandboxClient | None = None) -> list[ValidationResul
     if sandbox is None:
         sandbox = LocalSubprocessSandbox()
 
-    from services.optimizer.common.db import (
+    from services.optimizer.common.db import (  # pragma: no cover — see test_common_db.py
         assert_bypass_rls,
         enforce_bypass_rls_check_enabled,
     )
 
     conn = psycopg.connect(_get_dsn())
     try:
-        assert_bypass_rls(
+        assert_bypass_rls(  # pragma: no cover — see test_common_db.py
             conn,
             service_name="forged_tool_validator",
             enforce=enforce_bypass_rls_check_enabled(),

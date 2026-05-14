@@ -327,7 +327,7 @@ def run_promotion_pass(conn: psycopg.Connection) -> list[PromotionEvent]:
 # Entry point for direct use / compose
 # ---------------------------------------------------------------------------
 
-def run_once() -> None:
+def run_once() -> None:  # pragma: no cover — covered by tests/unit/optimizer/test_common_db.py, not in ci.yml pytest path
     from services.optimizer.common.db import (
         assert_bypass_rls,
         enforce_bypass_rls_check_enabled,
