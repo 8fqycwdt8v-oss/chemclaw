@@ -115,3 +115,27 @@ def test_get_propagates_signing_key_errors(monkeypatch):
 
 def test_default_ttl_is_300_seconds():
     assert DEFAULT_TTL_SECONDS == 300
+
+
+def test_strict_scopes_mode_refuses_unknown_service(monkeypatch):
+    """MCP_AUTH_STRICT_SCOPES=true rejects unknown services at mint time.
+
+    Without the flag (default) the cache logs and mints an unscoped
+    token — fine for dev, dangerous in prod where a typo silently mints
+    a token that the MCP middleware accepts as "no scope check
+    requested." The flag makes that scenario impossible.
+    """
+    monkeypatch.setenv("MCP_AUTH_SIGNING_KEY", SIGNING_KEY)
+    monkeypatch.setenv("MCP_AUTH_STRICT_SCOPES", "true")
+    cache = McpTokenCache()
+    with pytest.raises(McpAuthError, match="no SERVICE_SCOPES entry"):
+        cache.get(service="mcp-totally-fictional")
+
+
+def test_strict_scopes_mode_allows_known_service(monkeypatch):
+    """Strict mode does NOT affect services that exist in SERVICE_SCOPES."""
+    monkeypatch.setenv("MCP_AUTH_SIGNING_KEY", SIGNING_KEY)
+    monkeypatch.setenv("MCP_AUTH_STRICT_SCOPES", "true")
+    cache = McpTokenCache()
+    token = cache.get(service="mcp-xtb")
+    assert token is not None

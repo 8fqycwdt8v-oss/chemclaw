@@ -33,7 +33,7 @@ import socket
 import threading
 import urllib.parse
 from pathlib import Path
-from typing import Iterator
+from typing import Any, Iterator
 
 import httpx
 
@@ -72,7 +72,7 @@ def _pinned_getaddrinfo(host, port, *args, **kwargs):  # type: ignore[no-untyped
     addrs = pinned.get(host.lower() if isinstance(host, str) else host)
     if not addrs:
         return _ORIGINAL_GETADDRINFO(host, port, *args, **kwargs)
-    out: list[tuple] = []
+    out: list[tuple[Any, ...]] = []
     for ip in addrs:
         try:
             ip_addr_info = _ORIGINAL_GETADDRINFO(
@@ -116,7 +116,7 @@ def pin_resolution(host: str, validated_ips: list[str]) -> Iterator[None]:
     # but the wrapper is a no-op for unpinned threads / hosts).
     with _PIN_LOCK:
         if socket.getaddrinfo is not _pinned_getaddrinfo:
-            socket.getaddrinfo = _pinned_getaddrinfo  # type: ignore[assignment]
+            socket.getaddrinfo = _pinned_getaddrinfo
 
     pinned: dict[str, list[str]] = getattr(_pin_state, "pinned", None) or {}
     key = host.lower()
@@ -339,15 +339,16 @@ def build_page_offset_table(pdf_bytes: bytes) -> list[int]:
     # (pypdf >= 3.x) carries the object number we can look up in xref.
     try:
         page_starts: list[int] = []
-        xref = reader.xref  # type: ignore[attr-defined]
+        xref = reader.xref
         for page in reader.pages:
-            ref = page.indirect_reference  # type: ignore[attr-defined]
+            ref = page.indirect_reference
             if ref is None:
                 break
             obj_num = ref.idnum
             # Try various xref shapes (pypdf 3.x uses a list-of-lists internally).
             pos: int | None = None
-            for tbl in (xref if isinstance(xref, list) else []):
+            xref_tables: list[Any] = xref if isinstance(xref, list) else []
+            for tbl in xref_tables:
                 if isinstance(tbl, list) and len(tbl) > obj_num and tbl[obj_num]:
                     entry = tbl[obj_num]
                     if isinstance(entry, int) and entry > 0:
@@ -391,7 +392,7 @@ def offset_to_page(byte_offset: int, page_starts: list[int]) -> int:
 # --------------------------------------------------------------------------
 def render_pdf_pages(
     pdf_bytes: bytes, pages: list[int], *, max_pdf_pages: int
-) -> tuple[list[dict], str | None]:
+) -> tuple[list[dict[str, Any]], str | None]:
     """Render specific pages of a PDF to base64 PNGs.
 
     Returns ``(results, warning)``. Falls back to pypdf text extraction
@@ -421,8 +422,8 @@ def render_pdf_pages(
         )
 
     try:
-        from pdf2image import convert_from_bytes  # type: ignore[import-untyped]
-        import PIL.Image  # type: ignore[import-untyped]  # noqa: F401
+        from pdf2image import convert_from_bytes
+        import PIL.Image  # noqa: F401
 
         images = convert_from_bytes(
             pdf_bytes,
@@ -433,7 +434,7 @@ def render_pdf_pages(
         min_page = min(pages)
         page_map = {min_page + i: img for i, img in enumerate(images)}
 
-        results: list[dict] = []
+        results: list[dict[str, Any]] = []
         for p in pages:
             img = page_map.get(p)
             if img is None:

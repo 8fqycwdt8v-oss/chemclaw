@@ -77,7 +77,7 @@ def _not_implemented_for(scheme: str) -> JSONResponse:
 
 
 @app.post("/fetch", response_model=FetchOut, tags=["fetch"])
-async def fetch(req: Annotated[FetchIn, Body(...)]) -> FetchOut:
+async def fetch(req: Annotated[FetchIn, Body(...)]) -> FetchOut | JSONResponse:
     """Fetch the raw bytes of a document by URI."""
     parsed = parse_and_validate_uri(req.uri)
     scheme = parsed.scheme.lower()
@@ -101,7 +101,9 @@ async def fetch(req: Annotated[FetchIn, Body(...)]) -> FetchOut:
 
 
 @app.post("/pdf_pages", response_model=PdfPagesOut, tags=["pdf"])
-async def pdf_pages(req: Annotated[PdfPagesIn, Body(...)]) -> PdfPagesOut:
+async def pdf_pages(
+    req: Annotated[PdfPagesIn, Body(...)],
+) -> PdfPagesOut | JSONResponse:
     """Render specific pages of a PDF to base64 PNGs (text-extract fallback)."""
     parsed = parse_and_validate_uri(req.uri)
     scheme = parsed.scheme.lower()
@@ -124,7 +126,7 @@ async def pdf_pages(req: Annotated[PdfPagesIn, Body(...)]) -> PdfPagesOut:
 @app.post("/byte_offset_to_page", response_model=ByteOffsetToPageOut, tags=["pdf"])
 async def byte_offset_to_page(
     req: Annotated[ByteOffsetToPageIn, Body(...)],
-) -> ByteOffsetToPageOut:
+) -> ByteOffsetToPageOut | JSONResponse:
     """Map PDF byte offsets to 1-indexed page numbers.
 
     Used by the contextual_chunker projector for canonical chunk-to-page mapping.

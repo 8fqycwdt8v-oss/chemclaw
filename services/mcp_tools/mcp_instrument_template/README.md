@@ -2,9 +2,12 @@
 
 Starting point for adding a new instrument MCP adapter (Waters Empower,
 Agilent OpenLAB, Sciex Analyst, Thermo Chromeleon, or any HTTP-accessible
-LIMS/CDS export). No reference adapter is currently bundled in this build,
-so the steps below describe what an adapter must implement rather than
-which file to copy.
+LIMS/CDS export). The closest in-tree reference is **`mcp_logs_sciy`**
+(`services/mcp_tools/mcp_logs_sciy/`) — the SciY LOGS adapter that
+implements the same shape against a fake-Postgres backend (default) and a
+stubbed real-tenant backend. Read it alongside this guide to see what a
+production-shaped adapter looks like; the steps below describe the
+contract every new adapter must satisfy regardless.
 
 ## What the adapter must expose
 
