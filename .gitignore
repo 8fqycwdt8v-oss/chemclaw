@@ -76,6 +76,9 @@ Thumbs.db
 
 # Claude Code local settings (keep .claude/ shareable, but hide local overrides)
 .claude/settings.local.json
+# Per-process lock file written by Claude Code's scheduled-tasks runner. Local
+# state only; never tracked.
+.claude/scheduled_tasks.lock
 
 # ---- Node.js ----
 node_modules/
