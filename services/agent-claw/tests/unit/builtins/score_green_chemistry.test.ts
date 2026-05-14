@@ -8,7 +8,13 @@ const URL_ = "http://mcp-green-chemistry:8019";
 function makeCtx() {
   const seenFactIds = new Set<string>();
   const scratchpad = new Map<string, unknown>([["seenFactIds", seenFactIds]]);
-  return { userEntraId: "test@example.com", scratchpad, seenFactIds };
+  return {
+    userEntraId: "test@example.com",
+    orgId: null,
+    nceProjectId: null,
+    scratchpad,
+    seenFactIds,
+  };
 }
 
 const FAKE_RESPONSE = {

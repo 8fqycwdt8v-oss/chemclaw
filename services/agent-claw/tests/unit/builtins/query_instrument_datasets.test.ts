@@ -8,7 +8,13 @@ const LOGS_URL = "http://mcp-logs-sciy:8016";
 function makeCtx() {
   const seenFactIds = new Set<string>();
   const scratchpad = new Map<string, unknown>([["seenFactIds", seenFactIds]]);
-  return { userEntraId: "test@example.com", scratchpad, seenFactIds };
+  return {
+    userEntraId: "test@example.com",
+    orgId: null,
+    nceProjectId: null,
+    scratchpad,
+    seenFactIds,
+  };
 }
 
 const FAKE_DATASETS = [

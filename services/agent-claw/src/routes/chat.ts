@@ -171,6 +171,8 @@ async function handleChat(
   );
   const ctx: ToolContext = {
     userEntraId: user,
+    orgId: null,
+    nceProjectId: null,
     seenFactIds,
     scratchpad,
     lifecycle,

@@ -10,15 +10,25 @@
 // is closed. Operators wanting the legacy permissive default add a global
 // allow-all policy row.
 
-import { describe, it, expect, vi } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import type { Pool, QueryResult } from "pg";
 import { z } from "zod";
 import { Lifecycle } from "../../src/core/lifecycle.js";
 import { Budget } from "../../src/core/budget.js";
 import { runHarness } from "../../src/core/harness.js";
 import { resolveDecision } from "../../src/core/permissions/resolver.js";
+import {
+  PermissionPolicyLoader,
+  setPermissionPolicyLoader,
+  clearPermissionPolicyLoader,
+  type PolicyDecision,
+} from "../../src/core/permissions/policy-loader.js";
+import { permissionHook } from "../../src/core/hooks/permission.js";
 import { defineTool, type Tool } from "../../src/tools/tool.js";
 import { StubLlmProvider } from "../../src/llm/provider.js";
+import * as logger from "../../src/observability/logger.js";
 import type { Message, ToolContext } from "../../src/core/types.js";
+import { makeCtx } from "../helpers/make-ctx.js";
 
 const fakeTool: Tool = {
   id: "Bash",
@@ -101,6 +111,218 @@ describe("permissionMode='enforce'", () => {
 // (no-policy-match → ask) is paired with the consumer treating ask as
 // fail-closed. Without this pairing, an enforce-mode call with no matching
 // permission policy silently executed — see resolver.ts comment.
+// ---------------------------------------------------------------------------
+// Task F — org-scoped policy + unbound-ctx WARN
+//
+// When PolicyMatchContext.org/project were optional, a route that forgot to
+// thread orgId into the ToolContext silently failed org-scoped policies. The
+// new contract makes both fields required-nullable so the loader sees an
+// explicit null, and the resolver WARNs (event: permission_org_scoped_policy
+// _unbound_ctx) so operators can wire route-level binding (Phase F.3) BEFORE
+// org-scoped policies start landing in production.
+// ---------------------------------------------------------------------------
+describe("Task F: org-scoped policy unbound-ctx WARN", () => {
+  interface RowShape {
+    id: string;
+    scope: "global" | "org" | "project";
+    scope_id: string;
+    decision: PolicyDecision;
+    tool_pattern: string;
+    argument_pattern: string | null;
+    reason: string | null;
+    enabled: boolean;
+  }
+  let state: { rows: RowShape[] };
+  let pool: Pool;
+
+  beforeEach(() => {
+    state = { rows: [] };
+    pool = {
+      connect: async () => ({
+        query: async <T = unknown>(sql: string): Promise<QueryResult<T>> => {
+          if (
+            sql.startsWith("BEGIN") ||
+            sql.startsWith("COMMIT") ||
+            sql.startsWith("ROLLBACK") ||
+            sql.startsWith("SELECT set_config")
+          ) {
+            return { rows: [] as T[], rowCount: 0, command: "SET", oid: 0, fields: [] };
+          }
+          if (sql.includes("FROM permission_policies")) {
+            return {
+              rows: state.rows as unknown as T[],
+              rowCount: state.rows.length,
+              command: "SELECT",
+              oid: 0,
+              fields: [],
+            };
+          }
+          return { rows: [] as T[], rowCount: 0, command: "SELECT", oid: 0, fields: [] };
+        },
+        release: () => {},
+      }),
+    } as unknown as Pool;
+  });
+
+  afterEach(() => {
+    clearPermissionPolicyLoader();
+  });
+
+  function policyRow(over: Partial<RowShape>): RowShape {
+    return {
+      id: "p-test",
+      scope: "global",
+      scope_id: "",
+      decision: "deny",
+      tool_pattern: "risky_tool",
+      argument_pattern: null,
+      reason: null,
+      enabled: true,
+      ...over,
+    };
+  }
+
+  async function buildLifecycleWithPolicyHook(): Promise<Lifecycle> {
+    const loader = new PermissionPolicyLoader(pool);
+    await loader.refreshIfStale();
+    setPermissionPolicyLoader(loader);
+    const lifecycle = new Lifecycle();
+    lifecycle.on("permission_request", "permission", permissionHook);
+    return lifecycle;
+  }
+
+  const riskyTool: Tool = {
+    id: "risky_tool",
+    description: "",
+    inputSchema: { jsonSchema: { type: "object" } } as never,
+    call: async () => ({ ok: true }),
+  } as unknown as Tool;
+
+  it("WARNs when an org-scoped policy could match but ctx.orgId is null", async () => {
+    state.rows.push(
+      policyRow({
+        id: "org-acme-deny",
+        scope: "org",
+        scope_id: "acme",
+        decision: "deny",
+        tool_pattern: "risky_tool",
+      }),
+    );
+    const lifecycle = await buildLifecycleWithPolicyHook();
+
+    const warnSpy = vi.fn();
+    const stubLogger = {
+      warn: warnSpy,
+      info: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+      trace: vi.fn(),
+      fatal: vi.fn(),
+      child: () => stubLogger,
+    };
+    const getLoggerSpy = vi
+      .spyOn(logger, "getLogger")
+      .mockReturnValue(stubLogger as never);
+
+    try {
+      const result = await resolveDecision({
+        tool: riskyTool,
+        input: {},
+        ctx: makeCtx("u@example.com", [], { orgId: null }),
+        options: { permissionMode: "enforce" },
+        lifecycle,
+      });
+      // Org-scoped policy can't match unbound ctx → no decision → default ask.
+      expect(result.decision).toBe("ask");
+      // The unbound-ctx WARN fired with the new event name.
+      const unboundCall = warnSpy.mock.calls.find(
+        (call) =>
+          (call[0] as { event?: string }).event ===
+          "permission_org_scoped_policy_unbound_ctx",
+      );
+      expect(unboundCall).toBeDefined();
+      expect(unboundCall![0]).toMatchObject({
+        event: "permission_org_scoped_policy_unbound_ctx",
+        tool_id: "risky_tool",
+        policy_count: 1,
+      });
+    } finally {
+      getLoggerSpy.mockRestore();
+    }
+  });
+
+  it("the same org-scoped policy DOES fire when ctx.orgId matches", async () => {
+    state.rows.push(
+      policyRow({
+        id: "org-acme-deny",
+        scope: "org",
+        scope_id: "acme",
+        decision: "deny",
+        tool_pattern: "risky_tool",
+        reason: "acme denies risky_tool",
+      }),
+    );
+    const lifecycle = await buildLifecycleWithPolicyHook();
+
+    const result = await resolveDecision({
+      tool: riskyTool,
+      input: {},
+      ctx: makeCtx("u@example.com", [], { orgId: "acme" }),
+      options: { permissionMode: "enforce" },
+      lifecycle,
+    });
+    expect(result.decision).toBe("deny");
+    expect(result.reason).toMatch(/acme denies risky_tool/);
+  });
+
+  it("does NOT emit the unbound-ctx WARN when no org-scoped policy could match", async () => {
+    // Only a global policy exists; ctx.orgId being null is irrelevant.
+    state.rows.push(
+      policyRow({
+        id: "global-allow",
+        scope: "global",
+        scope_id: "",
+        decision: "allow",
+        tool_pattern: "risky_tool",
+      }),
+    );
+    const lifecycle = await buildLifecycleWithPolicyHook();
+
+    const warnSpy = vi.fn();
+    const stubLogger = {
+      warn: warnSpy,
+      info: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+      trace: vi.fn(),
+      fatal: vi.fn(),
+      child: () => stubLogger,
+    };
+    const getLoggerSpy = vi
+      .spyOn(logger, "getLogger")
+      .mockReturnValue(stubLogger as never);
+
+    try {
+      const result = await resolveDecision({
+        tool: riskyTool,
+        input: {},
+        ctx: makeCtx("u@example.com", [], { orgId: null }),
+        options: { permissionMode: "enforce" },
+        lifecycle,
+      });
+      expect(result.decision).toBe("allow");
+      const unboundCall = warnSpy.mock.calls.find(
+        (call) =>
+          (call[0] as { event?: string }).event ===
+          "permission_org_scoped_policy_unbound_ctx",
+      );
+      expect(unboundCall).toBeUndefined();
+    } finally {
+      getLoggerSpy.mockRestore();
+    }
+  });
+});
+
 describe("run-one-tool: enforce-mode 'ask' fails closed", () => {
   it("a tool call with no matching policy returns a synthetic deny envelope", async () => {
     const tool: Tool = defineTool({

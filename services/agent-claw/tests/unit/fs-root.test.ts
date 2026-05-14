@@ -76,6 +76,8 @@ describe2("read_file — OOM guard", () => {
     const tool = buildReadFileTool(readFileRoot);
     const ctx = {
       userEntraId: "u",
+      orgId: null,
+      nceProjectId: null,
       scratchpad: new Map(),
       seenFactIds: new Set<string>(),
     };
@@ -91,6 +93,8 @@ describe2("read_file — OOM guard", () => {
     const tool = buildReadFileTool(readFileRoot);
     const ctx = {
       userEntraId: "u",
+      orgId: null,
+      nceProjectId: null,
       scratchpad: new Map(),
       seenFactIds: new Set<string>(),
     };

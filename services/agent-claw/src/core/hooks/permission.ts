@@ -32,17 +32,16 @@ export async function permissionHook(
     // matching will simply fail to match and the policy will be skipped.
   }
 
-  // Org/project context for scoped policies. We don't have a definitive
-  // tenant binding in ToolContext today (Phase F.3 will add it); fall
-  // back to undefined so only global rules apply for now.
-  const org = (payload.ctx as { orgId?: string } | undefined)?.orgId;
-  const project = (payload.ctx as { projectId?: string } | undefined)?.projectId;
-
+  // Org/project context for scoped policies — typed nullable on
+  // ToolContext (Task F). Today routes pass null for both; Phase F.3
+  // will populate from the session / request body. The resolver emits a
+  // structured WARN when an org-scoped policy could match but ctx.orgId
+  // is null so the gap is observable in Loki.
   const match = loader.match({
     toolId: payload.toolId,
     inputJson,
-    org,
-    project,
+    org: payload.ctx.orgId,
+    project: payload.ctx.nceProjectId,
   });
   if (!match) return {};
 
