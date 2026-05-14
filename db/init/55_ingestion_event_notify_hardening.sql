@@ -12,9 +12,11 @@
 --      with it. Pre-emptively truncate the payload and emit a structured
 --      log record (`error_events`) so the failure is observable.
 --
---   2. Strengthen the empty-user RLS gate on three owner-scoped tables
---      (feedback_events, corrections, notifications). The 12_security
---      _hardening.sql policies were `user_entra_id = current_setting(...)`
+--   2. Strengthen the empty-user RLS gate on the two owner-scoped tables
+--      still in the schema (feedback_events, notifications). corrections was
+--      dropped by 52_drop_corrections.sql so its policy block is omitted.
+--      The 12_security_hardening.sql policies were
+--      `user_entra_id = current_setting(...)`
 --      with no IS NOT NULL/<> '' guard. Currently safe because user_entra_id
 --      is NOT NULL in the schema, but inconsistent with
 --      42_session_policy_empty_user_guard.sql and one schema change away
@@ -94,20 +96,10 @@ CREATE POLICY feedback_events_owner_policy ON feedback_events
     AND user_entra_id = current_setting('app.current_user_entra_id', true)
   );
 
--- corrections
-DROP POLICY IF EXISTS corrections_owner_policy ON corrections;
-CREATE POLICY corrections_owner_policy ON corrections
-  FOR ALL
-  USING (
-    current_setting('app.current_user_entra_id', true) IS NOT NULL
-    AND current_setting('app.current_user_entra_id', true) <> ''
-    AND user_entra_id = current_setting('app.current_user_entra_id', true)
-  )
-  WITH CHECK (
-    current_setting('app.current_user_entra_id', true) IS NOT NULL
-    AND current_setting('app.current_user_entra_id', true) <> ''
-    AND user_entra_id = current_setting('app.current_user_entra_id', true)
-  );
+-- corrections: dropped by 52_drop_corrections.sql (zero readers/writers,
+-- duplicate of feedback_events.correction_payload). The empty-user policy
+-- guard that landed here in the branch's original version is now defunct.
+-- Re-instate guarded policies only if the table is ever revived.
 
 -- notifications
 DROP POLICY IF EXISTS notifications_owner_policy ON notifications;
