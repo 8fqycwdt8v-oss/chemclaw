@@ -243,7 +243,7 @@ export function buildAdvanceSynthesisCampaignTool(pool: Pool) {
         // Optionally claim it (in_progress + started_at), then flip the campaign to 'active'
         // if it was still 'proposed'.
         if (input.claim) {
-          await client.query(
+          const claimResult = await client.query(
             `UPDATE synthesis_campaign_steps
                 SET status = 'in_progress',
                     started_at = COALESCE(started_at, NOW())
@@ -252,6 +252,16 @@ export function buildAdvanceSynthesisCampaignTool(pool: Pool) {
           );
           stepRow.status = "in_progress";
           stepRow.started_at ??= new Date().toISOString();
+          // Bump campaign etag so a snapshot consumer sees the step claim.
+          // The other three state-mutating branches (die, completed, proposed→active)
+          // already bump etag — this restores symmetry. Conditional on rowCount > 0
+          // so a no-op claim (step already in_progress under a race) doesn't churn etag.
+          if ((claimResult.rowCount ?? 0) > 0) {
+            await client.query(
+              `UPDATE synthesis_campaigns SET etag = etag + 1 WHERE id = $1::uuid`,
+              [campaign.id],
+            );
+          }
         }
         if (campaign.status === "proposed") {
           await client.query(
