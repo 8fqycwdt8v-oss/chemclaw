@@ -468,21 +468,41 @@ treat them right). The `wiki-human-block-guard` `pre_tool` hook rejects
 * **Done when**: an admin can promote a page (audited); `/wiki` opens
   the curator skill; the contradiction prompt is in `prompt_registry`.
 
-### Phase 4b-ii — `wiki_linter` Neo4j-backed stale-citation backstop + `contradiction/<slug>` pages
+### Phase 4b-ii — `wiki_linter` Neo4j-backed stale-citation backstop + `contradiction/<slug>` pages  ✅ done
 
-* Extend `wiki_linter` with a Neo4j connection (via
-  `services/projectors/common/neo4j_client.py`) that reads
-  `:Fact.invalidated_at` and `:Fact.expert_disputed` for the facts each
-  citing page lists. Mark a page `dirty` with
-  `dirty_reason='lint:stale_citation'` when ≥ 1 citation is invalidated
-  but the page revision hasn't been regenerated since.
-* For entities accumulating ≥ N `expert_disputed` / `invalidated` facts
-  on the same subject+predicate, create a `contradiction/<slug>` stub
-  with `dirty_reason='lint:contradiction'`; `wiki_regen` then calls the
-  `wiki.contradiction` prompt to fill it.
-* **Done when**: a lint run spins up a `contradiction/` page for a
-  seeded disagreement; a citing page is marked dirty when one of its
-  cited facts is invalidated.
+* `wiki_linter` gained two Neo4j-backed sweeps (via
+  `services/projectors/common/neo4j_client.py`):
+  * `_sweep_stale_citations` — for every `current` page with `dirty=false`,
+    fetch its `fact:<uuid>` citations, ask Neo4j which of those `:Fact`
+    nodes have `invalidated_at IS NOT NULL` OR have only invalidated
+    incoming `:CITES` edges, and `UPDATE knowledge_articles SET dirty=true,
+    dirty_reason='lint:stale_citation'` for the citing pages. Idempotent
+    (the `WHERE dirty=false` guard prevents `updated_at` thrash).
+  * `_sweep_contradictions` — Cypher group-by on
+    `(subject_label, subject_id_value, predicate)` yields `:Fact` clusters
+    with ≥ `wiki_linter_contradiction_min_objects` distinct active object
+    values; create a stub `contradiction/<slug>` page with `dirty=true,
+    dirty_reason='lint:contradiction'`, stamping the subject + predicate +
+    fact_ids into `entity_ref`. `_FIND_DIRTY_SQL`'s `entity_ref IS NOT
+    NULL` filter then picks it up on the regen daemon's next tick.
+* Both sweeps are gated on `NEO4J_URI` being set; in environments without
+  the KG (the chemistry profile isn't always deployed) the linter logs once
+  and skips them. The pure-Postgres sweeps (missing-page, orphan, index,
+  log) continue regardless.
+* `wiki_regen` gained `_ctx_contradiction` (read the `claim_a` / `claim_b`
+  shape straight from the linter's `entity_ref` payload — no extra Neo4j
+  call from the daemon), a per-kind prompt selector
+  (`contradiction` → `wiki.contradiction`, else `wiki.synthesis`), and a
+  built-in `_FALLBACK_CONTRADICTION_PROMPT` that mirrors the seed.
+* Tests: 8 new cases in `tests/unit/optimizer/test_wiki_linter.py`
+  (`_slugify`, `_contradiction_slug`, the two Neo4j sweeps via a fake-async
+  driver, including min/limit and short-circuit paths); 5 new cases in
+  `tests/unit/optimizer/test_wiki_regen.py` (`_ctx_contradiction` happy
+  path / missing entity_ref / resolved-pair / ≥ 3 sides /
+  `_load_contradiction_prompt` seed + fallback). All pass; mypy --strict on
+  the two touched daemons is clean.
+
+### Phase 5 — polish: confidence wiring, observability, docs
 
 ### Phase 5 — polish: confidence wiring, observability, docs
 
