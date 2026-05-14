@@ -433,4 +433,5 @@ export const VERB_TO_SKILL: Record<string, string> = {
   retro: "retro",
   qc: "qc",
   synthesize: "synthesis_campaign_orchestrator",
+  wiki: "wiki_curator",
 };

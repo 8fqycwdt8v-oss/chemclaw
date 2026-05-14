@@ -443,18 +443,46 @@ treat them right). The `wiki-human-block-guard` `pre_tool` hook rejects
 * **Done**: a lint run creates a stub for a project that has no page yet,
   rebuilds the `index`, and logs an entry.
 
-### Phase 4b — contradiction pages + admin route + `/wiki` verb + curator skill
+### Phase 4b-i — admin route + `/wiki` verb + curator skill + contradiction prompt seed  ✅ done
 
-* Extend `wiki_linter`: a stale-citation backstop sweep (needs a Neo4j
-  connection to read `:Fact.invalidated_at`) and `contradiction/<slug>` page
-  generation for entities with ≥N `expert_disputed`/`invalidated` facts (needs
-  Neo4j + an LLM call via the new `wiki.contradiction` `prompt_registry` mode).
-* `POST /api/admin/articles/:id/maturity` — `guardAdmin`, `appendAudit`,
-  cache-bust; runbook `docs/runbooks/knowledge-wiki-curation.md`.
-* `/wiki` slash verb (slash parser) + `skills/wiki-curator/SKILL.md` +
-  `skill_library` seed row.
-* **Done when**: a lint run spins up a `contradiction/` page; an admin can
-  promote a page to FOUNDATION (audited); `/wiki <slug>` opens the curator skill.
+* `POST /api/admin/articles/:id/maturity` — `guardAdmin` + `appendAudit`
+  (action `knowledge_article.maturity`); bumps `etag` but NOT `revision`
+  (maturity is curation metadata, not body content);
+  `services/agent-claw/src/routes/admin/admin-articles.ts` mounted from
+  `routes/admin/index.ts`; 7 vitest cases in
+  `tests/unit/admin-articles-route.test.ts` (403 / 400 / 404 / promote /
+  noop / demote).
+* `/wiki <query>` slash verb — `STREAMABLE_VERBS.add("wiki")` +
+  `VERB_TO_SKILL.wiki = "wiki_curator"` + help-text line; covered in
+  `tests/unit/slash.test.ts`.
+* `skills/wiki-curator/SKILL.md` — agent-authorable kinds only
+  (topic / glossary / contradiction); tools list scoped to wiki +
+  retrieval primitives; documents the hard rules (no entity pages, no
+  `<!-- human:begin -->` markers, cite-everything). Covered by
+  `tests/unit/skills-wiki-curator.test.ts`.
+* `db/seed/08_wiki_contradiction_prompt.sql` — `wiki.contradiction`
+  `prompt_registry` row v1 (used by Phase 4b-ii).
+* `docs/runbooks/knowledge-wiki-curation.md` — enable / observe /
+  curate (agent + human + admin) / replay / disable / failure modes;
+  linked from `CLAUDE.md` runbook list.
+* **Done when**: an admin can promote a page (audited); `/wiki` opens
+  the curator skill; the contradiction prompt is in `prompt_registry`.
+
+### Phase 4b-ii — `wiki_linter` Neo4j-backed stale-citation backstop + `contradiction/<slug>` pages
+
+* Extend `wiki_linter` with a Neo4j connection (via
+  `services/projectors/common/neo4j_client.py`) that reads
+  `:Fact.invalidated_at` and `:Fact.expert_disputed` for the facts each
+  citing page lists. Mark a page `dirty` with
+  `dirty_reason='lint:stale_citation'` when ≥ 1 citation is invalidated
+  but the page revision hasn't been regenerated since.
+* For entities accumulating ≥ N `expert_disputed` / `invalidated` facts
+  on the same subject+predicate, create a `contradiction/<slug>` stub
+  with `dirty_reason='lint:contradiction'`; `wiki_regen` then calls the
+  `wiki.contradiction` prompt to fill it.
+* **Done when**: a lint run spins up a `contradiction/` page for a
+  seeded disagreement; a citing page is marked dirty when one of its
+  cited facts is invalidated.
 
 ### Phase 5 — polish: confidence wiring, observability, docs
 

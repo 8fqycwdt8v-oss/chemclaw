@@ -96,6 +96,13 @@ describe("parseSlash — streamable verbs", () => {
     expect(r.args).toBe("");
     expect(r.isStreamable).toBe(true);
   });
+
+  it("/wiki returns isStreamable=true and routes to wiki_curator", () => {
+    const r = parseSlash("/wiki Buchwald-Hartwig amination conditions");
+    expect(r.verb).toBe("wiki");
+    expect(r.args).toBe("Buchwald-Hartwig amination conditions");
+    expect(r.isStreamable).toBe(true);
+  });
 });
 
 describe("parseSlash — unknown verbs", () => {
