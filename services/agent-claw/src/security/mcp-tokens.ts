@@ -17,6 +17,8 @@
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 
+import { getLogger } from "../observability/logger.js";
+
 export interface McpTokenClaims {
   /** Subject — usually the sandbox_id or "agent" for direct calls. */
   sub: string;
@@ -146,9 +148,22 @@ export function verifyMcpToken(
   token: string,
   opts: { signingKey?: string; now?: number; expectedAudience?: string } = {},
 ): McpTokenClaims {
+  // Dual-key verify (A6): accept tokens signed under either the primary
+  // MCP_AUTH_SIGNING_KEY or the rotation-window MCP_AUTH_SIGNING_KEY_NEXT.
+  // Mint stays single-key (always primary); this only widens verification
+  // so a service that has rolled its primary can still be accepted by
+  // peers that have only loaded the new key as _NEXT.
+  //
   // .trim() mirrors signMcpToken: a whitespace-only key cannot verify either.
-  const key = (opts.signingKey ?? process.env.MCP_AUTH_SIGNING_KEY ?? "").trim();
-  if (!key) {
+  const primary = (opts.signingKey ?? process.env.MCP_AUTH_SIGNING_KEY ?? "").trim();
+  // An explicit `signingKey` override (used by unit tests) suppresses the
+  // env-derived _NEXT — the caller is asking to verify against ONE specific
+  // key, not the rotation set.
+  const nextKey =
+    opts.signingKey !== undefined
+      ? ""
+      : (process.env.MCP_AUTH_SIGNING_KEY_NEXT ?? "").trim();
+  if (!primary) {
     throw new McpAuthError("MCP_AUTH_SIGNING_KEY is empty; cannot verify token");
   }
   const parts = token.split(".");
@@ -158,17 +173,28 @@ export function verifyMcpToken(
   const [h, p, sig] = parts as [string, string, string];
 
   const signingInput = `${h}.${p}`;
-  const expectedSig = createHmac("sha256", key).update(signingInput, "utf8").digest();
   let actualSig: Buffer;
   try {
     actualSig = Buffer.from(b64UrlDecode(sig));
   } catch (err) {
     throw new McpAuthError(`malformed signature: ${(err as Error).message}`);
   }
-  if (
-    actualSig.length !== expectedSig.length ||
-    !timingSafeEqual(expectedSig, actualSig)
-  ) {
+
+  const matches = (key: string): boolean => {
+    const expected = createHmac("sha256", key).update(signingInput, "utf8").digest();
+    return (
+      actualSig.length === expected.length && timingSafeEqual(expected, actualSig)
+    );
+  };
+
+  if (matches(primary)) {
+    // primary verified
+  } else if (nextKey && matches(nextKey)) {
+    getLogger("McpTokens").info(
+      { event: "mcp_auth_verify_via_next_key" },
+      "verified via _NEXT key",
+    );
+  } else {
     throw new McpAuthError("bad signature");
   }
 

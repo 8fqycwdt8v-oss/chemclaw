@@ -1,6 +1,6 @@
 // Tests for the MCP Bearer-token signing helper (ADR 006 partial).
 
-import { describe, it, expect } from "vitest";
+import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import {
   signMcpToken,
   verifyMcpToken,
@@ -91,5 +91,113 @@ describe("signMcpToken / verifyMcpToken — round-trip", () => {
         signingKey: "",
       }),
     ).toThrow(/MCP_AUTH_SIGNING_KEY/);
+  });
+});
+
+describe("verifyMcpToken — dual-key rotation", () => {
+  const SAVED_PRIMARY = process.env.MCP_AUTH_SIGNING_KEY;
+  const SAVED_NEXT = process.env.MCP_AUTH_SIGNING_KEY_NEXT;
+
+  beforeEach(() => {
+    delete process.env.MCP_AUTH_SIGNING_KEY;
+    delete process.env.MCP_AUTH_SIGNING_KEY_NEXT;
+  });
+  afterEach(() => {
+    if (SAVED_PRIMARY === undefined) {
+      delete process.env.MCP_AUTH_SIGNING_KEY;
+    } else {
+      process.env.MCP_AUTH_SIGNING_KEY = SAVED_PRIMARY;
+    }
+    if (SAVED_NEXT === undefined) {
+      delete process.env.MCP_AUTH_SIGNING_KEY_NEXT;
+    } else {
+      process.env.MCP_AUTH_SIGNING_KEY_NEXT = SAVED_NEXT;
+    }
+  });
+
+  it("accepts a token signed with MCP_AUTH_SIGNING_KEY_NEXT when primary is rotated", () => {
+    const primary = "p".repeat(32);
+    const next = "n".repeat(32);
+    // Mint a token under the (future-)next key by setting it as primary first.
+    process.env.MCP_AUTH_SIGNING_KEY = next;
+    const token = signMcpToken({
+      sandboxId: "sbx_001",
+      userEntraId: "alice@corp.com",
+      scopes: ["mcp_kg:read"],
+      now: 1_700_000_000,
+    });
+    // Now flip: verifier has the old key as primary and the new key as _NEXT.
+    process.env.MCP_AUTH_SIGNING_KEY = primary;
+    process.env.MCP_AUTH_SIGNING_KEY_NEXT = next;
+    const claims = verifyMcpToken(token, { now: 1_700_000_000 });
+    expect(claims.sub).toBe("sbx_001");
+    expect(claims.user).toBe("alice@corp.com");
+    expect(claims.scopes).toEqual(["mcp_kg:read"]);
+  });
+
+  it("rejects a token signed with a key that is neither primary nor next", () => {
+    const primary = "p".repeat(32);
+    const next = "n".repeat(32);
+    const rogue = "r".repeat(32);
+    process.env.MCP_AUTH_SIGNING_KEY = rogue;
+    const token = signMcpToken({
+      sandboxId: "sbx_001",
+      userEntraId: "alice@corp.com",
+      scopes: [],
+      now: 1_700_000_000,
+    });
+    process.env.MCP_AUTH_SIGNING_KEY = primary;
+    process.env.MCP_AUTH_SIGNING_KEY_NEXT = next;
+    expect(() => verifyMcpToken(token, { now: 1_700_000_000 })).toThrow(
+      McpAuthError,
+    );
+  });
+
+  it("behaves identically to single-key mode when MCP_AUTH_SIGNING_KEY_NEXT is unset", () => {
+    const primary = "p".repeat(32);
+    process.env.MCP_AUTH_SIGNING_KEY = primary;
+    // Sanity: a primary-signed token verifies.
+    const good = signMcpToken({
+      sandboxId: "sbx_001",
+      userEntraId: "alice@corp.com",
+      scopes: [],
+      now: 1_700_000_000,
+    });
+    const claims = verifyMcpToken(good, { now: 1_700_000_000 });
+    expect(claims.sub).toBe("sbx_001");
+
+    // And a token signed under any other key is rejected (since _NEXT is unset).
+    const otherKey = "o".repeat(32);
+    process.env.MCP_AUTH_SIGNING_KEY = otherKey;
+    const bad = signMcpToken({
+      sandboxId: "sbx_001",
+      userEntraId: "alice@corp.com",
+      scopes: [],
+      now: 1_700_000_000,
+    });
+    process.env.MCP_AUTH_SIGNING_KEY = primary;
+    expect(() => verifyMcpToken(bad, { now: 1_700_000_000 })).toThrow(
+      McpAuthError,
+    );
+  });
+
+  it("explicit signingKey override suppresses _NEXT (single-key semantic preserved)", () => {
+    const primary = "p".repeat(32);
+    const next = "n".repeat(32);
+    // Mint under _next.
+    process.env.MCP_AUTH_SIGNING_KEY = next;
+    const token = signMcpToken({
+      sandboxId: "sbx_001",
+      userEntraId: "alice@corp.com",
+      scopes: [],
+      now: 1_700_000_000,
+    });
+    // Set rotation env, but pass an explicit override pointing at primary —
+    // verification must NOT fall through to _NEXT.
+    process.env.MCP_AUTH_SIGNING_KEY = primary;
+    process.env.MCP_AUTH_SIGNING_KEY_NEXT = next;
+    expect(() =>
+      verifyMcpToken(token, { signingKey: primary, now: 1_700_000_000 }),
+    ).toThrow(McpAuthError);
   });
 });
