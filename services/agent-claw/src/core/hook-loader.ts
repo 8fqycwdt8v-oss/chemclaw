@@ -37,6 +37,7 @@ import type { Tool } from "../tools/tool.js";
 import type { SandboxClient } from "./sandbox.js";
 import { registerSessionSandboxCloseHook } from "./hooks/session-sandbox-close.js";
 import { registerRedactSecretsHook } from "./hooks/redact-secrets.js";
+import { registerRedactToolOutputHook } from "./hooks/redact-tool-output.js";
 import { registerTagMaturityHook } from "./hooks/tag-maturity.js";
 import { registerDetectMcpLeakageHook } from "./hooks/detect-mcp-leakage.js";
 import { registerBudgetGuardHook } from "./hooks/budget-guard.js";
@@ -159,6 +160,12 @@ const BUILTIN_REGISTRARS = new Map<string, BuiltinRegistrar>([
   // markers — those blocks are reserved for human edits via the route.
   ["wiki-human-block-guard", (lc) => { registerWikiHumanBlockGuardHook(lc); }],
   ["source-cache", (lc, deps) => { registerSourceCacheHook(lc, deps.pool); }],
+  // Defense-in-depth: scrubs every string leaf in tool outputs before
+  // they enter the next-turn LLM context. Registered AFTER the other
+  // post_tool hooks (yaml order:200 vs default 100) so anti-fabrication,
+  // tag-maturity, source-cache, detect-mcp-leakage,
+  // fact-id-consistency-guard see the unredacted output.
+  ["redact-tool-output", (lc) => { registerRedactToolOutputHook(lc); }],
   [
     "compact-window",
     (lc, deps) =>

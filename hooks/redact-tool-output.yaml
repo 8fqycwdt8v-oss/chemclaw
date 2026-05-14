@@ -1,0 +1,39 @@
+name: redact-tool-output
+# Registrar wires this at post_tool (defense-in-depth scrub of tool outputs
+# before they enter the next-turn LLM context). Pre-fix only the outbound
+# assistant text was scrubbed (post_turn redact-secrets); tool responses
+# flowed back to the model UNREDACTED, leaking SMILES / compound codes /
+# NCE-IDs / emails embedded in free-text fields.
+lifecycle: post_tool
+enabled: true
+# Order 200 places this AFTER the existing post_tool hooks (defaults +
+# fact-id-consistency-guard at 110): anti-fabrication, tag-maturity,
+# source-cache, detect-mcp-leakage, fact-id-consistency-guard. Those
+# earlier hooks need to see the UNREDACTED output to harvest fact_ids,
+# stamp artifacts, write the source cache, and run their tripwires.
+# This hook then scrubs the output before the harness hands the result
+# message back to the model.
+order: 200
+# No script — uses the built-in TypeScript implementation in
+# services/agent-claw/src/core/hooks/redact-tool-output.ts
+definition:
+  description: >
+    Defense-in-depth scrub of tool outputs before they enter the LLM
+    context. Walks every output object / array / string and applies the
+    length-bounded redactString to every string leaf. The earlier
+    post_tool hooks (anti-fabrication, tag-maturity, source-cache,
+    detect-mcp-leakage, fact-id-consistency-guard) see the unredacted
+    output for fact-ID harvesting / artifact stamping / source caching;
+    the model sees the redacted form via the post_tool aggregator.
+    Idempotent — re-running on already-redacted text is a no-op.
+  patterns:
+    - name: rxn_smiles
+      description: Reaction SMILES with two > separators
+    - name: smiles
+      description: SMILES-like token (bond grammar heuristic)
+    - name: email
+      description: Email address (Entra-ID and operator emails)
+    - name: nce_project
+      description: Internal NCE project identifier (NCE-\d{1,6})
+    - name: compound_code
+      description: Internal compound code (CMP-\d{4,8})
