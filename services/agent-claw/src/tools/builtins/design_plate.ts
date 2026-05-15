@@ -133,7 +133,7 @@ export function buildDesignPlateTool(
         const uniqueRxn = `${input.reactants_smiles}>>${input.product_smiles}`;
         try {
           const pred = await postJson(
-            `${yieldBase}/predict_yield_with_uq`,
+            `${yieldBase}/predict_yield`,
             {
               rxn_smiles_list: [uniqueRxn],
               project_internal_id: input.project_internal_id,
