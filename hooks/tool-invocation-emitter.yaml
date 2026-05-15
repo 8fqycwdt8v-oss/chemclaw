@@ -5,15 +5,15 @@ name: tool-invocation-emitter
 # fans out to the failure point. The two registrations share one name so
 # the YAML/registrar parity gate still sees a single hook.
 lifecycle: post_tool
-# DORMANT until Task 8 lands. Task 7 ships the implementation, YAML, and
-# tests; Task 8 adds the BUILTIN_REGISTRARS entry, flips `enabled` to
-# true, and bumps MIN_EXPECTED_HOOKS. Leaving `enabled: false` here means:
-#   - The loader records the YAML as `${file}: disabled` in `result.skipped`
-#     and never tries to look up a registrar (no boot failure).
-#   - The YAML/registrar parity test in
-#     tests/unit/hook-loader-coverage.test.ts explicitly skips
-#     `enabled: false` entries, so the dormant file doesn't trip CI.
-enabled: false
+# LIVE as of Task 8. The BUILTIN_REGISTRARS entry is wired and
+# MIN_EXPECTED_HOOKS bumped to 28. The hook's effective runtime behaviour
+# is still gated TWICE:
+#   1. The `condition:` block below short-circuits registration when
+#      `kg.auto_extraction.enabled` is false in config_settings (default).
+#   2. The hook itself re-reads the feature flag on every dispatch as
+#      belt-and-braces, so a stale condition gate doesn't fire writes the
+#      operator didn't opt into.
+enabled: true
 order: 80
 description: >
   Phase 0 — Universal Knowledge Accumulation post-tool extraction surface.

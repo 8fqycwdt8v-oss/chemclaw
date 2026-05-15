@@ -38,10 +38,14 @@ import {
 // 26 = +scheduled-substance-gate pre_tool (gap-plan H0.9, 2026-05-10).
 // 27 = +redact-tool-output post_tool (Tranche 1 / Task G — defense-in-depth
 // scrub of tool outputs before they enter the next-turn LLM context).
+// 28 = +tool-invocation-emitter post_tool (+ post_tool_failure internally;
+// Universal Knowledge Accumulation Phase 0, Task 8 — emits one
+// `tool_invocation_complete` ingestion event per non-internal tool call,
+// gated by feature flag `kg.auto_extraction.enabled`).
 // Bump every time BUILTIN_REGISTRARS gains an entry so a silent failure to
 // load a new hook trips the startup gate instead of quietly downgrading
 // the safety net.
-const MIN_EXPECTED_HOOKS = 27;
+const MIN_EXPECTED_HOOKS = 28;
 
 // Builtins gate. Mirrors MIN_EXPECTED_HOOKS for tools/builtins/: a new
 // builtin module landing under `services/agent-claw/src/tools/builtins/`
