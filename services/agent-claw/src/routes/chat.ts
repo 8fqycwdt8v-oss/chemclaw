@@ -316,7 +316,12 @@ async function handleChat(
   // A change in toolId/stream/toolUseId flushes the prior batch first so
   // the model never sees out-of-order lines from interleaved tools.
   const TOOL_LOG_FLUSH_MS = 50;
-  type Pending = { toolId: string; stream: "stdout" | "stderr"; toolUseId?: string; lines: string[] };
+  interface Pending {
+    toolId: string;
+    stream: "stdout" | "stderr";
+    toolUseId?: string;
+    lines: string[];
+  }
   let pending: Pending | null = null;
   let flushTimer: NodeJS.Timeout | null = null;
   const flushPending = (): void => {
@@ -352,9 +357,7 @@ async function handleChat(
         lines: [event.line],
       };
     }
-    if (!flushTimer) {
-      flushTimer = setTimeout(flushPending, TOOL_LOG_FLUSH_MS);
-    }
+    flushTimer ??= setTimeout(flushPending, TOOL_LOG_FLUSH_MS);
   };
   // Ensure any in-flight batch ships when the client disconnects or the
   // stream completes. reply.raw is the underlying http.ServerResponse.
