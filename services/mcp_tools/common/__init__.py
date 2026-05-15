@@ -13,12 +13,14 @@ This is a deliberate split:
     `configure_logging`, which has zero HTTP-framework dependencies.
 """
 
+from typing import Any
+
 from services.mcp_tools.common.logging import configure_logging
 
 __all__ = ["create_app", "configure_logging"]
 
 
-def __getattr__(name: str):
+def __getattr__(name: str) -> Any:
     if name == "create_app":
         # Imported lazily so `import services.mcp_tools.common` (or
         # `from services.mcp_tools.common import configure_logging`)
