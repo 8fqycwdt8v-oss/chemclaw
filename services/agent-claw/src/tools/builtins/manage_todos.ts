@@ -101,6 +101,8 @@ export function buildManageTodosTool(pool: Pool) {
     inputSchema: ManageTodosIn,
     outputSchema: ManageTodosOut,
     annotations: { readOnly: false },
+    // Internal agent-state builtin — never extracted into the KG.
+    is_internal: true,
 
     execute: async (ctx, input) => {
       const sessionId = ctx.scratchpad.get("session_id");

@@ -134,6 +134,7 @@ export async function startServer(
         llm: deps.llmProvider,
         skillLoader: deps.skillLoader,
         allTools: deps.registry.all(),
+        registry: deps.registry,
         tokenBudget: cfg.AGENT_TOKEN_BUDGET,
       });
       app.log.info(hookResult, "lifecycle hooks loaded");

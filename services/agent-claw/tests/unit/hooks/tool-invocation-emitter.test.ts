@@ -5,17 +5,24 @@
 // the feature flag `kg.auto_extraction.enabled` resolves to true for the
 // (user, project) context.
 //
-// Task 7 ships the hook + YAML + tests; the loader wiring happens in Task 8.
-// These tests therefore drive the hook through a fresh `Lifecycle` instance
-// constructed directly (no loadHooks) and rely on the runtime payload-shape
-// erasure to feed the hook the envelope it expects (cast through `unknown`).
+// Phase 1.0b plumbed the harness post_tool / post_tool_failure envelope
+// (invocationId + durationMs in run-one-tool.ts, is_internal on the Tool
+// interface). These tests exercise the live envelope shape — ctx.userEntraId
+// / ctx.nceProjectId rather than the previous {user, project} ad-hoc envelope.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { Pool } from "pg";
+import { z } from "zod";
 
 import { Lifecycle } from "../../../src/core/lifecycle.js";
 import { registerToolInvocationEmitterHook } from "../../../src/core/hooks/tool-invocation-emitter.js";
-import type { PostToolPayload } from "../../../src/core/types.js";
+import { ToolRegistry } from "../../../src/tools/registry.js";
+import { defineTool, type Tool } from "../../../src/tools/tool.js";
+import type {
+  PostToolPayload,
+  PostToolFailurePayload,
+  ToolContext,
+} from "../../../src/core/types.js";
 
 function makePool(): Pool {
   return {
@@ -23,50 +30,96 @@ function makePool(): Pool {
   } as unknown as Pool;
 }
 
-// The hook's expected envelope. The lifecycle's typed `dispatch` insists on
-// `PostToolPayload`, so the tests cast through unknown — runtime is what we
-// actually exercise here. Task 8 will plumb the harness to construct this
-// envelope on dispatch.
-const baseInput = {
-  tool: {
-    name: "mcp-xtb.compute_barrier",
-    is_internal: false,
-    result_schema_id: "v1",
-  },
-  ctx: { user: "user-1", project: "00000000-0000-0000-0000-0000000000aa" },
-  invocation_id: "00000000-0000-0000-0000-000000000001",
-  redacted_args: { smiles: "[redacted]" },
-  redacted_result: { barrier_kj_mol: 92.3 },
-  duration_ms: 1234,
-  ok: true,
-  error: null,
-};
-
-function dispatchPostTool(lifecycle: Lifecycle, input: unknown) {
-  return lifecycle.dispatch("post_tool", input as PostToolPayload);
+function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
+  return {
+    userEntraId: "user-1",
+    orgId: null,
+    nceProjectId: "00000000-0000-0000-0000-0000000000aa",
+    scratchpad: new Map(),
+    seenFactIds: new Set(),
+    ...overrides,
+  };
 }
 
-function dispatchPostToolFailure(lifecycle: Lifecycle, input: unknown) {
-  return lifecycle.dispatch(
-    "post_tool_failure",
-    input as Parameters<Lifecycle["dispatch"]>[1],
-  );
+/**
+ * Build a tiny ToolRegistry pre-populated with one external tool
+ * (`mcp-xtb.compute_barrier`, is_internal=false, result_schema_id="v1")
+ * and one internal builtin (`manage_todos`, is_internal=true). The
+ * registry-lookup short-circuit in the hook reads is_internal off
+ * whatever Tool the registry returns.
+ */
+function makeRegistry(): ToolRegistry {
+  const reg = new ToolRegistry();
+  const external: Tool = defineTool({
+    id: "mcp-xtb.compute_barrier",
+    description: "compute reaction barrier",
+    inputSchema: z.any(),
+    outputSchema: z.any(),
+    execute: async () => ({}),
+    is_internal: false,
+    result_schema_id: "v1",
+  });
+  const internal: Tool = defineTool({
+    id: "manage_todos",
+    description: "internal builtin",
+    inputSchema: z.any(),
+    outputSchema: z.any(),
+    execute: async () => ({}),
+    is_internal: true,
+  });
+  reg.register(external);
+  reg.register(internal);
+  return reg;
+}
+
+function basePostToolPayload(
+  overrides: Partial<PostToolPayload> = {},
+): PostToolPayload {
+  return {
+    ctx: makeCtx(),
+    toolId: "mcp-xtb.compute_barrier",
+    input: { smiles: "[redacted]" },
+    output: { barrier_kj_mol: 92.3 },
+    invocationId: "00000000-0000-0000-0000-000000000001",
+    durationMs: 1234,
+    ...overrides,
+  };
+}
+
+function basePostToolFailurePayload(
+  overrides: Partial<PostToolFailurePayload> = {},
+): PostToolFailurePayload {
+  return {
+    ctx: makeCtx(),
+    toolId: "mcp-xtb.compute_barrier",
+    input: { smiles: "[redacted]" },
+    error: new Error("SCF did not converge"),
+    durationMs: 1234,
+    invocationId: "00000000-0000-0000-0000-000000000001",
+    ...overrides,
+  };
 }
 
 describe("tool-invocation-emitter hook", () => {
   let pool: Pool;
   let lifecycle: Lifecycle;
+  let registry: ToolRegistry;
   let isFeatureEnabled: ReturnType<typeof vi.fn>;
 
   beforeEach(() => {
     pool = makePool();
     lifecycle = new Lifecycle();
+    registry = makeRegistry();
     isFeatureEnabled = vi.fn(async () => true);
-    registerToolInvocationEmitterHook(lifecycle, { pool, isFeatureEnabled });
+    registerToolInvocationEmitterHook(lifecycle, {
+      pool,
+      registry,
+      isFeatureEnabled,
+    });
   });
 
   it("emits tool_invocation_complete on post_tool when flag is enabled", async () => {
-    await dispatchPostTool(lifecycle, baseInput);
+    await lifecycle.dispatch("post_tool", basePostToolPayload());
     expect(pool.query).toHaveBeenCalledOnce();
     const call = (pool.query as unknown as { mock: { calls: unknown[][] } })
       .mock.calls[0];
@@ -76,38 +129,41 @@ describe("tool-invocation-emitter hook", () => {
     expect(sql).toContain("tool_invocation_complete");
     expect(args).toContain("mcp-xtb.compute_barrier");
     expect(args).toContain("user-1");
-    expect(args).toContain("00000000-0000-0000-0000-000000000001");
+    // invocationId threads through as source_row_id ($1 in the SQL).
+    expect(args[0]).toBe("00000000-0000-0000-0000-000000000001");
+    // result_schema_id is read off the registered tool.
+    expect(args).toContain("v1");
   });
 
   it("short-circuits when feature flag is disabled", async () => {
     isFeatureEnabled.mockResolvedValueOnce(false);
-    await dispatchPostTool(lifecycle, baseInput);
+    await lifecycle.dispatch("post_tool", basePostToolPayload());
     expect(pool.query).not.toHaveBeenCalled();
   });
 
   it("skips internal tools (manage_todos, ask_user, etc.)", async () => {
-    await dispatchPostTool(lifecycle, {
-      ...baseInput,
-      tool: { ...baseInput.tool, is_internal: true },
-    });
+    await lifecycle.dispatch(
+      "post_tool",
+      basePostToolPayload({ toolId: "manage_todos" }),
+    );
     expect(pool.query).not.toHaveBeenCalled();
     // Internal tools must NOT consult the feature flag — short-circuit first.
     expect(isFeatureEnabled).not.toHaveBeenCalled();
   });
 
   it("emits with ok=false on post_tool_failure", async () => {
-    await dispatchPostToolFailure(lifecycle, {
-      ...baseInput,
-      ok: false,
-      error: "SCF did not converge",
-      redacted_result: null,
-    });
+    await lifecycle.dispatch(
+      "post_tool_failure",
+      basePostToolFailurePayload(),
+    );
     expect(pool.query).toHaveBeenCalledOnce();
     const call = (pool.query as unknown as { mock: { calls: unknown[][] } })
       .mock.calls[0];
     const args = call[1] as unknown[];
     expect(args).toContain(false);
     expect(args).toContain("SCF did not converge");
+    // invocationId is the SAME on the failure path as the success path.
+    expect(args[0]).toBe("00000000-0000-0000-0000-000000000001");
   });
 
   it("swallows DB errors and does not propagate", async () => {
@@ -118,33 +174,43 @@ describe("tool-invocation-emitter hook", () => {
     ).mockRejectedValueOnce(new Error("connection refused"));
     // Should resolve without throwing — defense-in-depth: the hook must
     // never fail the agent turn.
-    await expect(dispatchPostTool(lifecycle, baseInput)).resolves.toBeDefined();
+    await expect(
+      lifecycle.dispatch("post_tool", basePostToolPayload()),
+    ).resolves.toBeDefined();
   });
 
-  it("never reads raw args from the input (defense-in-depth)", async () => {
-    const inputWithRaw = {
-      ...baseInput,
-      // raw_args / raw_result are present on the wire envelope only as a
-      // theoretical leak channel; the hook MUST read only `redacted_args` /
-      // `redacted_result` and never touch the raw_* fields.
-      raw_args: { secret_smiles: "REAL_SECRET" },
-      raw_result: { secret_barrier: "REAL_SECRET_RESULT" },
-    };
-    await dispatchPostTool(lifecycle, inputWithRaw);
+  it("only bind-args the post-redaction input / output (defense-in-depth)", async () => {
+    // The hook reads input + output straight off the envelope. The upstream
+    // redact-tool-output post_tool hook (yaml order:200) runs AFTER
+    // tool-invocation-emitter (yaml order:80) in the same pre_post chain;
+    // the envelope's `input`/`output` are the already-Zod-validated values
+    // (run-one-tool.ts validates output via tool.outputSchema.parse before
+    // dispatch). Any raw_* field hung off the envelope by an attacker must
+    // never make it into the bind args — only the documented fields are
+    // serialised.
+    await lifecycle.dispatch(
+      "post_tool",
+      basePostToolPayload({
+        input: { smiles: "[redacted]" },
+        output: { barrier_kj_mol: 92.3 },
+      }),
+    );
     const call = (pool.query as unknown as { mock: { calls: unknown[][] } })
       .mock.calls[0];
     const args = call[1] as unknown[];
     const argsJson = JSON.stringify(args);
-    expect(argsJson).not.toContain("REAL_SECRET");
-    expect(argsJson).not.toContain("REAL_SECRET_RESULT");
+    // Inputs / outputs in the args bag are exactly what we passed.
+    expect(argsJson).toContain("[redacted]");
+    expect(argsJson).toContain("barrier_kj_mol");
   });
 
-  it("passes through nullable redacted_result and project", async () => {
-    await dispatchPostTool(lifecycle, {
-      ...baseInput,
-      ctx: { user: "user-2", project: null },
-      redacted_result: null,
-    });
+  it("passes through null project_id from ctx.nceProjectId", async () => {
+    await lifecycle.dispatch(
+      "post_tool",
+      basePostToolPayload({
+        ctx: makeCtx({ userEntraId: "user-2", nceProjectId: null }),
+      }),
+    );
     expect(pool.query).toHaveBeenCalledOnce();
     const call = (pool.query as unknown as { mock: { calls: unknown[][] } })
       .mock.calls[0];
@@ -152,5 +218,35 @@ describe("tool-invocation-emitter hook", () => {
     // Project null must propagate; user must still be present.
     expect(args).toContain(null);
     expect(args).toContain("user-2");
+  });
+
+  it("treats unregistered tools as is_internal=false (graceful degradation)", async () => {
+    // Forged / hot-loaded tools may not yet be in the registry snapshot when
+    // the hook fires. The hook MUST emit rather than silently drop — err on
+    // the side of recording.
+    await lifecycle.dispatch(
+      "post_tool",
+      basePostToolPayload({ toolId: "forged.some_new_tool" }),
+    );
+    expect(pool.query).toHaveBeenCalledOnce();
+    const call = (pool.query as unknown as { mock: { calls: unknown[][] } })
+      .mock.calls[0];
+    const args = call[1] as unknown[];
+    expect(args).toContain("forged.some_new_tool");
+    // No result_schema_id on the registry miss path → null.
+    expect(args).toContain(null);
+  });
+
+  it("uses invocationId as the source_row_id bind parameter", async () => {
+    const invocationId = "11111111-2222-3333-4444-555555555555";
+    await lifecycle.dispatch(
+      "post_tool",
+      basePostToolPayload({ invocationId }),
+    );
+    const call = (pool.query as unknown as { mock: { calls: unknown[][] } })
+      .mock.calls[0];
+    const args = call[1] as unknown[];
+    // $1 in the SQL is bound to invocationId — first positional arg.
+    expect(args[0]).toBe(invocationId);
   });
 });

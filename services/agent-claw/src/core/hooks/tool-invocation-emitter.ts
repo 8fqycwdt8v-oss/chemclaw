@@ -10,59 +10,41 @@
 // projector (Task 9) consumes these events and dispatches to the per-source
 // extractor module declared in `extraction_registry`.
 //
-// Task 7 ships the hook and its YAML descriptor but does NOT wire it into
-// `core/hook-loader.ts` — Task 8 adds the BUILTIN_REGISTRARS entry and
-// bumps MIN_EXPECTED_HOOKS. Until then the YAML is dormant: the loader
-// skips it via the `condition` block (default false until an admin flips
-// `kg.auto_extraction.enabled`).
+// Phase 1.0b plumbed the harness's real post_tool / post_tool_failure
+// envelope through to this hook. It reads:
+//   - toolId               from PostToolPayload.toolId
+//   - ctx.userEntraId      from PostToolPayload.ctx
+//   - ctx.nceProjectId     from PostToolPayload.ctx
+//   - invocationId         from PostToolPayload.invocationId (uuid, stable
+//                          across success / failure for the same call)
+//   - durationMs           from PostToolPayload.durationMs
+//   - input / output       from PostToolPayload.input / .output (these are
+//                          already redaction-passed by the upstream
+//                          redact-tool-output post_tool hook AND the egress
+//                          LiteLLM redactor — defense-in-depth)
 //
-// Defense-in-depth: the hook reads ONLY from `redacted_args` /
-// `redacted_result`, never from any raw_* field. Callers MUST pre-redact
-// via the existing agent-claw redaction stack before invoking
-// lifecycle.dispatch. The unit test
-// `tests/unit/hooks/tool-invocation-emitter.test.ts` asserts that a
-// `raw_args` field in the input is never serialised into the SQL bind
-// parameters.
-//
-// Lifecycle wiring: the registrar attaches to BOTH `post_tool` and
-// `post_tool_failure` so the projector sees one event per logical
-// invocation regardless of outcome. The YAML descriptor declares
-// `lifecycle: post_tool` (single-string form to satisfy the existing
-// loader schema); the registrar fans out to the failure point itself.
+// Internal / agent-state builtins (manage_todos, ask_user,
+// dispatch_sub_agent, manage_plan) are short-circuited via the
+// `tool.is_internal` flag on the registered Tool. The registry lookup
+// degrades gracefully — an unregistered tool id (legacy / forged tool not
+// yet hot-loaded) is treated as is_internal=false so we err on the side of
+// emitting rather than silently dropping.
 
+import { randomUUID } from "node:crypto";
 import type { Pool } from "pg";
 import type { Lifecycle } from "../lifecycle.js";
 import type { HookJSONOutput } from "../hook-output.js";
+import type {
+  PostToolPayload,
+  PostToolFailurePayload,
+} from "../types.js";
+import type { ToolRegistry } from "../../tools/registry.js";
 import { getLogger } from "../../observability/logger.js";
-
-/**
- * The envelope the hook expects. Task 8 will plumb the harness to build
- * this on dispatch; until then the hook accepts whatever the lifecycle
- * forwards and structural-tests each field at runtime (no Zod parse —
- * the hook must be cheap and non-throwing).
- */
-export interface ToolInvocationContext {
-  user: string;
-  project: string | null;
-}
-
-export interface ToolInvocationInput {
-  tool: {
-    name: string;
-    is_internal?: boolean;
-    result_schema_id?: string | null;
-  };
-  ctx: ToolInvocationContext;
-  invocation_id: string;
-  redacted_args: unknown;
-  redacted_result: unknown;
-  duration_ms: number;
-  ok: boolean;
-  error: string | null;
-}
 
 export interface ToolInvocationEmitterDeps {
   pool: Pool;
+  /** Tool registry for is_internal / result_schema_id lookups. */
+  registry: ToolRegistry;
   isFeatureEnabled: (
     key: string,
     ctx: { user: string; project: string | null },
@@ -85,28 +67,43 @@ export function registerToolInvocationEmitterHook(
 ): void {
   const log = getLogger("tool-invocation-emitter");
 
-  async function handle(rawInput: unknown): Promise<HookJSONOutput> {
+  async function emit(
+    payload: PostToolPayload | PostToolFailurePayload,
+    ok: boolean,
+    output: unknown,
+    error: string | null,
+  ): Promise<HookJSONOutput> {
     try {
-      const input = rawInput as ToolInvocationInput;
+      const { ctx, toolId, input, durationMs, invocationId } = payload;
 
-      // Defensive: skip if the envelope looks malformed. Task 8 plumbs the
-      // shape; until then we tolerate missing fields rather than crash the
-      // turn. Cast through unknown because rawInput is typed `unknown` and
-      // the lifecycle dispatch may forward payloads without our optional
-      // fields (is_internal, redacted_*, etc.).
-      const tool = (input as { tool?: { name?: unknown } }).tool;
-      if (!tool || typeof tool.name !== "string") return {};
+      // Defensive: skip if the envelope looks malformed. The lifecycle
+      // dispatcher forwards `unknown` at the boundary, so even though the
+      // typed dispatch insists on PostToolPayload we re-check here to
+      // tolerate hand-crafted dispatches (tests, future call sites) that
+      // omit fields. The hook must never crash the turn.
+      if (typeof toolId !== "string" || toolId.length === 0) return {};
 
-      // Short-circuit internal builtins (manage_todos, ask_user, etc.). The
-      // projector has no business reasoning about agent-internal control
-      // tools.
-      if (input.tool.is_internal) return {};
+      // Skip internal agent-state builtins (manage_todos, ask_user,
+      // dispatch_sub_agent, manage_plan). The registry lookup may miss
+      // (forged tools not yet hot-loaded, legacy tool ids); fall back to
+      // is_internal=false in that case so we err on the side of emitting.
+      const tool = deps.registry.get(toolId);
+      if (tool?.is_internal === true) return {};
 
       // Feature-flag gate. Default-off until an admin enables KG auto
       // extraction for the org / project (Task 6 seeded the flag with
       // enabled=false).
-      const enabled = await deps.isFeatureEnabled(FEATURE_FLAG_KEY, input.ctx);
+      const enabled = await deps.isFeatureEnabled(FEATURE_FLAG_KEY, {
+        user: ctx.userEntraId,
+        project: ctx.nceProjectId ?? null,
+      });
       if (!enabled) return {};
+
+      // Fall back to a fresh UUID if a non-production dispatch site forgot
+      // to thread invocationId through. The real run-one-tool.ts path
+      // always populates it.
+      const eventInvocationId = invocationId ?? randomUUID();
+      const resultSchemaId = tool?.result_schema_id ?? null;
 
       await deps.pool.query(
         `INSERT INTO ingestion_events (event_type, source_table, source_row_id, payload)
@@ -123,30 +120,26 @@ export function registerToolInvocationEmitterHook(
                    'error', $10::text
                  ))`,
         [
-          input.invocation_id,
-          input.tool.name,
-          input.ctx.user,
-          input.ctx.project,
-          // Defense-in-depth: only the redacted_* fields ever make it into
-          // the bind parameters. `JSON.stringify(undefined)` → undefined, so
-          // coalesce to `null` to keep the JSONB cast happy.
-          JSON.stringify(input.redacted_args ?? null),
-          JSON.stringify(input.redacted_result ?? null),
-          input.tool.result_schema_id ?? null,
-          input.duration_ms,
-          input.ok,
-          input.error,
+          eventInvocationId,
+          toolId,
+          ctx.userEntraId,
+          ctx.nceProjectId,
+          // Defense-in-depth: input / output are the post-redaction values
+          // produced by the upstream redact-tool-output hook + the egress
+          // redactor. `JSON.stringify(undefined)` returns undefined, so
+          // coalesce to null to keep the JSONB cast happy.
+          JSON.stringify(input ?? null),
+          JSON.stringify(output ?? null),
+          resultSchemaId,
+          durationMs ?? 0,
+          ok,
+          error,
         ],
       );
     } catch (err) {
       // The hook must never fail the agent turn — log + swallow.
-      const toolName =
-        (rawInput as { tool?: { name?: unknown } } | undefined)?.tool?.name;
       log.warn(
-        {
-          err,
-          tool: typeof toolName === "string" ? toolName : "<unknown>",
-        },
+        { err, toolId: payload.toolId },
         "tool-invocation-emitter failed",
       );
     }
@@ -156,11 +149,15 @@ export function registerToolInvocationEmitterHook(
   lifecycle.on(
     "post_tool",
     "tool-invocation-emitter",
-    async (payload, _toolUseId, _opts) => await handle(payload),
+    async (payload, _toolUseId, _opts) => {
+      return await emit(payload, true, payload.output, null);
+    },
   );
   lifecycle.on(
     "post_tool_failure",
     "tool-invocation-emitter",
-    async (payload, _toolUseId, _opts) => await handle(payload),
+    async (payload, _toolUseId, _opts) => {
+      return await emit(payload, false, null, payload.error.message);
+    },
   );
 }

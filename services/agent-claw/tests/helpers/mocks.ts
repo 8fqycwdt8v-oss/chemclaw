@@ -58,6 +58,11 @@ export function mockHookDeps(overrides: Partial<HookDeps> = {}): HookDeps {
     llm: throwingStub("llm"),
     skillLoader: throwingStub("skillLoader"),
     allTools: [],
+    // tool-invocation-emitter looks up is_internal / result_schema_id via
+    // registry.get(toolId); a throwing stub catches accidental registration-
+    // time access while allowing tests that dispatch the hook to inject a
+    // real ToolRegistry via overrides.
+    registry: throwingStub("registry"),
     tokenBudget: 100_000,
     ...overrides,
   };

@@ -41,6 +41,23 @@ export interface Tool<I = unknown, O = unknown> {
   /** Optional metadata; absent annotations are treated as the conservative
    *  default (state-mutating). */
   annotations?: ToolAnnotations;
+  /**
+   * True for builtins that orchestrate agent state (manage_todos, ask_user,
+   * dispatch_sub_agent, manage_plan) rather than model "real" tool
+   * invocations worth recording in the KG. The tool-invocation-emitter
+   * post_tool hook reads this field to short-circuit before consulting
+   * the feature flag — internal builtins never emit
+   * `tool_invocation_complete` ingestion events. Absent / false means
+   * the tool is a normal world-touching tool.
+   */
+  is_internal?: boolean;
+  /**
+   * Optional schema identifier for the tool's output, consumed by the
+   * tool-invocation-emitter hook's `result_schema_id` payload field so
+   * downstream extractors can pick the right per-source decoder. Absent
+   * means "no published schema id"; the hook writes null.
+   */
+  result_schema_id?: string;
 }
 
 // ---------------------------------------------------------------------------

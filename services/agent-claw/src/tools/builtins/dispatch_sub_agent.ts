@@ -63,6 +63,8 @@ export function buildDispatchSubAgentTool(allTools: Tool[], llm: LlmProvider) {
     inputSchema: DispatchSubAgentIn,
     outputSchema: DispatchSubAgentOut,
     annotations: { readOnly: false },
+    // Internal agent-state builtin — never extracted into the KG.
+    is_internal: true,
 
     execute: async (ctx, input) => {
       const deps: SubAgentDeps = { allTools, llm, lifecycle };

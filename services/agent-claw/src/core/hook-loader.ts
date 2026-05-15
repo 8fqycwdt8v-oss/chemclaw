@@ -34,6 +34,7 @@ import type { HookPoint } from "./types.js";
 import type { LlmProvider } from "../llm/provider.js";
 import type { SkillLoader } from "./skills.js";
 import type { Tool } from "../tools/tool.js";
+import type { ToolRegistry } from "../tools/registry.js";
 import type { SandboxClient } from "./sandbox.js";
 import { registerSessionSandboxCloseHook } from "./hooks/session-sandbox-close.js";
 import { registerRedactSecretsHook } from "./hooks/redact-secrets.js";
@@ -129,6 +130,13 @@ export interface HookDeps {
   llm: LlmProvider;
   skillLoader: SkillLoader;
   allTools: Tool[];
+  /**
+   * Live tool registry. Used by the tool-invocation-emitter post_tool hook
+   * to look up `is_internal` / `result_schema_id` for each dispatched
+   * tool; the snapshot `allTools` above isn't sufficient because forged
+   * tools hot-load after startup.
+   */
+  registry: ToolRegistry;
   /** AGENT_TOKEN_BUDGET — used by the compact-window pre_compact hook. */
   tokenBudget: number;
   /** Optional sandbox client — passed to the session-sandbox-close
@@ -175,6 +183,7 @@ const BUILTIN_REGISTRARS = new Map<string, BuiltinRegistrar>([
     (lc, deps) => {
       registerToolInvocationEmitterHook(lc, {
         pool: deps.pool,
+        registry: deps.registry,
         isFeatureEnabled: (key, ctx) =>
           isFeatureEnabled(key, {
             user: ctx.user,
