@@ -15,6 +15,7 @@ import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { getToolTimeoutMs } from "../../config/tool-timeouts.js";
 import { RunXtbWorkflowOut } from "./run_xtb_workflow.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 // ---------- Schemas ----------------------------------------------------------
 
@@ -58,7 +59,7 @@ const TOOL_ID = "compute_conformer_ensemble";
 // ---------- Factory ----------------------------------------------------------
 
 export function buildComputeConformerEnsembleTool(mcpXtbUrl: string) {
-  const base = mcpXtbUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpXtbUrl);
 
   return defineTool({
     id: TOOL_ID,

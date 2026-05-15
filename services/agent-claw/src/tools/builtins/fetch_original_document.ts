@@ -15,6 +15,7 @@ import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { withUserContext } from "../../db/with-user-context.js";
 import type { Citation } from "../../core/types.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 // --------------------------------------------------------------------------
 // Schemas
@@ -117,7 +118,7 @@ const TIMEOUT_PDF_PAGES_MS = 60_000;
  * @param docFetcherUrl  — base URL of the mcp-doc-fetcher service
  */
 export function buildFetchOriginalDocumentTool(pool: Pool, docFetcherUrl: string) {
-  const base = docFetcherUrl.replace(/\/$/, "");
+  const base = normalizeUrl(docFetcherUrl);
 
   return defineTool({
     id: "fetch_original_document",

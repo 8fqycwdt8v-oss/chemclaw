@@ -7,6 +7,7 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 export const QmCrestScreenIn = z.object({
   smiles: z.string().min(1).max(10_000),
@@ -42,7 +43,7 @@ export type QmCrestScreenOutput = z.infer<typeof QmCrestScreenOut>;
 const TIMEOUT_MS = 600_000;
 
 export function buildQmCrestScreenTool(mcpCrestUrl: string) {
-  const base = mcpCrestUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpCrestUrl);
   return defineTool({
     id: "qm_crest_screen",
     description:

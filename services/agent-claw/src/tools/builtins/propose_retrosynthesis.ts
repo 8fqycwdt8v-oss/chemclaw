@@ -6,6 +6,7 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson, UpstreamError } from "../../mcp/postJson.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 // ---------- Schemas ----------------------------------------------------------
 
@@ -60,8 +61,8 @@ export function buildProposeRetrosynthesisTool(
   mcpAskcosUrl: string,
   mcpAiZynthUrl: string,
 ) {
-  const askcosBase = mcpAskcosUrl.replace(/\/$/, "");
-  const aizynthBase = mcpAiZynthUrl.replace(/\/$/, "");
+  const askcosBase = normalizeUrl(mcpAskcosUrl);
+  const aizynthBase = normalizeUrl(mcpAiZynthUrl);
 
   return defineTool({
     id: "propose_retrosynthesis",

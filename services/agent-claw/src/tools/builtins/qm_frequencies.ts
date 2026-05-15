@@ -5,6 +5,7 @@ import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { getToolTimeoutMs } from "../../config/tool-timeouts.js";
 import { QmRequestBase, QmResponseBase } from "./_qm_base.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 export const QmFrequenciesIn = QmRequestBase;
 export type QmFrequenciesInput = z.infer<typeof QmFrequenciesIn>;
@@ -20,7 +21,7 @@ const DEFAULT_TIMEOUT_MS = 300_000;
 const TOOL_ID = "qm_frequencies";
 
 export function buildQmFrequenciesTool(mcpXtbUrl: string) {
-  const base = mcpXtbUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpXtbUrl);
   return defineTool({
     id: TOOL_ID,
     description:

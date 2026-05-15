@@ -7,6 +7,7 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 // ---------- Schemas ----------------------------------------------------------
 
@@ -44,7 +45,7 @@ export function buildCanonicalizeSmilesTool(mcpRdkitUrl: string) {
     annotations: { readOnly: true },
     execute: async (ctx, input) => {
       return await postJson(
-        `${mcpRdkitUrl.replace(/\/$/, "")}/tools/canonicalize_smiles`,
+        `${normalizeUrl(mcpRdkitUrl)}/tools/canonicalize_smiles`,
         input,
         CanonicalizeOut,
         TIMEOUT_MS,

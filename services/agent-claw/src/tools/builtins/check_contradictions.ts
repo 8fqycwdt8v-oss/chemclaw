@@ -11,6 +11,7 @@ import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { QueryKgIn, QueryKgOut } from "./query_kg.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 // ---------- Schemas ----------------------------------------------------------
 
@@ -55,7 +56,7 @@ const TIMEOUT_MS = 20_000;
 // ---------- Factory ----------------------------------------------------------
 
 export function buildCheckContradictionsTool(mcpKgUrl: string) {
-  const base = mcpKgUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpKgUrl);
 
   return defineTool({
     id: "check_contradictions",

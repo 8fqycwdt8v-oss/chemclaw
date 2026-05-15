@@ -5,6 +5,7 @@ import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { getToolTimeoutMs } from "../../config/tool-timeouts.js";
 import { QmRequestBase, QmResponseBase } from "./_qm_base.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 export const QmGeometryOptIn = QmRequestBase.extend({
   threshold: z.enum(["crude", "loose", "normal", "tight", "vtight"]).default("tight"),
@@ -23,7 +24,7 @@ const DEFAULT_TIMEOUT_MS = 120_000;
 const TOOL_ID = "qm_geometry_opt";
 
 export function buildQmGeometryOptTool(mcpXtbUrl: string) {
-  const base = mcpXtbUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpXtbUrl);
   return defineTool({
     id: TOOL_ID,
     description:

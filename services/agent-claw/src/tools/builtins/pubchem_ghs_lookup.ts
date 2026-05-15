@@ -30,6 +30,7 @@ import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { getLogger } from "../../observability/logger.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 const log = getLogger("pubchem_ghs_lookup");
 
@@ -199,7 +200,7 @@ export function buildPubchemGhsLookupTool(mcpRdkitUrl: string) {
       let inchikey: string | null = input.inchikey ?? null;
       if (inchikey === null && input.smiles !== undefined) {
         const resolved = await postJson(
-          `${mcpRdkitUrl.replace(/\/$/, "")}/tools/inchikey_from_smiles`,
+          `${normalizeUrl(mcpRdkitUrl)}/tools/inchikey_from_smiles`,
           { smiles: input.smiles },
           InchikeyOnlyOut,
           TIMEOUT_MS,

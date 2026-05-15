@@ -15,6 +15,7 @@ import type { Pool } from "pg";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { withUserContext } from "../../db/with-user-context.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 const TANAKA_VECTOR = z.tuple([
   z.number(), z.number(), z.number(),
@@ -82,7 +83,7 @@ const BuildDomainOut = z.object({
 const TIMEOUT_MS = 30_000;
 
 export function buildStartChromCampaignTool(pool: Pool, optimizerUrl: string) {
-  const base = optimizerUrl.replace(/\/$/, "");
+  const base = normalizeUrl(optimizerUrl);
   return defineTool({
     id: "start_chrom_campaign",
     description:

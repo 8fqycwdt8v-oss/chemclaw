@@ -14,6 +14,7 @@ import { defineTool } from "../tool.js";
 import { withSystemContext } from "../../db/with-user-context.js";
 import { postJson } from "../../mcp/postJson.js";
 import { getLogger } from "../../observability/logger.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 const log = getLogger("substructure_search");
 
@@ -48,7 +49,7 @@ const BulkResp = z.object({
 const TIMEOUT_MS = 60_000;
 
 export function buildSubstructureSearchTool(pool: Pool, mcpRdkitUrl: string) {
-  const base = mcpRdkitUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpRdkitUrl);
   return defineTool({
     id: "substructure_search",
     description:

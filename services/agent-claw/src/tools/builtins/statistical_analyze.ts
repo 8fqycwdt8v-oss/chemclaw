@@ -12,6 +12,7 @@ import type { Pool } from "pg";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { withUserContext } from "../../db/with-user-context.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 // ---------- Schemas ----------------------------------------------------------
 
@@ -139,7 +140,7 @@ function toTabiclRow(r: ReactionRow, includeTarget: boolean) {
 // ---------- Factory ----------------------------------------------------------
 
 export function buildStatisticalAnalyzeTool(pool: Pool, mcpTabiclUrl: string) {
-  const base = mcpTabiclUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpTabiclUrl);
 
   return defineTool({
     id: "statistical_analyze",

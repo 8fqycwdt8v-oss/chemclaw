@@ -4,6 +4,7 @@ import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { QmRequestBase, QmResponseBase } from "./_qm_base.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 // Redox path always uses IPEA-xTB on the server; we omit the `method` field
 // from the shared base and add the redox-specific knobs.
@@ -24,7 +25,7 @@ export type QmRedoxOutput = z.infer<typeof QmRedoxOut>;
 const TIMEOUT_MS = 120_000;
 
 export function buildQmRedoxTool(mcpXtbUrl: string) {
-  const base = mcpXtbUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpXtbUrl);
   return defineTool({
     id: "qm_redox_potential",
     description:

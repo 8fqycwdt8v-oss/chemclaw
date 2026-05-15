@@ -8,6 +8,7 @@ import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { LogsDataset } from "./_logs_schemas.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 export const QueryInstrumentDatasetsIn = z.object({
   sample_id: z
@@ -28,7 +29,7 @@ export type QueryInstrumentDatasetsOutput = z.infer<typeof QueryInstrumentDatase
 const TIMEOUT_MS = 20_000;
 
 export function buildQueryInstrumentDatasetsTool(mcpLogsSciyUrl: string) {
-  const base = mcpLogsSciyUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpLogsSciyUrl);
 
   return defineTool({
     id: "query_instrument_datasets",

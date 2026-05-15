@@ -13,6 +13,7 @@ import type { Pool } from "pg";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { withUserContext } from "../../db/with-user-context.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 export const RecommendNextChromBatchIn = z.object({
   campaign_id: z.string().uuid(),
@@ -57,7 +58,7 @@ interface RoundRow {
 }
 
 export function buildRecommendNextChromBatchTool(pool: Pool, optimizerUrl: string) {
-  const base = optimizerUrl.replace(/\/$/, "");
+  const base = normalizeUrl(optimizerUrl);
   return defineTool({
     id: "recommend_next_chrom_batch",
     description:

@@ -12,6 +12,7 @@ import { withUserContext } from "../../db/with-user-context.js";
 import { appendAudit } from "../../routes/admin/audit-log.js";
 import { getLogger } from "../../observability/logger.js";
 import { MAX_RXN_SMILES_LEN } from "../_limits.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 const log = getLogger("assess_applicability_domain");
 
@@ -165,9 +166,9 @@ export function buildAssessApplicabilityDomainTool(
   chempropUrl: string,
   adUrl: string,
 ) {
-  const drfpBase = drfpUrl.replace(/\/$/, "");
-  const chempropBase = chempropUrl.replace(/\/$/, "");
-  const adBase = adUrl.replace(/\/$/, "");
+  const drfpBase = normalizeUrl(drfpUrl);
+  const chempropBase = normalizeUrl(chempropUrl);
+  const adBase = normalizeUrl(adUrl);
 
   return defineTool({
     id: "assess_applicability_domain",

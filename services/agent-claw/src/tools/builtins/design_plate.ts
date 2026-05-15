@@ -8,6 +8,7 @@ import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { MAX_RXN_SMILES_LEN, MAX_SMILES_LEN } from "../_limits.js";
 import { PredictYieldWithUqOut } from "./predict_yield_with_uq.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 const ContinuousFactor = z.object({
   name: z.string().min(1).max(64),
@@ -89,8 +90,8 @@ export function buildDesignPlateTool(
   mcpPlateDesignerUrl: string,
   mcpYieldBaselineUrl: string,
 ) {
-  const plateBase = mcpPlateDesignerUrl.replace(/\/$/, "");
-  const yieldBase = mcpYieldBaselineUrl.replace(/\/$/, "");
+  const plateBase = normalizeUrl(mcpPlateDesignerUrl);
+  const yieldBase = normalizeUrl(mcpYieldBaselineUrl);
 
   return defineTool({
     id: "design_plate",
