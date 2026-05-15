@@ -1,0 +1,48 @@
+-- db/seed/11_extraction_registry_wave_1.sql
+--
+-- Universal Knowledge Accumulation — Phase 1.2 wave-1.
+--
+-- Registers extractors for aizynth, chemprop, applicability_domain,
+-- yield_baseline. Each row points (source_kind, source_name, result_schema_id)
+-- at the extractor module — the dispatching projector
+-- (tool_result_extractor) handles the rest.
+--
+-- The agent builtins (qm_single_point, etc.) call the corresponding MCP
+-- endpoints; the source_name here matches the builtin name registered in
+-- bootstrap/dependencies.ts. result_schema_id versioning is by convention
+-- "<endpoint>.v1" — bump when the response shape changes incompatibly.
+
+BEGIN;
+
+INSERT INTO extraction_registry (
+  source_kind, source_name, result_schema_id, extractor_module,
+  enabled, promote_default
+) VALUES
+  -- aizynth retrosynthesis: per-target rollup (top score + in-stock ratio
+  -- + route count). Volume bounded by actual user queries — promote on.
+  ('mcp_tool', 'aizynth_retrosynthesis', 'retrosynthesis.v1',
+   'services.projectors.fact_extractor.aizynth', TRUE, TRUE),
+
+  -- chemprop predict_yield: per-reaction calibrated yield prediction.
+  ('mcp_tool', 'predict_reaction_yield', 'predict_yield.v1',
+   'services.projectors.fact_extractor.chemprop', TRUE, TRUE),
+
+  -- chemprop predict_property: per-compound property prediction (logP,
+  -- logS, mp, bp). Same module dispatches on response shape.
+  ('mcp_tool', 'predict_property', 'predict_property.v1',
+   'services.projectors.fact_extractor.chemprop', TRUE, TRUE),
+
+  -- applicability_domain assess: in/out-of-domain verdict + signal scores.
+  ('mcp_tool', 'assess_applicability_domain', 'assess.v1',
+   'services.projectors.fact_extractor.applicability_domain', TRUE, TRUE),
+
+  -- yield_baseline train: project-scoped baseline model existence fact.
+  ('mcp_tool', 'train_yield_baseline', 'train.v1',
+   'services.projectors.fact_extractor.yield_baseline', TRUE, TRUE)
+ON CONFLICT (source_kind, source_name, result_schema_id) DO UPDATE SET
+  extractor_module = EXCLUDED.extractor_module,
+  enabled          = EXCLUDED.enabled,
+  promote_default  = EXCLUDED.promote_default,
+  updated_at       = NOW();
+
+COMMIT;
