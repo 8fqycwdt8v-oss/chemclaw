@@ -105,6 +105,8 @@ export function buildManagePlanTool(pool: Pool) {
     inputSchema: ManagePlanIn,
     outputSchema: ManagePlanOut,
     annotations: { readOnly: false },
+    // Internal agent-state builtin — never extracted into the KG.
+    is_internal: true,
 
     execute: async (ctx, input): Promise<ManagePlanOutput> => {
       const sessionId = ctx.scratchpad.get("session_id");

@@ -8,8 +8,13 @@
 // extraction landed. step.ts re-exports `StepToolOutput` for external
 // consumers (none today) and now imports `runOneTool` from this module.
 
+import { randomUUID } from "node:crypto";
 import type { Lifecycle } from "./lifecycle.js";
-import type { PermissionOptions, ToolContext } from "./types.js";
+import type {
+  PermissionOptions,
+  PostToolPayload,
+  ToolContext,
+} from "./types.js";
 import type { Tool } from "../tools/tool.js";
 import type { StreamSink, TodoSnapshot } from "./streaming-sink.js";
 import { AwaitingUserInputError } from "../tools/builtins/ask_user.js";
@@ -148,6 +153,11 @@ export async function runOneTool(
 
   streamSink?.onToolCall?.(toolId, parsedInput);
 
+  // Stable per-invocation UUID. Used as `ingestion_events.source_row_id`
+  // by the tool-invocation-emitter hook so failure / success events from
+  // the same logical tool call can be correlated downstream. Generated
+  // OUTSIDE the try/catch so both branches see the same value.
+  const invocationId = randomUUID();
   const toolStartMs = Date.now();
   let rawOutput: unknown;
   try {
@@ -171,13 +181,21 @@ export async function runOneTool(
       input: parsedInput,
       error: err instanceof Error ? err : new Error(String(err)),
       durationMs: Date.now() - toolStartMs,
+      invocationId,
     });
     throw err;
   }
 
   const parsedOutput = tool.outputSchema.parse(rawOutput);
 
-  const postPayload = { ctx, toolId, input: effectiveInput, output: parsedOutput };
+  const postPayload: PostToolPayload = {
+    ctx,
+    toolId,
+    input: effectiveInput,
+    output: parsedOutput,
+    invocationId,
+    durationMs: Date.now() - toolStartMs,
+  };
   await lifecycle.dispatch("post_tool", postPayload, {
     toolUseID: toolId,
     matcherTarget: toolId,

@@ -252,6 +252,19 @@ export interface PostToolPayload {
   input: unknown;
   /** Mutable — hooks may annotate / wrap output. */
   output: unknown;
+  /**
+   * UUID generated once per tool invocation in run-one-tool.ts. Stable
+   * across post_tool / post_tool_failure for the SAME call (the failure
+   * path also receives it). Used as `ingestion_events.source_row_id` by
+   * the tool-invocation-emitter hook so events from the same call can be
+   * correlated across systems. Optional on the type so legacy test
+   * payloads that omit it still typecheck; production dispatch always
+   * populates it.
+   */
+  invocationId?: string;
+  /** Milliseconds from tool dispatch start to completion. Optional for
+   *  the same reason as `invocationId`. */
+  durationMs?: number;
 }
 
 export interface PreCompactPayload {
@@ -314,6 +327,12 @@ export interface PostToolFailurePayload {
   input: unknown;
   error: Error;
   durationMs: number;
+  /**
+   * Stable UUID for the tool invocation. Same value as the corresponding
+   * post_tool dispatch on the success path. See PostToolPayload.invocationId.
+   * Optional for legacy test payloads; production dispatch always populates it.
+   */
+  invocationId?: string;
 }
 
 export interface PostToolBatchEntry {

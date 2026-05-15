@@ -68,6 +68,8 @@ export function buildAskUserTool() {
     inputSchema: AskUserIn,
     outputSchema: AskUserOut,
     annotations: { readOnly: false },
+    // Internal agent-state builtin — never extracted into the KG.
+    is_internal: true,
 
     execute: async (ctx, input) => {
       // Record the question in scratchpad so chat.ts's post-turn save
