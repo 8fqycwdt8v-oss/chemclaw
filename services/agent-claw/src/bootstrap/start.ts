@@ -65,10 +65,13 @@ const MIN_EXPECTED_HOOKS = 28;
 // at call time by `wiki.enabled`). +1 for pubchem_ghs_lookup (gap-plan
 // H0.4, 2026-05-10). +3 for the Phase Z6 chromatography Phases 2-5
 // builtins (ingest_chrom_results, extract_chrom_pareto_front,
-// simulate_chrom_retention). The fs/shell builtins are NOT counted here
-// because they're conditionally registered behind AGENT_FS_TOOLS_ENABLED
-// — counting them would force the gate to fail in default-config deployments.
-const MIN_EXPECTED_BUILTINS = 94;
+// simulate_chrom_retention). +1 for promote_to_kg (Universal Knowledge
+// Accumulation Phase 0, Task 11 — explicit fact-promotion path for
+// agent-derived INTERPRETED / HYPOTHESIZED / ABSTRACTED claims). The
+// fs/shell builtins are NOT counted here because they're conditionally
+// registered behind AGENT_FS_TOOLS_ENABLED — counting them would force
+// the gate to fail in default-config deployments.
+const MIN_EXPECTED_BUILTINS = 95;
 
 export async function startServer(
   app: FastifyInstance,
