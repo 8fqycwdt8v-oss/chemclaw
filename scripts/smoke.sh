@@ -104,6 +104,19 @@ canonical=$(curl -sf -X POST http://localhost:8001/tools/canonicalize_smiles \
 ok "mcp-rdkit canonical: $canonical"
 
 # --------------------------------------------------------------------------
+# 6b. MCP roll-call — every service in SERVICE_SCOPES answers /healthz
+#     AND /readyz. Catches services that boot /healthz but fail readiness
+#     (e.g. mcp-tabicl PCA artifact missing, mcp-xtb without xtb binary)
+#     at smoke time rather than first-tool-call time.
+# --------------------------------------------------------------------------
+step "6b. MCP roll-call (--include-readyz)"
+if scripts/mcp-rollcall.sh --include-readyz; then
+  ok "all MCP services answered /healthz + /readyz"
+else
+  warn "MCP roll-call reported one or more services unreachable — see output above"
+fi
+
+# --------------------------------------------------------------------------
 # 7. Ingest sample document (unstructured → chunks → DRFP → KG)
 # --------------------------------------------------------------------------
 step "7. Ingesting sample document"
