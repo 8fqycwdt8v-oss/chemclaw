@@ -173,7 +173,11 @@ def _apply_dedup_filter(
             # Request 2× to compensate for expected rejections in dense regimes.
             new_df = domain.inputs.sample(n=n_needed * 2, seed=seed + round_idx)
             new_candidates = _df_rows_to_proposals(new_df, source="random_dedup_resample")
-        except Exception:  # noqa: BLE001
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "dedup resample round %d failed (%s); returning %d/%d candidates",
+                round_idx, exc, len(kept), n_candidates,
+            )
             break
         new_kept = [
             p for p in new_candidates
