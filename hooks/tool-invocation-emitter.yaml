@@ -1,0 +1,34 @@
+name: tool-invocation-emitter
+# The registrar attaches to BOTH post_tool and post_tool_failure internally;
+# the loader schema only accepts a single lifecycle string today, so the
+# YAML declares the primary point and the registrar (added in Task 8)
+# fans out to the failure point. The two registrations share one name so
+# the YAML/registrar parity gate still sees a single hook.
+lifecycle: post_tool
+# DORMANT until Task 8 lands. Task 7 ships the implementation, YAML, and
+# tests; Task 8 adds the BUILTIN_REGISTRARS entry, flips `enabled` to
+# true, and bumps MIN_EXPECTED_HOOKS. Leaving `enabled: false` here means:
+#   - The loader records the YAML as `${file}: disabled` in `result.skipped`
+#     and never tries to look up a registrar (no boot failure).
+#   - The YAML/registrar parity test in
+#     tests/unit/hook-loader-coverage.test.ts explicitly skips
+#     `enabled: false` entries, so the dormant file doesn't trip CI.
+enabled: false
+order: 80
+description: >
+  Phase 0 — Universal Knowledge Accumulation post-tool extraction surface.
+  Emits one `tool_invocation_complete` ingestion event per non-internal
+  tool call when the feature flag `kg.auto_extraction.enabled` resolves to
+  true for the current (user, project) context. The
+  `tool_result_extractor` projector (Task 9) consumes these events and
+  dispatches to the per-source extractor module declared in
+  `extraction_registry`. Defense-in-depth: the hook reads only from
+  `redacted_args` / `redacted_result`, never raw_* fields. Source of
+  truth: services/agent-claw/src/core/hooks/tool-invocation-emitter.ts
+# Runtime gate (effective once Task 8 flips `enabled: true`): defaults to
+# false until an admin sets `kg.auto_extraction.enabled` in either
+# `config_settings` or `feature_flags`. This keeps the production
+# behaviour off-by-default even after the YAML goes live.
+condition:
+  setting_key: kg.auto_extraction.enabled
+  default: false
