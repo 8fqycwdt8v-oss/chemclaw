@@ -124,6 +124,7 @@ export function buildPredictYieldWithUqTool(pool: Pool, mcpUrl: string) {
       "pretrained model when project has < 50 labeled reactions.",
     inputSchema: PredictYieldWithUqIn,
     outputSchema: PredictYieldWithUqOut,
+    result_schema_id: "train.v1",
     annotations: { readOnly: true },
 
     execute: async (ctx, input) => {

@@ -14,6 +14,17 @@
 
 BEGIN;
 
+-- Remove stale rows from earlier seed runs that used incorrect source_name
+-- values before the builtin-name alignment was corrected. ON CONFLICT only
+-- upserts exact-key matches, so misnamed rows must be deleted explicitly.
+DELETE FROM extraction_registry
+ WHERE source_kind = 'mcp_tool'
+   AND source_name IN (
+     'aizynth_retrosynthesis',   -- was propose_retrosynthesis
+     'predict_property',         -- was predict_molecular_property
+     'train_yield_baseline'      -- was predict_yield_with_uq
+   );
+
 INSERT INTO extraction_registry (
   source_kind, source_name, result_schema_id, extractor_module,
   enabled, promote_default
