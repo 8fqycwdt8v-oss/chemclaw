@@ -99,7 +99,7 @@ def test_extract_dipole_magnitude():
 # ---------------------------------------------------------------------------
 
 
-def test_gfn2_confidence_high_tier():
+def test_gfn2_confidence_foundational_tier():
     facts = extract(
         {"energy_hartree": -1.0, "method": "GFN2"},
         _ctx(),
@@ -108,7 +108,7 @@ def test_gfn2_confidence_high_tier():
     assert facts[0].confidence_tier == "foundational"
 
 
-def test_gff_confidence_medium_tier():
+def test_gff_confidence_high_tier():
     """GFN-FF (force field) degrades confidence."""
     facts = extract(
         {"energy_hartree": -1.0, "method": "GFN-FF"},

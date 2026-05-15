@@ -199,8 +199,11 @@ export function buildRecommendNextBatchTool(
         const reco = await bofireTracer.startActiveSpan(
           "bo.recommend_next",
           async (span) => {
-            // Pre-call attrs inside the try so span.end() in finally is
-            // always reached even if setAttributes throws.
+            // start declared before try so the catch block can record
+            // bo.wall_ms even when postJson throws (block-scoped const would
+            // make it inaccessible in catch). setAttributes is still inside
+            // try so span.end() in finally is always reached.
+            let start = 0;
             try {
               span.setAttributes({
                 "bo.campaign_id": input.campaign_id,
@@ -220,7 +223,7 @@ export function buildRecommendNextBatchTool(
                 })(),
                 "bo.min_observations_for_bo": minObs,
               });
-              const start = Date.now();
+              start = Date.now();
               const response = await postJson(
                 `${base}/recommend_next`,
                 {
@@ -244,6 +247,7 @@ export function buildRecommendNextBatchTool(
               span.setStatus({ code: SpanStatusCode.OK });
               return response;
             } catch (err) {
+              span.setAttribute("bo.wall_ms", Date.now() - start);
               const raw = err instanceof Error ? err.message : String(err);
               // Scrub before emitting to OTel — MCP/Postgres error strings
               // regularly embed SMILES and compound codes.

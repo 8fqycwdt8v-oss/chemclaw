@@ -178,7 +178,7 @@ def test_crest_no_smiles_returns_empty():
     )
 
 
-def test_crest_confidence_medium_tier():
+def test_crest_confidence_high_tier():
     facts = crest.extract(
         {"ensemble": [{"energy_hartree": -1.0}]},
         _ctx(),
@@ -265,7 +265,7 @@ def test_synthegy_falls_back_to_args_for_rxn_smiles():
     assert facts[0].subject_id_value == "X>>Y"
 
 
-def test_synthegy_confidence_medium_tier():
+def test_synthegy_confidence_high_tier():
     result = {
         "moves": [{"from_smiles": "A", "to_smiles": "B", "score": 8.0}],
         "reactants_smiles": "A",

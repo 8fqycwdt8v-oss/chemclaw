@@ -113,7 +113,7 @@ def test_chemprop_yield_predictions():
     assert facts[0].confidence_tier == "high"
 
 
-def test_chemprop_high_std_drops_to_medium_tier():
+def test_chemprop_high_std_drops_to_high_tier():
     result = {
         "predictions": [
             {"rxn_smiles": "A>>B", "predicted_yield": 50.0, "std": 18.0},  # rel = 0.36
