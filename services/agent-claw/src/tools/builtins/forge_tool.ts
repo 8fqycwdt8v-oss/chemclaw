@@ -57,6 +57,17 @@ export const ForgeToolIn = z.object({
   implementation_hint: z.string().max(2000).optional(),
   /** Phase D.5: fork from an existing forged tool. */
   parent_tool_id: z.string().uuid().optional(),
+  /**
+   * Tranche 10: NCE-project context this tool was forged from. When set,
+   * `record_skill_project_validation()` records the project as the first
+   * validating project on the new skill_library row, populating
+   * `validated_in_projects` for the cross-project promoter gate
+   * (services/optimizer/skill_promoter/promoter.py). When omitted, the
+   * skill is forged but its origin project is not recorded — the
+   * promoter then needs another project to validate it before any
+   * cross-project promotion can fire.
+   */
+  nce_project_id: z.string().uuid().optional(),
 });
 export type ForgeToolInput = z.infer<typeof ForgeToolIn>;
 
@@ -497,6 +508,23 @@ export function buildForgeToolTool(
                   JSON.stringify(tc.expected_output),
                   tc.tolerance !== undefined ? JSON.stringify({ _global: tc.tolerance }) : null,
                 ],
+              );
+            }
+
+            // Tranche 10: stamp the originating project on the new
+            // skill_library row so the cross-project promoter has at
+            // least one validating project from the moment of forge.
+            // SECURITY DEFINER helper bypasses FORCE RLS on
+            // skill_library so a chemclaw_app caller can populate the
+            // column without UPDATE rights on rows it doesn't own.
+            // Conditional on caller-supplied nce_project_id — when
+            // omitted the skill ships with an empty
+            // validated_in_projects array (promoter requires another
+            // project to validate before cross-project promotion).
+            if (input.nce_project_id) {
+              await client.query(
+                `SELECT record_skill_project_validation($1::uuid, $2::uuid)`,
+                [newSkillId, input.nce_project_id],
               );
             }
           }
