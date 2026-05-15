@@ -45,8 +45,28 @@ export function registerWorkflowSubAgentRoute(
   app: FastifyInstance,
   deps: WorkflowSubAgentDeps,
 ): void {
-  app.post("/api/internal/workflows/sub_agent", (req, reply) =>
-    handleWorkflowSubAgent(req, reply, deps),
+  // Tranche 6 J7: per-route rate-limit. Mirrors the cap on
+  // /api/internal/sessions/:id/resume (see sessions.ts:sessionMutatingRateLimit)
+  // — defense-in-depth against a leaked engine signing key. A leaked JWT
+  // can mint sub_agent harness invocations at arbitrary scale otherwise;
+  // the cap keeps the blast radius bounded to 1/4 the chat ceiling.
+  // Falls back to {} (global rate-limit only) when deps.config is absent
+  // (test paths construct the route without full bootstrap deps).
+  const subAgentRateLimit = deps.config
+    ? {
+        config: {
+          rateLimit: {
+            max: Math.max(1, Math.floor(deps.config.AGENT_CHAT_RATE_LIMIT_MAX / 4)),
+            timeWindow: deps.config.AGENT_CHAT_RATE_LIMIT_WINDOW_MS,
+          },
+        },
+      }
+    : {};
+
+  app.post(
+    "/api/internal/workflows/sub_agent",
+    subAgentRateLimit,
+    (req, reply) => handleWorkflowSubAgent(req, reply, deps),
   );
 }
 
