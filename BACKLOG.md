@@ -315,3 +315,17 @@ Deferred follow-ups discovered while doing other work. One bullet per item, pref
 - [ci/smoke] full scripts/smoke.sh in CI is deferred — requires docker-compose + 10+ services, prohibitively expensive in CI minutes. The cold-start invariants (schema_version row count >= file count + lint) cover the regression mode; full smoke runs locally via `bash scripts/smoke.sh`.
 - [db/migrations] long-term: replace lex-ordered db/init/*.sql with a real migration tool (Alembic / sqitch / dbmate). The schema_version backfill + lints close the immediate gap, but the underlying "60+ idempotent SQL files" pattern is still load-bearing without a real history check or down-migration story.
 - [agent-claw/litellm-redactor] tighten the redaction baseline + add tenant patterns (BACKLOG.md:6 already tracks)
+- [kg/phase-1] write per-MCP extractors (xtb, aizynth, askcos, chemprop, applicability, yield_baseline, sirius, crest, synthegy, tabicl, ord_io, plate, chrom_method, reaction_optimizer, genchem) — separate plan per spec §6 Phase 1
+- [kg/phase-2] document LLM fact extraction; ELN/LOGS direct extractors; external feeds (CrossRef, PubMed, USPTO, ORD)
+- [kg/phase-3] investigation_scorer + anomaly_detector + interpreter projector + kg.fact_interpretation prompt
+- [kg/phase-4] pattern_detector cron + hypothesis_former + budget enforcement
+- [kg/phase-5] test_planner + workflow_engine integration
+- [kg/phase-6] agent_conclusion_extractor + meta-fact extractors (forged_tool_validation, skill_promotion)
+- [kg/phase-7] wiki anomaly/pattern/pending-hypotheses sections; contradiction-page automation
+- [kg/migration] backfill derivation_class on historical reactions/hypotheses/artifacts/compute_results rows
+- [kg/migration] migrate existing direct-driver projectors (kg_hypotheses, kg_documents, qm_kg, wiki_kg) to write to facts table first, then mirror to Neo4j
+- [kg/harness-envelope] extend PostToolPayload + PostToolFailurePayload with invocation_id/redacted_args/redacted_result/duration_ms/ok/error so tool-invocation-emitter actually fires events when the flag is on — currently the hook is defensively guarded and short-circuits on missing fields
+- [kg/agent-tools] Tool type needs is_internal: boolean (or static allowlist) so the tool-invocation-emitter can skip internal builtins (manage_todos, ask_user, etc.) at dispatch time
+- [mcp_tools/common] services/mcp_tools/common/__init__.py eagerly imports `create_app` which pulls FastAPI; crash-loops projector containers (tool_result_extractor, wiki-pages) that don't depend on FastAPI. Lazy-import inside create_app() OR move the FastAPI dep out of common/. Pre-existing repo-wide; Task 10 surfaced it
+- [kg/observability] Grafana panels for facts/extractor/derivation_class rates + investigation_queue depth + investigation_budget_usage burndown
+- [kg/test] integration test for tool_result_extractor actually consuming a synthetic event end-to-end (requires the mcp_tools/common fix above)
