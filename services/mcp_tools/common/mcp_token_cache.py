@@ -72,26 +72,30 @@ class McpTokenCache:
 
         scope = SERVICE_SCOPES.get(service)
         if scope is None:
-            # Strict mode (`MCP_AUTH_STRICT_SCOPES=true`) refuses to mint
-            # an unscoped token. Without it, an unknown service silently
-            # gets a token with `scopes=[]`, which the MCP-side
-            # middleware treats as "no scope check" — that defeats the
-            # whole point of per-service scoping. Strict mode is opt-in
-            # so existing dev paths don't break, but production deploys
-            # should set it. Pact tests in
-            # services/mcp_tools/common/tests/test_scope_pact.py keep
-            # the TS / Py mirrors aligned, so any production miss here
-            # is a typo and worth a hard fail.
-            if os.environ.get("MCP_AUTH_STRICT_SCOPES", "").lower() == "true":
+            # Strict mode is now the default (Tranche 5 — flipped from opt-in
+            # to opt-out 2026-05-15 after Tranche 1 shipped without rollback).
+            # Without it, an unknown service silently gets a token with
+            # `scopes=[]`, which the MCP-side middleware treats as "no scope
+            # check" — that defeats the whole point of per-service scoping.
+            # The TS mirror at services/agent-claw/src/security/mcp-token-cache.ts
+            # has always been fail-loud on unknown services; this aligns the
+            # Python side. Set MCP_AUTH_STRICT_SCOPES=false explicitly to opt
+            # out (e.g. when developing a new MCP service before its scope row
+            # lands). Pact tests in services/mcp_tools/common/tests/
+            # test_scope_pact.py keep the TS / Py mirrors aligned.
+            strict = os.environ.get("MCP_AUTH_STRICT_SCOPES", "true").strip().lower() != "false"
+            if strict:
                 raise McpAuthError(
                     f"refusing to mint a token for unknown service {service!r}: "
                     f"no SERVICE_SCOPES entry. Add the scope to "
                     f"services/mcp_tools/common/scopes.py (and the matching "
                     f"TS mirror in services/agent-claw/src/security/"
-                    f"mcp-token-cache.ts) or unset MCP_AUTH_STRICT_SCOPES.",
+                    f"mcp-token-cache.ts), or set MCP_AUTH_STRICT_SCOPES=false "
+                    f"to opt out (not recommended for production).",
                 )
             log.warning(
-                "no SERVICE_SCOPES entry for %s; minting an unscoped token",
+                "no SERVICE_SCOPES entry for %s; minting an unscoped token "
+                "(MCP_AUTH_STRICT_SCOPES=false in effect)",
                 service,
                 extra={"event": "mcp_token_no_scope", "service": service},
             )
