@@ -116,6 +116,7 @@ jobs:
             services/projectors/kg_source_cache/tests/ \
             services/projectors/kg_documents/tests/ \
             services/projectors/tool_result_extractor/tests/ \
+            services/projectors/fact_extractor/tests/ \
             services/projectors/conditions_normalizer/tests/ \
             services/mcp_tools/mcp_applicability_domain/tests/ \
             services/mcp_tools/mcp_green_chemistry/tests/ \
