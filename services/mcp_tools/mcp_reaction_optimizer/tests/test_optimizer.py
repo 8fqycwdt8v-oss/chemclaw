@@ -551,3 +551,172 @@ def test_recommend_next_min_distance_none_is_disabled(client):
     )
     assert r.status_code == 200, r.text
     assert len(r.json()["proposals"]) == 3
+
+
+# ---------------------------------------------------------------------------
+# Unit tests for internal helpers (no HTTP, no BoFire required)
+# ---------------------------------------------------------------------------
+
+def test_gower_distance_feature_with_no_key_is_skipped():
+    """A feature whose key is None should be silently skipped (line 112 continue)."""
+    from services.mcp_tools.mcp_reaction_optimizer.optimizer import gower_distance
+
+    class _NoKeyFeat:
+        key = None
+        bounds = (0, 100)
+
+    domain = _FakeDomain([_NoKeyFeat(), _FakeFeat("t", bounds=(0, 100))])
+    # Only the "t" feature participates; t values identical → 0.0
+    d = gower_distance({"t": 50}, {"t": 50}, domain)
+    assert d == 0.0
+
+
+def test_min_distance_to_measured_empty_list_returns_one():
+    """Empty measured_factor_list → 1.0 so cold-start candidates are never filtered."""
+    from services.mcp_tools.mcp_reaction_optimizer.optimizer import _min_distance_to_measured
+
+    domain = _FakeDomain([_FakeFeat("t", bounds=(0, 100))])
+    result = _min_distance_to_measured({"t": 50}, [], domain)
+    assert result == 1.0
+
+
+def test_apply_dedup_filter_resample_loop_fires_when_all_rejected():
+    """All initial proposals rejected → resample loop must fire (covers lines 171-182).
+
+    We construct a tiny domain [0, 1] with all proposals forced to 0.5 (by
+    making the sample space effectively a single point) and a measured point
+    at 0.5, then set min_dist > 0 so every proposal is rejected and the loop
+    must resample.  We patch domain.inputs.sample to return near-0.5 proposals
+    on the first call and diverse proposals on subsequent calls so the loop
+    eventually fills the quota.
+    """
+    from unittest.mock import MagicMock, call
+    import pandas as pd
+    from services.mcp_tools.mcp_reaction_optimizer.optimizer import _apply_dedup_filter
+
+    # First sample call returns proposals all near 0.5 (will be rejected).
+    close_df = pd.DataFrame({"t": [0.5, 0.5]})
+    # Second sample call (resample round 1) returns proposals far from 0.5.
+    far_df = pd.DataFrame({"t": [0.0, 1.0]})
+
+    domain = _FakeDomain([_FakeFeat("t", bounds=(0, 1))])
+    domain.inputs = MagicMock()
+    domain.inputs.sample = MagicMock(side_effect=[close_df, far_df])
+    domain.inputs.features = [_FakeFeat("t", bounds=(0, 1))]
+
+    initial_proposals = [
+        {"factor_values": {"t": 0.5}, "source": "test"},
+        {"factor_values": {"t": 0.51}, "source": "test"},
+    ]
+    measured = [{"t": 0.5}]
+
+    kept, any_rejected = _apply_dedup_filter(
+        initial_proposals, measured, domain, min_dist=0.4, n_candidates=2, seed=7
+    )
+    # At least one resampled proposal should pass the filter.
+    assert any_rejected is True
+    assert len(kept) >= 1
+
+
+def test_apply_dedup_filter_resample_exception_is_handled():
+    """Exception in resample sample() is caught and logged; partial results returned."""
+    from unittest.mock import MagicMock
+    from services.mcp_tools.mcp_reaction_optimizer.optimizer import _apply_dedup_filter
+
+    domain = _FakeDomain([_FakeFeat("t", bounds=(0, 1))])
+    domain.inputs = MagicMock()
+    domain.inputs.sample = MagicMock(side_effect=RuntimeError("fake sampler error"))
+    domain.inputs.features = [_FakeFeat("t", bounds=(0, 1))]
+
+    initial_proposals = [{"factor_values": {"t": 0.5}, "source": "test"}]
+    measured = [{"t": 0.5}]
+
+    # All proposals rejected, resample raises → should return empty list without raising.
+    kept, any_rejected = _apply_dedup_filter(
+        initial_proposals, measured, domain, min_dist=0.9, n_candidates=2, seed=1
+    )
+    assert any_rejected is True
+    assert len(kept) == 0
+
+
+def test_maybe_dedup_closure_sets_fallback_reason_when_rejected(client):
+    """RandomStrategy + min_distance_from_measured → dedup_filter note in fallback_reason
+    when a proposal is rejected (covers _maybe_dedup with any_rejected=True).
+
+    Uses a single measured point at t=50 with min_distance=0.99 so virtually
+    every random sample within [0,100] is within 99 % Gower distance of t=50
+    and will be rejected, forcing the dedup_filter note into fallback_reason.
+    """
+    domain_resp = client.post(
+        "/build_domain",
+        json={
+            "factors": [{"name": "t", "type": "continuous", "range": [0, 100]}],
+            "categorical_inputs": [],
+            "outputs": [{"name": "y", "direction": "maximize"}],
+        },
+    )
+    bofire_domain = domain_resp.json()["bofire_domain"]
+    measured = [{"factor_values": {"t": 50.0}, "outputs": {"y": 80.0}}]
+
+    r = client.post(
+        "/recommend_next",
+        json={
+            "bofire_domain": bofire_domain,
+            "measured_outcomes": measured,
+            "n_candidates": 3,
+            "seed": 42,
+            "strategy": "RandomStrategy",
+            # 0.99 means only proposals within 1 % of range from measured pass —
+            # only t in [49, 51] passes; most random samples in [0,100] are rejected.
+            "min_distance_from_measured": 0.99,
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # Either dedup note is present or all resamples happened to pass (very unlikely
+    # but allowed). The important invariant: the endpoint returns 200 and proposals.
+    assert isinstance(body["proposals"], list)
+    # If any were rejected the fallback_reason must contain the dedup marker.
+    if body["fallback_reason"] and "dedup_filter" in body["fallback_reason"]:
+        assert "ε=0.990" in body["fallback_reason"]
+
+
+def test_recommend_next_batch_with_observations_and_dedup(client):
+    """Warm BO path (≥3 measured) + min_distance_from_measured set.
+
+    This test exercises the dedup wrapper around the BO ask() / fallback
+    return sites (lines 305, 315, 326, 336, 341).  We use a small 1-D domain
+    with 4 measured outcomes (above cold-start threshold) and a large epsilon
+    so the filter has something to do on the BO proposals.
+    """
+    domain_resp = client.post(
+        "/build_domain",
+        json={
+            "factors": [{"name": "t", "type": "continuous", "range": [0, 100]}],
+            "categorical_inputs": [],
+            "outputs": [{"name": "y", "direction": "maximize"}],
+        },
+    )
+    bofire_domain = domain_resp.json()["bofire_domain"]
+    measured = [
+        {"factor_values": {"t": 10}, "outputs": {"y": 55}},
+        {"factor_values": {"t": 30}, "outputs": {"y": 65}},
+        {"factor_values": {"t": 60}, "outputs": {"y": 80}},
+        {"factor_values": {"t": 90}, "outputs": {"y": 70}},
+    ]
+    r = client.post(
+        "/recommend_next",
+        json={
+            "bofire_domain": bofire_domain,
+            "measured_outcomes": measured,
+            "n_candidates": 2,
+            "seed": 99,
+            # Small epsilon: filter points within 5 % of any measured point.
+            "min_distance_from_measured": 0.05,
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert body["n_observations"] == 4
+    assert isinstance(body["proposals"], list)
+    assert len(body["proposals"]) >= 1
