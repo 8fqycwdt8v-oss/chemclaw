@@ -22,6 +22,7 @@ import asyncio
 import json
 import logging
 import os
+import re
 import signal
 from typing import Any
 
@@ -454,18 +455,41 @@ class WorkflowEngine:
         goal = step.get("goal")
         if not isinstance(goal, str) or not goal.strip():
             raise ValueError("sub_agent step requires non-empty 'goal' string")
-        # Whole-string JMESPath substitution: if goal is exactly '${expr}'
-        # (no surrounding text), resolve against scope. Mixed strings like
-        # 'look up ${steps.first.smiles}' are NOT substituted today; pass
-        # them through as-is. If you need substring substitution, build
-        # the full goal in a tool_call step and reference its result.
-        if goal.startswith("${") and goal.endswith("}"):
+        # JMESPath substitution. Two shapes supported:
+        #
+        # 1. Whole-string: goal is exactly '${expr}'. Resolves against scope;
+        #    the resolved value must be a non-empty string.
+        # 2. Substring: any number of '${expr}' tokens embedded in surrounding
+        #    text, e.g. 'look up ${steps.first.smiles} and report ${steps.foo.id}'.
+        #    Each match is resolved independently; non-string results are
+        #    str()-cast (so a numeric step output naturally inlines).
+        if goal.startswith("${") and goal.endswith("}") and goal.count("${") == 1:
+            # Whole-string path preserves the prior strict contract: resolved
+            # value must already be a string. Catches typos that would
+            # otherwise produce a stringified None / dict.
             resolved = self._resolve_jmespath(goal[2:-1], scope)
             if not isinstance(resolved, str) or not resolved.strip():
                 raise ValueError(
                     f"sub_agent goal expression {goal!r} did not resolve to a non-empty string"
                 )
             goal = resolved
+        elif "${" in goal:
+            # Substring path. Each ${expr} is resolved independently; missing /
+            # null results inline as the empty string (caller can chain with
+            # COALESCE in the JMESPath itself if they want a default).
+            def _sub(match: "re.Match[str]") -> str:
+                expr = match.group(1)
+                value = self._resolve_jmespath(expr, scope)
+                if value is None:
+                    return ""
+                return str(value)
+
+            substituted = re.sub(r"\$\{([^}]+)\}", _sub, goal)
+            if not substituted.strip():
+                raise ValueError(
+                    f"sub_agent goal {goal!r} resolved to an empty/whitespace string after substitution"
+                )
+            goal = substituted
 
         user_entra_id = step.get("user_entra_id")
         if not isinstance(user_entra_id, str) or not user_entra_id.strip():

@@ -281,6 +281,83 @@ def test_sub_agent_resolves_goal_jmespath_template():
     assert captured["headers"].get("x-user-entra-id") == "user-1"
 
 
+def test_sub_agent_resolves_goal_substring_substitution():
+    """Tranche 6 J8: substring '${expr}' substitution in goal."""
+    eng = _build_engine()
+    response = MagicMock(status_code=200, json=lambda: {"text": "ok"})
+    captured: dict[str, Any] = {}
+
+    async def fake_post(url, **kwargs):  # noqa: ANN001, ARG001
+        captured["json"] = kwargs.get("json")
+        return response
+
+    eng._http = MagicMock()
+    eng._http.post = fake_post
+
+    scope = {
+        "steps": {
+            "lookup": {"smiles": "CCO"},
+            "params": {"method": "GFN2-xTB"},
+        },
+    }
+    step = {
+        "kind": "sub_agent",
+        "goal": "Run ${steps.params.method} on ${steps.lookup.smiles} and report the energy.",
+        "user_entra_id": "user-1",
+    }
+    old_key = os.environ.pop("MCP_AUTH_SIGNING_KEY", None)
+    try:
+        asyncio.run(eng._execute_step(step, scope))
+    finally:
+        if old_key is not None:
+            os.environ["MCP_AUTH_SIGNING_KEY"] = old_key
+
+    assert captured["json"]["goal"] == "Run GFN2-xTB on CCO and report the energy."
+
+
+def test_sub_agent_substring_substitution_inlines_non_string():
+    """Numeric step outputs str-cast naturally during substring substitution."""
+    eng = _build_engine()
+    response = MagicMock(status_code=200, json=lambda: {"text": "ok"})
+    captured: dict[str, Any] = {}
+
+    async def fake_post(url, **kwargs):  # noqa: ANN001, ARG001
+        captured["json"] = kwargs.get("json")
+        return response
+
+    eng._http = MagicMock()
+    eng._http.post = fake_post
+
+    scope = {"steps": {"yield": {"value": 78.5}}}
+    step = {
+        "kind": "sub_agent",
+        "goal": "Yield was ${steps.yield.value}%",
+        "user_entra_id": "u1",
+    }
+    old_key = os.environ.pop("MCP_AUTH_SIGNING_KEY", None)
+    try:
+        asyncio.run(eng._execute_step(step, scope))
+    finally:
+        if old_key is not None:
+            os.environ["MCP_AUTH_SIGNING_KEY"] = old_key
+
+    assert captured["json"]["goal"] == "Yield was 78.5%"
+
+
+def test_sub_agent_substring_substitution_empty_after_subst_raises():
+    """If substitution produces an empty/whitespace string, raise."""
+    eng = _build_engine()
+    eng._http = AsyncMock()
+    scope = {"steps": {"x": {"v": None}}}
+    step = {
+        "kind": "sub_agent",
+        "goal": " ${steps.x.v} ",
+        "user_entra_id": "u1",
+    }
+    with pytest.raises(ValueError, match="resolved to an empty"):
+        asyncio.run(eng._execute_step(step, scope))
+
+
 def test_sub_agent_translates_4xx_to_runtime_error():
     eng = _build_engine()
     response = MagicMock(status_code=403, text="forbidden")

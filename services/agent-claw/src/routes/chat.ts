@@ -306,15 +306,60 @@ async function handleChat(
   // Non-streaming requests never reach this branch, so the sink stays
   // undefined and tools fall back to including the full buffered
   // stdout/stderr in their tool_result.
-  ctx.logSink = (event) => {
-    writeEvent(reply, {
-      type: "tool_log",
-      toolId: event.toolId,
-      stream: event.stream,
-      line: event.line,
-      ...(event.toolUseId ? { toolUseId: event.toolUseId } : {}),
-    });
+  //
+  // Tranche 6 J6: coalesce consecutive lines from the same (toolId, stream,
+  // toolUseId) tuple into a single SSE event with newline-joined content,
+  // flushed every TOOL_LOG_FLUSH_MS. A chatty Monty/run_program script
+  // emitting hundreds of lines per second per stream now produces
+  // ~20 events/sec instead of ~hundreds — the client gets the full text
+  // (no drops) but the SSE channel and HTTP/1.1 framing don't drown.
+  // A change in toolId/stream/toolUseId flushes the prior batch first so
+  // the model never sees out-of-order lines from interleaved tools.
+  const TOOL_LOG_FLUSH_MS = 50;
+  type Pending = { toolId: string; stream: "stdout" | "stderr"; toolUseId?: string; lines: string[] };
+  let pending: Pending | null = null;
+  let flushTimer: NodeJS.Timeout | null = null;
+  const flushPending = (): void => {
+    if (pending && pending.lines.length > 0) {
+      writeEvent(reply, {
+        type: "tool_log",
+        toolId: pending.toolId,
+        stream: pending.stream,
+        line: pending.lines.join("\n"),
+        ...(pending.toolUseId ? { toolUseId: pending.toolUseId } : {}),
+      });
+    }
+    pending = null;
+    if (flushTimer) {
+      clearTimeout(flushTimer);
+      flushTimer = null;
+    }
   };
+  ctx.logSink = (event) => {
+    if (
+      pending &&
+      pending.toolId === event.toolId &&
+      pending.stream === event.stream &&
+      pending.toolUseId === event.toolUseId
+    ) {
+      pending.lines.push(event.line);
+    } else {
+      flushPending();
+      pending = {
+        toolId: event.toolId,
+        stream: event.stream,
+        toolUseId: event.toolUseId,
+        lines: [event.line],
+      };
+    }
+    if (!flushTimer) {
+      flushTimer = setTimeout(flushPending, TOOL_LOG_FLUSH_MS);
+    }
+  };
+  // Ensure any in-flight batch ships when the client disconnects or the
+  // stream completes. reply.raw is the underlying http.ServerResponse.
+  reply.raw.once("close", flushPending);
+  reply.raw.once("finish", flushPending);
 
   // Opt the session into per-session E2B sandbox reuse — run_program
   // and forged-tool dispatch will share one sandbox across the whole
