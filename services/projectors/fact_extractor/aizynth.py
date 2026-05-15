@@ -1,14 +1,15 @@
 """aizynth extractor — surfaces retrosynthesis search outcomes as KG facts.
 
-Phase 1.2. The aizynth /retrosynthesis endpoint returns `routes: list[RetroRoute]`
-where each route has `score` (0..∞, higher is better) and `in_stock_ratio`
-(0..1). We emit a small per-target rollup, not per-route — Phase 1+ doesn't
-want a flood of route-level facts (would swamp the KG and break the wiki).
+Phase 1.2. The propose_retrosynthesis builtin wraps ASKCOS (primary) and
+AiZynthFinder (fallback). The builtin output has:
+  - source: "askcos" | "aizynth"
+  - routes_askcos: list[AskcosRoute]   — each has total_score, steps, depth
+  - routes_aizynth: list[AiZynthRoute] — each has score, in_stock_ratio, tree
 
 Facts emitted per retrosynthesis invocation (when routes are present):
-  - (Compound, has_top_retrosynthesis_score, best_score)
-  - (Compound, has_top_in_stock_ratio, best_ratio)
   - (Compound, has_retrosynthesis_route_count, len(routes))
+  - (Compound, has_top_retrosynthesis_score, best score)     [both sources]
+  - (Compound, has_top_in_stock_ratio, best ratio)           [aizynth only]
 
 derivation_class = COMPUTED (deterministic post-processing of typed output).
 Confidence: 0.80 — retrosynthesis is heuristic search, lower than QM single
@@ -40,7 +41,22 @@ def extract(result: dict[str, Any], ctx: ExtractionContext) -> list[FactDraft]:
 
 
 def _extract(result: dict[str, Any], ctx: ExtractionContext) -> list[FactDraft]:
-    routes = result.get("routes")
+    source = result.get("source")
+
+    if source == "aizynth":
+        routes = result.get("routes_aizynth") or []
+        score_key = "score"
+    elif source == "askcos":
+        routes = result.get("routes_askcos") or []
+        score_key = "total_score"
+    else:
+        # Defensive fallback: try aizynth first, then askcos.
+        aizynth_routes = result.get("routes_aizynth") or []
+        if aizynth_routes:
+            routes, score_key = aizynth_routes, "score"
+        else:
+            routes, score_key = result.get("routes_askcos") or [], "total_score"
+
     if not isinstance(routes, list) or not routes:
         return []
 
@@ -48,16 +64,16 @@ def _extract(result: dict[str, Any], ctx: ExtractionContext) -> list[FactDraft]:
     if smiles is None:
         return []
 
-    # Filter to dict entries with a numeric score / ratio. Defensive
-    # against partial / corrupted entries.
+    # Collect numeric score / ratio defensively — skip malformed entries.
     valid_scores: list[float] = []
     valid_ratios: list[float] = []
     for r in routes:
         if not isinstance(r, dict):
             continue
-        s = r.get("score")
+        s = r.get(score_key)
         if isinstance(s, (int, float)):
             valid_scores.append(float(s))
+        # in_stock_ratio only present on AiZynth routes.
         ratio = r.get("in_stock_ratio")
         if isinstance(ratio, (int, float)):
             valid_ratios.append(float(ratio))
@@ -66,6 +82,7 @@ def _extract(result: dict[str, Any], ctx: ExtractionContext) -> list[FactDraft]:
     common = {
         "tool": "aizynth.retrosynthesis",
         "route_count": len(routes),
+        "source": source,
     }
     facts: list[FactDraft] = [
         FactDraft(

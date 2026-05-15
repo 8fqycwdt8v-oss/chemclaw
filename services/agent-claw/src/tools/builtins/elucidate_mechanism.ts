@@ -128,6 +128,7 @@ export function buildElucidateMechanismTool(mcpSynthegyMechUrl: string) {
       "Optionally accepts a natural-language guidance prompt to bias the search.",
     inputSchema: ElucidateMechanismIn,
     outputSchema: ElucidateMechanismOut,
+    result_schema_id: "elucidate_mechanism.v1",
     annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {

@@ -7,7 +7,7 @@ import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { MAX_RXN_SMILES_LEN, MAX_SMILES_LEN } from "../_limits.js";
-import { PredictYieldWithUqOut } from "./predict_yield_with_uq.js";
+import { PredictServerOut } from "./predict_yield_with_uq.js";
 import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 const ContinuousFactor = z.object({
@@ -133,12 +133,12 @@ export function buildDesignPlateTool(
         const uniqueRxn = `${input.reactants_smiles}>>${input.product_smiles}`;
         try {
           const pred = await postJson(
-            `${yieldBase}/predict_yield_with_uq`,
+            `${yieldBase}/predict_yield`,
             {
               rxn_smiles_list: [uniqueRxn],
               project_internal_id: input.project_internal_id,
             },
-            PredictYieldWithUqOut,
+            PredictServerOut,
             TIMEOUT_MS,
             "mcp-yield-baseline",
           );

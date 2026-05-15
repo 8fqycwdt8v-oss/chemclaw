@@ -180,6 +180,7 @@ export function buildAssessApplicabilityDomainTool(
       "verdict is descriptive; the chemist still sees every recommendation.",
     inputSchema: AssessApplicabilityDomainIn,
     outputSchema: AssessApplicabilityDomainOut,
+    result_schema_id: "assess.v1",
     annotations: { readOnly: true },
 
     execute: async (ctx, input) => {

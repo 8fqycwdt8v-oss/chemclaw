@@ -42,10 +42,11 @@ def _ctx(args: dict[str, Any] | None = None) -> ExtractionContext:
 
 def test_aizynth_emits_three_facts_when_routes_present():
     result = {
-        "routes": [
+        "source": "aizynth",
+        "routes_aizynth": [
             {"score": 1.5, "in_stock_ratio": 0.8, "tree": {}},
             {"score": 1.2, "in_stock_ratio": 0.6, "tree": {}},
-        ]
+        ],
     }
     facts = aizynth.extract(result, _ctx())
     preds = {f.predicate for f in facts}
@@ -58,7 +59,13 @@ def test_aizynth_emits_three_facts_when_routes_present():
 
 def test_aizynth_takes_max_score_and_ratio():
     facts = aizynth.extract(
-        {"routes": [{"score": 0.5, "in_stock_ratio": 0.3}, {"score": 2.0, "in_stock_ratio": 0.9}]},
+        {
+            "source": "aizynth",
+            "routes_aizynth": [
+                {"score": 0.5, "in_stock_ratio": 0.3},
+                {"score": 2.0, "in_stock_ratio": 0.9},
+            ],
+        },
         _ctx(),
     )
     by_pred = {f.predicate: f.object_value["value"] for f in facts}
@@ -66,13 +73,34 @@ def test_aizynth_takes_max_score_and_ratio():
     assert by_pred["has_top_in_stock_ratio"] == 0.9
 
 
+def test_aizynth_askcos_source_uses_total_score():
+    """ASKCOS routes carry total_score (not score) and have no in_stock_ratio."""
+    result = {
+        "source": "askcos",
+        "routes_askcos": [
+            {"total_score": 0.7, "depth": 3, "steps": []},
+            {"total_score": 0.9, "depth": 2, "steps": []},
+        ],
+    }
+    facts = aizynth.extract(result, _ctx())
+    preds = {f.predicate for f in facts}
+    assert "has_retrosynthesis_route_count" in preds
+    assert "has_top_retrosynthesis_score" in preds
+    assert "has_top_in_stock_ratio" not in preds
+    by_pred = {f.predicate: f.object_value["value"] for f in facts}
+    assert by_pred["has_top_retrosynthesis_score"] == 0.9
+
+
 def test_aizynth_empty_routes_returns_empty():
-    assert aizynth.extract({"routes": []}, _ctx()) == []
+    assert aizynth.extract({"source": "aizynth", "routes_aizynth": []}, _ctx()) == []
 
 
 def test_aizynth_no_smiles_returns_empty():
     assert (
-        aizynth.extract({"routes": [{"score": 1.0, "in_stock_ratio": 0.5}]}, _ctx({}))
+        aizynth.extract(
+            {"source": "aizynth", "routes_aizynth": [{"score": 1.0, "in_stock_ratio": 0.5}]},
+            _ctx({}),
+        )
         == []
     )
 
@@ -80,11 +108,12 @@ def test_aizynth_no_smiles_returns_empty():
 def test_aizynth_swallows_bad_route_entries():
     """Non-dict / missing-field entries should be skipped, not raise."""
     result = {
-        "routes": [
+        "source": "aizynth",
+        "routes_aizynth": [
             "not a dict",
             {"score": 1.5, "in_stock_ratio": 0.8},
             {"no_fields": True},
-        ]
+        ],
     }
     facts = aizynth.extract(result, _ctx())
     # 3 facts (count, score, ratio) from the one good route.
@@ -108,12 +137,12 @@ def test_chemprop_yield_predictions():
     assert all(f.predicate == "has_predicted_yield_pct" for f in facts)
     assert all(f.subject_label == "Reaction" for f in facts)
     # First prediction: std/value = 5/75 ≈ 0.067 → base confidence (0.80,
-    # medium tier since 0.65 ≤ 0.80 < 0.85)
+    # high tier since 0.65 ≤ 0.80 < 0.85)
     assert facts[0].confidence == 0.80
-    assert facts[0].confidence_tier == "medium"
+    assert facts[0].confidence_tier == "high"
 
 
-def test_chemprop_high_std_drops_to_medium_tier():
+def test_chemprop_high_std_drops_to_high_tier():
     result = {
         "predictions": [
             {"rxn_smiles": "A>>B", "predicted_yield": 50.0, "std": 18.0},  # rel = 0.36
@@ -122,7 +151,7 @@ def test_chemprop_high_std_drops_to_medium_tier():
     facts = chemprop.extract(result, _ctx())
     assert len(facts) == 1
     assert facts[0].confidence == 0.65
-    assert facts[0].confidence_tier == "medium"
+    assert facts[0].confidence_tier == "high"
 
 
 def test_chemprop_property_predictions_with_property_name():

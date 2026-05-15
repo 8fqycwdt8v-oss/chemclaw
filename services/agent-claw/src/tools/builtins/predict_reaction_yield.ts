@@ -45,6 +45,7 @@ export function buildPredictReactionYieldTool(mcpChempropUrl: string) {
       "chemprop v2 MPNN model. Returns predicted_yield (0-100) and uncertainty std.",
     inputSchema: PredictReactionYieldIn,
     outputSchema: PredictReactionYieldOut,
+    result_schema_id: "predict_yield.v1",
     annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {

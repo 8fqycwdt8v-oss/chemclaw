@@ -53,6 +53,7 @@ export function buildQmCrestScreenTool(mcpCrestUrl: string) {
       "structures with Boltzmann weights. Latency 30 s - 10 min.",
     inputSchema: QmCrestScreenIn,
     outputSchema: QmCrestScreenOut,
+    result_schema_id: "crest_ensemble.v1",
     annotations: { readOnly: true },
     execute: async (_ctx, input) => {
       // Zod's .default("conformers") applies at parse time, but the

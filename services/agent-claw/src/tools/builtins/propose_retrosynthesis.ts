@@ -72,6 +72,7 @@ export function buildProposeRetrosynthesisTool(
       "Returns ranked routes with step-level scores.",
     inputSchema: ProposeRetrosynthesisIn,
     outputSchema: ProposeRetrosynthesisOut,
+    result_schema_id: "retrosynthesis.v1",
     annotations: { readOnly: true },
 
     execute: async (_ctx, input) => {

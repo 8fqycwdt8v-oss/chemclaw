@@ -24,22 +24,13 @@ import logging
 import math
 from typing import Any
 
+from services.projectors.fact_extractor._common import confidence_tier
 from services.projectors.tool_result_extractor.main import (
     ExtractionContext,
     FactDraft,
 )
 
 log = logging.getLogger(__name__)
-
-
-def _confidence_tier(score: float) -> str:
-    if score >= 0.85:
-        return "high"
-    if score >= 0.65:
-        return "medium"
-    if score >= 0.40:
-        return "low"
-    return "exploratory"
 
 
 def _resolve_compound_id(
@@ -93,7 +84,7 @@ def _extract_single_point(
         method_conf = 0.70
     else:
         method_conf = 0.85
-    tier = _confidence_tier(method_conf)
+    tier = confidence_tier(method_conf)
     cache_hit = bool(result.get("cache_hit", False))
 
     common_object_value: dict[str, Any] = {

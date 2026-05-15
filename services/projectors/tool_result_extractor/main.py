@@ -151,7 +151,7 @@ class ToolResultExtractor(BaseProjector):
                 "SELECT extractor_module, enabled, promote_default "
                 "FROM extraction_registry "
                 "WHERE source_kind=%s AND source_name=%s "
-                "  AND result_schema_id=%s",
+                "  AND result_schema_id IS NOT DISTINCT FROM %s",
                 ("mcp_tool", tool_name, result_schema_id),
             )
             row = await cur.fetchone()
