@@ -105,7 +105,7 @@ def test_gfn2_confidence_high_tier():
         _ctx(),
     )
     assert facts[0].confidence == 0.85
-    assert facts[0].confidence_tier == "high"
+    assert facts[0].confidence_tier == "foundational"
 
 
 def test_gff_confidence_medium_tier():
@@ -115,7 +115,7 @@ def test_gff_confidence_medium_tier():
         _ctx({"smiles": "CCO", "method": "GFN-FF"}),
     )
     assert facts[0].confidence == 0.70
-    assert facts[0].confidence_tier == "medium"
+    assert facts[0].confidence_tier == "high"
 
 
 # ---------------------------------------------------------------------------

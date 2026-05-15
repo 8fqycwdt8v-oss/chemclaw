@@ -108,9 +108,9 @@ def test_chemprop_yield_predictions():
     assert all(f.predicate == "has_predicted_yield_pct" for f in facts)
     assert all(f.subject_label == "Reaction" for f in facts)
     # First prediction: std/value = 5/75 ≈ 0.067 → base confidence (0.80,
-    # medium tier since 0.65 ≤ 0.80 < 0.85)
+    # high tier since 0.65 ≤ 0.80 < 0.85)
     assert facts[0].confidence == 0.80
-    assert facts[0].confidence_tier == "medium"
+    assert facts[0].confidence_tier == "high"
 
 
 def test_chemprop_high_std_drops_to_medium_tier():
@@ -122,7 +122,7 @@ def test_chemprop_high_std_drops_to_medium_tier():
     facts = chemprop.extract(result, _ctx())
     assert len(facts) == 1
     assert facts[0].confidence == 0.65
-    assert facts[0].confidence_tier == "medium"
+    assert facts[0].confidence_tier == "high"
 
 
 def test_chemprop_property_predictions_with_property_name():

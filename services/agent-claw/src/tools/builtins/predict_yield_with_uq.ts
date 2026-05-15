@@ -41,6 +41,12 @@ const ReactionPrediction = z.object({
 
 export const PredictYieldWithUqOut = z.object({
   predictions: z.array(ReactionPrediction),
+  // Training metadata — null/0 when the global pretrained model is used.
+  // Surfaced here so the yield_baseline extractor can record baseline-model
+  // existence in the KG without a separate tool invocation.
+  model_id: z.string().nullable(),
+  n_train: z.number().int(),
+  used_global_fallback: z.boolean(),
 });
 export type PredictYieldWithUqOutput = z.infer<typeof PredictYieldWithUqOut>;
 
@@ -48,6 +54,12 @@ const TrainOut = z.object({
   model_id: z.string(),
   n_train: z.number().int(),
   cached_for_seconds: z.number().int(),
+});
+
+// What /predict_yield actually returns — predictions only; we merge training
+// metadata from TrainOut before returning the full PredictYieldWithUqOut.
+const PredictServerOut = z.object({
+  predictions: z.array(ReactionPrediction),
 });
 
 interface TrainingRow {
@@ -85,10 +97,10 @@ async function fetchTrainingPairs(
 export function buildPredictYieldWithUqTool(pool: Pool, mcpUrl: string) {
   const base = normalizeUrl(mcpUrl);
 
-  async function trainAndGetModelId(
+  async function trainAndGetModel(
     projectInternalId: string,
     pairs: TrainingRow[],
-  ): Promise<string> {
+  ): Promise<{ model_id: string; n_train: number }> {
     const resp = await postJson(
       `${base}/train`,
       {
@@ -99,7 +111,7 @@ export function buildPredictYieldWithUqTool(pool: Pool, mcpUrl: string) {
       120_000,
       "mcp-yield-baseline",
     );
-    return resp.model_id;
+    return { model_id: resp.model_id, n_train: resp.n_train };
   }
 
   return defineTool({
@@ -121,6 +133,7 @@ export function buildPredictYieldWithUqTool(pool: Pool, mcpUrl: string) {
       }
 
       let modelId: string | null = null;
+      let nTrain = 0;
       let useGlobalFallback = true;
       let trainingPairs: TrainingRow[] = [];
 
@@ -131,7 +144,9 @@ export function buildPredictYieldWithUqTool(pool: Pool, mcpUrl: string) {
           input.project_internal_id,
         );
         if (trainingPairs.length >= MIN_TRAIN_PAIRS) {
-          modelId = await trainAndGetModelId(input.project_internal_id, trainingPairs);
+          const trained = await trainAndGetModel(input.project_internal_id, trainingPairs);
+          modelId = trained.model_id;
+          nTrain = trained.n_train;
           useGlobalFallback = false;
         }
       }
@@ -144,25 +159,29 @@ export function buildPredictYieldWithUqTool(pool: Pool, mcpUrl: string) {
       };
 
       try {
-        return await postJson(
+        const serverResp = await postJson(
           `${base}/predict_yield`,
           predictBody,
-          PredictYieldWithUqOut,
+          PredictServerOut,
           60_000,
           "mcp-yield-baseline",
         );
+        return { ...serverResp, model_id: modelId, n_train: nTrain, used_global_fallback: useGlobalFallback };
       } catch (err) {
         const msg = err instanceof Error ? err.message : String(err);
         // 412 → cache miss after restart; re-train and retry once.
         if (msg.includes("412") && !useGlobalFallback && input.project_internal_id) {
-          modelId = await trainAndGetModelId(input.project_internal_id, trainingPairs);
-          return await postJson(
+          const retrained = await trainAndGetModel(input.project_internal_id, trainingPairs);
+          modelId = retrained.model_id;
+          nTrain = retrained.n_train;
+          const retryResp = await postJson(
             `${base}/predict_yield`,
             { ...predictBody, model_id: modelId },
-            PredictYieldWithUqOut,
+            PredictServerOut,
             60_000,
             "mcp-yield-baseline",
           );
+          return { ...retryResp, model_id: modelId, n_train: nTrain, used_global_fallback: useGlobalFallback };
         }
         throw err;
       }

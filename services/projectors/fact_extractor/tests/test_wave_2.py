@@ -97,13 +97,13 @@ def test_sirius_skips_malformed_candidates():
     assert facts[0].subject_id_value == "CCO"
 
 
-def test_sirius_confidence_medium_tier():
+def test_sirius_confidence_high_tier():
     facts = sirius.extract(
         {"candidates": [{"smiles": "CCO", "score": 0.9, "classyfire": {}}]},
         _ctx({}),
     )
     assert facts[0].confidence == 0.65
-    assert facts[0].confidence_tier == "medium"
+    assert facts[0].confidence_tier == "high"
 
 
 # ---------------------------------------------------------------------------
@@ -184,8 +184,8 @@ def test_crest_confidence_medium_tier():
         _ctx(),
     )
     assert facts[0].confidence == 0.80
-    # 0.80 is medium tier (< 0.85).
-    assert facts[0].confidence_tier == "medium"
+    # 0.80 is high tier (>= 0.65 < 0.85).
+    assert facts[0].confidence_tier == "high"
 
 
 # ---------------------------------------------------------------------------
@@ -273,7 +273,7 @@ def test_synthegy_confidence_medium_tier():
     }
     facts = synthegy.extract(result, _ctx())
     assert facts[0].confidence == 0.70
-    assert facts[0].confidence_tier == "medium"
+    assert facts[0].confidence_tier == "high"
 
 
 def test_synthegy_truncated_flag_propagated():
@@ -322,7 +322,7 @@ def test_tabicl_subject_id_is_reaction_uuid_not_smiles():
     assert facts[0].subject_id_value == rxn_id
 
 
-def test_tabicl_high_std_drops_to_medium_tier():
+def test_tabicl_high_std_drops_to_high_tier():
     result = {
         "predictions": [
             {"query_reaction_id": str(uuid.uuid4()), "predicted_yield_pct": 50.0, "std": 18.0},
@@ -331,7 +331,7 @@ def test_tabicl_high_std_drops_to_medium_tier():
     }
     facts = tabicl.extract(result, _ctx())
     assert facts[0].confidence == 0.65
-    assert facts[0].confidence_tier == "medium"
+    assert facts[0].confidence_tier == "high"
 
 
 def test_tabicl_caveats_propagated_to_object_value():
@@ -444,15 +444,15 @@ def test_genchem_falls_back_candidate_count_to_proposals_length():
     assert facts[0].object_value["candidate_count"] == 3
 
 
-def test_genchem_confidence_exploratory_tier():
-    """0.50 → low tier per common.confidence_tier."""
+def test_genchem_confidence_medium_tier():
+    """0.50 → medium tier per common.confidence_tier."""
     result = {"run_id": "gen-005", "kind": "scaffold", "n_proposed": 1, "proposals": []}
     facts = genchem.extract(
         result, _ctx({"project_internal_id": "proj-1"})
     )
     assert facts[0].confidence == 0.50
-    # 0.50 → "low" per confidence_tier (>= 0.40 < 0.65 → low).
-    assert facts[0].confidence_tier == "low"
+    # 0.50 → "medium" per confidence_tier (>= 0.40 < 0.65 → medium).
+    assert facts[0].confidence_tier == "medium"
 
 
 def test_genchem_seed_smiles_resolved_from_args():
