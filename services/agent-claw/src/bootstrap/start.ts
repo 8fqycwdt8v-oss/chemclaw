@@ -38,10 +38,14 @@ import {
 // 26 = +scheduled-substance-gate pre_tool (gap-plan H0.9, 2026-05-10).
 // 27 = +redact-tool-output post_tool (Tranche 1 / Task G — defense-in-depth
 // scrub of tool outputs before they enter the next-turn LLM context).
+// 28 = +tool-invocation-emitter post_tool (+ post_tool_failure internally;
+// Universal Knowledge Accumulation Phase 0, Task 8 — emits one
+// `tool_invocation_complete` ingestion event per non-internal tool call,
+// gated by feature flag `kg.auto_extraction.enabled`).
 // Bump every time BUILTIN_REGISTRARS gains an entry so a silent failure to
 // load a new hook trips the startup gate instead of quietly downgrading
 // the safety net.
-const MIN_EXPECTED_HOOKS = 27;
+const MIN_EXPECTED_HOOKS = 28;
 
 // Builtins gate. Mirrors MIN_EXPECTED_HOOKS for tools/builtins/: a new
 // builtin module landing under `services/agent-claw/src/tools/builtins/`
@@ -61,10 +65,16 @@ const MIN_EXPECTED_HOOKS = 27;
 // at call time by `wiki.enabled`). +1 for pubchem_ghs_lookup (gap-plan
 // H0.4, 2026-05-10). +3 for the Phase Z6 chromatography Phases 2-5
 // builtins (ingest_chrom_results, extract_chrom_pareto_front,
-// simulate_chrom_retention). The fs/shell builtins are NOT counted here
+// simulate_chrom_retention). +1 for promote_to_kg (Universal Knowledge
+// Accumulation Phase 0, Task 11 — explicit fact-promotion path for
+// agent-derived INTERPRETED / HYPOTHESIZED / ABSTRACTED claims). +1 for
+// request_investigation (Universal Knowledge Accumulation Phase 0, Task
+// 12 — manual high-priority investigation_queue enqueue picked up by the
+// Phase 3+ interpreter). The fs/shell builtins are NOT counted here
 // because they're conditionally registered behind AGENT_FS_TOOLS_ENABLED
-// — counting them would force the gate to fail in default-config deployments.
-const MIN_EXPECTED_BUILTINS = 94;
+// — counting them would force the gate to fail in default-config
+// deployments.
+const MIN_EXPECTED_BUILTINS = 96;
 
 export async function startServer(
   app: FastifyInstance,

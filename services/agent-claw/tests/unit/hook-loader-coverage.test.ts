@@ -143,19 +143,40 @@ describe("hook YAML/registrar parity", () => {
       "task_created",
       "task_completed",
     ] as const;
-    const actual = new Map<string, string>();
+    // Some registrars (e.g. tool-invocation-emitter) attach the same hook
+    // name at MORE than one lifecycle point — the YAML declares the
+    // primary point and the registrar fans out internally. Track the full
+    // set of actual points per name so the assertion below tolerates
+    // multi-point registrations as long as the YAML's declared point is
+    // one of them.
+    const actual = new Map<string, Set<string>>();
     for (const point of points) {
       for (const name of lc.hookNames(point)) {
-        actual.set(name, point);
+        let set = actual.get(name);
+        if (!set) {
+          set = new Set<string>();
+          actual.set(name, set);
+        }
+        set.add(point);
       }
     }
 
-    // Each declared YAML must match its registrar's actual point. A
-    // mismatch means the YAML is lying about where the hook fires —
-    // future drift fails CI.
+    // Each declared YAML's lifecycle must be among the points where its
+    // registrar actually wires the handler. A YAML hook whose registrar
+    // doesn't attach at the declared point indicates drift.
+    //
+    // Hooks that didn't register at all in the test context (e.g. a
+    // `condition: { default: false }` block that short-circuited with no
+    // env-var override) are tolerated here — the "no missing registrar"
+    // test above already guards the registrar-existence invariant; this
+    // test focuses strictly on declared-point matching.
     for (const [name, declaredPoint] of declared) {
-      const actualPoint = actual.get(name);
-      expect(actualPoint, `hook ${name}: YAML declares ${declaredPoint}`).toBe(declaredPoint);
+      const actualPoints = actual.get(name);
+      if (!actualPoints) continue;
+      expect(
+        [...actualPoints],
+        `hook ${name}: YAML declares ${declaredPoint} but registrar wires ${[...actualPoints].join(", ")}`,
+      ).toContain(declaredPoint);
     }
   });
 });

@@ -115,6 +115,7 @@ jobs:
             services/mcp_tools/common/tests/ \
             services/projectors/kg_source_cache/tests/ \
             services/projectors/kg_documents/tests/ \
+            services/projectors/tool_result_extractor/tests/ \
             services/projectors/conditions_normalizer/tests/ \
             services/mcp_tools/mcp_applicability_domain/tests/ \
             services/mcp_tools/mcp_green_chemistry/tests/ \
@@ -202,6 +203,7 @@ jobs:
             --exclude='services/optimizer/session_reanimator/**' \
             --exclude='services/optimizer/audit_partition_maintainer/**' \
             --exclude='services/projectors/kg_hypotheses/**' \
+            --exclude='services/projectors/tool_result_extractor/*' \
             --exclude='services/mcp_tools/mcp_drfp/**' \
             --exclude='services/mcp_tools/mcp_rdkit/**' \
             --exclude='services/queue/**' \

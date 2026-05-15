@@ -317,6 +317,34 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # tool_result_extractor — universal-knowledge-accumulation Phase 0 projector.
+  # Consumes `tool_call_completed` events, looks up a registry-driven extractor
+  # for the tool, and writes structured `extracted_facts` rows. Phase 0 ships
+  # with an empty extractor registry, so this is a strict no-op until extractors
+  # are registered — wiring it on early validates the LISTEN/NOTIFY plumbing.
+  # -------------------------------------------------------------
+  tool-result-extractor:
+    build:
+      context: .
+      dockerfile: services/projectors/tool_result_extractor/Dockerfile
+    container_name: chemclaw-tool-result-extractor
+    restart: unless-stopped
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      # System workers connect as chemclaw_service (LOGIN BYPASSRLS).
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # wiki_regen — knowledge-wiki body-synthesis daemon (ADR 012 Phase 2b)
   # Polls knowledge_articles for `dirty` entity-backed pages, gathers context
   # from Postgres, asks the `wiki.synthesis` prompt (via central LiteLLM) to

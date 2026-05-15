@@ -160,6 +160,10 @@ run.chunk-embedder: ## Run the chunk-embedder projector locally
 run.wiki-pages: ## Run the knowledge-wiki projection projector locally (ADR 012)
 	$(VENV)/bin/python -m services.projectors.wiki_pages.main
 
+.PHONY: run.tool-result-extractor
+run.tool-result-extractor: ## Run the tool_result_extractor projector locally (universal-knowledge-accumulation Phase 0)
+	$(VENV)/bin/python -m services.projectors.tool_result_extractor.main
+
 .PHONY: run.wiki-regen
 run.wiki-regen: ## Run the knowledge-wiki body-synthesis daemon locally (ADR 012 Phase 2b)
 	$(VENV)/bin/python -m services.optimizer.wiki_regen.main

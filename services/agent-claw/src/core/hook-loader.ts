@@ -49,6 +49,8 @@ import { registerFoundationCitationGuardHook } from "./hooks/foundation-citation
 import { registerScheduledSubstanceGateHook } from "./hooks/scheduled-substance-gate.js";
 import { registerWikiHumanBlockGuardHook } from "./hooks/wiki-human-block-guard.js";
 import { registerSourceCacheHook } from "./hooks/source-cache.js";
+import { registerToolInvocationEmitterHook } from "./hooks/tool-invocation-emitter.js";
+import { isFeatureEnabled } from "../config/flags.js";
 import { registerCompactWindowHook } from "./hooks/compact-window.js";
 import { registerApplySkillsHook } from "./hooks/apply-skills.js";
 import { registerSessionEventsHook } from "./hooks/session-events.js";
@@ -160,6 +162,27 @@ const BUILTIN_REGISTRARS = new Map<string, BuiltinRegistrar>([
   // markers — those blocks are reserved for human edits via the route.
   ["wiki-human-block-guard", (lc) => { registerWikiHumanBlockGuardHook(lc); }],
   ["source-cache", (lc, deps) => { registerSourceCacheHook(lc, deps.pool); }],
+  // Phase 0 — Universal Knowledge Accumulation. Emits one
+  // `tool_invocation_complete` ingestion event per non-internal tool call
+  // when `kg.auto_extraction.enabled` resolves true. The YAML's `condition`
+  // block keeps registration off until an admin flips the flag; the hook
+  // itself gates each dispatch on `isFeatureEnabled` as belt-and-braces.
+  // The registrar fans out to BOTH post_tool and post_tool_failure so the
+  // downstream projector sees one event per logical invocation regardless
+  // of outcome (the YAML's lifecycle field declares the primary point).
+  [
+    "tool-invocation-emitter",
+    (lc, deps) => {
+      registerToolInvocationEmitterHook(lc, {
+        pool: deps.pool,
+        isFeatureEnabled: (key, ctx) =>
+          isFeatureEnabled(key, {
+            user: ctx.user,
+            project: ctx.project ?? undefined,
+          }),
+      });
+    },
+  ],
   // Defense-in-depth: scrubs every string leaf in tool outputs before
   // they enter the next-turn LLM context. Registered AFTER the other
   // post_tool hooks (yaml order:200 vs default 100) so anti-fabrication,
