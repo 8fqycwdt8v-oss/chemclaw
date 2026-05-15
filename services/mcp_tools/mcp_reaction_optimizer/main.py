@@ -228,6 +228,9 @@ class RecommendNextIn(BaseModel):
     strategy: SupportedStrategy = "SoboStrategy"
     acquisition: SupportedAcquisition = "qLogEI"
     min_observations_for_bo: int = Field(default=_opt.MIN_OBSERVATIONS_FOR_BO, ge=1, le=1000)
+    # Gower distance threshold in [0, 1]. Candidates within this distance of any
+    # measured point are rejected and replaced by random resamples. None = disabled.
+    min_distance_from_measured: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class ProposalOut(BaseModel):
@@ -298,6 +301,7 @@ async def recommend_next(
         strategy=req.strategy,
         acquisition=req.acquisition,
         min_observations_for_bo=req.min_observations_for_bo,
+        min_distance_from_measured=req.min_distance_from_measured,
     )
     used_bo = (
         len(measured) >= req.min_observations_for_bo

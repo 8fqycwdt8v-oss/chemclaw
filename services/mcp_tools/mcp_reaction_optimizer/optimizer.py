@@ -30,6 +30,9 @@ log = logging.getLogger("mcp-reaction-optimizer.optimizer")
 # / per-project tuning is possible without changing this default.
 MIN_OBSERVATIONS_FOR_BO = 3
 
+# Maximum extra sampling rounds when the dedup filter rejects too many candidates.
+_DEDUP_MAX_RESAMPLE_ROUNDS = 5
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -83,6 +86,108 @@ def domain_output_keys(domain: Any) -> set[str]:
     return keys
 
 
+# ---------------------------------------------------------------------------
+# Deduplication helpers — Gower distance in mixed continuous/categorical space
+# ---------------------------------------------------------------------------
+
+def gower_distance(
+    factors_a: dict[str, Any],
+    factors_b: dict[str, Any],
+    domain: Any,
+) -> float:
+    """Gower distance between two factor_values dicts, result in [0, 1].
+
+    Continuous dimensions: range-normalized absolute difference (|a-b|/span).
+    Categorical dimensions: 0 if same category, 1 if different.
+    The mean across all features normalizes for varying factor counts.
+    Missing or None values for a feature contribute 0 (conservative — don't
+    inflate distances for sparse rows).
+    """
+    n_feats = 0
+    total = 0.0
+    feats = getattr(getattr(domain, "inputs", None), "features", None) or []
+    for feat in feats:
+        key = getattr(feat, "key", None)
+        if key is None:
+            continue
+        n_feats += 1
+        a = factors_a.get(key)
+        b = factors_b.get(key)
+        bounds = getattr(feat, "bounds", None)
+        if bounds is not None:
+            # Continuous: range-normalized L1 distance
+            lo, hi = float(bounds[0]), float(bounds[1])
+            span = hi - lo
+            if span > 0 and a is not None and b is not None:
+                total += abs(float(a) - float(b)) / span
+        else:
+            # Categorical: indicator for mismatch
+            if a is not None and b is not None and str(a) != str(b):
+                total += 1.0
+    return total / n_feats if n_feats > 0 else 0.0
+
+
+def _min_distance_to_measured(
+    candidate_factors: dict[str, Any],
+    measured_factor_list: list[dict[str, Any]],
+    domain: Any,
+) -> float:
+    """Minimum Gower distance from candidate to any measured point.
+
+    Returns 1.0 (maximum) when there are no measured points so all
+    candidates pass the dedup filter on cold-start rounds.
+    """
+    if not measured_factor_list:
+        return 1.0
+    return min(
+        gower_distance(candidate_factors, m, domain) for m in measured_factor_list
+    )
+
+
+def _apply_dedup_filter(
+    proposals: list[dict[str, Any]],
+    measured_factor_list: list[dict[str, Any]],
+    domain: Any,
+    min_dist: float,
+    n_candidates: int,
+    seed: int,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Filter proposals within min_dist of any measured point and resample gaps.
+
+    Returns (filtered_proposals, any_rejected). Resamples up to
+    _DEDUP_MAX_RESAMPLE_ROUNDS times to try to reach n_candidates; if still
+    short, returns fewer than n_candidates without raising so the caller can
+    surface the situation via fallback_reason.
+    """
+    kept = [
+        p for p in proposals
+        if _min_distance_to_measured(p["factor_values"], measured_factor_list, domain) >= min_dist
+    ]
+    any_rejected = len(kept) < len(proposals)
+
+    for round_idx in range(1, _DEDUP_MAX_RESAMPLE_ROUNDS + 1):
+        if len(kept) >= n_candidates:
+            break
+        n_needed = n_candidates - len(kept)
+        try:
+            # Request 2× to compensate for expected rejections in dense regimes.
+            new_df = domain.inputs.sample(n=n_needed * 2, seed=seed + round_idx)
+            new_candidates = _df_rows_to_proposals(new_df, source="random_dedup_resample")
+        except Exception as exc:  # noqa: BLE001
+            log.warning(
+                "dedup resample round %d failed (%s); returning %d/%d candidates",
+                round_idx, exc, len(kept), n_candidates,
+            )
+            break
+        new_kept = [
+            p for p in new_candidates
+            if _min_distance_to_measured(p["factor_values"], measured_factor_list, domain) >= min_dist
+        ]
+        kept.extend(new_kept[:n_needed])
+
+    return kept[:n_candidates], any_rejected
+
+
 # Acquisitions valid for single- and multi-objective. The caller passes one
 # from the campaign row; unsupported combos fall back with a fallback_reason
 # so the agent can surface the mismatch instead of silently doing the wrong
@@ -101,6 +206,7 @@ def recommend_next_batch(
     strategy: str = "SoboStrategy",
     acquisition: str = "qLogEI",
     min_observations_for_bo: int = MIN_OBSERVATIONS_FOR_BO,
+    min_distance_from_measured: float | None = None,
 ) -> tuple[list[dict[str, Any]], str | None]:
     """Fit the requested Strategy and ask for n_candidates next-batch recommendations.
 
@@ -108,9 +214,32 @@ def recommend_next_batch(
     the configured BO path was used; otherwise a short string identifying why
     the loop degraded (cold start, RandomStrategy, BoFire missing, fit
     failure, …). Callers MUST surface this so silent degradation is visible.
+
+    ``min_distance_from_measured``: when set (Gower distance in [0, 1]), any
+    proposed candidate within this distance of an already-measured point is
+    rejected and replaced by a random resample. Prevents the GP from
+    re-proposing conditions already run in low-noise regimes.
     """
     n_obs = len(measured_outcomes)
     cold = n_obs < max(1, int(min_observations_for_bo))
+    measured_factor_list = [m.get("factor_values", {}) for m in measured_outcomes]
+
+    def _maybe_dedup(
+        proposals: list[dict[str, Any]], reason: str | None
+    ) -> tuple[list[dict[str, Any]], str | None]:
+        if not min_distance_from_measured:
+            return proposals, reason
+        filtered, any_rejected = _apply_dedup_filter(
+            proposals, measured_factor_list, domain,
+            min_distance_from_measured, n_candidates, seed,
+        )
+        if any_rejected:
+            dedup_note = f"dedup_filter(ε={min_distance_from_measured:.3f})"
+            new_reason = f"{reason},{dedup_note}" if reason else dedup_note
+            if len(filtered) < n_candidates:
+                new_reason += f",short_{len(filtered)}_of_{n_candidates}"
+            return filtered, new_reason
+        return filtered, reason
 
     # Determine objective dimensionality up-front so we can pick the right
     # default acquisition when the caller passed one that is incompatible
@@ -124,12 +253,13 @@ def recommend_next_batch(
     # RandomStrategy short-circuits the GP regardless of measured count.
     if strategy == "RandomStrategy":
         df = domain.inputs.sample(n=n_candidates, seed=seed)
-        return _df_rows_to_proposals(df, source="random_strategy"), "random_strategy"
+        return _maybe_dedup(_df_rows_to_proposals(df, source="random_strategy"), "random_strategy")
 
     if cold:
         df = domain.inputs.sample(n=n_candidates, seed=seed)
-        return _df_rows_to_proposals(df, source="random_cold_start"), (
-            f"cold_start_n_obs={n_obs}<{int(min_observations_for_bo)}"
+        return _maybe_dedup(
+            _df_rows_to_proposals(df, source="random_cold_start"),
+            f"cold_start_n_obs={n_obs}<{int(min_observations_for_bo)}",
         )
 
     # Validate acquisition against the objective shape; coerce with a reason
@@ -156,7 +286,9 @@ def recommend_next_batch(
         from bofire.strategies.api import strategy_map
     except ImportError:
         df = domain.inputs.sample(n=n_candidates, seed=seed)
-        return _df_rows_to_proposals(df, source="random_fallback"), "bofire_import_failed"
+        return _maybe_dedup(
+            _df_rows_to_proposals(df, source="random_fallback"), "bofire_import_failed"
+        )
 
     acq_ctors = {
         "qLogEI": qLogEI,
@@ -174,8 +306,9 @@ def recommend_next_batch(
     except Exception as exc:  # noqa: BLE001
         log.warning("strategy build failed (%s); falling back", exc)
         df = domain.inputs.sample(n=n_candidates, seed=seed)
-        return _df_rows_to_proposals(df, source="random_strategy_build_failed"), (
-            f"strategy_build_failed: {exc}"
+        return _maybe_dedup(
+            _df_rows_to_proposals(df, source="random_strategy_build_failed"),
+            f"strategy_build_failed: {exc}",
         )
 
     try:
@@ -183,8 +316,9 @@ def recommend_next_batch(
     except Exception as exc:  # noqa: BLE001
         log.warning("strategy_map failed (%s); falling back", exc)
         df = domain.inputs.sample(n=n_candidates, seed=seed)
-        return _df_rows_to_proposals(df, source="random_strategy_failed"), (
-            f"strategy_map_failed: {exc}"
+        return _maybe_dedup(
+            _df_rows_to_proposals(df, source="random_strategy_failed"),
+            f"strategy_map_failed: {exc}",
         )
 
     measured_df = measured_to_dataframe(domain, measured_outcomes)
@@ -193,8 +327,9 @@ def recommend_next_batch(
     except Exception as exc:  # noqa: BLE001
         log.warning("strategy.tell failed (%s); falling back", exc)
         df = domain.inputs.sample(n=n_candidates, seed=seed)
-        return _df_rows_to_proposals(df, source="random_tell_failed"), (
-            f"strategy_tell_failed: {exc}"
+        return _maybe_dedup(
+            _df_rows_to_proposals(df, source="random_tell_failed"),
+            f"strategy_tell_failed: {exc}",
         )
 
     try:
@@ -202,11 +337,12 @@ def recommend_next_batch(
     except Exception as exc:  # noqa: BLE001
         log.warning("strategy.ask failed (%s); falling back", exc)
         df = domain.inputs.sample(n=n_candidates, seed=seed)
-        return _df_rows_to_proposals(df, source="random_ask_failed"), (
-            f"strategy_ask_failed: {exc}"
+        return _maybe_dedup(
+            _df_rows_to_proposals(df, source="random_ask_failed"),
+            f"strategy_ask_failed: {exc}",
         )
 
-    return _df_rows_to_proposals(candidates, source=acquisition), coerced_reason
+    return _maybe_dedup(_df_rows_to_proposals(candidates, source=acquisition), coerced_reason)
 
 
 # ---------------------------------------------------------------------------
