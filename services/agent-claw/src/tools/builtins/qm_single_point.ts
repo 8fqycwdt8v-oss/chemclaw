@@ -10,6 +10,7 @@ import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { QmRequestBase, QmResponseBase } from "./_qm_base.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 export const QmSinglePointIn = QmRequestBase;
 export type QmSinglePointInput = z.infer<typeof QmSinglePointIn>;
@@ -24,7 +25,7 @@ export type QmSinglePointOutput = z.infer<typeof QmSinglePointOut>;
 const TIMEOUT_MS = 30_000;
 
 export function buildQmSinglePointTool(mcpXtbUrl: string) {
-  const base = mcpXtbUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpXtbUrl);
   return defineTool({
     id: "qm_single_point",
     description:

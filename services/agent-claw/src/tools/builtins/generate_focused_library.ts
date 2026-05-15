@@ -8,6 +8,7 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 export const GenerateFocusedLibraryIn = z.object({
   kind: z.enum(["scaffold", "rgroup", "bioisostere", "grow", "link"]).default("scaffold"),
@@ -42,7 +43,7 @@ export type GenerateFocusedLibraryOutput = z.infer<typeof GenerateFocusedLibrary
 const TIMEOUT_MS = 120_000;
 
 export function buildGenerateFocusedLibraryTool(mcpGenchemUrl: string) {
-  const base = mcpGenchemUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpGenchemUrl);
   return defineTool({
     id: "generate_focused_library",
     description:

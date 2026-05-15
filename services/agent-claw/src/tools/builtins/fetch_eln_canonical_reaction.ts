@@ -12,6 +12,7 @@ import {
   elnIdField,
   type CanonicalReactionDetail,
 } from "./_eln_shared.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 export const FetchElnCanonicalReactionIn = z.object({
   reaction_id: elnIdField("reaction_id"),
@@ -27,7 +28,7 @@ export type FetchElnCanonicalReactionOutput = CanonicalReactionDetail;
 const TIMEOUT_MS = 30_000;
 
 export function buildFetchElnCanonicalReactionTool(mcpUrl: string) {
-  const base = mcpUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpUrl);
 
   return defineTool({
     id: "fetch_eln_canonical_reaction",

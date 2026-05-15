@@ -7,6 +7,7 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 export const FindMatchedPairsIn = z.object({
   smiles: z.string().min(1).max(10_000),
@@ -27,7 +28,7 @@ export type FindMatchedPairsOutput = z.infer<typeof FindMatchedPairsOut>;
 const TIMEOUT_MS = 30_000;
 
 export function buildFindMatchedPairsTool(mcpGenchemUrl: string) {
-  const base = mcpGenchemUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpGenchemUrl);
   return defineTool({
     id: "find_matched_pairs",
     description:

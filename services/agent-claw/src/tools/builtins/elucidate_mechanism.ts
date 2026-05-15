@@ -15,6 +15,7 @@ import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { MAX_SMILES_LEN } from "../_limits.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 // ---------- Schemas ----------------------------------------------------------
 
@@ -116,7 +117,7 @@ const TIMEOUT_SYNTHEGY_MECH_MS = 300_000;
 // ---------- Factory ----------------------------------------------------------
 
 export function buildElucidateMechanismTool(mcpSynthegyMechUrl: string) {
-  const base = mcpSynthegyMechUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpSynthegyMechUrl);
 
   return defineTool({
     id: "elucidate_mechanism",

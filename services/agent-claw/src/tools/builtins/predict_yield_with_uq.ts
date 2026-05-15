@@ -10,6 +10,7 @@ import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { withUserContext } from "../../db/with-user-context.js";
 import { MAX_RXN_SMILES_LEN, MAX_BATCH_SMILES } from "../_limits.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 const MIN_TRAIN_PAIRS = 50;
 const MAX_TRAIN_PAIRS = 10_000;
@@ -82,7 +83,7 @@ async function fetchTrainingPairs(
 // ---------- Factory --------------------------------------------------------
 
 export function buildPredictYieldWithUqTool(pool: Pool, mcpUrl: string) {
-  const base = mcpUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpUrl);
 
   async function trainAndGetModelId(
     projectInternalId: string,

@@ -7,6 +7,7 @@ import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import type { Citation } from "../../core/types.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 // ---------- Schemas ----------------------------------------------------------
 
@@ -64,7 +65,7 @@ const TIMEOUT_MS = 150_000;
 // ---------- Factory ----------------------------------------------------------
 
 export function buildIdentifyUnknownFromMsTool(mcpSiriusUrl: string) {
-  const base = mcpSiriusUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpSiriusUrl);
 
   return defineTool({
     id: "identify_unknown_from_ms",

@@ -10,6 +10,7 @@ import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { withUserContext } from "../../db/with-user-context.js";
 import type { Citation } from "../../core/types.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 // ---------- Schemas ----------------------------------------------------------
 
@@ -69,7 +70,7 @@ const TIMEOUT_DB_MS = 20_000;
 // ---------- Factory ----------------------------------------------------------
 
 export function buildFindSimilarReactionsTool(pool: Pool, mcpDrfpUrl: string) {
-  const base = mcpDrfpUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpDrfpUrl);
 
   return defineTool({
     id: "find_similar_reactions",

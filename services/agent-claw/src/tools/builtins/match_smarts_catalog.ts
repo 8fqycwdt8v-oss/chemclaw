@@ -12,6 +12,7 @@ import { defineTool } from "../tool.js";
 import { withSystemContext } from "../../db/with-user-context.js";
 import { postJson } from "../../mcp/postJson.js";
 import { getLogger } from "../../observability/logger.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 const log = getLogger("match_smarts_catalog");
 
@@ -44,7 +45,7 @@ const SubstructResp = z.object({ matches: z.array(z.array(z.number())), count: z
 const TIMEOUT_MS = 30_000;
 
 export function buildMatchSmartsCatalogTool(pool: Pool, mcpRdkitUrl: string) {
-  const base = mcpRdkitUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpRdkitUrl);
   return defineTool({
     id: "match_smarts_catalog",
     description:

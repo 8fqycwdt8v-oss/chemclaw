@@ -16,6 +16,7 @@ import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { SampleSchema, elnIdField } from "./_eln_shared.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 export const QueryElnSamplesByEntryIn = z.object({
   entry_id: elnIdField("entry_id"),
@@ -31,7 +32,7 @@ export type QueryElnSamplesByEntryOutput = z.infer<typeof QueryElnSamplesByEntry
 const TIMEOUT_MS = 15_000;
 
 export function buildQueryElnSamplesByEntryTool(mcpUrl: string) {
-  const base = mcpUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpUrl);
 
   return defineTool({
     id: "query_eln_samples_by_entry",

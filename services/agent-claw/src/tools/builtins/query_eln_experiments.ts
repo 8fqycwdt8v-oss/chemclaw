@@ -11,6 +11,7 @@ import {
   ElnEntrySchema,
   type ElnEntry,
 } from "./_eln_shared.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 export const QueryElnExperimentsIn = z.object({
   project_code: z
@@ -48,7 +49,7 @@ export interface QueryElnExperimentsOutput {
 const TIMEOUT_MS = 15_000;
 
 export function buildQueryElnExperimentsTool(mcpUrl: string) {
-  const base = mcpUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpUrl);
 
   return defineTool({
     id: "query_eln_experiments",

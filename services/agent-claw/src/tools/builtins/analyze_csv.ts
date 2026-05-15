@@ -17,6 +17,7 @@ import type { Pool } from "pg";
 import { defineTool } from "../tool.js";
 import { withUserContext } from "../../db/with-user-context.js";
 import { postJson } from "../../mcp/postJson.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 // --------------------------------------------------------------------------
 // Constants
@@ -210,7 +211,7 @@ interface DocRow {
  * @param docFetcherUrl  — base URL of the mcp-doc-fetcher service.
  */
 export function buildAnalyzeCsvTool(pool: Pool, docFetcherUrl: string) {
-  const base = docFetcherUrl.replace(/\/$/, "");
+  const base = normalizeUrl(docFetcherUrl);
 
   return defineTool({
     id: "analyze_csv",

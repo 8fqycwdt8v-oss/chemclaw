@@ -18,6 +18,7 @@ import { postJson } from "../../mcp/postJson.js";
 import { withUserContext } from "../../db/with-user-context.js";
 import type { Citation } from "../../core/types.js";
 import { rrfMerge } from "../../core/rrf.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 // ---------- Schemas ----------------------------------------------------------
 
@@ -261,7 +262,7 @@ export const _rrfForTests = reciprocalRankFusion;
 // ---------- Factory ----------------------------------------------------------
 
 export function buildSearchKnowledgeTool(pool: Pool, mcpEmbedderUrl: string) {
-  const base = mcpEmbedderUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpEmbedderUrl);
 
   return defineTool({
     id: "search_knowledge",

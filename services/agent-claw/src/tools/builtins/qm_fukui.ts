@@ -4,6 +4,7 @@ import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { QmRequestBase, QmResponseBase } from "./_qm_base.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 export const QmFukuiIn = QmRequestBase;
 export type QmFukuiInput = z.infer<typeof QmFukuiIn>;
@@ -18,7 +19,7 @@ export type QmFukuiOutput = z.infer<typeof QmFukuiOut>;
 const TIMEOUT_MS = 60_000;
 
 export function buildQmFukuiTool(mcpXtbUrl: string) {
-  const base = mcpXtbUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpXtbUrl);
   return defineTool({
     id: "qm_fukui",
     description:

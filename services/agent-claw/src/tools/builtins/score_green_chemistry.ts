@@ -8,6 +8,7 @@ import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { MAX_SMILES_LEN } from "../_limits.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 const SolventInput = z.object({
   smiles: z.string().min(1).max(MAX_SMILES_LEN).optional(),
@@ -40,7 +41,7 @@ export type ScoreGreenChemistryOutput = z.infer<typeof ScoreGreenChemistryOut>;
 const TIMEOUT_MS = 10_000;
 
 export function buildScoreGreenChemistryTool(mcpUrl: string) {
-  const base = mcpUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpUrl);
   return defineTool({
     id: "score_green_chemistry",
     description:

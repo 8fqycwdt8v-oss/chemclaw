@@ -10,6 +10,7 @@ import type { Pool } from "pg";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { withUserContext } from "../../db/with-user-context.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 const ContinuousFactor = z.object({
   name: z.string().min(1).max(64),
@@ -98,7 +99,7 @@ export function buildStartOptimizationCampaignTool(
   pool: Pool,
   optimizerUrl: string,
 ) {
-  const base = optimizerUrl.replace(/\/$/, "");
+  const base = normalizeUrl(optimizerUrl);
   return defineTool({
     id: "start_optimization_campaign",
     description:

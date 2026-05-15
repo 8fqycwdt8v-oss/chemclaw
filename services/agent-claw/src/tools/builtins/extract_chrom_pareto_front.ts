@@ -15,6 +15,7 @@ import type { Pool } from "pg";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { withUserContext } from "../../db/with-user-context.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 export const ExtractChromParetoFrontIn = z.object({
   campaign_id: z.string().uuid(),
@@ -60,7 +61,7 @@ interface RoundRow {
 }
 
 export function buildExtractChromParetoFrontTool(pool: Pool, optimizerUrl: string) {
-  const base = optimizerUrl.replace(/\/$/, "");
+  const base = normalizeUrl(optimizerUrl);
   return defineTool({
     id: "extract_chrom_pareto_front",
     description:

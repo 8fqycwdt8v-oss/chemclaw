@@ -8,6 +8,7 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 export const InchikeyIn = z.object({
   smiles: z.string().min(1).max(10_000),
@@ -31,7 +32,7 @@ export function buildInchikeyFromSmilesTool(mcpRdkitUrl: string) {
     annotations: { readOnly: true },
     execute: async (ctx, input) => {
       return await postJson(
-        `${mcpRdkitUrl.replace(/\/$/, "")}/tools/inchikey_from_smiles`,
+        `${normalizeUrl(mcpRdkitUrl)}/tools/inchikey_from_smiles`,
         input,
         InchikeyOut,
         TIMEOUT_MS,

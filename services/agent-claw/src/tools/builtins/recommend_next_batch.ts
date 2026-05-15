@@ -19,6 +19,7 @@ import { postJson } from "../../mcp/postJson.js";
 import { withUserContext } from "../../db/with-user-context.js";
 import type { ConfigRegistry } from "../../config/registry.js";
 import { getLogger } from "../../observability/logger.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 export const RecommendNextBatchIn = z.object({
   campaign_id: z.string().uuid(),
@@ -107,7 +108,7 @@ export function buildRecommendNextBatchTool(
   optimizerUrl: string,
   configRegistry: ConfigRegistry,
 ) {
-  const base = optimizerUrl.replace(/\/$/, "");
+  const base = normalizeUrl(optimizerUrl);
   return defineTool({
     id: "recommend_next_batch",
     description:

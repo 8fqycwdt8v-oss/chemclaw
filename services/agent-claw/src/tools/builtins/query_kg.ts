@@ -8,6 +8,7 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 // ---------- Schemas ----------------------------------------------------------
 
@@ -86,7 +87,7 @@ const TIMEOUT_MS = 20_000;
 // ---------- Factory ----------------------------------------------------------
 
 export function buildQueryKgTool(mcpKgUrl: string) {
-  const base = mcpKgUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpKgUrl);
 
   return defineTool({
     id: "query_kg",

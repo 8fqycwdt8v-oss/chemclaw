@@ -4,6 +4,7 @@ import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { MAX_RXN_SMILES_LEN, MAX_BATCH_SMILES } from "../_limits.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 // ---------- Schemas ----------------------------------------------------------
 
@@ -35,7 +36,7 @@ const TIMEOUT_MS = 60_000;
 // ---------- Factory ----------------------------------------------------------
 
 export function buildPredictReactionYieldTool(mcpChempropUrl: string) {
-  const base = mcpChempropUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpChempropUrl);
 
   return defineTool({
     id: "predict_reaction_yield",

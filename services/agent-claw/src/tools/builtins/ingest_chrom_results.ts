@@ -18,6 +18,7 @@ import type { Pool } from "pg";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { withUserContext } from "../../db/with-user-context.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 const Peak = z.record(z.unknown());
 const TargetCompound = z.object({
@@ -90,7 +91,7 @@ interface RoundLookup {
 }
 
 export function buildIngestChromResultsTool(pool: Pool, optimizerUrl: string) {
-  const base = optimizerUrl.replace(/\/$/, "");
+  const base = normalizeUrl(optimizerUrl);
   return defineTool({
     id: "ingest_chrom_results",
     description:

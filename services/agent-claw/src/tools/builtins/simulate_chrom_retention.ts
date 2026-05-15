@@ -11,6 +11,7 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 const LssPair = z.tuple([z.number(), z.number()]);  // [log10_kw, S]
 const PhiTr = z.tuple([z.number(), z.number()]);     // [phi, t_R_min]
@@ -51,7 +52,7 @@ export type SimulateChromRetentionOutput = z.infer<typeof SimulateChromRetention
 const TIMEOUT_MS = 30_000;
 
 export function buildSimulateChromRetentionTool(optimizerUrl: string) {
-  const base = optimizerUrl.replace(/\/$/, "");
+  const base = normalizeUrl(optimizerUrl);
   return defineTool({
     id: "simulate_chrom_retention",
     description:

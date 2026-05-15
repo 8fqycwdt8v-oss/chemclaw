@@ -12,6 +12,7 @@ import { defineTool } from "../tool.js";
 import { withSystemContext } from "../../db/with-user-context.js";
 import { postJson } from "../../mcp/postJson.js";
 import { getLogger } from "../../observability/logger.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 const log = getLogger("find_similar_compounds");
 
@@ -42,7 +43,7 @@ const MorganOut = z.object({ n_bits: z.number(), on_bits: z.array(z.number()) })
 const TIMEOUT_MS = 15_000;
 
 export function buildFindSimilarCompoundsTool(pool: Pool, mcpRdkitUrl: string) {
-  const base = mcpRdkitUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpRdkitUrl);
   return defineTool({
     id: "find_similar_compounds",
     description:

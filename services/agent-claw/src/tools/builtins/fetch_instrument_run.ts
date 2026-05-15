@@ -7,6 +7,7 @@ import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { LogsDataset } from "./_logs_schemas.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 export const FetchInstrumentRunIn = z.object({
   uid: z
@@ -27,7 +28,7 @@ export type FetchInstrumentRunOutput = z.infer<typeof FetchInstrumentRunOut>;
 const TIMEOUT_MS = 20_000;
 
 export function buildFetchInstrumentRunTool(mcpLogsSciyUrl: string) {
-  const base = mcpLogsSciyUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpLogsSciyUrl);
 
   return defineTool({
     id: "fetch_instrument_run",

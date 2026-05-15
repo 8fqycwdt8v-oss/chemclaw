@@ -9,6 +9,7 @@ import type { Pool } from "pg";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { withUserContext } from "../../db/with-user-context.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 export const ExtractParetoFrontIn = z.object({
   campaign_id: z.string().uuid(),
@@ -53,7 +54,7 @@ interface RoundRow {
 const TIMEOUT_MS = 30_000;
 
 export function buildExtractParetoFrontTool(pool: Pool, optimizerUrl: string) {
-  const base = optimizerUrl.replace(/\/$/, "");
+  const base = normalizeUrl(optimizerUrl);
   return defineTool({
     id: "extract_pareto_front",
     description:

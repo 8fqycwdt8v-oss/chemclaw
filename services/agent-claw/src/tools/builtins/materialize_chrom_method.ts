@@ -14,6 +14,7 @@ import type { Pool } from "pg";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { withUserContext } from "../../db/with-user-context.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 export const MaterializeChromMethodIn = z.object({
   round_id: z.string().uuid(),
@@ -63,7 +64,7 @@ interface RoundLookup {
 }
 
 export function buildMaterializeChromMethodTool(pool: Pool, optimizerUrl: string) {
-  const base = optimizerUrl.replace(/\/$/, "");
+  const base = normalizeUrl(optimizerUrl);
   return defineTool({
     id: "materialize_chrom_method",
     description:

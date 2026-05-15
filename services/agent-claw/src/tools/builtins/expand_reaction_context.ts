@@ -11,6 +11,7 @@ import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { withUserContext } from "../../db/with-user-context.js";
 import { QueryKgIn, QueryKgOut } from "./query_kg.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 // ---------- Schemas ----------------------------------------------------------
 
@@ -107,7 +108,7 @@ const TIMEOUT_KG_MS = 15_000;
 // ---------- Factory ----------------------------------------------------------
 
 export function buildExpandReactionContextTool(pool: Pool, mcpKgUrl: string) {
-  const kgBase = mcpKgUrl.replace(/\/$/, "");
+  const kgBase = normalizeUrl(mcpKgUrl);
 
   return defineTool({
     id: "expand_reaction_context",

@@ -9,6 +9,7 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 // ---------- Recipes ---------------------------------------------------------
 
@@ -81,7 +82,7 @@ function networkTimeoutMs(requestedSeconds: number | null | undefined): number {
 // ---------- Factory ---------------------------------------------------------
 
 export function buildRunXtbWorkflowTool(mcpXtbUrl: string) {
-  const base = mcpXtbUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpXtbUrl);
 
   return defineTool({
     id: "run_xtb_workflow",

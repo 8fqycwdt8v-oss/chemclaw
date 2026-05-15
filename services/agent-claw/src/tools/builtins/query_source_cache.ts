@@ -19,6 +19,7 @@
 import { z } from "zod";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
+import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 // ---------- Schemas ----------------------------------------------------------
 
@@ -108,7 +109,7 @@ const TIMEOUT_MS = 10_000;
 // ---------- Factory ----------------------------------------------------------
 
 export function buildQuerySourceCacheTool(mcpKgUrl: string) {
-  const base = mcpKgUrl.replace(/\/$/, "");
+  const base = normalizeUrl(mcpKgUrl);
   return defineTool({
     id: "query_source_cache",
     description:
