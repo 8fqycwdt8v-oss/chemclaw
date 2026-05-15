@@ -285,6 +285,38 @@ def test_verify_works_with_no_next_key(monkeypatch):
     assert claims.user == "u@example.com"
 
 
+def test_verify_treats_too_short_next_key_as_unset(monkeypatch, caplog):
+    """A misconfigured MCP_AUTH_SIGNING_KEY_NEXT shorter than 32 chars is treated as unset.
+
+    The primary key enforces len >= 32 at sign time (cycle-3 d988baa) to
+    prevent weak-key brute-force. The dual-key verify path must apply the
+    same gate to _NEXT — a misconfigured `MCP_AUTH_SIGNING_KEY_NEXT='abc'`
+    would otherwise silently widen the verifier to accept brute-forceable
+    HMACs. Verifies BOTH:
+      1) primary-signed tokens continue to verify (no breakage), and
+      2) a WARN log line fires so operators surface the misconfig in Loki.
+    """
+    import logging
+
+    primary = "p" * 32
+    monkeypatch.setenv("MCP_AUTH_SIGNING_KEY", primary)
+    monkeypatch.setenv("MCP_AUTH_SIGNING_KEY_NEXT", "abc")  # 3 chars — too short
+    token = sign_mcp_token(
+        sandbox_id="sbx_001",
+        user_entra_id="u@example.com",
+        scopes=["mcp_kg:read"],
+        ttl_seconds=60,
+    )
+    with caplog.at_level(logging.WARNING, logger="mcp.auth"):
+        claims = verify_mcp_token(token)
+    assert claims.user == "u@example.com"
+    assert any(
+        "mcp_auth_next_key_too_short" in (rec.message or "")
+        or getattr(rec, "event", "") == "mcp_auth_next_key_too_short"
+        for rec in caplog.records
+    ), f"expected mcp_auth_next_key_too_short WARN; got {[r.message for r in caplog.records]}"
+
+
 def test_scope_mismatch_rejected(monkeypatch, client_factory):
     """A token with the wrong scope is rejected for endpoints requiring a different scope.
 

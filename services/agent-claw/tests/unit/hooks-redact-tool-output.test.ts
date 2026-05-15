@@ -17,7 +17,13 @@ import { Lifecycle } from "../../src/core/lifecycle.js";
 import type { PostToolPayload } from "../../src/core/types.js";
 import { makeCtx } from "../helpers/make-ctx.js";
 
-function makePayload(output: unknown, toolId = "some_tool"): PostToolPayload {
+// Default to a source-system tool ID so the existing per-shape / idempotency
+// tests below exercise the scrub path. Tests that need to exercise the
+// PASS-THROUGH path (e.g. chemistry compute tools) override `toolId`.
+function makePayload(
+  output: unknown,
+  toolId = "query_eln_canonical_reactions",
+): PostToolPayload {
   return {
     ctx: makeCtx(),
     toolId,
@@ -231,11 +237,101 @@ describe("registerRedactToolOutputHook", () => {
     expect(lc.count("post_turn")).toBe(0);
   });
 
-  it("dispatched post_tool scrubs the output in place", async () => {
+  it("dispatched post_tool scrubs the output in place (source-system tool)", async () => {
     const lc = new Lifecycle();
     registerRedactToolOutputHook(lc);
     const payload = makePayload({ note: "NCE-9001 is exciting." });
     await lc.dispatch("post_tool", payload);
     expect((payload.output as { note: string }).note).not.toContain("NCE-9001");
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Scope guard — non-source-system tool IDs pass through UNCHANGED
+//
+// Chemistry compute tools (canonicalize_smiles, find_similar_compounds,
+// propose_retrosynthesis, recommend_next_batch, etc.) return SMILES in
+// structured fields and the LLM must reason over them to chain calls. A
+// blanket scrub would emit `[REDACTED:SMILES]` to the LLM and break the
+// agent. Aligns with BACKLOG.md line 208 (scoped scrubbing of
+// mcp-eln-local / mcp-logs-sciy payloads only).
+// ---------------------------------------------------------------------------
+
+describe("redactToolOutputHook — scope guard", () => {
+  function lifecycleWithHook(): Lifecycle {
+    const lc = new Lifecycle();
+    registerRedactToolOutputHook(lc);
+    return lc;
+  }
+
+  it("does not redact chemistry tool outputs (e.g. canonicalize_smiles, propose_retrosynthesis)", async () => {
+    const lifecycle = lifecycleWithHook();
+    const payload: PostToolPayload = {
+      toolId: "canonicalize_smiles",
+      input: {},
+      output: { canonical_smiles: "CCCCCCN(C(=O)CCCCCC)CCCCCC" },
+      ctx: makeCtx(),
+    };
+    await lifecycle.dispatch("post_tool", payload, "tool-use-1");
+    expect((payload.output as { canonical_smiles: string }).canonical_smiles).toBe(
+      "CCCCCCN(C(=O)CCCCCC)CCCCCC",
+    );
+  });
+
+  it("does not redact recommend_next_batch / find_similar_compounds outputs", async () => {
+    const lifecycle = lifecycleWithHook();
+    const payload: PostToolPayload = {
+      toolId: "recommend_next_batch",
+      input: {},
+      output: { proposals: [{ factor_values: { catalyst_smiles: "CCO" } }] },
+      ctx: makeCtx(),
+    };
+    await lifecycle.dispatch("post_tool", payload, "tool-use-1");
+    expect(JSON.stringify(payload.output)).toContain("CCO");
+  });
+
+  it("does not redact propose_retrosynthesis outputs even when they contain NCE-IDs", async () => {
+    // Hypothetical chemistry-tool free-text — STILL must not be scrubbed,
+    // because chemistry tools never carry external PII; the gate is per-tool,
+    // not per-content.
+    const lifecycle = lifecycleWithHook();
+    const payload: PostToolPayload = {
+      toolId: "propose_retrosynthesis",
+      input: {},
+      output: { rationale: "Project NCE-001 — synthon disconnection at C-N." },
+      ctx: makeCtx(),
+    };
+    await lifecycle.dispatch("post_tool", payload, "tool-use-1");
+    expect((payload.output as { rationale: string }).rationale).toBe(
+      "Project NCE-001 — synthon disconnection at C-N.",
+    );
+  });
+
+  it("redacts source-system tool outputs (fetch_instrument_run)", async () => {
+    const lifecycle = lifecycleWithHook();
+    const payload: PostToolPayload = {
+      toolId: "fetch_instrument_run",
+      input: {},
+      output: { note: "Operator alice@corp.com — NCE-9001 run" },
+      ctx: makeCtx(),
+    };
+    await lifecycle.dispatch("post_tool", payload, "tool-use-1");
+    const note = (payload.output as { note: string }).note;
+    expect(note).not.toContain("alice@corp.com");
+    expect(note).not.toContain("NCE-9001");
+  });
+
+  it("redacts source-system tool outputs (query_lims_*)", async () => {
+    const lifecycle = lifecycleWithHook();
+    const payload: PostToolPayload = {
+      toolId: "query_lims_samples",
+      input: {},
+      output: { note: "Compound CMP-12345678 routed via LIMS." },
+      ctx: makeCtx(),
+    };
+    await lifecycle.dispatch("post_tool", payload, "tool-use-1");
+    expect((payload.output as { note: string }).note).not.toContain(
+      "CMP-12345678",
+    );
   });
 });

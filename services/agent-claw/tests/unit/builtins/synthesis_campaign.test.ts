@@ -482,6 +482,128 @@ describe("advance_synthesis_campaign", () => {
     expect(claimedStepId).toBe(STEP_UUID);
   });
 
+  it("bumps synthesis_campaigns.etag when claiming an active campaign's step", async () => {
+    const { pool, dataSpy } = createMockPool({
+      dataHandler: async (sql) => {
+        if (sql.includes("FROM synthesis_campaigns WHERE id") && sql.includes("FOR UPDATE")) {
+          return rows({
+            id: CAMPAIGN_UUID,
+            kind: "single_experiment",
+            status: "active", // already active — claim path is the ONLY etag bumper
+            policy: {},
+            total_steps: 7,
+            completed_steps: 0,
+          });
+        }
+        if (sql.includes("FROM synthesis_campaign_steps s") && sql.includes("status = 'pending'")) {
+          return rows({
+            ...SAMPLE_STEP_ROW,
+            kind: "retrosynthesis",
+            step_index: 0,
+          });
+        }
+        if (sql.includes("UPDATE synthesis_campaign_steps") && sql.includes("'in_progress'")) {
+          return { rows: [], rowCount: 1 } as unknown as QueryResult; // claim succeeded
+        }
+        if (sql.includes("UPDATE synthesis_campaigns") && sql.includes("etag = etag + 1")) {
+          return rows();
+        }
+        return rows();
+      },
+    });
+
+    const tool = buildAdvanceSynthesisCampaignTool(pool);
+    await tool.execute(makeCtx(), { campaign_id: CAMPAIGN_UUID, claim: true });
+
+    const sqls = dataSpy.mock.calls.map((c) => c[0] as string);
+    const stepUpdateIdx = sqls.findIndex(
+      (s) => s.includes("UPDATE synthesis_campaign_steps") && s.includes("'in_progress'"),
+    );
+    const etagUpdateIdx = sqls.findIndex(
+      (s) => s.includes("UPDATE synthesis_campaigns") && s.includes("etag = etag + 1"),
+    );
+    expect(stepUpdateIdx, "step claim UPDATE expected").toBeGreaterThanOrEqual(0);
+    expect(etagUpdateIdx, "campaign etag UPDATE expected after step claim").toBeGreaterThan(stepUpdateIdx);
+  });
+
+  it("does not bump etag when claim is requested but the step is already in_progress (rowCount=0)", async () => {
+    const { pool, dataSpy } = createMockPool({
+      dataHandler: async (sql) => {
+        if (sql.includes("FROM synthesis_campaigns WHERE id") && sql.includes("FOR UPDATE")) {
+          return rows({
+            id: CAMPAIGN_UUID,
+            kind: "single_experiment",
+            status: "active",
+            policy: {},
+            total_steps: 7,
+            completed_steps: 0,
+          });
+        }
+        if (sql.includes("FROM synthesis_campaign_steps s") && sql.includes("status = 'pending'")) {
+          return rows({
+            ...SAMPLE_STEP_ROW,
+            kind: "retrosynthesis",
+            step_index: 0,
+          });
+        }
+        if (sql.includes("UPDATE synthesis_campaign_steps") && sql.includes("'in_progress'")) {
+          return { rows: [], rowCount: 0 } as unknown as QueryResult; // claim no-op (race)
+        }
+        return rows();
+      },
+    });
+
+    const tool = buildAdvanceSynthesisCampaignTool(pool);
+    await tool.execute(makeCtx(), { campaign_id: CAMPAIGN_UUID, claim: true });
+
+    const sqls = dataSpy.mock.calls.map((c) => c[0] as string);
+    const etagBumps = sqls.filter(
+      (s) => s.includes("UPDATE synthesis_campaigns") && s.includes("etag = etag + 1"),
+    );
+    expect(etagBumps, "no etag bump expected on no-op claim").toEqual([]);
+  });
+
+  it("bumps etag exactly once when claiming on a proposed campaign (proposed→active does the bump)", async () => {
+    const { pool, dataSpy } = createMockPool({
+      dataHandler: async (sql) => {
+        if (sql.includes("FROM synthesis_campaigns WHERE id") && sql.includes("FOR UPDATE")) {
+          return rows({
+            id: CAMPAIGN_UUID,
+            kind: "single_experiment",
+            status: "proposed",
+            policy: {},
+            total_steps: 7,
+            completed_steps: 0,
+          });
+        }
+        if (sql.includes("FROM synthesis_campaign_steps s") && sql.includes("status = 'pending'")) {
+          return rows({
+            ...SAMPLE_STEP_ROW,
+            kind: "retrosynthesis",
+            step_index: 0,
+          });
+        }
+        if (sql.includes("UPDATE synthesis_campaign_steps") && sql.includes("'in_progress'")) {
+          return { rows: [], rowCount: 1 } as unknown as QueryResult;
+        }
+        if (sql.includes("UPDATE synthesis_campaigns") && sql.includes("'active'")) {
+          return rows();
+        }
+        return rows();
+      },
+    });
+    const tool = buildAdvanceSynthesisCampaignTool(pool);
+    await tool.execute(makeCtx(), { campaign_id: CAMPAIGN_UUID, claim: true });
+    const sqls = dataSpy.mock.calls.map((c) => c[0] as string);
+    const etagBumps = sqls.filter(
+      (s) => s.includes("UPDATE synthesis_campaigns") && s.includes("etag = etag + 1"),
+    );
+    expect(etagBumps, "exactly one etag bump expected on proposed+claim").toHaveLength(1);
+    // The single bump should be the proposed→active UPDATE (which carries `'active'`),
+    // not a standalone claim-path bump.
+    expect(etagBumps[0]).toContain("'active'");
+  });
+
   it("flips campaign to completed when no pending or in_progress steps remain", async () => {
     const { pool, dataSpy } = createMockPool({
       dataHandler: async (sql) => {

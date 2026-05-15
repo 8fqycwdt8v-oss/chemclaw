@@ -157,6 +157,18 @@ def verify_mcp_token(
     # specific key, not the rotation set.
     if signing_key is not None:
         next_key = ""
+    # Treat a too-short _NEXT as unset, matching the sign-time guard (cycle-3
+    # review d988baa). A misconfigured _NEXT='abc' would otherwise silently
+    # widen the verifier to accept brute-forceable HMACs.
+    if next_key and len(next_key) < 32:
+        log.warning(
+            "mcp_auth_next_key_too_short",
+            extra={
+                "event": "mcp_auth_next_key_too_short",
+                "length": len(next_key),
+            },
+        )
+        next_key = ""
     if not primary:
         raise McpAuthError("MCP_AUTH_SIGNING_KEY is empty; cannot verify token")
 
