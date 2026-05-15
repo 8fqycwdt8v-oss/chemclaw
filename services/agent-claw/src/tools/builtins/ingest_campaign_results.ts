@@ -286,6 +286,17 @@ export function buildIngestCampaignResultsTool(pool: Pool) {
           throw new Error("round_already_ingested");
         }
 
+        // Bump optimization_campaigns.etag so a snapshot consumer detects the
+        // new measurements (mirrors recommend_next_batch's bump on round
+        // INSERT — Tranche 1 follow-up resolving the asymmetry where the
+        // recommend path bumped etag but the ingest path did not).
+        await client.query(
+          `UPDATE optimization_campaigns
+             SET etag = etag + 1, updated_at = NOW()
+           WHERE id = $1::uuid`,
+          [row.campaign_id],
+        );
+
         // 3. Backfill the parent synthesis_campaign_steps row if this
         // optimization_rounds belongs to an umbrella. Two link shapes are
         // supported: ref_table/ref_id pointing at the round, or at the

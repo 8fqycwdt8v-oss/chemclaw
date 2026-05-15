@@ -484,6 +484,69 @@ describe("ingest_campaign_results", () => {
     expect(result.step_backfilled).toBe(false);
   });
 
+  it("bumps optimization_campaigns.etag after a successful round ingest", async () => {
+    const pool = makePoolMock({
+      ingestCampaignDomain: [
+        {
+          campaign_id: "aaaaaaaa-1111-2222-3333-444444444444",
+          bofire_domain: baseDomain,
+          output_bounds: { yield_pct: { lo: 0, hi: 100 } },
+          synthesis_campaign_id: null,
+        },
+      ],
+      ingestRow: {
+        campaign_id: "aaaaaaaa-1111-2222-3333-444444444444",
+        ingested_results_at: "2026-05-03T00:00:00Z",
+      },
+    });
+    const tool = buildIngestCampaignResultsTool(pool as never);
+    await tool.execute(makeCtx(), {
+      round_id: "11111111-2222-3333-4444-555555555555",
+      measured_outcomes: [
+        { factor_values: { t: 50, solvent: "EtOH" }, outputs: { yield_pct: 78 } },
+      ],
+    });
+    // Assert ORDER: the etag UPDATE follows the round UPDATE so a thrown
+    // error in the round UPDATE leaves etag unchanged.
+    const roundIdx = pool.queries.findIndex(
+      (s) => s.includes("UPDATE optimization_rounds") && s.includes("ingested_results_at"),
+    );
+    const etagIdx = pool.queries.findIndex(
+      (s) => s.includes("UPDATE optimization_campaigns") && s.includes("etag = etag + 1"),
+    );
+    expect(roundIdx, "round UPDATE expected").toBeGreaterThanOrEqual(0);
+    expect(etagIdx, "etag UPDATE expected after round UPDATE").toBeGreaterThan(roundIdx);
+  });
+
+  it("does not bump etag when round_already_ingested (idempotent re-call)", async () => {
+    const pool = makePoolMock({
+      ingestCampaignDomain: [
+        {
+          campaign_id: "aaaaaaaa-1111-2222-3333-444444444444",
+          bofire_domain: baseDomain,
+          output_bounds: { yield_pct: { lo: 0, hi: 100 } },
+          synthesis_campaign_id: null,
+        },
+      ],
+      // No ingestRow → round UPDATE returns 0 rows, sentinel SELECT returns
+      // ingestExistsRow with non-null ingested_results_at → throws round_already_ingested.
+      ingestExistsRow: { ingested_results_at: "2026-05-02T00:00:00Z" },
+    });
+    const tool = buildIngestCampaignResultsTool(pool as never);
+    await expect(
+      tool.execute(makeCtx(), {
+        round_id: "11111111-2222-3333-4444-555555555555",
+        measured_outcomes: [
+          { factor_values: { t: 50, solvent: "EtOH" }, outputs: { yield_pct: 78 } },
+        ],
+      }),
+    ).rejects.toThrow(/round_already_ingested/);
+    const etagBumped = pool.queries.some(
+      (s) => s.includes("UPDATE optimization_campaigns") && s.includes("etag = etag + 1"),
+    );
+    expect(etagBumped, "etag MUST NOT bump on idempotent re-ingest").toBe(false);
+  });
+
   it("rejects unknown factor key", async () => {
     const pool = makePoolMock({
       ingestCampaignDomain: [
