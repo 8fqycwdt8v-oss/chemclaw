@@ -55,6 +55,7 @@ export function buildGenerateFocusedLibraryTool(mcpGenchemUrl: string) {
       "+ InChIKey).",
     inputSchema: GenerateFocusedLibraryIn,
     outputSchema: GenerateFocusedLibraryOut,
+    result_schema_id: "gen_run.v1",
     annotations: { readOnly: true },
     execute: async (_ctx, input) => {
       const kind = input.kind ?? "scaffold";

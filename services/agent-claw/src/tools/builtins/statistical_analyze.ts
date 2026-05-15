@@ -151,6 +151,7 @@ export function buildStatisticalAnalyzeTool(pool: Pool, mcpTabiclUrl: string) {
       "question=rank_feature_importance: TabICL permutation importance ranking.",
     inputSchema: StatisticalAnalyzeIn,
     outputSchema: StatisticalAnalyzeOut,
+    result_schema_id: "predict_yield_for_similar.v1",
     annotations: { readOnly: true },
 
     execute: async (ctx, input) => {

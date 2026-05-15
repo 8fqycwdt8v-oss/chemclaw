@@ -58,9 +58,12 @@ const TrainOut = z.object({
 
 // What /predict_yield actually returns — predictions only; we merge training
 // metadata from TrainOut before returning the full PredictYieldWithUqOut.
-const PredictServerOut = z.object({
+// Exported so design_plate (direct MCP caller) can validate without requiring
+// the training-metadata fields that only the builtin adds.
+export const PredictServerOut = z.object({
   predictions: z.array(ReactionPrediction),
 });
+export type PredictServerOutput = z.infer<typeof PredictServerOut>;
 
 interface TrainingRow {
   rxn_smiles: string;

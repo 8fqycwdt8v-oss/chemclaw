@@ -36,6 +36,7 @@ export function buildQmSinglePointTool(mcpXtbUrl: string) {
       "screening primitive before geometry opt or frequencies.",
     inputSchema: QmSinglePointIn,
     outputSchema: QmSinglePointOut,
+    result_schema_id: "single_point.v1",
     annotations: { readOnly: true },
     execute: async (_ctx, input) => {
       return await postJson(
