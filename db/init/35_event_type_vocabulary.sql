@@ -88,7 +88,17 @@ INSERT INTO ingestion_event_catalog (event_type, description, emitted_by, consum
    'outputs against the canonical state. Failed runs do NOT emit — they '
    'surface only via workflow_events.kind=step_failed/finish.',
    'services/workflow_engine/main.py:_finish',
-   ARRAY['kg_experiments'])
+   ARRAY['kg_experiments']),
+  ('tool_invocation_complete',
+   'Universal Knowledge Accumulation Phase 0. Emitted by the '
+   'tool-invocation-emitter post_tool / post_tool_failure hook for every '
+   'non-internal MCP / builtin call when feature flag '
+   'kg.auto_extraction.enabled is true. Payload carries tool_name, '
+   'redacted args/result, result_schema_id, duration_ms, ok, error. The '
+   'tool_result_extractor projector dispatches to per-source extractor '
+   'modules registered in extraction_registry.',
+   'services/agent-claw/src/core/hooks/tool-invocation-emitter.ts',
+   ARRAY['tool_result_extractor'])
 ON CONFLICT (event_type) DO UPDATE SET
   description = EXCLUDED.description,
   emitted_by  = EXCLUDED.emitted_by,

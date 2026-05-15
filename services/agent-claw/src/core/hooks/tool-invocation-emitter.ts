@@ -91,8 +91,11 @@ export function registerToolInvocationEmitterHook(
 
       // Defensive: skip if the envelope looks malformed. Task 8 plumbs the
       // shape; until then we tolerate missing fields rather than crash the
-      // turn.
-      if (!input?.tool || typeof input.tool.name !== "string") return {};
+      // turn. Cast through unknown because rawInput is typed `unknown` and
+      // the lifecycle dispatch may forward payloads without our optional
+      // fields (is_internal, redacted_*, etc.).
+      const tool = (input as { tool?: { name?: unknown } }).tool;
+      if (!tool || typeof tool.name !== "string") return {};
 
       // Short-circuit internal builtins (manage_todos, ask_user, etc.). The
       // projector has no business reasoning about agent-internal control
@@ -153,11 +156,11 @@ export function registerToolInvocationEmitterHook(
   lifecycle.on(
     "post_tool",
     "tool-invocation-emitter",
-    async (payload, _toolUseId, _opts) => handle(payload),
+    async (payload, _toolUseId, _opts) => await handle(payload),
   );
   lifecycle.on(
     "post_tool_failure",
     "tool-invocation-emitter",
-    async (payload, _toolUseId, _opts) => handle(payload),
+    async (payload, _toolUseId, _opts) => await handle(payload),
   );
 }

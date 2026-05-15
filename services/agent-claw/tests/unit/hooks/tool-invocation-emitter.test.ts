@@ -43,13 +43,13 @@ const baseInput = {
 };
 
 function dispatchPostTool(lifecycle: Lifecycle, input: unknown) {
-  return lifecycle.dispatch("post_tool", input as unknown as PostToolPayload);
+  return lifecycle.dispatch("post_tool", input as PostToolPayload);
 }
 
 function dispatchPostToolFailure(lifecycle: Lifecycle, input: unknown) {
   return lifecycle.dispatch(
     "post_tool_failure",
-    input as unknown as Parameters<Lifecycle["dispatch"]>[1],
+    input as Parameters<Lifecycle["dispatch"]>[1],
   );
 }
 
