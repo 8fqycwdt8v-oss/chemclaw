@@ -26,6 +26,16 @@ const LearnRequestSchema = z.object({
   title: z.string().min(1).max(200),
   last_turn_text: z.string().min(10).max(20_000),
   source_trace_id: z.string().optional(),
+  /**
+   * Tranche 10: NCE-project context the skill was learned from. When
+   * present, populates `validated_in_projects` on the new skill_library
+   * row via record_skill_project_validation() — the cross-project
+   * promoter (services/optimizer/skill_promoter/promoter.py) needs at
+   * least one validating project before any cross-project promotion can
+   * fire. Omitted from older clients; absent → skill gets an empty
+   * validated_in_projects array.
+   */
+  nce_project_id: z.string().uuid().optional(),
 });
 
 /** Sanitize a user-provided title into a safe skill name. */
@@ -52,7 +62,7 @@ export function registerLearnRoute(
     }
 
     const user = deps.getUser(req);
-    const { title, last_turn_text, source_trace_id } = parsed.data;
+    const { title, last_turn_text, source_trace_id, nce_project_id } = parsed.data;
     const name = sanitizeName(title);
 
     if (!name) {
@@ -105,7 +115,18 @@ export function registerLearnRoute(
            RETURNING id::text AS id, name`,
           [name, promptMd, source_trace_id ?? null, user, shadowUntil],
         );
-        return row.rows[0] ?? null;
+        const inserted = row.rows[0] ?? null;
+        // Tranche 10: stamp originating project on the new skill_library row
+        // so the cross-project promoter has at least one validating project
+        // from the moment of induction. SECURITY DEFINER helper bypasses
+        // FORCE RLS so a chemclaw_app caller can populate the column.
+        if (inserted && nce_project_id) {
+          await client.query(
+            `SELECT record_skill_project_validation($1::uuid, $2::uuid)`,
+            [inserted.id, nce_project_id],
+          );
+        }
+        return inserted;
       });
 
       if (!result) {

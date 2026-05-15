@@ -51,10 +51,12 @@ async function buildApp(llm?: StubLlmProvider) {
 
   // Intercept withUserContext — it calls pool.connect() then client.query().
   const insertedRows: Array<{ name: string; prompt_md: string }> = [];
+  const queries: Array<{ sql: string; params: unknown[] }> = [];
   const pool: Pool = {
     connect: async () => {
       const client = {
         query: async <T = unknown>(sql: string, params?: unknown[]): Promise<QueryResult<T>> => {
+          queries.push({ sql, params: params ?? [] });
           if (sql.startsWith("SET LOCAL")) {
             return { rows: [], rowCount: 0, command: "SET", oid: 0, fields: [] };
           }
@@ -90,7 +92,7 @@ async function buildApp(llm?: StubLlmProvider) {
     getUser: () => "test@example.com",
   });
 
-  return { app, insertedRows };
+  return { app, insertedRows, queries };
 }
 
 describe("POST /api/learn", () => {
@@ -134,6 +136,49 @@ describe("POST /api/learn", () => {
     expect(typeof body.skill_id).toBe("string");
     expect(body.name).toBe("my_skill");
     expect(typeof body.shadow_until).toBe("string");
+  });
+
+  it("calls record_skill_project_validation when nce_project_id is supplied (Tranche 10)", async () => {
+    const llm = new StubLlmProvider();
+    llm.enqueueJson({ prompt_md: "## Project-stamped Skill\n\nUse tool X." });
+
+    const { app, queries } = await buildApp(llm);
+    const projectId = "11111111-2222-3333-4444-555555555555";
+    const resp = await app.inject({
+      method: "POST",
+      url: "/api/learn",
+      body: {
+        title: "Project-stamped Skill",
+        last_turn_text: "The agent called canonicalize_smiles then propose_hypothesis.",
+        nce_project_id: projectId,
+      },
+    });
+    expect(resp.statusCode).toBe(200);
+    const validationCall = queries.find(
+      (q) => q.sql.includes("record_skill_project_validation"),
+    );
+    expect(validationCall).toBeDefined();
+    expect(validationCall!.params).toEqual(["test-uuid-1", projectId]);
+  });
+
+  it("does NOT call record_skill_project_validation when nce_project_id is omitted", async () => {
+    const llm = new StubLlmProvider();
+    llm.enqueueJson({ prompt_md: "## Unstamped Skill\n\nBody." });
+
+    const { app, queries } = await buildApp(llm);
+    const resp = await app.inject({
+      method: "POST",
+      url: "/api/learn",
+      body: {
+        title: "Unstamped Skill",
+        last_turn_text: "The agent called canonicalize_smiles then propose_hypothesis.",
+      },
+    });
+    expect(resp.statusCode).toBe(200);
+    const validationCall = queries.find(
+      (q) => q.sql.includes("record_skill_project_validation"),
+    );
+    expect(validationCall).toBeUndefined();
   });
 
   it("sanitizes the skill name correctly", async () => {
