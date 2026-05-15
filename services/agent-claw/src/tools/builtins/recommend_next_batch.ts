@@ -237,7 +237,7 @@ export function buildRecommendNextBatchTool(
                 "mcp-reaction-optimizer",
               );
               span.setAttribute("bo.wall_ms", Date.now() - start);
-              span.setAttribute("bo.used_bo", response.used_bo ?? false);
+              span.setAttribute("bo.used_bo", response.used_bo);
               if (response.fallback_reason) {
                 span.setAttribute("bo.fallback_reason", response.fallback_reason);
               }
