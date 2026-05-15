@@ -95,8 +95,25 @@ export async function handleListSessions(
   deps: ReadDeps,
 ): Promise<unknown> {
   const user = deps.getUser(req);
-  const rawLimit = parseInt(req.query.limit ?? "20", 10);
-  const limit = Number.isFinite(rawLimit) ? Math.max(1, Math.min(100, rawLimit)) : 20;
+  // Pagination knobs migrated from hardcoded literals in Tranche 4.
+  // Admins can tune via /api/admin/config/global keys
+  // route.sessions.list_default_limit and route.sessions.list_max_limit.
+  let defaultLimit = 20;
+  let maxLimit = 100;
+  try {
+    const { getConfigRegistry } = await import("../config/registry.js");
+    const reg = getConfigRegistry();
+    [defaultLimit, maxLimit] = await Promise.all([
+      reg.getNumber("route.sessions.list_default_limit", {}, defaultLimit),
+      reg.getNumber("route.sessions.list_max_limit", {}, maxLimit),
+    ]);
+  } catch {
+    // Registry not initialised (test paths) → keep defaults.
+  }
+  const rawLimit = parseInt(req.query.limit ?? String(defaultLimit), 10);
+  const limit = Number.isFinite(rawLimit)
+    ? Math.max(1, Math.min(maxLimit, rawLimit))
+    : defaultLimit;
 
   const rows = await withUserContext(deps.pool, user, (client) =>
     client

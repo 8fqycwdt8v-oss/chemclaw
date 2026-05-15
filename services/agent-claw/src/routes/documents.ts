@@ -102,13 +102,29 @@ async function handleDocumentsOriginal(
       return await reply.code(503).send({ error: "mcp_doc_fetcher_not_configured" });
     }
 
+    // Tunable knobs; fall back to historical defaults if ConfigRegistry is
+    // unreachable. Migrated from hardcoded literals in Tranche 4 — admins
+    // can override via /api/admin/config/global without redeploying.
+    let maxBytes = 50_000_000;
+    let timeoutMs = 60_000;
+    try {
+      const { getConfigRegistry } = await import("../config/registry.js");
+      const reg = getConfigRegistry();
+      [maxBytes, timeoutMs] = await Promise.all([
+        reg.getNumber("route.documents.original.fetch_max_bytes", {}, maxBytes),
+        reg.getNumber("route.documents.original.fetch_timeout_ms", {}, timeoutMs),
+      ]);
+    } catch {
+      // Registry not initialised (test paths) → keep defaults.
+    }
+
     let fetched: { content_type: string; base64_bytes: string; byte_count: number };
     try {
       fetched = await postJson(
         `${base}/fetch`,
-        { uri: row.original_uri, max_bytes: 50_000_000 },
+        { uri: row.original_uri, max_bytes: maxBytes },
         _FetchOut,
-        60_000,
+        timeoutMs,
         "mcp-doc-fetcher",
       );
     } catch (err) {
