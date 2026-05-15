@@ -433,6 +433,40 @@ spec:
               value: {{ printf "http://litellm:%d" (int .Values.litellm.port) | quote }}
 {{- end }}
 
+{{- if .Values.projectors.toolResultExtractor.enabled }}
+---
+# tool_result_extractor — universal-knowledge-accumulation Phase 0 projector.
+# Consumes tool_call_completed events and writes structured extracted_facts
+# rows via a registry-driven extractor lookup. Phase 0 ships an empty registry
+# (strict no-op) — wired on by default so the LISTEN/NOTIFY plumbing is exercised.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tool-result-extractor
+  labels:
+    app: tool-result-extractor
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: tool-result-extractor
+  template:
+    metadata:
+      labels:
+        app: tool-result-extractor
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: tool-result-extractor
+          image: {{ .Values.projectors.toolResultExtractor.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+{{- end }}
+
 {{- if .Values.projectors.wikiPages.enabled }}
 ---
 # wiki_pages — knowledge-wiki projection projector (ADR 012). Keeps

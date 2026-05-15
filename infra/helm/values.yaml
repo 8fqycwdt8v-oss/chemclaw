@@ -103,6 +103,13 @@ projectors:
     # LLM-context chunk-prefix projector. Requires LITELLM_BASE_URL.
     enabled: true
     image: chemclaw/contextual-chunker:latest
+  toolResultExtractor:
+    # Universal-knowledge-accumulation Phase 0: consumes tool_call_completed
+    # events and writes structured extracted_facts rows via a registry-driven
+    # extractor lookup. Phase 0 ships an empty registry → strict no-op; enable
+    # by default so the LISTEN/NOTIFY plumbing is validated.
+    enabled: true
+    image: chemclaw/tool-result-extractor:latest
   wikiPages:
     # Knowledge-wiki projection projector (ADR 012): keeps knowledge_articles
     # in sync with which pages exist / need (re)synthesis. Harmless when the
