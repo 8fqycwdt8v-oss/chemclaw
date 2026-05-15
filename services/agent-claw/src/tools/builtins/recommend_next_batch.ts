@@ -14,12 +14,23 @@
 import { createHash } from "node:crypto";
 import { z } from "zod";
 import type { Pool } from "pg";
+import { trace, SpanStatusCode } from "@opentelemetry/api";
 import { defineTool } from "../tool.js";
 import { postJson } from "../../mcp/postJson.js";
 import { withUserContext } from "../../db/with-user-context.js";
 import type { ConfigRegistry } from "../../config/registry.js";
 import { getLogger } from "../../observability/logger.js";
 import { normalizeUrl } from "../../mcp/normalize-url.js";
+
+// Tranche 8 F8: per-call OTel sub-span around the BoFire /recommend_next
+// HTTP POST. The outer `tool.recommend_next_batch` span (driven by
+// step.ts via withToolSpan) covers the full builtin including DB reads
+// and the round INSERT. This inner span isolates the BoFire fit/recommend
+// wall-clock and emits the BO-specific attributes operators chart in
+// Grafana: how many observations the surrogate saw, how many candidates
+// were proposed, whether multi-objective, the wall-clock duration, and
+// the fallback_reason (cold-start, BoFire-error → random, etc).
+const bofireTracer = trace.getTracer("agent-claw.bo");
 
 export const RecommendNextBatchIn = z.object({
   campaign_id: z.string().uuid(),
@@ -184,20 +195,64 @@ export function buildRecommendNextBatchTool(
           input.seed ??
           deriveRoundSeed(c.seed ?? 42, nextIndex);
 
-        const reco = await postJson(
-          `${base}/recommend_next`,
-          {
-            bofire_domain: domainParsed.data,
-            measured_outcomes: allMeasured,
-            n_candidates: input.n_candidates,
-            seed,
-            strategy: c.strategy,
-            acquisition: c.acquisition,
-            min_observations_for_bo: minObs,
+        const reco = await bofireTracer.startActiveSpan(
+          "bo.recommend_next",
+          async (span) => {
+            // Pre-call attrs: what we ASKED the surrogate for. Post-call
+            // attrs (used_bo, fallback_reason) are set after the response
+            // returns — they tell us what the surrogate actually did.
+            span.setAttributes({
+              "bo.campaign_id": input.campaign_id,
+              "bo.round_index": nextIndex,
+              "bo.n_observations": allMeasured.length,
+              "bo.n_candidates": input.n_candidates,
+              "bo.strategy": c.strategy,
+              "bo.acquisition": c.acquisition,
+              "bo.multi_objective": (() => {
+                // Defensive narrow over the open-shape Domain JSON.
+                const outputs = (domainParsed.data as { outputs?: unknown }).outputs;
+                if (outputs && typeof outputs === "object") {
+                  const features = (outputs as { features?: unknown }).features;
+                  if (Array.isArray(features)) return features.length > 1;
+                }
+                return false;
+              })(),
+              "bo.min_observations_for_bo": minObs,
+            });
+            const start = Date.now();
+            try {
+              const response = await postJson(
+                `${base}/recommend_next`,
+                {
+                  bofire_domain: domainParsed.data,
+                  measured_outcomes: allMeasured,
+                  n_candidates: input.n_candidates,
+                  seed,
+                  strategy: c.strategy,
+                  acquisition: c.acquisition,
+                  min_observations_for_bo: minObs,
+                },
+                RecommendNextOut,
+                TIMEOUT_MS,
+                "mcp-reaction-optimizer",
+              );
+              span.setAttribute("bo.wall_ms", Date.now() - start);
+              span.setAttribute("bo.used_bo", response.used_bo);
+              if (response.fallback_reason) {
+                span.setAttribute("bo.fallback_reason", response.fallback_reason);
+              }
+              span.setStatus({ code: SpanStatusCode.OK });
+              return response;
+            } catch (err) {
+              span.setAttribute("bo.wall_ms", Date.now() - start);
+              const message = err instanceof Error ? err.message : String(err);
+              span.setStatus({ code: SpanStatusCode.ERROR, message });
+              span.recordException(err instanceof Error ? err : new Error(message));
+              throw err;
+            } finally {
+              span.end();
+            }
           },
-          RecommendNextOut,
-          TIMEOUT_MS,
-          "mcp-reaction-optimizer",
         );
 
         const insertRes = await client.query<{ id: string }>(
