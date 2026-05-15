@@ -9,82 +9,149 @@ Compromise of the signing key lets an attacker mint MCP tokens for any
 user → can call any MCP tool. Rotate immediately on suspected leak;
 otherwise rotate every 90 days as routine hygiene.
 
-## Current limitation: single-key rotation only
+## Dual-key zero-downtime rotation (default flow)
 
-The agent and MCP services accept exactly one `MCP_AUTH_SIGNING_KEY` —
-there is **no dual-key (`signing_key` + `signing_key_next`) support
-today**. A naive rotation produces a brief window during which existing
-tokens fail validation. Two acceptable shapes:
+The agent (`services/agent-claw/src/security/mcp-tokens.ts:verifyMcpToken`)
+and every MCP service (`services/mcp_tools/common/auth.py:verify_mcp_token`)
+accept tokens signed under EITHER `MCP_AUTH_SIGNING_KEY` (primary) or
+`MCP_AUTH_SIGNING_KEY_NEXT` (rotation fallback). Mint always uses
+primary. The verifier emits a structured INFO log
+`mcp_auth_verify_via_next_key` whenever it falls through to `_NEXT`
+— operators chart this in Loki to know when every service has rolled.
 
-- **Brief-downtime rotation** (this runbook): roll the secret + restart
-  agent and every MCP service together. In-flight requests during the
-  rollout get 401s and clients retry. Acceptable for a maintenance
-  window.
-- **Dual-key rotation** (BACKLOG): implement an `MCP_AUTH_SIGNING_KEY_NEXT`
-  fallback in `services/mcp_tools/common/auth.py:_verify_token` so a
-  receiver accepts EITHER key during the rollout. Tracked as a follow-up.
+A length guard rejects misconfigured short keys: `MCP_AUTH_SIGNING_KEY_NEXT`
+shorter than 32 chars is treated as unset, with a structured WARN
+`mcp_auth_next_key_too_short` so the misconfig is visible in Loki rather
+than silently widening the verifier to brute-forceable HMACs.
 
-If this is a suspected-leak rotation and the brief downtime is
-unacceptable, file an emergency change with the on-call to coordinate.
-Otherwise:
+### Procedure
 
-## Prerequisites
+#### 1. Generate the new key
 
-- Helm + kubectl access to the production cluster, OR docker-compose
-  shell on the host.
-- Private key access to update the secret.
-- Maintenance window scheduled (typically <60s of 401s during the agent
-  + MCP service rollout).
+```bash
+NEW_KEY="$(openssl rand -hex 32)"
+```
 
-## Procedure
+The `openssl rand -hex 32` invocation produces a 64-char hex string
+(256 bits); both verifiers enforce `>= 32 chars` so this is safely above
+the floor.
 
-1. Generate the new key:
-   ```bash
-   NEW_KEY="$(openssl rand -hex 32)"
-   ```
+#### 2. Stage `_NEXT` on every verifier
 
-2. Update the secret:
-   ```bash
-   kubectl create secret generic chemclaw-mcp-auth-key \
-     --from-literal=signing_key="$NEW_KEY" \
-     --dry-run=client -o yaml | kubectl apply -f -
-   ```
+Set `MCP_AUTH_SIGNING_KEY_NEXT=$NEW_KEY` on the agent AND every MCP
+service WITHOUT touching the primary `MCP_AUTH_SIGNING_KEY`. Roll each
+deployment to pick it up.
 
-3. Roll the agent + every MCP service so they pick up the new key:
-   ```bash
-   kubectl rollout restart deploy/agent-claw
-   for svc in mcp-rdkit mcp-drfp mcp-kg mcp-embedder mcp-tabicl \
-              mcp-doc-fetcher mcp-eln-local mcp-logs-sciy; do
-     kubectl rollout restart deploy/$svc
-   done
-   ```
+```bash
+kubectl create secret generic chemclaw-mcp-auth-key \
+  --from-literal=signing_key="$OLD_KEY" \
+  --from-literal=signing_key_next="$NEW_KEY" \
+  --dry-run=client -o yaml | kubectl apply -f -
 
-   Wait for `kubectl rollout status` to report ready on each. Existing
-   tokens minted with the old key get 401s during the window between
-   "agent restarts" and "every MCP service restarts" — clients retry.
+kubectl rollout restart deploy/agent-claw
+for svc in mcp-rdkit mcp-drfp mcp-kg mcp-embedder mcp-tabicl \
+           mcp-doc-fetcher mcp-eln-local mcp-logs-sciy; do
+  kubectl rollout restart deploy/$svc
+done
+```
 
-4. Verify with smoke:
-   ```bash
-   ./scripts/smoke.sh
-   ```
+After this step, every verifier accepts tokens signed under either key.
+Mint is unchanged (still uses primary). No 401 window.
 
-5. Burn the old key from your password manager / vault.
+#### 3. Promote `_NEXT` to primary on signers
+
+Sequentially update the signers (today: agent-claw and any service that
+mints — currently only agent-claw mints; the optimizer reanimator
+re-uses agent-claw's mint). Swap the secret so the new key becomes
+primary, then roll:
+
+```bash
+kubectl create secret generic chemclaw-mcp-auth-key \
+  --from-literal=signing_key="$NEW_KEY" \
+  --from-literal=signing_key_next="$OLD_KEY" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl rollout restart deploy/agent-claw
+```
+
+Newly-minted tokens now use the new key. Verifiers accept either —
+in-flight tokens minted under `$OLD_KEY` (now in `_NEXT`) still verify.
+
+Watch `mcp_auth_verify_via_next_key` in Loki: as the in-flight tokens
+expire, the per-second rate of fallback verifications drops to zero.
+Default token TTL is 5 minutes (configurable via `MCP_AUTH_TTL_SECONDS`),
+so wait at least one TTL after the signer roll before step 4.
+
+#### 4. Clear `_NEXT` on every verifier
+
+Once `mcp_auth_verify_via_next_key` log volume is steady at zero (or
+acceptably close), drop the fallback:
+
+```bash
+kubectl create secret generic chemclaw-mcp-auth-key \
+  --from-literal=signing_key="$NEW_KEY" \
+  --dry-run=client -o yaml | kubectl apply -f -
+
+kubectl rollout restart deploy/agent-claw
+for svc in mcp-rdkit mcp-drfp mcp-kg mcp-embedder mcp-tabicl \
+           mcp-doc-fetcher mcp-eln-local mcp-logs-sciy; do
+  kubectl rollout restart deploy/$svc
+done
+```
+
+After this step, only `$NEW_KEY` verifies. The rotation is complete.
+
+#### 5. Verify
+
+```bash
+./scripts/smoke.sh
+```
+
+Confirm a fresh agent → MCP request round-trips. Then burn `$OLD_KEY`
+from your password manager / vault.
 
 ## Audit
 
 - Generates a `secret-rotation` event in your observability platform
   (Helm chart annotation `audit-event=secret-rotation`).
-- Append an entry to your team's secret-rotation log with date + initiator.
+- The `mcp_auth_verify_via_next_key` INFO log line (during steps 2–4)
+  is itself the audit trail: a Grafana panel keyed on this event lets
+  you observe every verifier's handover behaviour through the rotation
+  window.
+- Append an entry to your team's secret-rotation log with date,
+  initiator, and which step triggered each rollout.
 
 ## Rollback
 
-If `smoke.sh` fails after step 4, revert the secret to the prior key and
-re-run step 3:
+The dual-key path makes rollback safe at every step.
 
-```bash
-kubectl create secret generic chemclaw-mcp-auth-key \
-  --from-literal=signing_key="$OLD_KEY" \
-  --dry-run=client -o yaml | kubectl apply -f -
-kubectl rollout restart deploy/agent-claw
-# (and the same for-loop on MCP services)
-```
+- **Failure during step 2 (`_NEXT` rollout)**: revert by removing
+  `signing_key_next` from the secret + rolling. Verifiers fall back to
+  single-key behaviour. Zero downtime.
+- **Failure during step 3 (signer promotion)**: revert by swapping the
+  secret back (`signing_key="$OLD_KEY"`, `signing_key_next="$NEW_KEY"`)
+  and rolling the signers. Tokens minted by the rolled-forward agent
+  during the failed window still verify because `$NEW_KEY` is in
+  `_NEXT`. Zero downtime.
+- **Failure during step 4 (`_NEXT` clear)**: re-add `signing_key_next`
+  and roll. The in-flight tokens minted under `$OLD_KEY` (which step 4
+  removed support for) get 401s briefly until you complete the rollback.
+
+## Single-key emergency rotation
+
+If the signing key is known compromised and you need to invalidate ALL
+existing tokens immediately (not just stop minting new ones under the
+old key), skip the dual-key procedure: roll only `signing_key="$NEW_KEY"`
+with no `_NEXT`. Every in-flight token under `$OLD_KEY` gets 401 on the
+next request, and clients re-mint via the auth flow. Brief downtime
+window during the agent + MCP service rollout (typically <60s of 401s).
+
+## See also
+
+- ADR 006 (`docs/adr/006-mcp-bearer-token-auth.md`) — the layered auth
+  model.
+- `services/mcp_tools/common/auth.py` — Python verifier (the dual-key
+  + length-guard logic).
+- `services/agent-claw/src/security/mcp-tokens.ts` — TypeScript verifier +
+  mint.
+- `BACKLOG.md` `[security/mcp-auth]` — open follow-ups.
