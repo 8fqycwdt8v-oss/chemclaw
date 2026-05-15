@@ -440,6 +440,108 @@ describe("recommend_next_batch", () => {
       }),
     ).rejects.toThrow(/campaign_not_found/);
   });
+
+  it("forwards min_distance_from_measured to the optimizer when explicitly set", async () => {
+    const pool = makePoolMock({
+      campaignSelect: [
+        {
+          bofire_domain: { type: "Domain" },
+          status: "active",
+          strategy: "SoboStrategy",
+          acquisition: "qLogEI",
+          seed: 1,
+          nce_project_id: "00000000-0000-0000-0000-000000000001",
+        },
+      ],
+      rounds: [],
+    });
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      text: async () =>
+        JSON.stringify({
+          proposals: [{ factor_values: { t: 50 }, source: "random_cold_start" }],
+          n_observations: 0,
+          used_bo: false,
+          fallback_reason: "cold_start_n_obs=0<3",
+          strategy: "SoboStrategy",
+          acquisition: "qLogEI",
+        }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = buildRecommendNextBatchTool(pool as never, URL_, stubConfigRegistry());
+    await tool.execute(makeCtx(), {
+      campaign_id: "aaaaaaaa-1111-2222-3333-444444444444",
+      n_candidates: 1,
+      min_distance_from_measured: 0.05,
+    });
+
+    const body = JSON.parse(
+      (fetchMock.mock.calls[0]![1] as RequestInit).body as string,
+    );
+    expect(body.min_distance_from_measured).toBeCloseTo(0.05);
+  });
+
+  it("does not forward min_distance_from_measured when config returns 0 (disabled)", async () => {
+    const pool = makePoolMock({
+      campaignSelect: [
+        {
+          bofire_domain: { type: "Domain" },
+          status: "active",
+          strategy: "SoboStrategy",
+          acquisition: "qLogEI",
+          seed: 1,
+          nce_project_id: "00000000-0000-0000-0000-000000000001",
+        },
+      ],
+      rounds: [],
+    });
+    const fetchMock = vi.fn().mockResolvedValueOnce({
+      ok: true,
+      text: async () =>
+        JSON.stringify({
+          proposals: [{ factor_values: { t: 50 }, source: "random_cold_start" }],
+          n_observations: 0,
+          used_bo: false,
+          fallback_reason: "cold_start_n_obs=0<3",
+          strategy: "SoboStrategy",
+          acquisition: "qLogEI",
+        }),
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    const tool = buildRecommendNextBatchTool(pool as never, URL_, stubConfigRegistry());
+    // Input omits min_distance_from_measured; stubConfigRegistry returns 0 (disabled default).
+    await tool.execute(makeCtx(), {
+      campaign_id: "aaaaaaaa-1111-2222-3333-444444444444",
+      n_candidates: 1,
+    });
+
+    const body = JSON.parse(
+      (fetchMock.mock.calls[0]![1] as RequestInit).body as string,
+    );
+    expect(body.min_distance_from_measured).toBeUndefined();
+  });
+
+  it("inputSchema rejects min_distance_from_measured > 1", () => {
+    const tool = buildRecommendNextBatchTool({} as never, URL_, stubConfigRegistry());
+    expect(
+      tool.inputSchema.safeParse({
+        campaign_id: "aaaaaaaa-1111-2222-3333-444444444444",
+        min_distance_from_measured: 1.5,
+      }).success,
+    ).toBe(false);
+  });
+
+  it("inputSchema rejects min_distance_from_measured < 0", () => {
+    const tool = buildRecommendNextBatchTool({} as never, URL_, stubConfigRegistry());
+    expect(
+      tool.inputSchema.safeParse({
+        campaign_id: "aaaaaaaa-1111-2222-3333-444444444444",
+        min_distance_from_measured: -0.01,
+      }).success,
+    ).toBe(false);
+  });
 });
 
 describe("ingest_campaign_results", () => {

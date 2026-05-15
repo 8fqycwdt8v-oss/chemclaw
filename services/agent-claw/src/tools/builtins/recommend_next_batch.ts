@@ -39,6 +39,11 @@ export const RecommendNextBatchIn = z.object({
   // Optional override; when omitted the seed is derived deterministically
   // from the campaign's stored seed and the round_index.
   seed: z.number().int().optional(),
+  // Gower distance threshold [0, 1]. Candidates within this distance of any
+  // already-measured point are rejected and replaced by random resamples.
+  // When omitted, falls back to the `bo.min_distance_from_measured` config
+  // key (default 0 = disabled). Prevents re-proposing conditions already run.
+  min_distance_from_measured: z.number().min(0).max(1).optional(),
 });
 export type RecommendNextBatchInput = z.infer<typeof RecommendNextBatchIn>;
 
@@ -150,6 +155,19 @@ export function buildRecommendNextBatchTool(
         3,
       );
 
+      // Dedup threshold: explicit input param wins; falls back to config key
+      // `bo.min_distance_from_measured` (default 0 = disabled). A value of 0
+      // is treated as "disabled" and not sent to the optimizer so the
+      // optimizer's own None-check correctly no-ops.
+      const configMinDist = await configRegistry.getNumber(
+        "bo.min_distance_from_measured",
+        { user: userEntraId },
+        0,
+      );
+      const minDistFromMeasured =
+        input.min_distance_from_measured ??
+        (configMinDist > 0 ? configMinDist : undefined);
+
       // Single transaction holds the advisory lock from read through INSERT.
       const result = await withUserContext(pool, userEntraId, async (client) => {
         await client.query("SELECT pg_advisory_xact_lock($1::bigint)", [lockKey.toString()]);
@@ -212,6 +230,9 @@ export function buildRecommendNextBatchTool(
                 "bo.n_candidates": input.n_candidates,
                 "bo.strategy": c.strategy,
                 "bo.acquisition": c.acquisition,
+                ...(minDistFromMeasured !== undefined
+                  ? { "bo.min_distance_from_measured": minDistFromMeasured }
+                  : {}),
                 "bo.multi_objective": (() => {
                   // Defensive narrow over the open-shape Domain JSON.
                   const outputs = (domainParsed.data as { outputs?: unknown }).outputs;
@@ -234,6 +255,9 @@ export function buildRecommendNextBatchTool(
                   strategy: c.strategy,
                   acquisition: c.acquisition,
                   min_observations_for_bo: minObs,
+                  ...(minDistFromMeasured !== undefined
+                    ? { min_distance_from_measured: minDistFromMeasured }
+                    : {}),
                 },
                 RecommendNextOut,
                 TIMEOUT_MS,

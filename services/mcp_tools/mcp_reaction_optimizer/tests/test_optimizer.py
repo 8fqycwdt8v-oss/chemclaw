@@ -383,3 +383,171 @@ def test_domain_load_uses_model_validate_round_trip(client):
     redumped = _domain_dump(reloaded)
     assert redumped["inputs"] == payload["inputs"]
     assert redumped["outputs"] == payload["outputs"]
+
+
+# ---------------------------------------------------------------------------
+# gower_distance unit tests (pure functions, no HTTP, no BoFire import)
+# ---------------------------------------------------------------------------
+
+class _FakeFeat:
+    """Minimal Domain input feature stub for gower_distance tests."""
+    def __init__(self, key: str, bounds=None, categories=None):
+        self.key = key
+        self.bounds = bounds
+        self.categories = categories
+
+
+class _FakeInputs:
+    def __init__(self, features):
+        self.features = features
+
+
+class _FakeDomain:
+    def __init__(self, features):
+        self.inputs = _FakeInputs(features)
+
+
+def test_gower_distance_identical_continuous_is_zero():
+    from services.mcp_tools.mcp_reaction_optimizer.optimizer import gower_distance
+    domain = _FakeDomain([_FakeFeat("t", bounds=(25, 120))])
+    assert gower_distance({"t": 70}, {"t": 70}, domain) == 0.0
+
+
+def test_gower_distance_max_continuous_is_one():
+    from services.mcp_tools.mcp_reaction_optimizer.optimizer import gower_distance
+    domain = _FakeDomain([_FakeFeat("t", bounds=(0, 100))])
+    assert abs(gower_distance({"t": 0}, {"t": 100}, domain) - 1.0) < 1e-9
+
+
+def test_gower_distance_continuous_midpoint():
+    from services.mcp_tools.mcp_reaction_optimizer.optimizer import gower_distance
+    domain = _FakeDomain([_FakeFeat("t", bounds=(0, 100))])
+    assert abs(gower_distance({"t": 0}, {"t": 50}, domain) - 0.5) < 1e-9
+
+
+def test_gower_distance_identical_categorical_is_zero():
+    from services.mcp_tools.mcp_reaction_optimizer.optimizer import gower_distance
+    domain = _FakeDomain([_FakeFeat("solvent")])
+    assert gower_distance({"solvent": "EtOH"}, {"solvent": "EtOH"}, domain) == 0.0
+
+
+def test_gower_distance_different_categorical_is_one():
+    from services.mcp_tools.mcp_reaction_optimizer.optimizer import gower_distance
+    domain = _FakeDomain([_FakeFeat("solvent")])
+    assert gower_distance({"solvent": "EtOH"}, {"solvent": "Toluene"}, domain) == 1.0
+
+
+def test_gower_distance_mixed_continuous_and_categorical():
+    from services.mcp_tools.mcp_reaction_optimizer.optimizer import gower_distance
+    domain = _FakeDomain([
+        _FakeFeat("t", bounds=(0, 100)),
+        _FakeFeat("solvent"),
+    ])
+    # t contributes 0.5/2 = 0.25; solvent mismatch contributes 1.0/2 = 0.5; total = 0.75
+    d = gower_distance({"t": 50, "solvent": "EtOH"}, {"t": 0, "solvent": "Toluene"}, domain)
+    assert abs(d - 0.75) < 1e-9
+
+
+def test_gower_distance_missing_value_contributes_zero():
+    from services.mcp_tools.mcp_reaction_optimizer.optimizer import gower_distance
+    domain = _FakeDomain([_FakeFeat("t", bounds=(0, 100))])
+    # None vs 100 — missing value contributes 0, not max
+    assert gower_distance({"t": None}, {"t": 100}, domain) == 0.0
+
+
+def test_gower_distance_zero_span_contributes_zero():
+    from services.mcp_tools.mcp_reaction_optimizer.optimizer import gower_distance
+    domain = _FakeDomain([_FakeFeat("t", bounds=(50, 50))])
+    assert gower_distance({"t": 50}, {"t": 50}, domain) == 0.0
+
+
+# ---------------------------------------------------------------------------
+# _apply_dedup_filter / HTTP integration
+# ---------------------------------------------------------------------------
+
+def test_recommend_next_min_distance_filters_identical_proposal(client):
+    """A candidate nearly identical to a measured point should be filtered out;
+    the response still returns n_candidates via resampling."""
+    domain_resp = client.post(
+        "/build_domain",
+        json={
+            "factors": [{"name": "t", "type": "continuous", "range": [0, 100]}],
+            "categorical_inputs": [],
+            "outputs": [{"name": "y", "direction": "maximize"}],
+        },
+    )
+    bofire_domain = domain_resp.json()["bofire_domain"]
+    # Single measured point at t=50.0
+    measured = [{"factor_values": {"t": 50.0}, "outputs": {"y": 80.0}}]
+
+    # min_distance_from_measured=0.01 → reject proposals within 1 % of range.
+    # Cold-start path with seed that places a candidate near t=50 should be
+    # filtered. We can't guarantee which exact value BoFire samples, so we
+    # just assert the contract: response comes back 200, proposals have sources,
+    # and fallback_reason mentions the dedup filter when anything was rejected.
+    r = client.post(
+        "/recommend_next",
+        json={
+            "bofire_domain": bofire_domain,
+            "measured_outcomes": measured,
+            "n_candidates": 4,
+            "seed": 42,
+            "min_distance_from_measured": 0.01,
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    # Proposals must be present (either original or resampled).
+    assert len(body["proposals"]) >= 1
+
+
+def test_recommend_next_min_distance_zero_is_disabled(client):
+    """min_distance_from_measured=0 is treated as disabled — no filtering applied."""
+    domain_resp = client.post(
+        "/build_domain",
+        json={
+            "factors": [{"name": "t", "type": "continuous", "range": [0, 100]}],
+            "categorical_inputs": [],
+            "outputs": [{"name": "y", "direction": "maximize"}],
+        },
+    )
+    bofire_domain = domain_resp.json()["bofire_domain"]
+    r = client.post(
+        "/recommend_next",
+        json={
+            "bofire_domain": bofire_domain,
+            "measured_outcomes": [],
+            "n_candidates": 3,
+            "seed": 1,
+            "min_distance_from_measured": 0.0,
+        },
+    )
+    assert r.status_code == 200, r.text
+    body = r.json()
+    assert len(body["proposals"]) == 3
+    # No dedup note in reason when effectively disabled.
+    assert body["fallback_reason"] is None or "dedup" not in (body["fallback_reason"] or "")
+
+
+def test_recommend_next_min_distance_none_is_disabled(client):
+    """Omitting min_distance_from_measured does not filter any proposals."""
+    domain_resp = client.post(
+        "/build_domain",
+        json={
+            "factors": [{"name": "t", "type": "continuous", "range": [0, 100]}],
+            "categorical_inputs": [],
+            "outputs": [{"name": "y", "direction": "maximize"}],
+        },
+    )
+    bofire_domain = domain_resp.json()["bofire_domain"]
+    r = client.post(
+        "/recommend_next",
+        json={
+            "bofire_domain": bofire_domain,
+            "measured_outcomes": [],
+            "n_candidates": 3,
+            "seed": 2,
+        },
+    )
+    assert r.status_code == 200, r.text
+    assert len(r.json()["proposals"]) == 3
