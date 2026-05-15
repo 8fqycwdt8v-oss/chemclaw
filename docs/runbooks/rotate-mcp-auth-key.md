@@ -79,8 +79,10 @@ in-flight tokens minted under `$OLD_KEY` (now in `_NEXT`) still verify.
 
 Watch `mcp_auth_verify_via_next_key` in Loki: as the in-flight tokens
 expire, the per-second rate of fallback verifications drops to zero.
-Default token TTL is 5 minutes (configurable via `MCP_AUTH_TTL_SECONDS`),
-so wait at least one TTL after the signer roll before step 4.
+Default token TTL is 5 minutes (hardcoded in `signMcpToken` /
+`sign_mcp_token`); wait at least one TTL after the signer roll before
+step 4. Wait longer if the rate hasn't reached zero — there is no env
+override for the TTL today.
 
 #### 4. Clear `_NEXT` on every verifier
 
