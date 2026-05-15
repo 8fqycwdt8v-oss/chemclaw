@@ -161,6 +161,26 @@ export async function resolveDecision(
         }
       }
     }
+    // Same surface for project-scoped policies. policy-loader.match() treats
+    // ctx.project === null as a non-match for project-scoped policies, so
+    // without this WARN a project-scoped deny silently fails to fire when
+    // the route hasn't bound an nceProjectId.
+    if (input.ctx.nceProjectId === null) {
+      const loader = getPermissionPolicyLoader();
+      if (loader) {
+        const matchableProject = loader.countMatchableProjectPolicies(tool.id);
+        if (matchableProject > 0) {
+          getLogger("agent-claw.core.permissions.resolver").warn(
+            {
+              event: "permission_project_scoped_policy_unbound_ctx",
+              tool_id: tool.id,
+              policy_count: matchableProject,
+            },
+            "project-scoped permission policy could match but ctx.nceProjectId is null — route is not binding project identity (Phase F.3)",
+          );
+        }
+      }
+    }
     getLogger("agent-claw.core.permissions.resolver").warn(
       {
         event: "permission_enforce_no_policy_match",

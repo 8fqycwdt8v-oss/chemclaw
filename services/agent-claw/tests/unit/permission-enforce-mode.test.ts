@@ -321,6 +321,87 @@ describe("Task F: org-scoped policy unbound-ctx WARN", () => {
       getLoggerSpy.mockRestore();
     }
   });
+
+  it("WARNs when a project-scoped policy could match but ctx.nceProjectId is null", async () => {
+    state.rows.push(
+      policyRow({
+        id: "project-alpha-deny",
+        scope: "project",
+        scope_id: "00000000-0000-0000-0000-000000000001",
+        decision: "deny",
+        tool_pattern: "risky_tool",
+      }),
+    );
+    const lifecycle = await buildLifecycleWithPolicyHook();
+
+    const warnSpy = vi.fn();
+    const stubLogger = {
+      warn: warnSpy,
+      info: vi.fn(),
+      error: vi.fn(),
+      debug: vi.fn(),
+      trace: vi.fn(),
+      fatal: vi.fn(),
+      child: () => stubLogger,
+    };
+    const getLoggerSpy = vi
+      .spyOn(logger, "getLogger")
+      .mockReturnValue(stubLogger as never);
+
+    try {
+      const result = await resolveDecision({
+        tool: riskyTool,
+        input: {},
+        ctx: makeCtx("u@example.com", [], {
+          orgId: null,
+          nceProjectId: null,
+        }),
+        options: { permissionMode: "enforce" },
+        lifecycle,
+      });
+      expect(result.decision).toBe("ask");
+      const unboundCall = warnSpy.mock.calls.find(
+        (call) =>
+          (call[0] as { event?: string }).event ===
+          "permission_project_scoped_policy_unbound_ctx",
+      );
+      expect(unboundCall).toBeDefined();
+      expect(unboundCall![0]).toMatchObject({
+        event: "permission_project_scoped_policy_unbound_ctx",
+        tool_id: "risky_tool",
+        policy_count: 1,
+      });
+    } finally {
+      getLoggerSpy.mockRestore();
+    }
+  });
+
+  it("the same project-scoped policy DOES fire when ctx.nceProjectId matches", async () => {
+    state.rows.push(
+      policyRow({
+        id: "project-alpha-deny",
+        scope: "project",
+        scope_id: "00000000-0000-0000-0000-000000000001",
+        decision: "deny",
+        tool_pattern: "risky_tool",
+        reason: "alpha project denies risky_tool",
+      }),
+    );
+    const lifecycle = await buildLifecycleWithPolicyHook();
+
+    const result = await resolveDecision({
+      tool: riskyTool,
+      input: {},
+      ctx: makeCtx("u@example.com", [], {
+        orgId: null,
+        nceProjectId: "00000000-0000-0000-0000-000000000001",
+      }),
+      options: { permissionMode: "enforce" },
+      lifecycle,
+    });
+    expect(result.decision).toBe("deny");
+    expect(result.reason).toMatch(/alpha project denies risky_tool/);
+  });
 });
 
 describe("run-one-tool: enforce-mode 'ask' fails closed", () => {

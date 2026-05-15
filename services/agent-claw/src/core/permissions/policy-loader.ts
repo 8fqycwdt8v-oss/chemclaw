@@ -178,6 +178,21 @@ export class PermissionPolicyLoader {
   }
 
   /**
+   * Mirror of countMatchableOrgPolicies for project-scoped policies. Used by
+   * the resolver to emit `permission_project_scoped_policy_unbound_ctx` when
+   * ctx.nceProjectId is null but a project-scoped policy COULD match the
+   * tool pattern. Same semantics: returns 0 before the first refresh.
+   */
+  countMatchableProjectPolicies(toolId: string): number {
+    if (this.cache === null) return 0;
+    return this.cache.filter((p) => {
+      if (p.scope !== "project") return false;
+      if (p.compiledBroken) return false;
+      return patternMatches(p.toolPattern, toolId);
+    }).length;
+  }
+
+  /**
    * Returns the strongest applicable decision under the deny>ask>allow
    * aggregator, or null when no policy matches. Caller decides what to do
    * with null (the lifecycle treats it as "no opinion" → resolver falls
