@@ -188,9 +188,11 @@ jobs:
           mypy services/projectors/reaction_vectorizer
           # mypy services/projectors/compound_classifier
           # mypy services/projectors/compound_fingerprinter
-          # ingestion/doc_ingester dropped: 2 untyped-decorator errors
-          # on typer @app.command() in cli.py — pre-existing on main.
-          # mypy services/ingestion/doc_ingester
+          # ingestion/doc_ingester re-included 2026-05-15 — the typer
+          # @app.command() decorator no longer trips no-untyped-def in
+          # the current mypy version (verified: mypy returns "Success:
+          # no issues found" on cli.py).
+          mypy services/ingestion/doc_ingester
       - name: Diff coverage (Python)
         if: github.event_name == 'pull_request'
         run: |
