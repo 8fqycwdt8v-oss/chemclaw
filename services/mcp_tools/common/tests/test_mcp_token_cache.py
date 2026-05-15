@@ -94,6 +94,10 @@ def test_invalidate_drops_cached_tokens(monkeypatch):
 
 def test_get_warns_on_unknown_service(monkeypatch):
     monkeypatch.setenv("MCP_AUTH_SIGNING_KEY", SIGNING_KEY)
+    # Strict mode is the default since 2026-05-15 (Tranche 5); explicitly
+    # opt out so this test exercises the historical "warn + mint unscoped"
+    # branch.
+    monkeypatch.setenv("MCP_AUTH_STRICT_SCOPES", "false")
     cache = McpTokenCache()
     # This service is not in SERVICE_SCOPES; cache logs + mints unscoped.
     token = cache.get(service="mcp-totally-fictional")
@@ -138,4 +142,29 @@ def test_strict_scopes_mode_allows_known_service(monkeypatch):
     monkeypatch.setenv("MCP_AUTH_STRICT_SCOPES", "true")
     cache = McpTokenCache()
     token = cache.get(service="mcp-xtb")
+    assert token is not None
+
+
+def test_strict_scopes_default_is_now_true(monkeypatch):
+    """Tranche 5 flipped MCP_AUTH_STRICT_SCOPES from opt-in to opt-out.
+
+    With the env var unset (or set to anything other than 'false'), an
+    unknown service must now refuse to mint — matching the TS-side mirror
+    at services/agent-claw/src/security/mcp-token-cache.ts which has
+    always been fail-loud on unknown services.
+    """
+    monkeypatch.setenv("MCP_AUTH_SIGNING_KEY", SIGNING_KEY)
+    monkeypatch.delenv("MCP_AUTH_STRICT_SCOPES", raising=False)
+    cache = McpTokenCache()
+    with pytest.raises(McpAuthError, match="no SERVICE_SCOPES entry"):
+        cache.get(service="mcp-totally-fictional")
+
+
+def test_strict_scopes_opt_out_via_false(monkeypatch):
+    """MCP_AUTH_STRICT_SCOPES=false explicitly opts back into the legacy
+    warn-and-mint-unscoped behaviour (used for new-service development)."""
+    monkeypatch.setenv("MCP_AUTH_SIGNING_KEY", SIGNING_KEY)
+    monkeypatch.setenv("MCP_AUTH_STRICT_SCOPES", "false")
+    cache = McpTokenCache()
+    token = cache.get(service="mcp-totally-fictional")
     assert token is not None
