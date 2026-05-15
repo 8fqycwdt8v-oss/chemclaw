@@ -163,6 +163,20 @@ async function emitLangfuseScore(opts: {
 
   const score = signal === "up" ? 1 : 0;
 
+  // Migrated from a hardcoded 5s timeout in Tranche 4. Admins can override
+  // via /api/admin/config/global key=route.feedback.langfuse_score_timeout_ms.
+  let timeoutMs = 5_000;
+  try {
+    const { getConfigRegistry } = await import("../config/registry.js");
+    timeoutMs = await getConfigRegistry().getNumber(
+      "route.feedback.langfuse_score_timeout_ms",
+      {},
+      timeoutMs,
+    );
+  } catch {
+    // Registry not initialised (test paths) → keep default.
+  }
+
   await fetch(`${host.replace(/\/$/, "")}/api/public/scores`, {
     method: "POST",
     headers,
@@ -173,6 +187,6 @@ async function emitLangfuseScore(opts: {
       comment: reason ?? undefined,
       dataType: "NUMERIC",
     }),
-    signal: AbortSignal.timeout(5_000),
+    signal: AbortSignal.timeout(timeoutMs),
   });
 }
