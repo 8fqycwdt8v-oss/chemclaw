@@ -150,16 +150,14 @@ export function registerToolInvocationEmitterHook(
     "post_tool",
     "tool-invocation-emitter",
     async (payload, _toolUseId, _opts) => {
-      const p = payload as PostToolPayload;
-      return await emit(p, true, p.output, null);
+      return await emit(payload, true, payload.output, null);
     },
   );
   lifecycle.on(
     "post_tool_failure",
     "tool-invocation-emitter",
     async (payload, _toolUseId, _opts) => {
-      const p = payload as PostToolFailurePayload;
-      return await emit(p, false, null, p.error?.message ?? String(p.error));
+      return await emit(payload, false, null, payload.error.message);
     },
   );
 }
