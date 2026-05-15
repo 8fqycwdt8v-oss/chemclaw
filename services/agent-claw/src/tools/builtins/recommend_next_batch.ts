@@ -20,6 +20,7 @@ import { postJson } from "../../mcp/postJson.js";
 import { withUserContext } from "../../db/with-user-context.js";
 import type { ConfigRegistry } from "../../config/registry.js";
 import { getLogger } from "../../observability/logger.js";
+import { scrub } from "../../observability/redact-string.js";
 import { normalizeUrl } from "../../mcp/normalize-url.js";
 
 // Tranche 8 F8: per-call OTel sub-span around the BoFire /recommend_next
@@ -198,29 +199,28 @@ export function buildRecommendNextBatchTool(
         const reco = await bofireTracer.startActiveSpan(
           "bo.recommend_next",
           async (span) => {
-            // Pre-call attrs: what we ASKED the surrogate for. Post-call
-            // attrs (used_bo, fallback_reason) are set after the response
-            // returns — they tell us what the surrogate actually did.
-            span.setAttributes({
-              "bo.campaign_id": input.campaign_id,
-              "bo.round_index": nextIndex,
-              "bo.n_observations": allMeasured.length,
-              "bo.n_candidates": input.n_candidates,
-              "bo.strategy": c.strategy,
-              "bo.acquisition": c.acquisition,
-              "bo.multi_objective": (() => {
-                // Defensive narrow over the open-shape Domain JSON.
-                const outputs = (domainParsed.data as { outputs?: unknown }).outputs;
-                if (outputs && typeof outputs === "object") {
-                  const features = (outputs as { features?: unknown }).features;
-                  if (Array.isArray(features)) return features.length > 1;
-                }
-                return false;
-              })(),
-              "bo.min_observations_for_bo": minObs,
-            });
-            const start = Date.now();
+            // Pre-call attrs inside the try so span.end() in finally is
+            // always reached even if setAttributes throws.
             try {
+              span.setAttributes({
+                "bo.campaign_id": input.campaign_id,
+                "bo.round_index": nextIndex,
+                "bo.n_observations": allMeasured.length,
+                "bo.n_candidates": input.n_candidates,
+                "bo.strategy": c.strategy,
+                "bo.acquisition": c.acquisition,
+                "bo.multi_objective": (() => {
+                  // Defensive narrow over the open-shape Domain JSON.
+                  const outputs = (domainParsed.data as { outputs?: unknown }).outputs;
+                  if (outputs && typeof outputs === "object") {
+                    const features = (outputs as { features?: unknown }).features;
+                    if (Array.isArray(features)) return features.length > 1;
+                  }
+                  return false;
+                })(),
+                "bo.min_observations_for_bo": minObs,
+              });
+              const start = Date.now();
               const response = await postJson(
                 `${base}/recommend_next`,
                 {
@@ -244,10 +244,12 @@ export function buildRecommendNextBatchTool(
               span.setStatus({ code: SpanStatusCode.OK });
               return response;
             } catch (err) {
-              span.setAttribute("bo.wall_ms", Date.now() - start);
-              const message = err instanceof Error ? err.message : String(err);
+              const raw = err instanceof Error ? err.message : String(err);
+              // Scrub before emitting to OTel — MCP/Postgres error strings
+              // regularly embed SMILES and compound codes.
+              const message = scrub(raw);
               span.setStatus({ code: SpanStatusCode.ERROR, message });
-              span.recordException(err instanceof Error ? err : new Error(message));
+              span.recordException(new Error(message));
               throw err;
             } finally {
               span.end();

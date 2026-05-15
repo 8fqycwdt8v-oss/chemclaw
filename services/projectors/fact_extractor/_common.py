@@ -9,13 +9,20 @@ from typing import Any
 
 
 def confidence_tier(score: float) -> str:
-    """Map a numeric confidence to the canonical tier label used in
-    facts.confidence_tier."""
+    """Map a numeric confidence to the canonical 5-value tier used in
+    facts.confidence_tier (foundational | high | medium | low | exploratory).
+    Thresholds mirror config_settings defaults:
+      confidence.threshold.foundational = 0.85
+      confidence.threshold.high         = 0.65
+      confidence.threshold.medium       = 0.40
+    """
     if score >= 0.85:
-        return "high"
+        return "foundational"
     if score >= 0.65:
-        return "medium"
+        return "high"
     if score >= 0.40:
+        return "medium"
+    if score >= 0.20:
         return "low"
     return "exploratory"
 

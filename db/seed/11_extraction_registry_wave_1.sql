@@ -19,25 +19,26 @@ INSERT INTO extraction_registry (
   enabled, promote_default
 ) VALUES
   -- aizynth retrosynthesis: per-target rollup (top score + in-stock ratio
-  -- + route count). Volume bounded by actual user queries — promote on.
-  ('mcp_tool', 'aizynth_retrosynthesis', 'retrosynthesis.v1',
+  -- + route count). source_name = builtin registered in bootstrap/dependencies.ts.
+  ('mcp_tool', 'propose_retrosynthesis', 'retrosynthesis.v1',
    'services.projectors.fact_extractor.aizynth', TRUE, TRUE),
 
   -- chemprop predict_yield: per-reaction calibrated yield prediction.
   ('mcp_tool', 'predict_reaction_yield', 'predict_yield.v1',
    'services.projectors.fact_extractor.chemprop', TRUE, TRUE),
 
-  -- chemprop predict_property: per-compound property prediction (logP,
-  -- logS, mp, bp). Same module dispatches on response shape.
-  ('mcp_tool', 'predict_property', 'predict_property.v1',
+  -- chemprop predict_molecular_property: per-compound property (logP, logS,
+  -- mp, bp). Same module dispatches on response shape.
+  ('mcp_tool', 'predict_molecular_property', 'predict_property.v1',
    'services.projectors.fact_extractor.chemprop', TRUE, TRUE),
 
   -- applicability_domain assess: in/out-of-domain verdict + signal scores.
   ('mcp_tool', 'assess_applicability_domain', 'assess.v1',
    'services.projectors.fact_extractor.applicability_domain', TRUE, TRUE),
 
-  -- yield_baseline train: project-scoped baseline model existence fact.
-  ('mcp_tool', 'train_yield_baseline', 'train.v1',
+  -- yield_baseline: baseline-model training events extracted from the
+  -- predict_yield_with_uq builtin output (carries model_id + n_train).
+  ('mcp_tool', 'predict_yield_with_uq', 'train.v1',
    'services.projectors.fact_extractor.yield_baseline', TRUE, TRUE)
 ON CONFLICT (source_kind, source_name, result_schema_id) DO UPDATE SET
   extractor_module = EXCLUDED.extractor_module,
