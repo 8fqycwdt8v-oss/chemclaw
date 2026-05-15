@@ -67,11 +67,14 @@ const MIN_EXPECTED_HOOKS = 28;
 // builtins (ingest_chrom_results, extract_chrom_pareto_front,
 // simulate_chrom_retention). +1 for promote_to_kg (Universal Knowledge
 // Accumulation Phase 0, Task 11 — explicit fact-promotion path for
-// agent-derived INTERPRETED / HYPOTHESIZED / ABSTRACTED claims). The
-// fs/shell builtins are NOT counted here because they're conditionally
-// registered behind AGENT_FS_TOOLS_ENABLED — counting them would force
-// the gate to fail in default-config deployments.
-const MIN_EXPECTED_BUILTINS = 95;
+// agent-derived INTERPRETED / HYPOTHESIZED / ABSTRACTED claims). +1 for
+// request_investigation (Universal Knowledge Accumulation Phase 0, Task
+// 12 — manual high-priority investigation_queue enqueue picked up by the
+// Phase 3+ interpreter). The fs/shell builtins are NOT counted here
+// because they're conditionally registered behind AGENT_FS_TOOLS_ENABLED
+// — counting them would force the gate to fail in default-config
+// deployments.
+const MIN_EXPECTED_BUILTINS = 96;
 
 export async function startServer(
   app: FastifyInstance,

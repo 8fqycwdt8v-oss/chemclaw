@@ -102,6 +102,7 @@ import { buildSynthesizeInsightsTool } from "../tools/builtins/synthesize_insigh
 import { buildComputeConfidenceEnsembleTool } from "../tools/builtins/compute_confidence_ensemble.js";
 import { buildProposeHypothesisTool } from "../tools/builtins/propose_hypothesis.js";
 import { buildPromoteToKgTool } from "../tools/builtins/promote_to_kg.js";
+import { buildRequestInvestigationTool } from "../tools/builtins/request_investigation.js";
 import { buildUpdateHypothesisStatusTool } from "../tools/builtins/update_hypothesis_status.js";
 import { buildDraftSectionTool } from "../tools/builtins/draft_section.js";
 // Source-system wrappers (Phase F.2 — Postgres-backed mock ELN).
@@ -370,6 +371,12 @@ function registerBuiltinTools(
   // for agent-derived INTERPRETED / HYPOTHESIZED / ABSTRACTED claims. Writes
   // to `facts` + emits 'extracted_fact'. See db/init/62_facts_table.sql.
   registry.registerBuiltin("promote_to_kg", () => asTool(buildPromoteToKgTool(pool)));
+  // Universal Knowledge Accumulation Phase 0 — manual investigation-queue
+  // enqueue (high-priority, manual_request). The Phase 3+ interpreter
+  // picks it up. See db/init/64_investigation_queue.sql.
+  registry.registerBuiltin("request_investigation", () =>
+    asTool(buildRequestInvestigationTool(pool)),
+  );
   registry.registerBuiltin("update_hypothesis_status", () =>
     asTool(buildUpdateHypothesisStatusTool(pool)),
   );
