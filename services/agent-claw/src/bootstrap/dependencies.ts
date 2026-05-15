@@ -71,6 +71,11 @@ import { buildDesignPlateTool } from "../tools/builtins/design_plate.js";
 import { buildExportToOrdTool } from "../tools/builtins/export_to_ord.js";
 import { buildStartOptimizationCampaignTool } from "../tools/builtins/start_optimization_campaign.js";
 import { buildRecommendNextBatchTool } from "../tools/builtins/recommend_next_batch.js";
+import {
+  buildPauseOptimizationCampaignTool,
+  buildResumeOptimizationCampaignTool,
+  buildCompleteOptimizationCampaignTool,
+} from "../tools/builtins/optimization_campaign_lifecycle.js";
 import { buildIngestCampaignResultsTool } from "../tools/builtins/ingest_campaign_results.js";
 import { buildExtractParetoFrontTool } from "../tools/builtins/extract_pareto_front.js";
 import { buildStartChromCampaignTool } from "../tools/builtins/start_chrom_campaign.js";
@@ -289,6 +294,16 @@ function registerBuiltinTools(
   );
   registry.registerBuiltin("extract_pareto_front", () =>
     asTool(buildExtractParetoFrontTool(pool, cfg.MCP_REACTION_OPTIMIZER_URL)),
+  );
+  // Tranche 8 F7 — campaign lifecycle (pause / resume / complete).
+  registry.registerBuiltin("pause_optimization_campaign", () =>
+    asTool(buildPauseOptimizationCampaignTool(pool)),
+  );
+  registry.registerBuiltin("resume_optimization_campaign", () =>
+    asTool(buildResumeOptimizationCampaignTool(pool)),
+  );
+  registry.registerBuiltin("complete_optimization_campaign", () =>
+    asTool(buildCompleteOptimizationCampaignTool(pool)),
   );
   // Phase Z6 — chromatography method optimization.
   registry.registerBuiltin("start_chrom_campaign", () =>

@@ -74,7 +74,7 @@ const MIN_EXPECTED_HOOKS = 28;
 // because they're conditionally registered behind AGENT_FS_TOOLS_ENABLED
 // — counting them would force the gate to fail in default-config
 // deployments.
-const MIN_EXPECTED_BUILTINS = 96;
+const MIN_EXPECTED_BUILTINS = 99;
 
 export async function startServer(
   app: FastifyInstance,
