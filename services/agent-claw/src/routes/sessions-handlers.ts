@@ -182,6 +182,24 @@ export async function handlePlanRun(
     return await reply.code(404).send({ error: "no_active_plan" });
   }
 
+  // Tranche 6 J3: optional `max_auto_turns` body override for long synthesis
+  // tasks. Capped at the global cfg.AGENT_PLAN_MAX_AUTO_TURNS ceiling so a
+  // malicious caller cannot exceed the operator-set bound.
+  const planRunBody = (req.body ?? {}) as { max_auto_turns?: unknown };
+  let maxAutoTurns: number | undefined;
+  if (typeof planRunBody.max_auto_turns === "number") {
+    if (
+      !Number.isInteger(planRunBody.max_auto_turns)
+      || planRunBody.max_auto_turns < 1
+    ) {
+      return await reply.code(400).send({
+        error: "invalid_input",
+        detail: "max_auto_turns must be a positive integer",
+      });
+    }
+    maxAutoTurns = Math.min(planRunBody.max_auto_turns, cfg.AGENT_PLAN_MAX_AUTO_TURNS);
+  }
+
   await advancePlan(deps.pool, user, plan.id, { status: "running" });
 
   const result = await runChainedHarness({
@@ -196,6 +214,7 @@ export async function handlePlanRun(
     log: req.log,
     signal: req.signal,
     requestId: req.id,
+    ...(maxAutoTurns !== undefined ? { maxAutoTurns } : {}),
     // Phase F4: pass the plan so the runner can advance current_step_index
     // as tool calls match planned steps.
     planForProgress: {
@@ -267,6 +286,34 @@ async function executeResume(
   pool: Pool,
   paperclip: PaperclipClient | undefined,
 ): Promise<unknown> {
+  // Tranche 6 J3: optional `auto_resume_cap` body override. A long synthesis
+  // task can opt the session into a higher ceiling without an admin DB tweak;
+  // the new cap takes effect for THIS resume call (atomic UPDATE before the
+  // increment check). The cap is a session-state mutation, so it persists
+  // for subsequent resumes too — a deliberate trade so the reanimator's
+  // next tick respects the new ceiling. We never LOWER the cap from a body
+  // param (would let a misbehaving caller stop progress), only raise it.
+  const resumeBody = (req.body ?? {}) as { auto_resume_cap?: unknown };
+  if (typeof resumeBody.auto_resume_cap === "number") {
+    if (
+      !Number.isInteger(resumeBody.auto_resume_cap)
+      || resumeBody.auto_resume_cap < 1
+    ) {
+      return await reply.code(400).send({
+        error: "invalid_input",
+        detail: "auto_resume_cap must be a positive integer",
+      });
+    }
+    await withUserContext(pool, user, async (client) => {
+      await client.query(
+        `UPDATE agent_sessions
+            SET auto_resume_cap = GREATEST(auto_resume_cap, $2::int)
+          WHERE id = $1::uuid`,
+        [sessionId, resumeBody.auto_resume_cap],
+      );
+    });
+  }
+
   // Atomic counter + cap + awaiting check. Doing this BEFORE the harness
   // run means:
   //   - Two parallel reanimator calls can't both pass the cap check
