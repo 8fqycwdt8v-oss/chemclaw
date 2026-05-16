@@ -1,0 +1,21 @@
+name: compute-result-writer
+lifecycle: post_tool
+enabled: true
+order: 110
+description: >
+  Chemistry-result persistence hook (Tranche 9).
+  After any chemistry prediction tool call (those with a non-null
+  result_schema_id in the registry: propose_retrosynthesis,
+  predict_yield_with_uq, predict_molecular_property, elucidate_mechanism,
+  qm_single_point, qm_crest_screen, assess_applicability_domain,
+  identify_unknown_from_ms, predict_reaction_yield, statistical_analyze,
+  generate_focused_library), persists the tool output to compute_results
+  with a (tool_id, input_hash, nce_project_id, model_id) cache key.
+  ON CONFLICT refreshes payload + tool_confidence. The trigger in
+  56_compute_results.sql emits a compute_result_observed ingestion event
+  so downstream projectors can fan out to the KG.
+  Skipped when ctx.nceProjectId is null or the feature flag is false.
+implementation: services/agent-claw/src/core/hooks/compute-result-writer.ts
+condition:
+  setting_key: chemistry.compute_results.persist
+  default: false

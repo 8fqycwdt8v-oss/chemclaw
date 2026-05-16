@@ -42,10 +42,12 @@ import {
 // Universal Knowledge Accumulation Phase 0, Task 8 — emits one
 // `tool_invocation_complete` ingestion event per non-internal tool call,
 // gated by feature flag `kg.auto_extraction.enabled`).
+// 29 = +compute-result-writer (Tranche 9 — persists chemistry tool outputs
+// to compute_results canonical store; feature-flagged default-off).
 // Bump every time BUILTIN_REGISTRARS gains an entry so a silent failure to
 // load a new hook trips the startup gate instead of quietly downgrading
 // the safety net.
-const MIN_EXPECTED_HOOKS = 28;
+const MIN_EXPECTED_HOOKS = 29;
 
 // Builtins gate. Mirrors MIN_EXPECTED_HOOKS for tools/builtins/: a new
 // builtin module landing under `services/agent-claw/src/tools/builtins/`
