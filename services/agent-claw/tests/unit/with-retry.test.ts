@@ -2,6 +2,7 @@ import type { Logger } from "pino";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { withRetry } from "../../src/observability/with-retry.js";
+import { runWithRequestContext } from "../../src/core/request-context.js";
 
 // Tests use a tiny logger mock so we don't pollute real Pino output but can
 // still assert the structured fields. The default-options behaviour is then
@@ -134,5 +135,95 @@ describe("withRetry", () => {
       }),
     ).rejects.toThrow("upstream cancelled");
     expect(fn).not.toHaveBeenCalled();
+  });
+
+  describe("per-request retry budget", () => {
+    it("stops retrying when shared budget is exhausted", async () => {
+      vi.useRealTimers();
+      const log = makeMockLogger();
+      const fn = vi.fn(async () => {
+        throw new Error("always fails");
+      });
+      // Budget of 1: the first retry consumes it; second retry is skipped even
+      // though attempts=5.
+      await expect(
+        runWithRequestContext(
+          { userEntraId: "test@example.com", retryBudget: { remaining: 1 } },
+          () =>
+            withRetry(fn, {
+              logger: log as unknown as Logger,
+              operation: "budget-limited",
+              attempts: 5,
+              baseMs: 1,
+            }),
+        ),
+      ).rejects.toThrow("always fails");
+      // Initial call (attempt 1) + 1 retry before budget exhausted = 2 total
+      expect(fn).toHaveBeenCalledTimes(2);
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.objectContaining({ event: "retry_budget_exhausted" }),
+        expect.any(String),
+      );
+    });
+
+    it("does not decrement budget on first attempt (only on retries)", async () => {
+      const log = makeMockLogger();
+      const fn = vi.fn(async () => "ok");
+      await runWithRequestContext(
+        { userEntraId: "test@example.com", retryBudget: { remaining: 0 } },
+        () =>
+          withRetry(fn, {
+            logger: log as unknown as Logger,
+            operation: "no-retries-needed",
+            attempts: 3,
+            baseMs: 1,
+          }),
+      );
+      // Budget of 0 with a succeeding fn: no retries needed, so budget check
+      // never fires and the call succeeds.
+      expect(fn).toHaveBeenCalledTimes(1);
+      expect(log.warn).not.toHaveBeenCalled();
+    });
+
+    it("shares budget across two withRetry call sites in one context", async () => {
+      vi.useRealTimers();
+      const log = makeMockLogger();
+      let callsA = 0;
+      const fnA = vi.fn(async () => {
+        callsA++;
+        if (callsA < 3) throw new Error("transient-A");
+        return "ok-A";
+      });
+      let callsB = 0;
+      const fnB = vi.fn(async () => {
+        callsB++;
+        if (callsB < 2) throw new Error("transient-B");
+        return "ok-B";
+      });
+
+      // Budget of 3: fnA needs 2 retries, fnB needs 1 retry. Total = 3.
+      const [a, b] = await runWithRequestContext(
+        { userEntraId: "test@example.com", retryBudget: { remaining: 3 } },
+        async () => {
+          const rA = await withRetry(fnA, {
+            logger: log as unknown as Logger,
+            operation: "site-A",
+            attempts: 5,
+            baseMs: 1,
+          });
+          const rB = await withRetry(fnB, {
+            logger: log as unknown as Logger,
+            operation: "site-B",
+            attempts: 5,
+            baseMs: 1,
+          });
+          return [rA, rB] as const;
+        },
+      );
+      expect(a).toBe("ok-A");
+      expect(b).toBe("ok-B");
+      expect(fnA).toHaveBeenCalledTimes(3);
+      expect(fnB).toHaveBeenCalledTimes(2);
+    });
   });
 });
