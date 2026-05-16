@@ -87,7 +87,7 @@ AS $$
   SELECT EXISTS (
     SELECT 1 FROM admin_roles
      WHERE user_entra_id = current_setting('app.current_user_entra_id', true)
-       AND (role_check  IS NULL OR role     = role_check)
+       AND (role_check  IS NULL OR role::text = role_check)
        AND (scope_check IS NULL OR scope_id = scope_check OR scope_id = '')
   );
 $$;
