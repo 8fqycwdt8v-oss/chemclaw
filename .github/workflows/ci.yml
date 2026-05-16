@@ -191,17 +191,18 @@ jobs:
           diff-cover coverage.xml \
             --compare-branch=origin/main \
             --fail-under=70 \
-            --exclude='services/optimizer/session_reanimator/**' \
-            --exclude='services/optimizer/audit_partition_maintainer/**' \
-            --exclude='services/projectors/kg_hypotheses/**' \
-            --exclude='services/projectors/tool_result_extractor/*' \
-            --exclude='services/mcp_tools/mcp_drfp/**' \
-            --exclude='services/mcp_tools/mcp_rdkit/**' \
-            --exclude='services/queue/**' \
-            --exclude='services/workflow_engine/**' \
-            --exclude='*/mcp_eln_local/*' \
-            --exclude='*/compound_classifier/*' \
-            --exclude='*/compound_fingerprinter/*'
+            --exclude \
+              'services/optimizer/session_reanimator/**' \
+              'services/optimizer/audit_partition_maintainer/**' \
+              'services/projectors/kg_hypotheses/**' \
+              'services/projectors/tool_result_extractor/*' \
+              'services/mcp_tools/mcp_drfp/**' \
+              'services/mcp_tools/mcp_rdkit/**' \
+              'services/queue/**' \
+              'services/workflow_engine/**' \
+              '*/mcp_eln_local/*' \
+              '*/compound_classifier/*' \
+              '*/compound_fingerprinter/*'
 
   schema:
     name: Schema (idempotent re-apply + cold-start invariants)
