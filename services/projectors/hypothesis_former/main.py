@@ -201,7 +201,7 @@ async def _insert_hypothesis(
     tier = confidence_tier(confidence)
     supporting = raw.get("supporting_fact_ids") or []
     if source_fact_id and source_fact_id not in supporting:
-        supporting = [source_fact_id] + list(supporting)
+        supporting = [source_fact_id, *list(supporting)]
 
     obj_value = raw.get("object_value") or {"value": raw.get("hypothesis_text", "")}
 

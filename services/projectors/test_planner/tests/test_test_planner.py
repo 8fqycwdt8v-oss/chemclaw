@@ -100,7 +100,7 @@ def test_validate_plan_null_plan():
 def test_allowed_campaign_kinds_is_subset_of_synthesis_campaigns():
     # Must all be valid synthesis_campaigns.kind values
     known_kinds = {"single_experiment", "library_synthesis", "screening", "bo_campaign", "bo_or_die"}
-    assert _ALLOWED_CAMPAIGN_KINDS <= known_kinds
+    assert known_kinds >= _ALLOWED_CAMPAIGN_KINDS
 
 
 def test_allowed_step_kinds_nonempty():
