@@ -168,6 +168,10 @@ run.tool-result-extractor: ## Run the tool_result_extractor projector locally (u
 run.wiki-regen: ## Run the knowledge-wiki body-synthesis daemon locally (ADR 012 Phase 2b)
 	$(VENV)/bin/python -m services.optimizer.wiki_regen.main
 
+.PHONY: run.kg-optimization-campaign
+run.kg-optimization-campaign: ## Run the BO-campaign → Neo4j projector locally
+	$(VENV)/bin/python -m services.projectors.kg_optimization_campaign.main
+
 .PHONY: run.wiki-kg
 run.wiki-kg: ## Run the knowledge-wiki → Neo4j projector locally (ADR 012 Phase 3a)
 	$(VENV)/bin/python -m services.projectors.wiki_kg.main
