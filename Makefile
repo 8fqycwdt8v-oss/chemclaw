@@ -173,6 +173,10 @@ run.interpreter: ## Run the interpreter projector locally (universal-knowledge-a
 run.pattern-detector: ## Run the pattern_detector daemon locally (universal-knowledge-accumulation Phase 4)
 	$(VENV)/bin/python -m services.optimizer.pattern_detector.main
 
+.PHONY: run.hypothesis-former
+run.hypothesis-former: ## Run the hypothesis_former projector locally (universal-knowledge-accumulation Phase 4)
+	$(VENV)/bin/python -m services.projectors.hypothesis_former.main
+
 .PHONY: run.wiki-regen
 run.wiki-regen: ## Run the knowledge-wiki body-synthesis daemon locally (ADR 012 Phase 2b)
 	$(VENV)/bin/python -m services.optimizer.wiki_regen.main

@@ -350,6 +350,40 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # hypothesis_former — universal-knowledge-accumulation Phase 4 projector.
+  # Consumes `anomaly_observed` + `pattern_detected` events. Budget-gates and
+  # per-project hypothesis-caps before calling LiteLLM with the `hypothesis.form`
+  # prompt. Inserts HYPOTHESIZED facts (confidence <= 0.65, derivation_depth=2);
+  # emits `hypothesis_proposed` events consumed by kg_hypotheses + wiki_regen.
+  # -------------------------------------------------------------
+  hypothesis-former:
+    build:
+      context: .
+      dockerfile: services/projectors/hypothesis_former/Dockerfile
+    container_name: chemclaw-hypothesis-former
+    restart: unless-stopped
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-chemclaw-dev-master-change-me}
+      HYPOTHESIS_FORMER_MODEL: ${HYPOTHESIS_FORMER_MODEL:-claude-haiku-4-5}
+      HYPOTHESIS_FORMER_DAILY_LLM_BUDGET_USD: ${HYPOTHESIS_FORMER_DAILY_LLM_BUDGET_USD:-50.0}
+      HYPOTHESIS_FORMER_MAX_ACTIVE_PER_PROJECT: ${HYPOTHESIS_FORMER_MAX_ACTIVE_PER_PROJECT:-12}
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # pattern_detector — universal-knowledge-accumulation Phase 4 daemon.
   # Runs every PATTERN_DETECTOR_POLL_HOURS (default 24). For every predicate
   # with >= 5 numeric facts, computes population statistics (mean, stdev, cv,
