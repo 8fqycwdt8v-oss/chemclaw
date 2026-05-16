@@ -30,12 +30,6 @@ from services.mcp_tools.common.user_hash import hash_user
 # Standard error codes used in the {error, detail} envelope. Services should
 # pass one of these to HTTPException(status_code=..., detail={"error": CODE,
 # "detail": "..."}) — the handler below preserves them verbatim.
-#
-# NOTE: `services/mcp_tools/common/error_envelope.py` defines a richer
-# `make_envelope` + typed `ErrorCode` enum that is fully tested but NOT
-# wired into the handlers below. Open BACKLOG decision (`[mcp_tools/common]`):
-# either route these handlers through `make_envelope` or drop the
-# error_envelope.py + error_codes.py modules. Don't add a third shape.
 ERROR_CODE_INVALID_INPUT = "invalid_input"
 ERROR_CODE_NOT_FOUND = "not_found"
 ERROR_CODE_NOT_IMPLEMENTED = "not_implemented"

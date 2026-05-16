@@ -30,7 +30,6 @@ setup.python: ## Create .venv and install Python deps for all services
 	$(PIP) install --upgrade pip
 	$(PIP) install -e ".[dev]"
 	$(PIP) install -e tools/cli
-	$(PIP) install -r services/ingestion/eln_json_importer.legacy/requirements.txt
 	$(PIP) install -r services/mcp_tools/mcp_rdkit/requirements.txt
 	$(PIP) install -r services/mcp_tools/mcp_drfp/requirements.txt
 	$(PIP) install -r services/mcp_tools/mcp_yield_baseline/requirements.txt
@@ -129,12 +128,6 @@ db.init.tabicl-pca: ## Cold-fit PCA model from all reactions in the database
 run.agent: ## Run agent service in dev mode (hot-reload)
 	npm run dev:agent
 
-.PHONY: import.sample.legacy
-import.sample.legacy: ## [DEPRECATED] One-shot bulk import via legacy eln_json_importer.
-	@echo "WARNING: eln_json_importer is retired from the live path."
-	@echo "Use this only for one-shot bulk migrations from a JSON dump."
-	$(VENV)/bin/python -m services.ingestion.eln_json_importer.legacy.cli \
-	  --input sample-data/eln-experiments-sample.json
 
 .PHONY: run.mcp-rdkit
 run.mcp-rdkit: ## Run mcp-rdkit locally (needs rdkit in .venv)
@@ -255,8 +248,7 @@ diff-cover: coverage ## Enforce changed-line coverage thresholds against main
 	  --exclude='services/optimizer/session_reanimator/**' \
 	  --exclude='services/projectors/kg_hypotheses/**' \
 	  --exclude='services/mcp_tools/mcp_drfp/**' \
-	  --exclude='services/mcp_tools/mcp_rdkit/**' \
-	  --exclude='services/ingestion/eln_json_importer.legacy/**'
+	  --exclude='services/mcp_tools/mcp_rdkit/**'
 
 # --------------------------------------------------------------------------
 # Smoke
