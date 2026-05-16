@@ -1944,6 +1944,39 @@ services:
     security_opt:
       - no-new-privileges:true
 
+  # -------------------------------------------------------------
+  # test_planner — universal-knowledge-accumulation Phase 5 projector.
+  # Consumes `hypothesis_proposed` events. For each HYPOTHESIZED fact, calls
+  # LiteLLM to design a minimal discriminating experiment plan, then inserts
+  # a synthesis_campaign + synthesis_campaign_steps with auto_advance=true.
+  # Budget-gated by investigation_budget_usage daily CPU hours.
+  # -------------------------------------------------------------
+  test-planner:
+    build:
+      context: .
+      dockerfile: services/projectors/test_planner/Dockerfile
+    container_name: chemclaw-test-planner
+    restart: unless-stopped
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-chemclaw-dev-master-change-me}
+      TEST_PLANNER_MODEL: ${TEST_PLANNER_MODEL:-claude-haiku-4-5}
+      TEST_PLANNER_DAILY_CPU_BUDGET_HOURS: ${TEST_PLANNER_DAILY_CPU_BUDGET_HOURS:-100.0}
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
 volumes:
   postgres-data:
   neo4j-data:
