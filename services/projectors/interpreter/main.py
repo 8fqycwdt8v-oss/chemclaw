@@ -24,7 +24,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import date, timezone
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -165,7 +165,7 @@ async def _check_daily_budget(
     budget_usd: float,
 ) -> bool:
     """Return True if daily LLM budget has not been exhausted."""
-    today = date.today().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
     async with conn.cursor() as cur:
         await cur.execute(
             "SELECT COALESCE(SUM(llm_usd_spent), 0) AS spent "
@@ -182,7 +182,7 @@ async def _record_llm_spend(
     conn: psycopg.AsyncConnection[dict[str, Any]],
     usd: float,
 ) -> None:
-    today = date.today().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
     async with conn.cursor() as cur:
         await cur.execute(
             """

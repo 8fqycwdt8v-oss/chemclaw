@@ -26,7 +26,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import date
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -103,7 +103,7 @@ class HypothesisFormerSettings(BaseSettings):
 async def _check_daily_budget(
     conn: psycopg.AsyncConnection[dict[str, Any]], budget_usd: float
 ) -> bool:
-    today = date.today().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
     async with conn.cursor() as cur:
         await cur.execute(
             "SELECT COALESCE(SUM(llm_usd_spent), 0) AS spent "
@@ -118,7 +118,7 @@ async def _check_daily_budget(
 async def _record_llm_spend(
     conn: psycopg.AsyncConnection[dict[str, Any]], usd: float
 ) -> None:
-    today = date.today().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
     async with conn.cursor() as cur:
         await cur.execute(
             "INSERT INTO investigation_budget_usage (scope, scope_id, date_utc, llm_usd_spent) "

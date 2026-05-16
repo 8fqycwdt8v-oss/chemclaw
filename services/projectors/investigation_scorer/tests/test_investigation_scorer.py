@@ -247,3 +247,57 @@ async def test_score_and_route_skips_zero_composite():
             await proj._score_and_route(conn, "f1")
             # should not emit or enqueue when composite is effectively 0
             assert "investigation_requested" not in emit_calls
+
+
+@pytest.mark.asyncio
+async def test_score_and_route_emits_anomaly_observed():
+    # anomaly >= 0.70 → anomaly_observed (even if composite < 0.70)
+    fact = {
+        "id": "f2", "subject_label": "Compound", "subject_id_value": "CCO",
+        "predicate": "has_yield_pct", "object_value": {"value": 1000.0},
+        "project_id": None, "confidence": 0.9,
+    }
+    proj = _proj()
+    # extreme outlier (1000 vs peers [85]*6) → anomaly close to 1.0
+    conn = _mock_conn(fact, peer_count=0, peer_values=[80.0, 82.0, 84.0, 86.0, 88.0, 90.0])
+    emit_calls: list[str] = []
+
+    async def mock_emit(c: Any, ev: str, fid: str, payload: Any) -> None:
+        emit_calls.append(ev)
+
+    with patch("services.projectors.investigation_scorer.main._emit_event", side_effect=mock_emit):
+        with patch("services.projectors.investigation_scorer.main._enqueue_investigation"):
+            await proj._score_and_route(conn, "f2")
+    assert "anomaly_observed" in emit_calls
+
+
+@pytest.mark.asyncio
+async def test_score_and_route_emits_investigation_requested_for_high_composite():
+    # composite >= 0.70 → investigation_requested. Patch scores directly so
+    # this test is about routing, not the math (which is covered by pure tests above).
+    fact = {
+        "id": "f3", "subject_label": "Compound", "subject_id_value": "CC",
+        "predicate": "has_yield_pct", "object_value": {"value": 50.0},
+        "project_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa", "confidence": 0.9,
+    }
+    proj = _proj()
+    conn = _mock_conn(fact, peer_count=0, peer_values=[])
+
+    emit_calls: list[str] = []
+
+    async def mock_emit(c: Any, ev: str, fid: str, payload: Any) -> None:
+        emit_calls.append(ev)
+
+    # anomaly=0.60 (below 0.70 anomaly_observed threshold), novelty=1.0, priority=1.0
+    # → composite = 0.45*0.60 + 0.35*1.0 + 0.20*1.0 = 0.82 ≥ 0.70
+    with patch("services.projectors.investigation_scorer.main._emit_event", side_effect=mock_emit):
+        with patch(
+            "services.projectors.investigation_scorer.main._check_project_priority",
+            return_value=(True, False, True),
+        ):
+            with patch("services.projectors.investigation_scorer.main.compute_anomaly_score", return_value=0.60):
+                with patch("services.projectors.investigation_scorer.main.compute_novelty_score", return_value=1.0):
+                    with patch("services.projectors.investigation_scorer.main._enqueue_investigation"):
+                        await proj._score_and_route(conn, "f3")
+    assert "investigation_requested" in emit_calls
+    assert "anomaly_observed" not in emit_calls

@@ -200,6 +200,22 @@ async def test_plan_test_skips_when_budget_exhausted():
 
 
 @pytest.mark.asyncio
+async def test_plan_test_skips_no_project_id():
+    proj = _proj()
+    conn = AsyncMock()
+    with patch("services.projectors.test_planner.main._check_cpu_budget", return_value=True):
+        with patch("services.projectors.test_planner.main._fetch_hypothesis_fact", return_value={
+            "id": "h1", "subject_label": "Compound", "subject_id_value": "CCO",
+            "predicate": "mechanism_involves_pi_stacking",
+            "object_value": {"value": True},
+            "project_id": None, "confidence": 0.55, "derivation_class": "HYPOTHESIZED",
+        }):
+            with patch("services.projectors.test_planner.main._call_llm") as mock_llm:
+                await proj._plan_test(conn, "h1")
+                mock_llm.assert_not_called()
+
+
+@pytest.mark.asyncio
 async def test_plan_test_skips_invalid_plan():
     proj = _proj()
     conn = AsyncMock()
@@ -209,7 +225,8 @@ async def test_plan_test_skips_invalid_plan():
             "id": "h1", "subject_label": "Compound", "subject_id_value": "CCO",
             "predicate": "mechanism_involves_pi_stacking",
             "object_value": {"value": True},
-            "project_id": None, "confidence": 0.55, "derivation_class": "HYPOTHESIZED",
+            "project_id": "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa",
+            "confidence": 0.55, "derivation_class": "HYPOTHESIZED",
         }):
             with patch("services.projectors.test_planner.main._load_prompt", return_value="sys"):
                 with patch("services.projectors.test_planner.main._call_llm", return_value=invalid_plan):

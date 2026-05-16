@@ -8,7 +8,7 @@ Subscribes to `extracted_fact` events. For each new fact:
        anomaly_score   — |z-score| / 3.0 clamped to [0, 1] for numeric object_value.value;
                          0.0 if non-numeric or < 3 peers.
        priority_score  — 1.0 if project has an active synthesis campaign or
-                         is in Phase 1/2; 0.5 if no project; 0.0 otherwise.
+                         is in Phase 1/2; 0.0 if project exists but quiet; 0.5 if no project.
   3. Composite = anomaly_w * anomaly + novelty_w * novelty + priority_w * priority.
      Weights read from config_settings (defaults: 0.45 / 0.35 / 0.20).
   4. If composite == 0.0 → skip (fact is known + unremarkable + low-priority).
@@ -101,7 +101,7 @@ def compute_priority_score(
     is_clinical_phase: bool,
     has_project: bool,
 ) -> float:
-    """1.0 → active campaign or clinical phase; 0.5 → project exists but quiet; 0.0 → no project."""
+    """1.0 → active campaign or clinical phase; 0.0 → project exists but quiet; 0.5 → no project (unknown priority)."""
     if not has_project:
         return 0.5
     if has_active_campaign or is_clinical_phase:
@@ -231,7 +231,7 @@ async def _check_project_priority(
 
     async with conn.cursor() as cur:
         await cur.execute(
-            "SELECT 1 FROM synthesis_campaigns WHERE id = %s::uuid AND status = 'active' LIMIT 1",
+            "SELECT 1 FROM synthesis_campaigns WHERE nce_project_id = %s::uuid AND status = 'active' LIMIT 1",
             (project_id,),
         )
         active_row = await cur.fetchone()
@@ -264,7 +264,7 @@ async def _enqueue_investigation(
         await cur.execute(
             "INSERT INTO investigation_queue (fact_id, project_id, score, reason_codes) "
             "VALUES (%s::uuid, %s::uuid, %s, %s) "
-            "ON CONFLICT DO NOTHING",
+            "ON CONFLICT (fact_id) WHERE picked_at IS NULL DO NOTHING",
             (fact_id, project_id, round(score, 3), codes),
         )
 

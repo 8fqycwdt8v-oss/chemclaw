@@ -31,7 +31,7 @@ from __future__ import annotations
 import asyncio
 import json
 import logging
-from datetime import date
+from datetime import datetime, timezone
 from typing import Any
 
 import httpx
@@ -124,7 +124,7 @@ class TestPlannerSettings(BaseSettings):
 async def _check_cpu_budget(
     conn: psycopg.AsyncConnection[dict[str, Any]], budget_hours: float
 ) -> bool:
-    today = date.today().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
     async with conn.cursor() as cur:
         await cur.execute(
             "SELECT COALESCE(SUM(cpu_hours_spent), 0) AS spent "
@@ -139,7 +139,7 @@ async def _check_cpu_budget(
 async def _record_cpu_spend(
     conn: psycopg.AsyncConnection[dict[str, Any]], cpu_hours: float
 ) -> None:
-    today = date.today().isoformat()
+    today = datetime.now(timezone.utc).date().isoformat()
     async with conn.cursor() as cur:
         await cur.execute(
             "INSERT INTO investigation_budget_usage (scope, scope_id, date_utc, cpu_hours_spent) "
@@ -184,7 +184,7 @@ async def _create_campaign(
     name: str,
     kind: str,
     goal: dict[str, Any],
-    project_id: str | None,
+    project_id: str,
     hypothesis_fact_id: str,
 ) -> str:
     """Insert a synthesis_campaign row and return its id."""
@@ -192,11 +192,12 @@ async def _create_campaign(
         await cur.execute(
             """
             INSERT INTO synthesis_campaigns
-              (name, kind, goal, policy, status, created_by)
-            VALUES (%s, %s, %s::jsonb, %s::jsonb, 'proposed', 'test_planner')
+              (nce_project_id, name, kind, goal, policy, status, created_by_user_entra_id)
+            VALUES (%s::uuid, %s, %s, %s::jsonb, %s::jsonb, 'proposed', 'test_planner')
             RETURNING id::text
             """,
             (
+                project_id,
                 str(name)[:200],
                 str(kind),
                 json.dumps(goal),
@@ -371,6 +372,10 @@ class TestPlanner(BaseProjector):
             return
 
         project_id: str | None = hypothesis.get("project_id")
+        if not project_id:
+            log.info("test_planner: hypothesis %s has no project_id; cannot create campaign", fact_id)
+            return
+
         prompt = await _load_prompt(conn)
 
         def _r(row: Any) -> dict[str, Any]:

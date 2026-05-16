@@ -9,7 +9,7 @@ per invocation; ORD queries are usually specific):
   - (Compound, has_ord_yield_pct, yield_fraction * 100)
   - (Compound, has_ord_temperature_c, temperature_c)
 
-derivation_class = COMPUTED (deterministic extraction of typed field).
+derivation_class = OBSERVED (curated experimental measurement from ORD).
 Confidence: 0.90 (measured experimental data, well-curated source).
 """
 from __future__ import annotations
@@ -56,7 +56,7 @@ def _extract(result: dict[str, Any], ctx: ExtractionContext) -> list[FactDraft]:
                 predicate="has_ord_yield_pct",
                 object_value={"value": round(float(yf) * 100, 2), **common},
                 unit="%",
-                derivation_class="COMPUTED",
+                derivation_class="OBSERVED",
                 confidence=_CONFIDENCE,
                 confidence_tier=tier,
                 extractor_name="ord_io.query_ord_reactions",
@@ -72,7 +72,7 @@ def _extract(result: dict[str, Any], ctx: ExtractionContext) -> list[FactDraft]:
                 predicate="has_ord_temperature_c",
                 object_value={"value": float(temp), **common},
                 unit="°C",
-                derivation_class="COMPUTED",
+                derivation_class="OBSERVED",
                 confidence=_CONFIDENCE,
                 confidence_tier=tier,
                 extractor_name="ord_io.query_ord_reactions",
