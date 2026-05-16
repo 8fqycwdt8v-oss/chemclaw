@@ -39,6 +39,7 @@ import psycopg
 from psycopg.rows import dict_row
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from services.common.config_registry import ConfigRegistry
 from services.mcp_tools.common.auth import McpAuthError, sign_mcp_token
 
 log = logging.getLogger("session-reanimator")
@@ -120,6 +121,8 @@ class Settings(BaseSettings):
 # Find sessions ready for auto-resume.
 # ---------------------------------------------------------------------------
 
+_FINISH_REASON_ALLOWLIST_DEFAULT: list[str] = ["max_steps", "stop"]
+
 _FIND_RESUMABLE_SQL = """
 SELECT s.id::text AS id,
        s.user_entra_id,
@@ -129,7 +132,7 @@ SELECT s.id::text AS id,
        s.session_input_tokens,
        COALESCE(s.session_token_budget, 1000000) AS session_token_budget
   FROM agent_sessions s
- WHERE s.last_finish_reason IN ('max_steps', 'stop')
+ WHERE s.last_finish_reason = ANY(%s::text[])
    AND s.auto_resume_count < s.auto_resume_cap
    AND s.session_input_tokens < COALESCE(s.session_token_budget, 1000000)
    AND s.updated_at < NOW() - make_interval(secs => %s)
@@ -143,14 +146,45 @@ SELECT s.id::text AS id,
 """
 
 
-async def find_resumable(settings: Settings) -> list[dict[str, Any]]:
+def _load_reanimator_config(settings: Settings) -> tuple[int, int, list[str]]:
+    """Read reanimator knobs from config_settings, falling back to env-var values.
+
+    Returns (stale_after_seconds, batch_size, finish_reason_allowlist).
+    """
+    stale = settings.stale_after_seconds
+    batch = settings.batch_size
+    allowlist: list[str] = list(_FINISH_REASON_ALLOWLIST_DEFAULT)
+    try:
+        reg = ConfigRegistry(dsn=settings.postgres_dsn)
+        stale = reg.get_int("reanimator.stale_after_seconds", default=stale)
+        batch = reg.get_int("reanimator.batch_size", default=batch)
+        raw = reg.get("reanimator.finish_reason_allowlist", default=None)
+        if isinstance(raw, list) and raw:
+            allowlist = [str(r) for r in raw]
+    except Exception as exc:
+        log.warning(
+            "config_registry: failed to load reanimator overrides, using defaults: %s", exc
+        )
+    return stale, batch, allowlist
+
+
+async def find_resumable(
+    settings: Settings,
+    *,
+    stale_after_seconds: int | None = None,
+    batch_size: int | None = None,
+    finish_reason_allowlist: list[str] | None = None,
+) -> list[dict[str, Any]]:
+    _stale = stale_after_seconds if stale_after_seconds is not None else settings.stale_after_seconds
+    _batch = batch_size if batch_size is not None else settings.batch_size
+    _allowlist = finish_reason_allowlist if finish_reason_allowlist is not None else _FINISH_REASON_ALLOWLIST_DEFAULT
     async with await psycopg.AsyncConnection.connect(
         settings.postgres_dsn,
         row_factory=dict_row,
     ) as conn, conn.cursor() as cur:
         await cur.execute(
             _FIND_RESUMABLE_SQL,
-            (settings.stale_after_seconds, settings.batch_size),
+            (_allowlist, _stale, _batch),
         )
         return list(await cur.fetchall())
 
@@ -246,11 +280,15 @@ async def amain() -> None:  # pragma: no cover — process entrypoint
     configure_logging(settings.log_level, service="session_reanimator")
     # Hard-fail in production-mode if no signing key — see Settings docstring.
     settings.assert_production_safe()
+    stale_secs, batch_sz, finish_allowlist = _load_reanimator_config(settings)
     log.info(
-        "session-reanimator starting; agent=%s poll=%ds batch=%d dev_mode=%s",
+        "session-reanimator starting; agent=%s poll=%ds batch=%d stale=%ds "
+        "finish_allowlist=%s dev_mode=%s",
         settings.agent_base_url,
         settings.poll_interval_seconds,
-        settings.batch_size,
+        batch_sz,
+        stale_secs,
+        finish_allowlist,
         settings.chemclaw_dev_mode,
     )
 
@@ -261,7 +299,12 @@ async def amain() -> None:  # pragma: no cover — process entrypoint
             sessions_skipped = 0
             errors = 0
             try:
-                resumable = await find_resumable(settings)
+                resumable = await find_resumable(
+                    settings,
+                    stale_after_seconds=stale_secs,
+                    batch_size=batch_sz,
+                    finish_reason_allowlist=finish_allowlist,
+                )
                 if resumable:
                     log.info("found %d session(s) ready to resume", len(resumable))
                 else:
