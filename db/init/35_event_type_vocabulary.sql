@@ -98,7 +98,32 @@ INSERT INTO ingestion_event_catalog (event_type, description, emitted_by, consum
    'tool_result_extractor projector dispatches to per-source extractor '
    'modules registered in extraction_registry.',
    'services/agent-claw/src/core/hooks/tool-invocation-emitter.ts',
-   ARRAY['tool_result_extractor'])
+   ARRAY['tool_result_extractor']),
+  ('extracted_fact',
+   'Universal Knowledge Accumulation Phase 1/2. Emitted by the '
+   'tool_result_extractor and doc_extractor projectors when a new row lands '
+   'in the canonical facts table. Carries fact_id; consumers load full '
+   'context from facts directly.',
+   'services/projectors/tool_result_extractor/main.py, services/projectors/doc_extractor/main.py',
+   ARRAY['investigation_scorer', 'kg_facts_sync', 'wiki_pages']),
+  ('anomaly_observed',
+   'Universal Knowledge Accumulation Phase 3. Emitted by investigation_scorer '
+   'when a fact''s z-score anomaly metric exceeds 0.70. Carries fact_id + '
+   'anomaly_score. Routes to hypothesis_former for HYPOTHESIZED fact generation.',
+   'services/projectors/investigation_scorer/main.py',
+   ARRAY['hypothesis_former']),
+  ('investigation_requested',
+   'Universal Knowledge Accumulation Phase 3. Emitted by investigation_scorer '
+   'when composite score >= score_threshold_sync (default 0.70). Triggers sync '
+   'LLM interpretation instead of polling the investigation_queue.',
+   'services/projectors/investigation_scorer/main.py',
+   ARRAY['interpreter']),
+  ('pattern_detected',
+   'Universal Knowledge Accumulation Phase 4. Emitted by pattern_detector daemon '
+   'when a predicate''s numeric population shows significant spread (CV > 0.15). '
+   'Carries cluster summary (predicate, count, mean, stdev, quartiles).',
+   'services/optimizer/pattern_detector/main.py',
+   ARRAY['hypothesis_former'])
 ON CONFLICT (event_type) DO UPDATE SET
   description = EXCLUDED.description,
   emitted_by  = EXCLUDED.emitted_by,
