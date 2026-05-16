@@ -350,6 +350,40 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # interpreter — universal-knowledge-accumulation Phase 3 projector.
+  # Consumes `investigation_requested` events. Gathers KG context for the
+  # flagged fact, calls LiteLLM with the `fact_interpretation.derive` prompt,
+  # and inserts INTERPRETED facts (derivation_class=INTERPRETED, depth+1).
+  # Budget-gated by investigation_budget_usage daily LLM spend.
+  # -------------------------------------------------------------
+  interpreter:
+    build:
+      context: .
+      dockerfile: services/projectors/interpreter/Dockerfile
+    container_name: chemclaw-interpreter
+    restart: unless-stopped
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-chemclaw-dev-master-change-me}
+      INTERPRETER_MODEL: ${INTERPRETER_MODEL:-claude-haiku-4-5}
+      INTERPRETER_DAILY_LLM_BUDGET_USD: ${INTERPRETER_DAILY_LLM_BUDGET_USD:-50.0}
+      INTERPRETER_MAX_DERIVATION_DEPTH: ${INTERPRETER_MAX_DERIVATION_DEPTH:-4}
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # investigation_scorer — universal-knowledge-accumulation Phase 3 projector.
   # Consumes `extracted_fact` events. Computes novelty + anomaly + priority
   # scores, then routes facts to `investigation_requested` (sync interpreter),
