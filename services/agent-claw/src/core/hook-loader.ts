@@ -51,6 +51,7 @@ import { registerScheduledSubstanceGateHook } from "./hooks/scheduled-substance-
 import { registerWikiHumanBlockGuardHook } from "./hooks/wiki-human-block-guard.js";
 import { registerSourceCacheHook } from "./hooks/source-cache.js";
 import { registerToolInvocationEmitterHook } from "./hooks/tool-invocation-emitter.js";
+import { registerComputeResultWriterHook } from "./hooks/compute-result-writer.js";
 import { isFeatureEnabled } from "../config/flags.js";
 import { registerCompactWindowHook } from "./hooks/compact-window.js";
 import { registerApplySkillsHook } from "./hooks/apply-skills.js";
@@ -182,6 +183,25 @@ const BUILTIN_REGISTRARS = new Map<string, BuiltinRegistrar>([
     "tool-invocation-emitter",
     (lc, deps) => {
       registerToolInvocationEmitterHook(lc, {
+        pool: deps.pool,
+        registry: deps.registry,
+        isFeatureEnabled: (key, ctx) =>
+          isFeatureEnabled(key, {
+            user: ctx.user,
+            project: ctx.project ?? undefined,
+          }),
+      });
+    },
+  ],
+  // Tranche 9: persist chemistry tool outputs to compute_results.
+  // Only fires for tools with a non-null result_schema_id and a non-null
+  // ctx.nceProjectId. Feature-flagged by chemistry.compute_results.persist
+  // (default false). The YAML condition gate short-circuits registration
+  // when the flag is false; the hook itself re-checks as belt-and-braces.
+  [
+    "compute-result-writer",
+    (lc, deps) => {
+      registerComputeResultWriterHook(lc, {
         pool: deps.pool,
         registry: deps.registry,
         isFeatureEnabled: (key, ctx) =>
