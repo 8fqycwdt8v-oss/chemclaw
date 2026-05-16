@@ -159,8 +159,7 @@ def test_non_uuid_source_row_id_raises_data_error(pg_conn: psycopg.Connection) -
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio
-async def test_projector_acks_source_fact_event(pg_conn: psycopg.Connection) -> None:
+def test_projector_acks_source_fact_event(pg_conn: psycopg.Connection) -> None:
     """Handler runs against a real Postgres row and acks the event."""
     import asyncio
 
@@ -182,8 +181,9 @@ async def test_projector_acks_source_fact_event(pg_conn: psycopg.Connection) -> 
         payload=payload,
     )
 
+    from services.projectors.common.base import ProjectorSettings
+
     async def _catch_up() -> None:
-        from services.projectors.common.base import ProjectorSettings
         settings = ProjectorSettings()
         async with await psycopg.AsyncConnection.connect(settings.postgres_dsn) as work:
             await proj._catch_up(work)
@@ -201,8 +201,7 @@ async def test_projector_acks_source_fact_event(pg_conn: psycopg.Connection) -> 
     proj._kg.write_fact.assert_awaited_once()
 
 
-@pytest.mark.asyncio
-async def test_projector_replay_is_idempotent(pg_conn: psycopg.Connection) -> None:
+def test_projector_replay_is_idempotent(pg_conn: psycopg.Connection) -> None:
     """Wipe acks → re-run → one ack row, no duplicate KG calls."""
     import asyncio
 
@@ -225,9 +224,9 @@ async def test_projector_replay_is_idempotent(pg_conn: psycopg.Connection) -> No
     )
 
     from services.projectors.common.base import ProjectorSettings
-    settings = ProjectorSettings()
 
     async def _catch_up() -> None:
+        settings = ProjectorSettings()
         async with await psycopg.AsyncConnection.connect(settings.postgres_dsn) as work:
             await proj._catch_up(work)
 
@@ -235,8 +234,13 @@ async def test_projector_replay_is_idempotent(pg_conn: psycopg.Connection) -> No
 
     with pg_conn.cursor() as cur:
         cur.execute("SET LOCAL ROLE chemclaw_service")
+        # Scope the wipe to this test's event only — a projector-wide DELETE would
+        # also remove acks from the sibling test, causing _catch_up to replay its
+        # event and breaking assert_awaited_once() with a second write_fact call.
         cur.execute(
-            "DELETE FROM projection_acks WHERE projector_name = 'kg_source_cache'",
+            "DELETE FROM projection_acks "
+            "WHERE projector_name = 'kg_source_cache' AND event_id = %s::uuid",
+            (str(event_id),),
         )
     pg_conn.commit()
 
