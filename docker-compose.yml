@@ -317,6 +317,39 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # doc_extractor — universal-knowledge-accumulation Phase 2 projector.
+  # Consumes `document_ingested` events. For each event it fetches the document's
+  # chunks and calls LiteLLM (in batches of ~10) with a structured extraction
+  # prompt to derive `extracted_fact` rows. Gated by DOC_EXTRACTOR_ENABLED (mirrors
+  # the `kg.auto_extraction.documents` feature flag; default false).
+  # -------------------------------------------------------------
+  doc-extractor:
+    build:
+      context: .
+      dockerfile: services/projectors/doc_extractor/Dockerfile
+    container_name: chemclaw-doc-extractor
+    restart: unless-stopped
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-chemclaw-dev-master-change-me}
+      DOC_EXTRACTOR_MODEL: ${DOC_EXTRACTOR_MODEL:-claude-haiku-4-5}
+      DOC_EXTRACTOR_ENABLED: ${DOC_EXTRACTOR_ENABLED:-false}
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # tool_result_extractor — universal-knowledge-accumulation Phase 0 projector.
   # Consumes `tool_call_completed` events, looks up a registry-driven extractor
   # for the tool, and writes structured `extracted_facts` rows. Phase 0 ships
