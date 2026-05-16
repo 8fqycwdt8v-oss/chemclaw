@@ -7,3 +7,7 @@ UPDATE ingestion_event_catalog
          'optimization_results_ingested'
        )
    AND NOT ('kg_optimization_campaign' = ANY(consumed_by));
+
+INSERT INTO schema_version (filename, applied_at)
+  VALUES ('69_kg_optimization_campaign_consumer.sql', NOW())
+  ON CONFLICT (filename) DO NOTHING;
