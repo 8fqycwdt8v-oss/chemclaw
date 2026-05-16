@@ -83,6 +83,7 @@ jobs:
           python3 -m pip install -r services/projectors/kg_experiments/requirements.txt
           python3 -m pip install -r services/projectors/kg_hypotheses/requirements.txt
           python3 -m pip install -r services/projectors/kg_documents/requirements.txt
+          python3 -m pip install -r services/projectors/kg_optimization_campaign/requirements.txt
           python3 -m pip install -r services/mcp_tools/mcp_kg/requirements.txt
           python3 -m pip install -r services/optimizer/session_reanimator/requirements.txt
           python3 -m pip install -r services/optimizer/session_purger/requirements.txt
@@ -118,6 +119,7 @@ jobs:
             services/projectors/tool_result_extractor/tests/ \
             services/projectors/fact_extractor/tests/ \
             services/projectors/conditions_normalizer/tests/ \
+            services/projectors/kg_optimization_campaign/tests/ \
             services/mcp_tools/mcp_applicability_domain/tests/ \
             services/mcp_tools/mcp_green_chemistry/tests/ \
             services/mcp_tools/mcp_reaction_optimizer/tests/ \
@@ -186,6 +188,7 @@ jobs:
           mypy services/projectors/kg_experiments
           mypy services/projectors/kg_hypotheses
           mypy services/projectors/kg_source_cache
+          mypy services/projectors/kg_optimization_campaign
           mypy services/projectors/qm_kg
           mypy services/projectors/reaction_vectorizer
           # mypy services/projectors/compound_classifier

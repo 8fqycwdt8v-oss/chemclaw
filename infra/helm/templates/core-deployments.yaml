@@ -536,6 +536,38 @@ spec:
               value: {{ .Values.projectors.wikiRegen.model | quote }}
 {{- end }}
 
+{{- if .Values.projectors.kgOptimizationCampaign.enabled }}
+---
+# kg_optimization_campaign — project BO round events into Neo4j (Tranche 8 F10):
+# :OptimizationCampaign / :OptimizationRound nodes + MEASURED_BY edges.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kg-optimization-campaign
+  labels:
+    app: kg-optimization-campaign
+    {{ include "chemclaw.labels" . | nindent 4 }}
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kg-optimization-campaign
+  template:
+    metadata:
+      labels:
+        app: kg-optimization-campaign
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+      containers:
+        - name: kg-optimization-campaign
+          image: {{ .Values.projectors.kgOptimizationCampaign.image }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            allowPrivilegeEscalation: false
+{{- end }}
+
 {{- if .Values.projectors.wikiKg.enabled }}
 ---
 # wiki_kg — project knowledge-wiki pages into Neo4j (ADR 012 Phase 3a):
