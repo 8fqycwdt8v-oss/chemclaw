@@ -24,6 +24,7 @@
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 import { generateText, streamText, tool } from "ai";
 import type { Config } from "../config.js";
+import { getConfigRegistry } from "../config/registry.js";
 import type { LlmCallOptions, LlmProvider, LlmResponse, ModelRole, StreamChunk } from "./provider.js";
 import type { Message } from "../core/types.js";
 import type { Tool } from "../tools/tool.js";
@@ -130,6 +131,23 @@ export class LiteLLMProvider implements LlmProvider {
     return this._roleMap[role];
   }
 
+  /**
+   * Resolve max output tokens from config_settings, with per-role override.
+   * Falls back to 4096 when ConfigRegistry is unavailable (test paths) or the
+   * key is unset. Uses global scope — per-user/project threading is a
+   * follow-up once context is threaded through LlmCallOptions.
+   */
+  private async _resolveMaxTokens(role?: ModelRole): Promise<number> {
+    try {
+      const reg = getConfigRegistry();
+      const global = await reg.getNumber("llm.max_tokens", {}, 4096);
+      if (!role) return global;
+      return await reg.getNumber(`llm.max_tokens.${role}`, {}, global);
+    } catch {
+      return 4096;
+    }
+  }
+
   async call(
     messages: Message[],
     tools: Tool[],
@@ -142,7 +160,7 @@ export class LiteLLMProvider implements LlmProvider {
       model: this._factory(this._resolveModel(opts?.role)),
       messages: sdkMessages,
       tools: sdkTools,
-      maxOutputTokens: 4_096,
+      maxOutputTokens: await this._resolveMaxTokens(opts?.role),
       // Forward the upstream signal to the AI SDK so a client disconnect
       // mid-call propagates to the underlying fetch and we stop burning
       // LLM tokens. The SDK rejects with an AbortError that bubbles out
@@ -221,7 +239,7 @@ export class LiteLLMProvider implements LlmProvider {
       model: this._factory(this._resolveModel(opts?.role)),
       messages: sdkMessages,
       tools: sdkTools,
-      maxOutputTokens: 4_096,
+      maxOutputTokens: await this._resolveMaxTokens(opts?.role),
       // Forwarded so a client disconnect mid-stream cancels the underlying
       // fetch — the AI SDK propagates the signal into the HTTP layer.
       ...(opts?.signal !== undefined ? { abortSignal: opts.signal } : {}),
@@ -277,7 +295,7 @@ export class LiteLLMProvider implements LlmProvider {
       model: this._factory(this._resolveModel(opts.role)),
       system: opts.system,
       messages: [{ role: "user", content: opts.user }],
-      maxOutputTokens: 4_000,
+      maxOutputTokens: await this._resolveMaxTokens(opts.role),
       ...(opts.signal !== undefined ? { abortSignal: opts.signal } : {}),
     });
     return JSON.parse(result.text);

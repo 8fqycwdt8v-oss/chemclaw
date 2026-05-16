@@ -228,4 +228,20 @@ describe("LiteLLMProvider", () => {
       ).rejects.toThrow(SyntaxError);
     });
   });
+
+  describe("_resolveMaxTokens — config_settings integration", () => {
+    it("falls back to 4096 when ConfigRegistry is not initialised", async () => {
+      generateTextMock.mockResolvedValue({
+        text: "ok",
+        toolCalls: [],
+        usage: { inputTokens: 5, outputTokens: 5, totalTokens: 10 },
+      });
+      const provider = new LiteLLMProvider(makeConfig());
+      // ConfigRegistry is not set in unit tests; the try-catch in
+      // _resolveMaxTokens catches the "not initialised" error and returns 4096.
+      await provider.call(makeMessages(), []);
+      const callArg = generateTextMock.mock.calls[0][0] as { maxOutputTokens: number };
+      expect(callArg.maxOutputTokens).toBe(4096);
+    });
+  });
 });

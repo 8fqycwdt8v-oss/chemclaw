@@ -26,6 +26,8 @@ import pytest
 from services.optimizer.session_reanimator.main import (
     Settings,
     _FIND_RESUMABLE_SQL,
+    _FINISH_REASON_ALLOWLIST_DEFAULT,
+    _load_reanimator_config,
     find_resumable,
     resume_session,
 )
@@ -131,7 +133,11 @@ class TestFindResumableSql:
         # max_steps + stop are the two finish reasons that mean
         # "agent didn't pause on a question, has more work to do".
         # awaiting-question states are deliberately excluded.
-        assert "last_finish_reason IN ('max_steps', 'stop')" in _FIND_RESUMABLE_SQL
+        # The allowlist is now a runtime parameter (= ANY(%s::text[])) so
+        # operators can tune it via config_settings without a code deploy.
+        assert "= ANY(%s::text[])" in _FIND_RESUMABLE_SQL
+        assert "max_steps" in str(_FINISH_REASON_ALLOWLIST_DEFAULT)
+        assert "stop" in str(_FINISH_REASON_ALLOWLIST_DEFAULT)
 
     def test_filters_by_auto_resume_cap(self):
         # Hard cap per session prevents unbounded loops.
@@ -175,11 +181,70 @@ class TestFindResumable:
             "psycopg.AsyncConnection.connect",
             new=AsyncMock(return_value=fake_conn),
         ):
-            out = await find_resumable(Settings(stale_after_seconds=600, batch_size=42))
+            out = await find_resumable(
+                Settings(stale_after_seconds=600, batch_size=42),
+                stale_after_seconds=600,
+                batch_size=42,
+                finish_reason_allowlist=["max_steps", "stop"],
+            )
 
         assert out == rows
-        # SQL parameters: stale_after_seconds and batch_size.
-        assert fake_conn._cursor.execute.call_args[0][1] == (600, 42)
+        # SQL parameters: finish_reason_allowlist, stale_after_seconds, batch_size.
+        assert fake_conn._cursor.execute.call_args[0][1] == (
+            ["max_steps", "stop"], 600, 42
+        )
+
+
+# ---------------------------------------------------------------------------
+# _load_reanimator_config — config_settings override path.
+# ---------------------------------------------------------------------------
+
+
+class TestLoadReanimatorConfig:
+    def test_returns_settings_defaults_when_config_registry_unavailable(self):
+        # No reachable DB → ConfigRegistry._fetch_value will raise; the helper
+        # must fall back silently and return Settings values.
+        s = Settings(stale_after_seconds=600, batch_size=5)
+        stale, batch, allowlist = _load_reanimator_config(s)
+        assert stale == 600
+        assert batch == 5
+        assert allowlist == ["max_steps", "stop"]
+
+    def test_config_registry_overrides_stale_and_batch(self):
+        from unittest.mock import MagicMock
+
+        reg = MagicMock()
+        reg.get_int.side_effect = lambda key, default: (
+            900 if key == "reanimator.stale_after_seconds" else
+            20 if key == "reanimator.batch_size" else
+            default
+        )
+        reg.get.return_value = None  # no allowlist override
+
+        s = Settings(stale_after_seconds=300, batch_size=10)
+        with patch(
+            "services.optimizer.session_reanimator.main.ConfigRegistry",
+            return_value=reg,
+        ):
+            stale, batch, allowlist = _load_reanimator_config(s)
+        assert stale == 900
+        assert batch == 20
+        assert allowlist == ["max_steps", "stop"]
+
+    def test_config_registry_overrides_finish_reason_allowlist(self):
+        from unittest.mock import MagicMock
+
+        reg = MagicMock()
+        reg.get_int.side_effect = lambda key, default: default
+        reg.get.return_value = ["max_steps"]
+
+        s = Settings()
+        with patch(
+            "services.optimizer.session_reanimator.main.ConfigRegistry",
+            return_value=reg,
+        ):
+            _, _, allowlist = _load_reanimator_config(s)
+        assert allowlist == ["max_steps"]
 
 
 # ---------------------------------------------------------------------------
