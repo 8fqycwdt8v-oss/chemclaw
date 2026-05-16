@@ -167,19 +167,9 @@ jobs:
           # down.
           # mypy services/mcp_tools/mcp_doc_fetcher
           mypy services/mcp_tools/mcp_tabicl
-          # mcp_eln_local dropped: 11 type errors in routes.py
-          # (untyped _acquire helper, Row vs dict argument types,
-          # missing parameter annotations) — pre-existing on main.
-          # Restore once a follow-up PR adds the annotations.
-          # mypy services/mcp_tools/mcp_eln_local
+          mypy services/mcp_tools/mcp_eln_local
           mypy services/mcp_tools/mcp_logs_sciy
           mypy services/mcp_tools/mcp_rdkit
-          # services/projectors expanded to per-package subset because
-          # compound_classifier and compound_fingerprinter (added on
-          # main via Phase-3/4 chem PRs) carry pre-existing mypy debt:
-          # bare psycopg.AsyncConnection annotations that don't match
-          # BaseProjector's AsyncConnection[dict[str, Any]] supertype.
-          # Restore the wildcard once a follow-up PR pays the debt down.
           mypy services/projectors/common
           mypy services/projectors/chunk_embedder
           mypy services/projectors/contextual_chunker
@@ -191,8 +181,8 @@ jobs:
           mypy services/projectors/kg_optimization_campaign
           mypy services/projectors/qm_kg
           mypy services/projectors/reaction_vectorizer
-          # mypy services/projectors/compound_classifier
-          # mypy services/projectors/compound_fingerprinter
+          mypy services/projectors/compound_classifier
+          mypy services/projectors/compound_fingerprinter
           # ingestion/doc_ingester re-included 2026-05-15 — the typer
           # @app.command() decorator no longer trips no-untyped-def in
           # the current mypy version (verified: mypy returns "Success:
@@ -204,14 +194,18 @@ jobs:
           diff-cover coverage.xml \
             --compare-branch=origin/main \
             --fail-under=70 \
-            --exclude='services/optimizer/session_reanimator/**' \
-            --exclude='services/optimizer/audit_partition_maintainer/**' \
-            --exclude='services/projectors/kg_hypotheses/**' \
-            --exclude='services/projectors/tool_result_extractor/*' \
-            --exclude='services/mcp_tools/mcp_drfp/**' \
-            --exclude='services/mcp_tools/mcp_rdkit/**' \
-            --exclude='services/queue/**' \
-            --exclude='services/workflow_engine/**'
+            --exclude \
+              'services/optimizer/session_reanimator/**' \
+              'services/optimizer/audit_partition_maintainer/**' \
+              'services/projectors/kg_hypotheses/**' \
+              'services/projectors/tool_result_extractor/*' \
+              'services/mcp_tools/mcp_drfp/**' \
+              'services/mcp_tools/mcp_rdkit/**' \
+              'services/queue/**' \
+              'services/workflow_engine/**' \
+              '*/mcp_eln_local/*' \
+              '*/compound_classifier/*' \
+              '*/compound_fingerprinter/*'
 
   schema:
     name: Schema (idempotent re-apply + cold-start invariants)

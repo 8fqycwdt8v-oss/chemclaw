@@ -13,8 +13,9 @@ Split from main.py during PR-7 (Python God-file split).
 
 from __future__ import annotations
 
+from contextlib import AbstractAsyncContextManager
 from datetime import datetime
-from typing import Annotated
+from typing import TYPE_CHECKING, Annotated, Any
 
 import psycopg
 from fastapi import Body, FastAPI, HTTPException
@@ -22,8 +23,11 @@ from fastapi import Body, FastAPI, HTTPException
 from . import models as M  # noqa: N812 — `M` is the project-wide models alias
 from . import queries as Q  # noqa: N812 — `Q` is the project-wide queries alias
 
+if TYPE_CHECKING:
+    from .main import ElnLocalSettings
 
-def _acquire():
+
+def _acquire() -> AbstractAsyncContextManager[psycopg.AsyncConnection[dict[str, Any]]]:
     """Resolve the request-scoped DB acquire context manager from main.
 
     Late binding is required so test monkey-patches of ``main._acquire``
@@ -35,7 +39,7 @@ def _acquire():
 
 
 async def _fetch_attachments(
-    conn: psycopg.AsyncConnection, entry_id: str
+    conn: psycopg.AsyncConnection[dict[str, Any]], entry_id: str
 ) -> list[M.Attachment]:
     async with conn.cursor() as cur:
         await cur.execute(Q.ATTACHMENTS_BY_ENTRY_SQL, {"entry_id": entry_id})
@@ -44,7 +48,7 @@ async def _fetch_attachments(
 
 
 async def _fetch_audit_summary(
-    conn: psycopg.AsyncConnection, entry_id: str, limit: int = 20
+    conn: psycopg.AsyncConnection[dict[str, Any]], entry_id: str, limit: int = 20
 ) -> list[M.AuditEntry]:
     async with conn.cursor() as cur:
         await cur.execute(
@@ -54,7 +58,7 @@ async def _fetch_audit_summary(
     return [M.row_to_audit(r) for r in rows]
 
 
-def register_routes(app: FastAPI, settings) -> None:
+def register_routes(app: FastAPI, settings: ElnLocalSettings) -> None:
     """Attach every endpoint to ``app``. Called from ``main.py`` after the
     FastAPI app is built via ``common.app.create_app``."""
 

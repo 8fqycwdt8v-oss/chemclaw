@@ -19,7 +19,7 @@ from __future__ import annotations
 
 import logging
 from contextlib import asynccontextmanager
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import psycopg
 from fastapi import FastAPI, HTTPException
@@ -84,7 +84,7 @@ settings = ElnLocalSettings()
 # --------------------------------------------------------------------------
 # Pool + lifespan
 # --------------------------------------------------------------------------
-_pool_holder: dict[str, AsyncConnectionPool] = {}
+_pool_holder: dict[str, Any] = {}
 
 
 def _check_dsn_safety() -> None:
@@ -133,7 +133,7 @@ def _ready_check() -> bool:
 
 
 @asynccontextmanager
-async def _acquire() -> AsyncIterator[psycopg.AsyncConnection]:
+async def _acquire() -> AsyncIterator[psycopg.AsyncConnection[dict[str, Any]]]:
     """Acquire a connection from the pool for the lifetime of one request.
 
     psycopg's async connection is not safe for concurrent operations (one
