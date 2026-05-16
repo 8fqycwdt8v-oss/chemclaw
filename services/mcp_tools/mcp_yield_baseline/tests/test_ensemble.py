@@ -72,3 +72,27 @@ def test_combine_batch_maps_per_row():
     assert rows[0]["ensemble_mean"] == 55.0
     assert rows[1]["ensemble_mean"] == 80.0
     assert math.isclose(rows[1]["ensemble_std"], 3.0, abs_tol=1e-9)
+
+
+def test_combine_batch_length_mismatch_raises():
+    """Unequal-length inputs must raise ValueError immediately."""
+    import pytest
+    from services.mcp_tools.mcp_yield_baseline.ensemble import combine_batch
+    with pytest.raises(ValueError, match="length mismatch"):
+        combine_batch(
+            chemprop_means=[50.0, 60.0],
+            chemprop_stds=[5.0],
+            xgboost_means=[55.0, 65.0],
+        )
+
+
+def test_combine_batch_all_lengths_must_match():
+    """xgboost_means shorter than the other two also raises."""
+    import pytest
+    from services.mcp_tools.mcp_yield_baseline.ensemble import combine_batch
+    with pytest.raises(ValueError, match="length mismatch"):
+        combine_batch(
+            chemprop_means=[50.0, 60.0],
+            chemprop_stds=[5.0, 3.0],
+            xgboost_means=[55.0],
+        )
