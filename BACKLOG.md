@@ -20,7 +20,7 @@ Deferred follow-ups discovered while doing other work. One bullet per item, pref
 - [ci/mypy] restore `ingestion/doc_ingester` to mypy clean subset — 2 untyped-decorator errors on `typer @app.command()` in `cli.py`
 - [ci/diff-cover] add real tests for `services/queue/**` (worker LISTEN setup currently 0% covered; excluded from diff-cover in `.github/workflows/ci.yml`)
 - [ci/diff-cover] add tests covering `services/optimizer/session_reanimator/**`, `services/projectors/kg_hypotheses/**`, `services/mcp_tools/mcp_drfp/**`, `services/mcp_tools/mcp_rdkit/**` so the diff-cover excludes can be removed
-- [cleanup] decide fate of `services/ingestion/eln_json_importer.legacy/**` — currently excluded from diff-cover and ruff; either delete or re-enable
+- [DONE 2026-05-15] [cleanup] `services/ingestion/eln_json_importer.legacy/` deleted; `make setup.python` + `import.sample.legacy` target removed from Makefile; diff-cover exclude dropped from both Makefile and ci.yml
 - [parity/v1.4] implement Setting sources (user/project/local) — Claude SDK primitive, currently `not implemented` in `docs/PARITY.md`
 - [parity/v1.4] implement ToolSearch (lazy tool loading) — Claude SDK primitive, currently `not implemented` in `docs/PARITY.md`
 - [parity/permissions] make `allowedTools` / `disallowedTools` filter the catalog **before** the LLM sees it — current behaviour is a post-call short-circuit via synthetic `denied_by_permissions` tool result
@@ -247,7 +247,7 @@ Deferred follow-ups discovered while doing other work. One bullet per item, pref
 - [DONE 2026-05-15] [agent-claw/routes] migrated all 5 route knobs to `config_settings` with global scope (`{}` ctx): `route.documents.original.fetch_max_bytes` (50M), `route.documents.original.fetch_timeout_ms` (60s), `route.feedback.langfuse_score_timeout_ms` (5s), `route.sessions.list_default_limit` (20), `route.sessions.list_max_limit` (100). Each handler wraps the registry read in a try/catch fallback to the historical default so test paths (where ConfigRegistry isn't bootstrapped) keep working. Per-user/project scoping deferred — routes today don't need it; revisit if a tenant requests per-org pagination caps.
 - [agent-claw/builtins] extract `normalizeUrl(url)` helper and migrate ~49 builtins that each call `mcpUrl.replace(/\/$/, "")`; mechanical but sweeping diff — handle as standalone PR
 - [projectors/common] consider centralizing the deterministic UUIDv5 fact-id namespaces (kg_documents/kg_experiments/kg_source_cache each declare a separate `_FACT_ID_NAMESPACE`); current per-module 1-liner helpers are not duplication, but a registry would document the namespace allocations in one place
-- [mcp_tools/common] decide fate of `error_envelope.py` + `error_codes.py` — the `make_envelope()` + `ErrorCode` enum exist with tests but production `app.py` still emits the legacy flat `{error, detail}` shape; either wire the new envelope into `app.py` or drop the unused module
+- [DONE 2026-05-15] [mcp_tools/common] `error_envelope.py` + `error_codes.py` + their test `test_error_envelope.py` dropped — unused in production; `app.py` NOTE comment removed; decision: drop (app.py flat envelope is the one shape)
 
 # Adaptive-replanning autonomy upgrade (PR #146, 2026-05-10)
 

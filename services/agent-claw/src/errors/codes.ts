@@ -7,10 +7,9 @@
 // fields (`message`, `trace_id`, `request_id`, `hint`, `detail`) sit
 // alongside it. See `envelope.ts` for the helper that builds the shape.
 //
-// Mirrored on the Python side at
-// `services/mcp_tools/common/error_codes.py`. Adding a code requires
-// matching changes in both places — a parity test is added in
-// `tests/parity/error-codes-parity.test.ts` if/when one is needed.
+// Note: the Python-side `error_codes.py` / `error_envelope.py` mirror was
+// dropped (dead code — never wired into MCP services). This TS enum is
+// the single source of truth for error codes.
 // ---------------------------------------------------------------------------
 
 export const ERROR_CODES = {

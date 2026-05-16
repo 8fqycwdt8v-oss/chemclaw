@@ -122,13 +122,11 @@ omit = [
     "*/tests/*",
     "*/test_*",
     "*/__pycache__/*",
-    "services/ingestion/eln_json_importer.legacy/*",
     # New daemon — has no tests yet (tracked in BACKLOG). Covered at the
     # SQL layer by db/init/32_rls_completeness.sql's
     # ensure_audit_log_partitions function. The diff-cover --exclude flag
     # alone doesn't match this path under fnmatch in this version of
-    # diff-cover, so we omit at the coverage.run layer (which the
-    # eln_json_importer.legacy precedent above already does).
+    # diff-cover, so we omit at the coverage.run layer.
     "services/optimizer/audit_partition_maintainer/*",
     # optimizer/common/db.py — 2026-05-09 database deep-review added
     # `get_dsn()`, `assert_bypass_rls()`, and `enforce_bypass_rls_check_enabled()`
