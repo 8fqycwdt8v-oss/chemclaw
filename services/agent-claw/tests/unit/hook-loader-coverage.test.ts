@@ -18,6 +18,8 @@
 // pre_tool now has 5 handlers).
 // Tranche 1 / Task G added redact-tool-output on post_tool (27 total;
 // post_tool now has 6 handlers).
+// Tranche 9 added compute-result-writer on post_tool (28 total;
+// post_tool now has 7 handlers).
 //
 // This test is intentionally read-only against the on-disk `hooks/` directory
 // (the canonical source of truth). It locks in the invariant that adding a
@@ -45,13 +47,13 @@ describe("hook loader coverage", () => {
     expect(skipsForMissingRegistrar).toEqual([]);
   });
 
-  it("registers all 27 known hook implementations at the right points", async () => {
+  it("registers all 28 known hook implementations at the right points", async () => {
     const lc = new Lifecycle();
     await loadHooks(lc, mockHookDeps(), hooksDir);
     // Exact counts — `>=` would hide accidental double-registration.
     expect(lc.count("pre_turn")).toBe(2); // init-scratch, apply-skills
     expect(lc.count("pre_tool")).toBe(5); // budget-guard, foundation-citation-guard, loop-detector, wiki-human-block-guard, scheduled-substance-gate
-    expect(lc.count("post_tool")).toBe(6); // tag-maturity, anti-fabrication, source-cache, detect-mcp-leakage, fact-id-consistency-guard, redact-tool-output
+    expect(lc.count("post_tool")).toBe(7); // tag-maturity, anti-fabrication, source-cache, detect-mcp-leakage, fact-id-consistency-guard, redact-tool-output, compute-result-writer
     expect(lc.count("pre_compact")).toBe(1); // compact-window
     expect(lc.count("post_turn")).toBe(1); // redact-secrets
     expect(lc.count("session_start")).toBe(1); // session-events (Phase 4B)
@@ -67,7 +69,7 @@ describe("hook loader coverage", () => {
     expect(lc.count("task_created")).toBe(1);
     expect(lc.count("task_completed")).toBe(1);
     expect(lc.count("post_compact")).toBe(1);
-    // Sanity sum: 2 + 5 + 6 + 1 + 1 + 1 + 1 + 9 + 1 = 27 hooks total.
+    // Sanity sum: 2 + 5 + 7 + 1 + 1 + 1 + 1 + 9 + 1 = 28 hooks total.
     const totalRegistered = (
       [
         "pre_turn",
@@ -88,7 +90,7 @@ describe("hook loader coverage", () => {
         "task_completed",
       ] as const
     ).reduce((sum, p) => sum + lc.count(p), 0);
-    expect(totalRegistered).toBe(27);
+    expect(totalRegistered).toBe(28);
   });
 
   it("each YAML file's `name` field is non-empty", async () => {
