@@ -140,6 +140,12 @@ projectors:
     enabled: false
     image: chemclaw/wiki-regen:latest
     model: claude-haiku-4-5
+  kgOptimizationCampaign:
+    # Projects BO round events into Neo4j as :OptimizationCampaign /
+    # :OptimizationRound nodes + MEASURED_BY edges (Tranche 8 F10).
+    # Needs NEO4J_URI/USER/PASSWORD (same secret as other kg-* projectors).
+    enabled: true
+    image: chemclaw/kg-optimization-campaign:latest
 
 # ── Profile: chemistry ────────────────────────────────────────────────────────
 # Enable with: --set chemistry.enabled=true

@@ -27,18 +27,29 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
 from typing import Any
 
 import psycopg
 
+from services.mcp_tools.common.logging import configure_logging
 from services.projectors.common.base import (
     BaseProjector,
     ProjectorSettings,
 )
-from services.projectors.common.neo4j_client import Neo4jClient
+from services.projectors.common.neo4j_client import SYSTEM_GROUP_ID, Neo4jClient
 
-log = logging.getLogger("kg_optimization_campaign")
+log = logging.getLogger("projector.kg_optimization_campaign")
+
+# Defense-in-depth: only alphanumerics, hyphens, and underscores in group_id.
+_GROUP_ID_RE = re.compile(r"^[A-Za-z0-9_\-]+$")
+
+
+def _safe_group_id(gid: str | None) -> str:
+    if gid and _GROUP_ID_RE.fullmatch(gid):
+        return gid
+    return SYSTEM_GROUP_ID
 
 # Deterministic namespace UUIDs — stable across replays.
 _NS_CAMPAIGN = uuid.UUID("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
@@ -144,8 +155,12 @@ class KgOptimizationCampaignProjector(BaseProjector):
         return str(uuid.uuid5(_NS_MEASURED_BY, f"{campaign_id}|{round_id}"))
 
     async def _upsert_campaign_node(
-        self, session: Any, campaign: dict[str, Any]
+        self, session: Any, campaign: dict[str, Any], group_id: str
     ) -> None:
+        # status is re-stamped on every MATCH so the last round event reflects the
+        # current campaign status.  NOTE: lifecycle transitions (pause/resume/complete)
+        # do not emit ingestion_events today — status will lag until the next round
+        # event fires. See BACKLOG [bo/campaign-status-events].
         await session.run(
             """
             MERGE (c:OptimizationCampaign {fact_id: $fact_id})
@@ -155,8 +170,10 @@ class KgOptimizationCampaignProjector(BaseProjector):
                             c.acquisition   = $acquisition,
                             c.status        = $status,
                             c.nce_project_id = $nce_project_id,
-                            c.created_at    = $created_at
-              ON MATCH  SET c.status        = $status
+                            c.created_at    = $created_at,
+                            c.group_id      = $group_id
+              ON MATCH  SET c.status        = $status,
+                            c.group_id      = $group_id
             """,
             fact_id=self._campaign_fact_id(campaign["id"]),
             campaign_id=campaign["id"],
@@ -166,10 +183,11 @@ class KgOptimizationCampaignProjector(BaseProjector):
             status=campaign["status"],
             nce_project_id=campaign["nce_project_id"],
             created_at=campaign["created_at"],
+            group_id=group_id,
         )
 
     async def _upsert_round_node(
-        self, session: Any, round_data: dict[str, Any]
+        self, session: Any, round_data: dict[str, Any], group_id: str
     ) -> None:
         await session.run(
             """
@@ -178,14 +196,18 @@ class KgOptimizationCampaignProjector(BaseProjector):
                             r.campaign_id   = $campaign_id,
                             r.round_index   = $round_index,
                             r.n_proposals   = $n_proposals,
-                            r.proposed_at   = $proposed_at
+                            r.n_outcomes    = $n_outcomes,
+                            r.proposed_at   = $proposed_at,
+                            r.results_at    = $results_at,
+                            r.group_id      = $group_id
               ON MATCH  SET r.n_proposals   = $n_proposals,
                             r.n_outcomes    = CASE
                               WHEN $n_outcomes > 0 THEN $n_outcomes
                               ELSE r.n_outcomes END,
                             r.results_at    = CASE
                               WHEN $results_at IS NOT NULL THEN $results_at
-                              ELSE r.results_at END
+                              ELSE r.results_at END,
+                            r.group_id      = $group_id
             """,
             fact_id=self._round_fact_id(round_data["id"]),
             round_id=round_data["id"],
@@ -195,22 +217,29 @@ class KgOptimizationCampaignProjector(BaseProjector):
             n_outcomes=round_data["n_outcomes"],
             proposed_at=round_data["proposed_at"],
             results_at=round_data["results_at"],
+            group_id=group_id,
         )
 
     async def _upsert_edge(
-        self, session: Any, campaign: dict[str, Any], round_data: dict[str, Any]
+        self,
+        session: Any,
+        campaign: dict[str, Any],
+        round_data: dict[str, Any],
+        group_id: str,
     ) -> None:
         await session.run(
             """
             MATCH (c:OptimizationCampaign {fact_id: $c_fact_id})
             MATCH (r:OptimizationRound    {fact_id: $r_fact_id})
             MERGE (c)-[e:MEASURED_BY {fact_id: $edge_fact_id}]->(r)
-              ON CREATE SET e.round_index = $round_index
+              ON CREATE SET e.round_index = $round_index,
+                            e.group_id   = $group_id
             """,
             c_fact_id=self._campaign_fact_id(campaign["id"]),
             r_fact_id=self._round_fact_id(round_data["id"]),
             edge_fact_id=self._edge_fact_id(campaign["id"], round_data["id"]),
             round_index=round_data["round_index"],
+            group_id=group_id,
         )
 
     async def _handle_proposed(
@@ -225,10 +254,11 @@ class KgOptimizationCampaignProjector(BaseProjector):
             log.warning("round %s not found; skipping", round_id)
             return
 
+        group_id = _safe_group_id(campaign.get("nce_project_id"))
         async with self._neo4j.session() as session:
-            await self._upsert_campaign_node(session, campaign)
-            await self._upsert_round_node(session, round_data)
-            await self._upsert_edge(session, campaign, round_data)
+            await self._upsert_campaign_node(session, campaign, group_id)
+            await self._upsert_round_node(session, round_data, group_id)
+            await self._upsert_edge(session, campaign, round_data, group_id)
 
         log.info(
             "kg_opt_campaign: upserted round %s (index=%d, n_proposals=%d) for campaign %s",
@@ -250,10 +280,11 @@ class KgOptimizationCampaignProjector(BaseProjector):
             log.warning("campaign %s not found on results_ingested; skipping", campaign_id)
             return
 
+        group_id = _safe_group_id(campaign.get("nce_project_id"))
         async with self._neo4j.session() as session:
-            await self._upsert_campaign_node(session, campaign)
-            await self._upsert_round_node(session, round_data)
-            await self._upsert_edge(session, campaign, round_data)
+            await self._upsert_campaign_node(session, campaign, group_id)
+            await self._upsert_round_node(session, round_data, group_id)
+            await self._upsert_edge(session, campaign, round_data, group_id)
 
         log.info(
             "kg_opt_campaign: enriched round %s with n_outcomes=%d",
@@ -264,7 +295,6 @@ class KgOptimizationCampaignProjector(BaseProjector):
 
 def main() -> None:  # pragma: no cover — process entrypoint
     settings = ProjectorSettings()
-    from services.mcp_tools.common.logging import configure_logging
     configure_logging(settings.projector_log_level, service="kg_optimization_campaign")
     proj = KgOptimizationCampaignProjector(settings)
     try:

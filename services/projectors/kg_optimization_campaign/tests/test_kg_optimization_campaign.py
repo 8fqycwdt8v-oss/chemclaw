@@ -196,6 +196,7 @@ class TestHandleProposed:
         assert params["campaign_id"] == CAMPAIGN_ID
         assert params["name"] == "Test Campaign"
         assert params["status"] == "active"
+        assert params["group_id"] == NCE_PROJECT_ID
 
     @pytest.mark.asyncio
     async def test_round_node_params(
@@ -240,6 +241,7 @@ class TestHandleProposed:
         assert params["edge_fact_id"] == _expected_edge_fact_id()
         assert params["c_fact_id"] == _expected_campaign_fact_id()
         assert params["r_fact_id"] == _expected_round_fact_id()
+        assert params["group_id"] == NCE_PROJECT_ID
 
     @pytest.mark.asyncio
     async def test_skips_when_campaign_not_found(
