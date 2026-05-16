@@ -20,7 +20,7 @@ import asyncio
 import json
 import logging
 import os
-from typing import Any
+from typing import Any, cast
 
 import httpx
 import psycopg
@@ -89,7 +89,7 @@ class CompoundFingerprinter(BaseProjector):
                 await self._http.aclose()
                 self._http = None
 
-    async def _catch_up(self, work_conn: psycopg.AsyncConnection) -> None:
+    async def _catch_up(self, work_conn: psycopg.AsyncConnection[dict[str, Any]]) -> None:
         async with work_conn.cursor() as cur:
             await cur.execute(
                 """
@@ -112,8 +112,8 @@ class CompoundFingerprinter(BaseProjector):
 
     async def _listen_loop_compounds(
         self,
-        listen_conn: psycopg.AsyncConnection,
-        work_conn: psycopg.AsyncConnection,
+        listen_conn: psycopg.AsyncConnection[dict[str, Any]],
+        work_conn: psycopg.AsyncConnection[dict[str, Any]],
     ) -> None:
         notify_gen = listen_conn.notifies()
         next_notify_task: asyncio.Task[Any] | None = None
@@ -151,11 +151,17 @@ class CompoundFingerprinter(BaseProjector):
                 shutdown_task.cancel()
 
     async def handle(  # pragma: no cover — bypassed
-        self, *, event_id, event_type, source_table, source_row_id, payload,
+        self,
+        *,
+        event_id: str,
+        event_type: str,
+        source_table: str | None,
+        source_row_id: str | None,
+        payload: dict[str, Any],
     ) -> None:
         return None
 
-    async def _fetch_smiles(self, work_conn: psycopg.AsyncConnection, inchikey: str) -> str | None:
+    async def _fetch_smiles(self, work_conn: psycopg.AsyncConnection[dict[str, Any]], inchikey: str) -> str | None:
         async with work_conn.cursor() as cur:
             await cur.execute(
                 "SELECT smiles_canonical FROM compounds WHERE inchikey = %s",
@@ -165,12 +171,12 @@ class CompoundFingerprinter(BaseProjector):
         await work_conn.commit()
         if row is None:
             return None
-        return row["smiles_canonical"]
+        return cast(str, row["smiles_canonical"])
 
     # --- the actual work -----------------------------------------------------
 
     async def _fingerprint(
-        self, work_conn: psycopg.AsyncConnection, inchikey: str, smiles: str,
+        self, work_conn: psycopg.AsyncConnection[dict[str, Any]], inchikey: str, smiles: str,
     ) -> None:
         # Atomicity contract: every write inside this method runs in a single
         # transaction terminated by either commit() (full success) or rollback()
@@ -299,7 +305,7 @@ class CompoundFingerprinter(BaseProjector):
             raise PermanentHandlerError(
                 f"mcp-rdkit {path} {resp.status_code}: {resp.text[:200]}"
             )
-        return resp.json()
+        return cast(dict[str, Any], resp.json())
 
 
 from services.mcp_tools.common.fingerprint import bits_to_pgvector_literal as _bits_to_vector  # noqa: E402, F401

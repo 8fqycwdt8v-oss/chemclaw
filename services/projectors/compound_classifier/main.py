@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import Any
+from typing import Any, cast
 
 import psycopg
 from psycopg.rows import dict_row
@@ -66,7 +66,7 @@ class CompoundClassifier(BaseProjector):
                 log.info("[%s] catch-up complete", self.name)
                 await self._listen_loop_classes(listen_conn, work_conn)
 
-    async def _catch_up(self, work_conn: psycopg.AsyncConnection) -> None:
+    async def _catch_up(self, work_conn: psycopg.AsyncConnection[dict[str, Any]]) -> None:
         # Re-classify every compound that has fingerprints but no live class
         # assignment yet. Bounded so a fresh image doesn't churn for hours.
         async with work_conn.cursor() as cur:
@@ -93,8 +93,8 @@ class CompoundClassifier(BaseProjector):
 
     async def _listen_loop_classes(
         self,
-        listen_conn: psycopg.AsyncConnection,
-        work_conn: psycopg.AsyncConnection,
+        listen_conn: psycopg.AsyncConnection[dict[str, Any]],
+        work_conn: psycopg.AsyncConnection[dict[str, Any]],
     ) -> None:
         notify_gen = listen_conn.notifies()
         next_notify_task: asyncio.Task[Any] | None = None
@@ -129,11 +129,17 @@ class CompoundClassifier(BaseProjector):
                 shutdown_task.cancel()
 
     async def handle(  # pragma: no cover
-        self, *, event_id, event_type, source_table, source_row_id, payload,
+        self,
+        *,
+        event_id: str,
+        event_type: str,
+        source_table: str | None,
+        source_row_id: str | None,
+        payload: dict[str, Any],
     ) -> None:
         return None
 
-    async def _classify(self, work_conn: psycopg.AsyncConnection, inchikey: str) -> None:
+    async def _classify(self, work_conn: psycopg.AsyncConnection[dict[str, Any]], inchikey: str) -> None:
         async with work_conn.cursor() as cur:
             # Concurrency guard: serialize per-inchikey classification across
             # replicas. The INSERT below uses `WHERE NOT EXISTS` to skip when a
