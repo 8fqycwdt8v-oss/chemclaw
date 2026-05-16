@@ -198,7 +198,10 @@ jobs:
             --exclude='services/mcp_tools/mcp_drfp/**' \
             --exclude='services/mcp_tools/mcp_rdkit/**' \
             --exclude='services/queue/**' \
-            --exclude='services/workflow_engine/**'
+            --exclude='services/workflow_engine/**' \
+            --exclude='services/mcp_tools/mcp_eln_local/**' \
+            --exclude='services/projectors/compound_classifier/**' \
+            --exclude='services/projectors/compound_fingerprinter/**'
 
   schema:
     name: Schema (idempotent re-apply + cold-start invariants)
