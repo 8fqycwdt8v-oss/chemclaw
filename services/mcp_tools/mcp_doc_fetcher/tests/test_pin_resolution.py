@@ -50,13 +50,9 @@ class TestPinResolution:
         assert _current_pin("example.com") is None
 
     def test_empty_validated_ips_is_noop(self) -> None:
-        """Empty IP list → no pin installed; original resolver stays in place."""
-        before = socket.getaddrinfo
+        """Empty IP list → context exits immediately without touching the pin map."""
         with pin_resolution("example.com", []):
-            # No pin should have been set.
             assert _current_pin("example.com") is None
-        # getaddrinfo is still the original (or the pinned wrapper if another
-        # thread has already installed it — but the pin map is empty for this host).
         assert _current_pin("example.com") is None
 
     def test_nested_pins_restore_outer(self) -> None:

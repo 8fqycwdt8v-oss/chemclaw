@@ -14,9 +14,8 @@ without any infrastructure. The goal is to verify:
 
 from __future__ import annotations
 
-import asyncio
 from typing import Any
-from unittest.mock import AsyncMock, MagicMock, patch
+from unittest.mock import AsyncMock, MagicMock
 
 import httpx
 import pytest
@@ -40,7 +39,8 @@ def _make_fingerprinter() -> Any:
         CompoundFingerprinterSettings,
     )
     settings = CompoundFingerprinterSettings(
-        postgres_dsn="postgresql://fake:fake@localhost/fake",
+        postgres_host="localhost",
+        postgres_password="fake",
         mcp_rdkit_url="http://mcp-rdkit:8001",
     )
     proj = CompoundFingerprinter(settings)
@@ -115,11 +115,12 @@ async def test_fingerprint_happy_path_commits_once() -> None:
 
 
 @pytest.mark.asyncio
-async def test_fingerprint_4xx_on_fp_call_raises_and_rolls_back() -> None:
-    """mcp-rdkit returns 503 on /tools/morgan_fingerprint → PermanentHandlerError
-    is raised and rollback() is called so the transaction is clean for retries."""
+async def test_fingerprint_error_on_fp_call_raises_and_rolls_back() -> None:
+    """mcp-rdkit returns 422 on /tools/morgan_fingerprint → PermanentHandlerError
+    is raised and rollback() is called so the transaction is clean for retries.
+    _post_json raises for any status >= 400 (4xx and 5xx alike)."""
     proj = _make_fingerprinter()
-    proj._http = _make_http_client(fp_status=503)
+    proj._http = _make_http_client(fp_status=422)
     work_conn = _make_work_conn()
 
     with pytest.raises(PermanentHandlerError, match="mcp-rdkit"):
