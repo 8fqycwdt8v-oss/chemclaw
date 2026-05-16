@@ -14,16 +14,17 @@
 --   - Column conversion guarded by information_schema.columns udt_name check;
 --     skipped when the column is already the target ENUM type.
 --   - CHECK constraints on the affected columns are DROPPED before conversion:
---     PostgreSQL stores the constraint with resolved text-type literals, and
---     after the column type changes to ENUM the stored CHECK compares
---     `maturity_tier = text` which has no operator. The ENUM type enforces
---     the same invariant, so the CHECK is not re-added.
+--     PostgreSQL stores constraint expressions with types resolved at creation
+--     time, so after the column type changes to ENUM the stored CHECK would
+--     compare `maturity_tier = text` — no such operator. ENUM enforces the
+--     same invariant, so the CHECK is not re-added.
+--   - Views (hypotheses_current, artifacts_current) that SELECT * from tables
+--     with maturity columns are DROPPED before conversion and RECREATED after,
+--     since PostgreSQL refuses to ALTER a column used by a view.
 
 BEGIN;
 
 -- ── 1. maturity_tier (EXPLORATORY | WORKING | FOUNDATION) ─────────────────
--- Shared across 7 tables; converting to a named type makes ADD VALUE the
--- single change point if a new tier is ever approved.
 
 DO $$
 BEGIN
@@ -46,6 +47,11 @@ DECLARE
     'knowledge_articles'
   ];
 BEGIN
+  -- Drop views that SELECT * from maturity-bearing tables; they block ALTER
+  -- COLUMN TYPE. Recreated below after all columns are converted.
+  DROP VIEW IF EXISTS hypotheses_current CASCADE;
+  DROP VIEW IF EXISTS artifacts_current   CASCADE;
+
   FOREACH tbl IN ARRAY maturity_tables LOOP
     IF EXISTS (
       SELECT 1
@@ -55,11 +61,9 @@ BEGIN
          AND column_name  = 'maturity'
          AND udt_name     = 'text'
     ) THEN
-      -- Drop any CHECK constraints referencing the maturity column.
-      -- PostgreSQL stores CHECK constraint expressions with the literal types
-      -- resolved at creation time (text). After converting the column to
-      -- maturity_tier, the stored expression compares maturity_tier = text,
-      -- which has no operator. The ENUM type enforces the same invariant.
+      -- Drop any CHECK constraints referencing maturity. PostgreSQL stores
+      -- the literal values as text; after the column type changes to ENUM,
+      -- the stored CHECK tries maturity_tier = text — no operator exists.
       FOR rec IN
         SELECT con.conname
           FROM pg_constraint con
@@ -74,9 +78,8 @@ BEGIN
         EXECUTE format('ALTER TABLE %I DROP CONSTRAINT %I', tbl, rec.conname);
       END LOOP;
 
-      -- Must drop the DEFAULT before retyping: PostgreSQL cannot automatically
-      -- cast a stored text default ('EXPLORATORY') to the new ENUM type.
-      -- Restore the default after the type change using the ENUM literal.
+      -- Drop DEFAULT first: PostgreSQL cannot auto-cast a stored text default
+      -- ('EXPLORATORY') to the new ENUM type. Restore it after the retype.
       EXECUTE format(
         'ALTER TABLE %I '
         'ALTER COLUMN maturity DROP DEFAULT, '
@@ -86,6 +89,41 @@ BEGIN
       );
     END IF;
   END LOOP;
+
+  -- Recreate hypotheses_current (same definition as 52_bitemporal_current_views.sql).
+  IF to_regclass('public.hypotheses') IS NOT NULL THEN
+    EXECUTE '
+      CREATE OR REPLACE VIEW hypotheses_current
+        WITH (security_invoker = true) AS
+        SELECT *
+          FROM hypotheses
+         WHERE refuted_at IS NULL
+           AND valid_to   IS NULL
+    ';
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'chemclaw_app') THEN
+      EXECUTE 'GRANT SELECT ON hypotheses_current TO chemclaw_app';
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'chemclaw_service') THEN
+      EXECUTE 'GRANT SELECT ON hypotheses_current TO chemclaw_service';
+    END IF;
+  END IF;
+
+  -- Recreate artifacts_current (same definition as 52_bitemporal_current_views.sql).
+  IF to_regclass('public.artifacts') IS NOT NULL THEN
+    EXECUTE '
+      CREATE OR REPLACE VIEW artifacts_current
+        WITH (security_invoker = true) AS
+        SELECT *
+          FROM artifacts
+         WHERE superseded_at IS NULL
+    ';
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'chemclaw_app') THEN
+      EXECUTE 'GRANT SELECT ON artifacts_current TO chemclaw_app';
+    END IF;
+    IF EXISTS (SELECT 1 FROM pg_roles WHERE rolname = 'chemclaw_service') THEN
+      EXECUTE 'GRANT SELECT ON artifacts_current TO chemclaw_service';
+    END IF;
+  END IF;
 END;
 $$;
 
