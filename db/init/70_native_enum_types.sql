@@ -52,9 +52,14 @@ BEGIN
          AND column_name  = 'maturity'
          AND udt_name     = 'text'
     ) THEN
+      -- Must drop the DEFAULT before retyping: PostgreSQL cannot automatically
+      -- cast a stored text default ('EXPLORATORY') to the new ENUM type.
+      -- Restore the default after the type change using the ENUM literal.
       EXECUTE format(
-        'ALTER TABLE %I ALTER COLUMN maturity TYPE maturity_tier '
-        'USING maturity::maturity_tier',
+        'ALTER TABLE %I '
+        'ALTER COLUMN maturity DROP DEFAULT, '
+        'ALTER COLUMN maturity TYPE maturity_tier USING maturity::maturity_tier, '
+        'ALTER COLUMN maturity SET DEFAULT ''EXPLORATORY''::maturity_tier',
         tbl
       );
     END IF;
