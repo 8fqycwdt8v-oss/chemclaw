@@ -4,6 +4,10 @@
 //   - The tool has a non-null result_schema_id (chemistry tool)
 //   - ctx.nceProjectId is non-null
 //   - The feature flag chemistry.compute_results.persist is enabled
+//
+// DB writes go through withUserContext (FORCE RLS on compute_results requires
+// app.current_user_entra_id to be set). The module is mocked so unit tests
+// do not need a real Postgres connection.
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
 import type { Pool } from "pg";
@@ -15,10 +19,23 @@ import { ToolRegistry } from "../../../src/tools/registry.js";
 import { defineTool, type Tool } from "../../../src/tools/tool.js";
 import type { PostToolPayload, ToolContext } from "../../../src/core/types.js";
 
+// Mock withUserContext so tests don't need a real pool.
+// The mock forwards the fn call to a stub client whose query we can inspect.
+vi.mock("../../../src/db/with-user-context.js", () => ({
+  withUserContext: vi.fn(async (
+    _pool: unknown,
+    _user: unknown,
+    fn: (c: { query: ReturnType<typeof vi.fn> }) => Promise<void>,
+  ) => {
+    const client = { query: vi.fn(async () => ({ rows: [], rowCount: 1 })) };
+    await fn(client);
+    return undefined;
+  }),
+}));
+
 function makePool(): Pool {
-  return {
-    query: vi.fn(async () => ({ rows: [], rowCount: 1 })),
-  } as unknown as Pool;
+  // Pool is passed to withUserContext but the mock ignores it.
+  return {} as unknown as Pool;
 }
 
 function makeCtx(overrides: Partial<ToolContext> = {}): ToolContext {
@@ -83,58 +100,75 @@ describe("compute-result-writer hook", () => {
   let lifecycle: Lifecycle;
   let registry: ToolRegistry;
   let isFeatureEnabled: ReturnType<typeof vi.fn>;
+  let withUserContextMock: ReturnType<typeof vi.fn>;
 
-  beforeEach(() => {
+  beforeEach(async () => {
     pool = makePool();
     lifecycle = new Lifecycle();
     registry = makeRegistry();
     isFeatureEnabled = vi.fn(async () => true);
     registerComputeResultWriterHook(lifecycle, { pool, registry, isFeatureEnabled });
+
+    const ucModule = await import("../../../src/db/with-user-context.js");
+    withUserContextMock = vi.mocked(ucModule.withUserContext);
+    withUserContextMock.mockClear();
   });
 
-  it("inserts into compute_results for a chemistry tool when flag is on", async () => {
+  it("calls withUserContext (RLS) and inserts into compute_results for a chemistry tool", async () => {
+    let clientQuery!: ReturnType<typeof vi.fn>;
+    withUserContextMock.mockImplementationOnce(async (_pool, _user, fn) => {
+      clientQuery = vi.fn(async () => ({ rows: [], rowCount: 1 }));
+      await fn({ query: clientQuery });
+    });
+
     await lifecycle.dispatch("post_tool", basePayload());
-    expect(pool.query).toHaveBeenCalledOnce();
-    const [sql, args] = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0] as [string, unknown[]];
+
+    expect(withUserContextMock).toHaveBeenCalledOnce();
+    expect(withUserContextMock.mock.calls[0][1]).toBe("user-1");
+    expect(clientQuery).toHaveBeenCalledOnce();
+
+    const [sql, args] = clientQuery.mock.calls[0] as [string, unknown[]];
     expect(sql).toContain("INSERT INTO compute_results");
     expect(sql).toContain("ON CONFLICT ON CONSTRAINT compute_results_cache_key");
-    // tool_id
     expect(args[0]).toBe("propose_retrosynthesis");
-    // nce_project_id
     expect(args[2]).toBe("00000000-0000-0000-0000-000000000aaa");
-    // model_id defaults to '' (not present in output)
     expect(args[3]).toBe("");
-    // user_entra_id
     expect(args[7]).toBe("user-1");
   });
 
   it("skips when feature flag is disabled", async () => {
     isFeatureEnabled.mockResolvedValueOnce(false);
     await lifecycle.dispatch("post_tool", basePayload());
-    expect(pool.query).not.toHaveBeenCalled();
+    expect(withUserContextMock).not.toHaveBeenCalled();
   });
 
   it("skips when ctx.nceProjectId is null", async () => {
     await lifecycle.dispatch("post_tool", basePayload({ ctx: makeCtx({ nceProjectId: null }) }));
-    expect(pool.query).not.toHaveBeenCalled();
+    expect(withUserContextMock).not.toHaveBeenCalled();
   });
 
   it("skips for tools without result_schema_id", async () => {
     await lifecycle.dispatch("post_tool", basePayload({ toolId: "search_knowledge" }));
-    expect(pool.query).not.toHaveBeenCalled();
+    expect(withUserContextMock).not.toHaveBeenCalled();
   });
 
   it("skips for internal tools", async () => {
     await lifecycle.dispatch("post_tool", basePayload({ toolId: "manage_todos" }));
-    expect(pool.query).not.toHaveBeenCalled();
+    expect(withUserContextMock).not.toHaveBeenCalled();
   });
 
   it("skips for unknown tool id (no registry entry)", async () => {
     await lifecycle.dispatch("post_tool", basePayload({ toolId: "some_forged_tool" }));
-    expect(pool.query).not.toHaveBeenCalled();
+    expect(withUserContextMock).not.toHaveBeenCalled();
   });
 
   it("extracts model_id from yield prediction output", async () => {
+    let clientQuery!: ReturnType<typeof vi.fn>;
+    withUserContextMock.mockImplementationOnce(async (_pool, _user, fn) => {
+      clientQuery = vi.fn(async () => ({ rows: [], rowCount: 1 }));
+      await fn({ query: clientQuery });
+    });
+
     const output = {
       predictions: [{ rxn_smiles: "A>>B", ensemble_mean: 72.5, ensemble_std: 6.1 }],
       model_id: "proj-abc-v2",
@@ -142,18 +176,29 @@ describe("compute-result-writer hook", () => {
       used_global_fallback: false,
     };
     await lifecycle.dispatch("post_tool", basePayload({ output }));
-    const [, args] = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0] as [string, unknown[]];
+    const [, args] = clientQuery.mock.calls[0] as [string, unknown[]];
     expect(args[3]).toBe("proj-abc-v2");
   });
 
   it("extracts tool_confidence from retrosynthesis route total_score", async () => {
+    let clientQuery!: ReturnType<typeof vi.fn>;
+    withUserContextMock.mockImplementationOnce(async (_pool, _user, fn) => {
+      clientQuery = vi.fn(async () => ({ rows: [], rowCount: 1 }));
+      await fn({ query: clientQuery });
+    });
+
     await lifecycle.dispatch("post_tool", basePayload());
-    const [, args] = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0] as [string, unknown[]];
-    // tool_confidence is at index 5 (0-based: $6 in SQL)
+    const [, args] = clientQuery.mock.calls[0] as [string, unknown[]];
     expect(args[5]).toBeCloseTo(0.87, 5);
   });
 
   it("extracts tool_confidence from ensemble_mean (yield prediction)", async () => {
+    let clientQuery!: ReturnType<typeof vi.fn>;
+    withUserContextMock.mockImplementationOnce(async (_pool, _user, fn) => {
+      clientQuery = vi.fn(async () => ({ rows: [], rowCount: 1 }));
+      await fn({ query: clientQuery });
+    });
+
     const output = {
       predictions: [{ rxn_smiles: "A>>B", ensemble_mean: 80.0, ensemble_std: 4.0 }],
       model_id: null,
@@ -161,30 +206,41 @@ describe("compute-result-writer hook", () => {
       used_global_fallback: false,
     };
     await lifecycle.dispatch("post_tool", basePayload({ output }));
-    const [, args] = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0] as [string, unknown[]];
+    const [, args] = clientQuery.mock.calls[0] as [string, unknown[]];
     expect(args[5]).toBeCloseTo(0.8, 5);
   });
 
   it("produces null tool_confidence when output has no recognisable score", async () => {
+    let clientQuery!: ReturnType<typeof vi.fn>;
+    withUserContextMock.mockImplementationOnce(async (_pool, _user, fn) => {
+      clientQuery = vi.fn(async () => ({ rows: [], rowCount: 1 }));
+      await fn({ query: clientQuery });
+    });
+
     const output = { compound: "caffeine", inchikey: "XYZ123" };
     await lifecycle.dispatch("post_tool", basePayload({ output }));
-    const [, args] = (pool.query as ReturnType<typeof vi.fn>).mock.calls[0] as [string, unknown[]];
+    const [, args] = clientQuery.mock.calls[0] as [string, unknown[]];
     expect(args[5]).toBeNull();
   });
 
   it("input_hash is deterministic regardless of object key order", async () => {
+    const hashes: unknown[] = [];
+    withUserContextMock.mockImplementation(async (_pool, _user, fn) => {
+      const clientQuery = vi.fn(async () => ({ rows: [], rowCount: 1 }));
+      await fn({ query: clientQuery });
+      hashes.push(clientQuery.mock.calls[0][1][1]);
+    });
+
     const inputA = { smiles: "CC", max_depth: 3 };
     const inputB = { max_depth: 3, smiles: "CC" };
     await lifecycle.dispatch("post_tool", basePayload({ input: inputA }));
     await lifecycle.dispatch("post_tool", basePayload({ input: inputB }));
-    const calls = (pool.query as ReturnType<typeof vi.fn>).mock.calls as [string, unknown[]][];
-    // Both hashes should be identical (canonical key-sort).
-    expect(calls[0][1][1]).toBe(calls[1][1][1]);
+
+    expect(hashes[0]).toBe(hashes[1]);
   });
 
-  it("swallows DB errors without failing the turn", async () => {
-    (pool.query as ReturnType<typeof vi.fn>).mockRejectedValueOnce(new Error("connection lost"));
-    // Should not throw.
+  it("swallows withUserContext errors without failing the turn", async () => {
+    withUserContextMock.mockRejectedValueOnce(new Error("connection lost"));
     await expect(lifecycle.dispatch("post_tool", basePayload())).resolves.not.toThrow();
   });
 });

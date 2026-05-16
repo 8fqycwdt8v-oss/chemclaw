@@ -16,6 +16,8 @@ description: >
   so downstream projectors can fan out to the KG.
   Skipped when ctx.nceProjectId is null or the feature flag is false.
 implementation: services/agent-claw/src/core/hooks/compute-result-writer.ts
-condition:
-  setting_key: chemistry.compute_results.persist
-  default: false
+# No YAML condition block — the hook is always registered. The runtime gate
+# is the isFeatureEnabled("chemistry.compute_results.persist") check inside
+# the hook implementation. Using condition.setting_key here would query
+# config_settings, but this flag lives in feature_flags — wrong table.
+# The tool-invocation-emitter follows the same pattern (no YAML condition).

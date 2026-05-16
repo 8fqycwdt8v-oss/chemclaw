@@ -35,6 +35,7 @@ import type { Lifecycle } from "../lifecycle.js";
 import type { PostToolPayload } from "../types.js";
 import type { HookJSONOutput } from "../hook-output.js";
 import type { ToolRegistry } from "../../tools/registry.js";
+import { withUserContext } from "../../db/with-user-context.js";
 import { getLogger } from "../../observability/logger.js";
 
 const FEATURE_FLAG_KEY = "chemistry.compute_results.persist";
@@ -149,29 +150,33 @@ export function registerComputeResultWriterHook(
         const modelId = extractModelId(output);
         const toolConfidence = extractToolConfidence(output);
 
-        await deps.pool.query(
-          `INSERT INTO compute_results
-              (tool_id, input_hash, nce_project_id, model_id,
-               payload, tool_confidence,
-               agent_trace_id, created_by_user_entra_id)
-           VALUES ($1, $2, $3::uuid, $4, $5::jsonb, $6,
-                   $7, $8)
-           ON CONFLICT ON CONSTRAINT compute_results_cache_key
-           DO UPDATE SET
-             payload          = EXCLUDED.payload,
-             tool_confidence  = EXCLUDED.tool_confidence,
-             valid_to         = NULL`,
-          [
-            toolId,
-            inputHash,
-            ctx.nceProjectId,
-            modelId,
-            JSON.stringify(output ?? null),
-            toolConfidence ?? null,
-            null,
-            ctx.userEntraId,
-          ],
-        );
+        // withUserContext sets app.current_user_entra_id for the transaction
+        // so FORCE RLS on compute_results lets the INSERT through.
+        await withUserContext(deps.pool, ctx.userEntraId, async (client) => {
+          await client.query(
+            `INSERT INTO compute_results
+                (tool_id, input_hash, nce_project_id, model_id,
+                 payload, tool_confidence,
+                 agent_trace_id, created_by_user_entra_id)
+             VALUES ($1, $2, $3::uuid, $4, $5::jsonb, $6,
+                     $7, $8)
+             ON CONFLICT ON CONSTRAINT compute_results_cache_key
+             DO UPDATE SET
+               payload          = EXCLUDED.payload,
+               tool_confidence  = EXCLUDED.tool_confidence,
+               valid_to         = NULL`,
+            [
+              toolId,
+              inputHash,
+              ctx.nceProjectId,
+              modelId,
+              JSON.stringify(output ?? null),
+              toolConfidence ?? null,
+              null,
+              ctx.userEntraId,
+            ],
+          );
+        });
       } catch (err) {
         log.warn({ err, toolId: payload.toolId }, "compute-result-writer failed");
       }
