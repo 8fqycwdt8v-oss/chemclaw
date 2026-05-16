@@ -150,16 +150,58 @@ def _verify_kg_hypotheses(_conn: psycopg.Connection, _state: dict[str, Any]) -> 
 
 
 def _count_acks(projector_name: str) -> Callable[[psycopg.Connection, dict[str, Any]], int]:
-    def _inner(conn: psycopg.Connection, _state: dict[str, Any]) -> int:
+    # Counts the ack for the specific event_id inserted by this test case.
+    # Using (projector_name, event_id) rather than projector_name alone prevents
+    # false-positives when a projector cross-acks events from other test cases
+    # (BaseProjector acks every event_type it encounters, even ones outside its
+    # interested_event_types, so the total ack count can exceed 1 in a shared DB).
+    def _inner(conn: psycopg.Connection, state: dict[str, Any]) -> int:
+        event_id = state.get("event_id")
+        if not event_id:
+            return 0
         with conn.cursor() as cur:
             cur.execute(
-                "SELECT count(*)::int FROM projection_acks WHERE projector_name = %s",
-                (projector_name,),
+                "SELECT count(*)::int FROM projection_acks "
+                "WHERE projector_name = %s AND event_id = %s::uuid",
+                (projector_name, str(event_id)),
             )
             row = cur.fetchone()
         return int(row[0]) if row else 0
 
     return _inner
+
+
+# ---------------------------------------------------------------------------
+# Postgres-only projector setups (no external HTTP required)
+#
+# chunk_embedder, contextual_chunker, and reaction_vectorizer all have an
+# early-exit path when the canonical table has no rows for the given row id:
+#   chunk_embedder:      SELECT … FROM document_chunks WHERE document_id=?  → empty → return
+#   contextual_chunker:  SELECT … FROM documents WHERE id=?  → not found → return
+#   reaction_vectorizer: SELECT … FROM reactions WHERE experiment_id=?      → empty → return
+#
+# By passing a random UUID that has no corresponding rows in the DB, the
+# handler acks the event without making any outbound HTTP call (no mcp-embedder,
+# mcp-drfp, or mcp-kg needed). This lets us pin the BaseProjector replay
+# contract across Postgres-heavy projectors without the full service stack.
+# ---------------------------------------------------------------------------
+
+
+def _setup_noop(source_table: str) -> Callable[[psycopg.Connection, uuid.UUID], dict[str, Any]]:
+    """Return a setup callable that emits a single event pointing at a
+    non-existent row — the projector's early-exit guard fires immediately."""
+    def _inner(_conn: psycopg.Connection, case_id: uuid.UUID) -> dict[str, Any]:
+        row_id = uuid.uuid4()
+        return {
+            "source_table": source_table,
+            "source_row_id": str(row_id),
+            "payload": {},
+        }
+    return _inner
+
+
+def _verify_noop(_conn: psycopg.Connection, _state: dict[str, Any]) -> None:
+    return
 
 
 # Trimmed initial matrix — additional projector specs land as their setup
@@ -174,6 +216,36 @@ PROJECTOR_CASES: list[ProjectorCase] = [
         setup=_setup_kg_hypotheses,
         verify_state=_verify_kg_hypotheses,
         count_state=_count_acks("kg-hypotheses"),
+    ),
+    # chunk_embedder: no chunks exist for the random document_id → early exit.
+    ProjectorCase(
+        name="chunk_embedder-document_ingested",
+        projector_module="services.projectors.chunk_embedder.main",
+        projector_class="ChunkEmbedderProjector",
+        event_type="document_ingested",
+        setup=_setup_noop("documents"),
+        verify_state=_verify_noop,
+        count_state=_count_acks("chunk_embedder"),
+    ),
+    # contextual_chunker: document row missing → not-found branch → early exit.
+    ProjectorCase(
+        name="contextual_chunker-document_ingested",
+        projector_module="services.projectors.contextual_chunker.main",
+        projector_class="ContextualChunkerProjector",
+        event_type="document_ingested",
+        setup=_setup_noop("documents"),
+        verify_state=_verify_noop,
+        count_state=_count_acks("contextual_chunker"),
+    ),
+    # reaction_vectorizer: no reactions exist for the random experiment_id → early exit.
+    ProjectorCase(
+        name="reaction_vectorizer-experiment_imported",
+        projector_module="services.projectors.reaction_vectorizer.main",
+        projector_class="ReactionVectorizerProjector",
+        event_type="experiment_imported",
+        setup=_setup_noop("experiments"),
+        verify_state=_verify_noop,
+        count_state=_count_acks("reaction_vectorizer"),
     ),
 ]
 
