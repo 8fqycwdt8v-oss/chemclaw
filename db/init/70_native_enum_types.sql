@@ -13,9 +13,11 @@
 --   - ENUM creation wrapped in EXCEPTION WHEN duplicate_object.
 --   - Column conversion guarded by information_schema.columns udt_name check;
 --     skipped when the column is already the target ENUM type.
---   - Existing CHECK constraints on these columns become redundant after
---     conversion (the ENUM already enforces the same invariant) but are left
---     in place — they cause no errors and would require named DROPs to remove.
+--   - CHECK constraints on the affected columns are DROPPED before conversion:
+--     PostgreSQL stores the constraint with resolved text-type literals, and
+--     after the column type changes to ENUM the stored CHECK compares
+--     `maturity_tier = text` which has no operator. The ENUM type enforces
+--     the same invariant, so the CHECK is not re-added.
 
 BEGIN;
 
@@ -33,6 +35,7 @@ $$;
 DO $$
 DECLARE
   tbl TEXT;
+  rec RECORD;
   maturity_tables TEXT[] := ARRAY[
     'documents',
     'research_reports',
@@ -52,6 +55,25 @@ BEGIN
          AND column_name  = 'maturity'
          AND udt_name     = 'text'
     ) THEN
+      -- Drop any CHECK constraints referencing the maturity column.
+      -- PostgreSQL stores CHECK constraint expressions with the literal types
+      -- resolved at creation time (text). After converting the column to
+      -- maturity_tier, the stored expression compares maturity_tier = text,
+      -- which has no operator. The ENUM type enforces the same invariant.
+      FOR rec IN
+        SELECT con.conname
+          FROM pg_constraint con
+          JOIN pg_class     cls ON con.conrelid = cls.oid
+          JOIN pg_attribute att ON att.attrelid  = cls.oid
+                                AND att.attnum   = ANY(con.conkey)
+         WHERE cls.relname        = tbl
+           AND cls.relnamespace   = 'public'::regnamespace
+           AND con.contype        = 'c'
+           AND att.attname        = 'maturity'
+      LOOP
+        EXECUTE format('ALTER TABLE %I DROP CONSTRAINT %I', tbl, rec.conname);
+      END LOOP;
+
       -- Must drop the DEFAULT before retyping: PostgreSQL cannot automatically
       -- cast a stored text default ('EXPLORATORY') to the new ENUM type.
       -- Restore the default after the type change using the ENUM literal.
@@ -77,6 +99,8 @@ END;
 $$;
 
 DO $$
+DECLARE
+  rec RECORD;
 BEGIN
   IF EXISTS (
     SELECT 1
@@ -86,6 +110,20 @@ BEGIN
        AND column_name  = 'decision'
        AND udt_name     = 'text'
   ) THEN
+    FOR rec IN
+      SELECT con.conname
+        FROM pg_constraint con
+        JOIN pg_class     cls ON con.conrelid = cls.oid
+        JOIN pg_attribute att ON att.attrelid  = cls.oid
+                              AND att.attnum   = ANY(con.conkey)
+       WHERE cls.relname      = 'permission_policies'
+         AND cls.relnamespace = 'public'::regnamespace
+         AND con.contype      = 'c'
+         AND att.attname      = 'decision'
+    LOOP
+      EXECUTE format('ALTER TABLE permission_policies DROP CONSTRAINT %I', rec.conname);
+    END LOOP;
+
     ALTER TABLE permission_policies
       ALTER COLUMN decision TYPE permission_decision
       USING decision::permission_decision;
@@ -103,6 +141,8 @@ END;
 $$;
 
 DO $$
+DECLARE
+  rec RECORD;
 BEGIN
   IF EXISTS (
     SELECT 1
@@ -112,6 +152,20 @@ BEGIN
        AND column_name  = 'role'
        AND udt_name     = 'text'
   ) THEN
+    FOR rec IN
+      SELECT con.conname
+        FROM pg_constraint con
+        JOIN pg_class     cls ON con.conrelid = cls.oid
+        JOIN pg_attribute att ON att.attrelid  = cls.oid
+                              AND att.attnum   = ANY(con.conkey)
+       WHERE cls.relname      = 'admin_roles'
+         AND cls.relnamespace = 'public'::regnamespace
+         AND con.contype      = 'c'
+         AND att.attname      = 'role'
+    LOOP
+      EXECUTE format('ALTER TABLE admin_roles DROP CONSTRAINT %I', rec.conname);
+    END LOOP;
+
     ALTER TABLE admin_roles
       ALTER COLUMN role TYPE admin_role_kind
       USING role::admin_role_kind;
