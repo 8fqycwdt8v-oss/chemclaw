@@ -157,6 +157,30 @@ run.wiki-pages: ## Run the knowledge-wiki projection projector locally (ADR 012)
 run.tool-result-extractor: ## Run the tool_result_extractor projector locally (universal-knowledge-accumulation Phase 0)
 	$(VENV)/bin/python -m services.projectors.tool_result_extractor.main
 
+.PHONY: run.doc-extractor
+run.doc-extractor: ## Run the doc_extractor projector locally (universal-knowledge-accumulation Phase 2)
+	$(VENV)/bin/python -m services.projectors.doc_extractor.main
+
+.PHONY: run.investigation-scorer
+run.investigation-scorer: ## Run the investigation_scorer projector locally (universal-knowledge-accumulation Phase 3)
+	$(VENV)/bin/python -m services.projectors.investigation_scorer.main
+
+.PHONY: run.interpreter
+run.interpreter: ## Run the interpreter projector locally (universal-knowledge-accumulation Phase 3)
+	$(VENV)/bin/python -m services.projectors.interpreter.main
+
+.PHONY: run.pattern-detector
+run.pattern-detector: ## Run the pattern_detector daemon locally (universal-knowledge-accumulation Phase 4)
+	$(VENV)/bin/python -m services.optimizer.pattern_detector.main
+
+.PHONY: run.hypothesis-former
+run.hypothesis-former: ## Run the hypothesis_former projector locally (universal-knowledge-accumulation Phase 4)
+	$(VENV)/bin/python -m services.projectors.hypothesis_former.main
+
+.PHONY: run.test-planner
+run.test-planner: ## Run the test_planner projector locally (universal-knowledge-accumulation Phase 5)
+	$(VENV)/bin/python -m services.projectors.test_planner.main
+
 .PHONY: run.wiki-regen
 run.wiki-regen: ## Run the knowledge-wiki body-synthesis daemon locally (ADR 012 Phase 2b)
 	$(VENV)/bin/python -m services.optimizer.wiki_regen.main

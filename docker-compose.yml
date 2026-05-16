@@ -317,6 +317,166 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # doc_extractor — universal-knowledge-accumulation Phase 2 projector.
+  # Consumes `document_ingested` events. For each event it fetches the document's
+  # chunks and calls LiteLLM (in batches of ~10) with a structured extraction
+  # prompt to derive `extracted_fact` rows. Gated by DOC_EXTRACTOR_ENABLED (mirrors
+  # the `kg.auto_extraction.documents` feature flag; default false).
+  # -------------------------------------------------------------
+  doc-extractor:
+    build:
+      context: .
+      dockerfile: services/projectors/doc_extractor/Dockerfile
+    container_name: chemclaw-doc-extractor
+    restart: unless-stopped
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-chemclaw-dev-master-change-me}
+      DOC_EXTRACTOR_MODEL: ${DOC_EXTRACTOR_MODEL:-claude-haiku-4-5}
+      DOC_EXTRACTOR_ENABLED: ${DOC_EXTRACTOR_ENABLED:-false}
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # hypothesis_former — universal-knowledge-accumulation Phase 4 projector.
+  # Consumes `anomaly_observed` + `pattern_detected` events. Budget-gates and
+  # per-project hypothesis-caps before calling LiteLLM with the `hypothesis.form`
+  # prompt. Inserts HYPOTHESIZED facts (confidence <= 0.65, derivation_depth=2);
+  # emits `hypothesis_proposed` events consumed by kg_hypotheses + wiki_regen.
+  # -------------------------------------------------------------
+  hypothesis-former:
+    build:
+      context: .
+      dockerfile: services/projectors/hypothesis_former/Dockerfile
+    container_name: chemclaw-hypothesis-former
+    restart: unless-stopped
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-chemclaw-dev-master-change-me}
+      HYPOTHESIS_FORMER_MODEL: ${HYPOTHESIS_FORMER_MODEL:-claude-haiku-4-5}
+      HYPOTHESIS_FORMER_DAILY_LLM_BUDGET_USD: ${HYPOTHESIS_FORMER_DAILY_LLM_BUDGET_USD:-50.0}
+      HYPOTHESIS_FORMER_MAX_ACTIVE_PER_PROJECT: ${HYPOTHESIS_FORMER_MAX_ACTIVE_PER_PROJECT:-12}
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # pattern_detector — universal-knowledge-accumulation Phase 4 daemon.
+  # Runs every PATTERN_DETECTOR_POLL_HOURS (default 24). For every predicate
+  # with >= 5 numeric facts, computes population statistics (mean, stdev, cv,
+  # quartiles) and emits `pattern_detected` ingestion events when spread is
+  # significant. Cooldown prevents re-emission within 20 hours. No LLM.
+  # -------------------------------------------------------------
+  pattern-detector:
+    build:
+      context: .
+      dockerfile: services/optimizer/pattern_detector/Dockerfile
+    container_name: chemclaw-pattern-detector
+    restart: unless-stopped
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      PATTERN_DETECTOR_POLL_HOURS: ${PATTERN_DETECTOR_POLL_HOURS:-24}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # interpreter — universal-knowledge-accumulation Phase 3 projector.
+  # Consumes `investigation_requested` events. Gathers KG context for the
+  # flagged fact, calls LiteLLM with the `fact_interpretation.derive` prompt,
+  # and inserts INTERPRETED facts (derivation_class=INTERPRETED, depth+1).
+  # Budget-gated by investigation_budget_usage daily LLM spend.
+  # -------------------------------------------------------------
+  interpreter:
+    build:
+      context: .
+      dockerfile: services/projectors/interpreter/Dockerfile
+    container_name: chemclaw-interpreter
+    restart: unless-stopped
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-chemclaw-dev-master-change-me}
+      INTERPRETER_MODEL: ${INTERPRETER_MODEL:-claude-haiku-4-5}
+      INTERPRETER_DAILY_LLM_BUDGET_USD: ${INTERPRETER_DAILY_LLM_BUDGET_USD:-50.0}
+      INTERPRETER_MAX_DERIVATION_DEPTH: ${INTERPRETER_MAX_DERIVATION_DEPTH:-4}
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # investigation_scorer — universal-knowledge-accumulation Phase 3 projector.
+  # Consumes `extracted_fact` events. Computes novelty + anomaly + priority
+  # scores, then routes facts to `investigation_requested` (sync interpreter),
+  # `investigation_queue` (deferred sweep), or `anomaly_observed` (hypothesis
+  # former) based on composite score vs thresholds.
+  # -------------------------------------------------------------
+  investigation-scorer:
+    build:
+      context: .
+      dockerfile: services/projectors/investigation_scorer/Dockerfile
+    container_name: chemclaw-investigation-scorer
+    restart: unless-stopped
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      SCORE_ANOMALY_WEIGHT: ${SCORE_ANOMALY_WEIGHT:-0.45}
+      SCORE_NOVELTY_WEIGHT: ${SCORE_NOVELTY_WEIGHT:-0.35}
+      SCORE_PRIORITY_WEIGHT: ${SCORE_PRIORITY_WEIGHT:-0.20}
+      SCORE_THRESHOLD_SYNC: ${SCORE_THRESHOLD_SYNC:-0.70}
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # tool_result_extractor — universal-knowledge-accumulation Phase 0 projector.
   # Consumes `tool_call_completed` events, looks up a registry-driven extractor
   # for the tool, and writes structured `extracted_facts` rows. Phase 0 ships
@@ -1781,6 +1941,39 @@ services:
       POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
       POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
       MCP_KG_URL: http://mcp-kg:8003
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
+  # test_planner — universal-knowledge-accumulation Phase 5 projector.
+  # Consumes `hypothesis_proposed` events. For each HYPOTHESIZED fact, calls
+  # LiteLLM to design a minimal discriminating experiment plan, then inserts
+  # a synthesis_campaign + synthesis_campaign_steps with auto_advance=true.
+  # Budget-gated by investigation_budget_usage daily CPU hours.
+  # -------------------------------------------------------------
+  test-planner:
+    build:
+      context: .
+      dockerfile: services/projectors/test_planner/Dockerfile
+    container_name: chemclaw-test-planner
+    restart: unless-stopped
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+      litellm:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      LITELLM_BASE_URL: ${LITELLM_BASE_URL:-http://litellm:4000}
+      LITELLM_API_KEY: ${LITELLM_API_KEY:-sk-chemclaw-dev-master-change-me}
+      TEST_PLANNER_MODEL: ${TEST_PLANNER_MODEL:-claude-haiku-4-5}
+      TEST_PLANNER_DAILY_CPU_BUDGET_HOURS: ${TEST_PLANNER_DAILY_CPU_BUDGET_HOURS:-100.0}
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
     security_opt:
       - no-new-privileges:true
 

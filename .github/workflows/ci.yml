@@ -120,6 +120,12 @@ jobs:
             services/projectors/fact_extractor/tests/ \
             services/projectors/conditions_normalizer/tests/ \
             services/projectors/kg_optimization_campaign/tests/ \
+            services/projectors/doc_extractor/tests/ \
+            services/projectors/investigation_scorer/tests/ \
+            services/projectors/interpreter/tests/ \
+            services/projectors/hypothesis_former/tests/ \
+            services/projectors/test_planner/tests/ \
+            services/optimizer/pattern_detector/tests/ \
             services/mcp_tools/mcp_applicability_domain/tests/ \
             services/mcp_tools/mcp_green_chemistry/tests/ \
             services/mcp_tools/mcp_reaction_optimizer/tests/ \
