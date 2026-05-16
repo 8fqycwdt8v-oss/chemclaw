@@ -183,7 +183,7 @@ def create_app(
         except Exception:
             _cb.record_failure()
             raise
-        if response.status_code >= 500:
+        if response.status_code >= 500 and response.status_code != 501:
             _cb.record_failure()
         else:
             _cb.record_success()

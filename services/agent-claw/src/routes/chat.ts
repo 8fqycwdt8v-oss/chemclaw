@@ -530,7 +530,7 @@ async function handleChat(
               err_name: err instanceof Error ? err.name : "unknown",
               err_msg:
                 err instanceof Error
-                  ? (err.message ?? "").slice(0, 500)
+                  ? err.message.slice(0, 500)
                   : String(err).slice(0, 500),
               request_id: req.id,
             }),
