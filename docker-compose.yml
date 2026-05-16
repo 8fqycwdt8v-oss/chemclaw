@@ -350,6 +350,37 @@ services:
       - no-new-privileges:true
 
   # -------------------------------------------------------------
+  # investigation_scorer — universal-knowledge-accumulation Phase 3 projector.
+  # Consumes `extracted_fact` events. Computes novelty + anomaly + priority
+  # scores, then routes facts to `investigation_requested` (sync interpreter),
+  # `investigation_queue` (deferred sweep), or `anomaly_observed` (hypothesis
+  # former) based on composite score vs thresholds.
+  # -------------------------------------------------------------
+  investigation-scorer:
+    build:
+      context: .
+      dockerfile: services/projectors/investigation_scorer/Dockerfile
+    container_name: chemclaw-investigation-scorer
+    restart: unless-stopped
+    profiles: ["full"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-chemclaw}
+      POSTGRES_USER: ${CHEMCLAW_SERVICE_USER:-chemclaw_service}
+      POSTGRES_PASSWORD: ${CHEMCLAW_SERVICE_PASSWORD:-${POSTGRES_PASSWORD:-chemclaw_dev_password_change_me}}
+      SCORE_ANOMALY_WEIGHT: ${SCORE_ANOMALY_WEIGHT:-0.45}
+      SCORE_NOVELTY_WEIGHT: ${SCORE_NOVELTY_WEIGHT:-0.35}
+      SCORE_PRIORITY_WEIGHT: ${SCORE_PRIORITY_WEIGHT:-0.20}
+      SCORE_THRESHOLD_SYNC: ${SCORE_THRESHOLD_SYNC:-0.70}
+      PROJECTOR_LOG_LEVEL: ${PROJECTOR_LOG_LEVEL:-INFO}
+    security_opt:
+      - no-new-privileges:true
+
+  # -------------------------------------------------------------
   # tool_result_extractor — universal-knowledge-accumulation Phase 0 projector.
   # Consumes `tool_call_completed` events, looks up a registry-driven extractor
   # for the tool, and writes structured `extracted_facts` rows. Phase 0 ships

@@ -161,6 +161,10 @@ run.tool-result-extractor: ## Run the tool_result_extractor projector locally (u
 run.doc-extractor: ## Run the doc_extractor projector locally (universal-knowledge-accumulation Phase 2)
 	$(VENV)/bin/python -m services.projectors.doc_extractor.main
 
+.PHONY: run.investigation-scorer
+run.investigation-scorer: ## Run the investigation_scorer projector locally (universal-knowledge-accumulation Phase 3)
+	$(VENV)/bin/python -m services.projectors.investigation_scorer.main
+
 .PHONY: run.wiki-regen
 run.wiki-regen: ## Run the knowledge-wiki body-synthesis daemon locally (ADR 012 Phase 2b)
 	$(VENV)/bin/python -m services.optimizer.wiki_regen.main
