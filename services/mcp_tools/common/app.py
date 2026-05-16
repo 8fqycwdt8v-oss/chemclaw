@@ -22,6 +22,7 @@ from typing import Any
 from fastapi import FastAPI, HTTPException, Request, Response, status
 from fastapi.responses import JSONResponse
 
+from services.mcp_tools.common.circuit_breaker import build_circuit_breaker
 from services.mcp_tools.common.log_context import bind_log_context, reset_log_context
 from services.mcp_tools.common.logging import configure_logging
 from services.mcp_tools.common.user_hash import hash_user
@@ -138,6 +139,55 @@ def create_app(
         log.info("stopping %s", name)
 
     app = FastAPI(title=name, version=version, lifespan=_default_lifespan)
+
+    # ---------------------------------------------------------------------------
+    # Circuit breaker (per-service process-level singleton).
+    #
+    # Trips after MCP_CB_THRESHOLD consecutive 5xx responses (default 5) and
+    # short-circuits subsequent non-probe requests with 503 for
+    # MCP_CB_COOLDOWN_SECS (default 30). After the cooldown, one probe is
+    # allowed through; success → CLOSED, failure → resets the cooldown clock.
+    # Probe and health paths (/healthz, /readyz) are exempt so k8s liveness
+    # probes never trip the breaker.
+    # ---------------------------------------------------------------------------
+    _cb = build_circuit_breaker()
+
+    @app.middleware("http")
+    async def circuit_breaker_middleware(
+        request: Request,
+        call_next: Callable[[Request], Awaitable[Response]],
+    ) -> Response:
+        path = request.url.path
+        if path in ("/healthz", "/readyz"):
+            return await call_next(request)
+        if _cb.is_open():
+            log.warning(
+                "circuit breaker open; rejecting request",
+                extra={
+                    "event": "cb_open_rejection",
+                    "service": name,
+                    "path": path,
+                    "cb_state": _cb.state(),
+                },
+            )
+            return JSONResponse(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                content={
+                    "error": ERROR_CODE_DEGRADED,
+                    "detail": "service temporarily unavailable (circuit breaker open)",
+                },
+                headers={"x-request-id": getattr(request.state, "request_id", "")},
+            )
+        try:
+            response = await call_next(request)
+        except Exception:
+            _cb.record_failure()
+            raise
+        if response.status_code >= 500 and response.status_code != 501:
+            _cb.record_failure()
+        else:
+            _cb.record_success()
+        return response
 
     # ADR 006 Layer 2 — Bearer-token auth on every /tools/* route.
     # Implemented as middleware (not a FastAPI dependency) so service code
@@ -446,8 +496,8 @@ def create_app(
         )
 
     @app.get("/healthz", tags=["internal"])
-    async def healthz() -> dict[str, str]:
-        return {"status": "ok", "service": name, "version": version}
+    async def healthz() -> dict[str, Any]:
+        return {"status": "ok", "service": name, "version": version, "circuit_breaker": _cb.state()}
 
     @app.get("/readyz", tags=["internal"], response_model=None)
     async def readyz() -> dict[str, Any] | JSONResponse:

@@ -18,6 +18,7 @@
 import type { Logger } from "pino";
 
 import { getLogger } from "./logger.js";
+import { getRequestContext } from "../core/request-context.js";
 
 export interface RetryOptions {
   /** Total attempts including the first. Defaults to 3. */
@@ -127,6 +128,29 @@ export async function withRetry<T>(
         );
         throw err;
       }
+
+      // Per-request budget check: if the ALS RequestContext has a shared
+      // retryBudget and it is exhausted, skip this retry to bound the
+      // total amplification from fan-out chains (e.g. 3 tools × 3 each =
+      // 9 attempts vs. a shared cap of, say, 6).
+      const reqCtx = getRequestContext();
+      if (reqCtx?.retryBudget !== undefined) {
+        if (reqCtx.retryBudget.remaining <= 0) {
+          log.warn(
+            {
+              event: "retry_budget_exhausted",
+              operation: opts.operation,
+              attempt,
+              err_name: (err as Error).name,
+              err_msg: (err as Error).message,
+            },
+            "per-request retry budget exhausted; not retrying",
+          );
+          throw err;
+        }
+        reqCtx.retryBudget.remaining -= 1;
+      }
+
       const sleep = backoffMs(opts, attempt);
       log.warn(
         {

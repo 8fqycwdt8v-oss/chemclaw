@@ -64,6 +64,12 @@ export type { StreamEvent } from "../streaming/sse.js";
 // importing ChatRouteDeps from this module.
 export type { ChatRouteDeps } from "./chat-helpers.js";
 
+// Default per-request retry budget injected into the RequestContext ALS store
+// so withRetry call sites share a ceiling across fan-out chains.
+// 9 = three MCP tools each retrying twice (1 initial + 2 retries = 3 calls,
+// 2 retry decrements each). Tune via config_settings "agent.per_request_retry_budget".
+const PER_REQUEST_RETRY_BUDGET = 9;
+
 // ---------------------------------------------------------------------------
 // Main handler
 // ---------------------------------------------------------------------------
@@ -509,6 +515,37 @@ async function handleChat(
     // event and returns the finishReason for our outer-scope `let`.
     const classified = classifyStreamError(err, conn, reply, req);
     finishReason = classified.finishReason;
+    // Persist unhandled errors to error_events so operators can chart the
+    // rate in Loki / Grafana without relying solely on log scraping.
+    // Best-effort: a DB outage must not mask the original failure.
+    if (classified.finishReason === "error") {
+      void deps.pool
+        .query(
+          "SELECT record_error_event($1, $2, $3, $4::jsonb)",
+          [
+            "agent-claw",
+            "STREAM_UNHANDLED_EXCEPTION",
+            "error",
+            JSON.stringify({
+              err_name: err instanceof Error ? err.name : "unknown",
+              err_msg:
+                err instanceof Error
+                  ? err.message.slice(0, 500)
+                  : String(err).slice(0, 500),
+              request_id: req.id,
+            }),
+          ],
+        )
+        .catch((dbErr: unknown) => {
+          req.log.warn(
+            {
+              event: "record_error_event_failed",
+              err_msg: dbErr instanceof Error ? dbErr.message : String(dbErr),
+            },
+            "record_error_event call failed",
+          );
+        });
+    }
   } finally {
     // Persist in-flight stream redactions to scratchpad for observability.
     // post_turn already ran inside runHarness; we append the stream_delta
@@ -674,6 +711,10 @@ export function registerChatRoute(app: FastifyInstance, deps: ChatRouteDeps): vo
           signal: req.signal,
           requestId: req.id,
           userHash: hashUser(u),
+          // Per-request retry budget: caps total retry amplification across
+          // all withRetry call sites in one turn (e.g. 3 tools × 3 each = 9
+          // potential retries, bounded to PER_REQUEST_RETRY_BUDGET_DEFAULT).
+          retryBudget: { remaining: PER_REQUEST_RETRY_BUDGET },
         },
         () => handleChat(req, reply, deps),
       );

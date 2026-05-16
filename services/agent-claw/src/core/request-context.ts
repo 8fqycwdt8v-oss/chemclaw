@@ -16,6 +16,20 @@
 
 import { AsyncLocalStorage } from "node:async_hooks";
 
+/**
+ * Per-request retry budget shared across all `withRetry` call sites within
+ * the same AsyncLocalStorage context. Prevents a fan-out chain of N tools
+ * each retrying M times from amplifying into N×M attempts against an
+ * already-saturated downstream service.
+ *
+ * The budget is mutable (decremented in place) so every `withRetry` call
+ * in the same request sees the running total without needing to thread a
+ * return value through the call stack.
+ */
+export interface RetryBudget {
+  remaining: number;
+}
+
 export interface RequestContext {
   /** Entra-ID of the calling user — flows into JWT `user` claim. */
   userEntraId: string;
@@ -50,6 +64,16 @@ export interface RequestContext {
    * AbortController as before.
    */
   signal?: AbortSignal;
+  /**
+   * Per-request retry budget shared across every `withRetry` invocation
+   * within this AsyncLocalStorage context. When set, `withRetry` decrements
+   * this before each retry attempt and skips further retries once exhausted,
+   * bounding the total amplification from fan-out tool chains.
+   *
+   * Default: undefined (no per-request cap; per-call defaults apply).
+   * Production routes set this via `PER_REQUEST_RETRY_BUDGET_DEFAULT`.
+   */
+  retryBudget?: RetryBudget;
 }
 
 const _storage = new AsyncLocalStorage<RequestContext>();
