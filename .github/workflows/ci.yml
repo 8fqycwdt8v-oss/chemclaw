@@ -125,7 +125,9 @@ jobs:
             services/projectors/interpreter/tests/ \
             services/projectors/hypothesis_former/tests/ \
             services/projectors/test_planner/tests/ \
+            services/projectors/wiki_pages/tests/ \
             services/optimizer/pattern_detector/tests/ \
+            services/optimizer/wiki_regen/tests/ \
             services/mcp_tools/mcp_applicability_domain/tests/ \
             services/mcp_tools/mcp_green_chemistry/tests/ \
             services/mcp_tools/mcp_reaction_optimizer/tests/ \

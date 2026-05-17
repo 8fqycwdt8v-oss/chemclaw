@@ -1,0 +1,15 @@
+name: kg-conclusion-buffer
+lifecycle: post_tool
+enabled: true
+order: 120
+description: >
+  Phase 6 — Universal Knowledge Accumulation: agent-internal ABSTRACTED fact
+  extraction. Buffers chemistry tool outputs (retrosynthesis, yield prediction,
+  property prediction, mechanism elucidation, QM, statistical analysis, …) in
+  ctx.scratchpad["kg_conclusion_inputs"] for the companion post_turn hook
+  (kg-conclusion-extractor) to process. Only fires for chemistry-domain tools
+  whose output is a non-empty object or array. Internal builtins are excluded.
+  Feature-gated by kg.conclusion_extraction.enabled (default false).
+condition:
+  setting_key: kg.conclusion_extraction.enabled
+  default: false

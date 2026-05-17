@@ -1,0 +1,17 @@
+name: kg-conclusion-extractor
+lifecycle: post_turn
+enabled: true
+order: 90
+description: >
+  Phase 6 — Universal Knowledge Accumulation: agent-internal ABSTRACTED fact
+  extraction. Reads ctx.scratchpad["kg_conclusion_inputs"] (populated by the
+  post_tool kg-conclusion-buffer hook), calls the LLM (role=judge) to derive
+  ABSTRACTED cross-tool conclusions, inserts them into `facts` with
+  derivation_class='ABSTRACTED' and confidence ≤ 0.70, and emits one
+  `extracted_fact` ingestion event per inserted fact. The investigation_scorer
+  and interpreter projectors pick these up for follow-on analysis. Fires BEFORE
+  redact-secrets (order=100) so the buffer is cleared even on redaction turns.
+  Feature-gated by kg.conclusion_extraction.enabled (default false).
+condition:
+  setting_key: kg.conclusion_extraction.enabled
+  default: false

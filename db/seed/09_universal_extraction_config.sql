@@ -59,6 +59,27 @@ UPDATE feature_flags
        updated_at  = NOW()
  WHERE key = 'kg.auto_extraction.enabled';
 
+-- Phase 6: agent-internal ABSTRACTED fact extraction
+SELECT bootstrap_feature_flag(
+  'kg.conclusion_extraction.enabled',
+  FALSE,
+  'Phase 6 switch for agent-internal ABSTRACTED fact extraction. '
+  'When ON the kg-conclusion-buffer post_tool hook buffers chemistry tool '
+  'outputs each turn and the kg-conclusion-extractor post_turn hook calls '
+  'LLM to derive ABSTRACTED facts (confidence ≤ 0.70). Off by default — '
+  'flip per project once the prompt template is tuned.',
+  '__bootstrap__'
+);
+UPDATE feature_flags
+   SET description =
+        'Phase 6 switch for agent-internal ABSTRACTED fact extraction. '
+        'When ON the kg-conclusion-buffer post_tool hook buffers chemistry tool '
+        'outputs each turn and the kg-conclusion-extractor post_turn hook calls '
+        'LLM to derive ABSTRACTED facts (confidence ≤ 0.70). Off by default — '
+        'flip per project once the prompt template is tuned.',
+       updated_at  = NOW()
+ WHERE key = 'kg.conclusion_extraction.enabled';
+
 -- ────────────────────────────────────────────────────────────────────────────
 -- 2. Config knobs (global defaults; resolution chain user → project → org → global).
 --
@@ -232,6 +253,10 @@ VALUES
   ('kg.pattern_summary', 1,
    '-- placeholder; populated in Phase 4',
    '{"phase": 0, "purpose": "summarise pattern_detected event clusters"}'::jsonb,
+   '__bootstrap__', FALSE),
+  ('kg.conclusion_extraction', 1,
+   '-- placeholder; populated in Phase 6',
+   '{"phase": 0, "purpose": "extract ABSTRACTED facts from buffered chemistry tool outputs"}'::jsonb,
    '__bootstrap__', FALSE)
 ON CONFLICT (prompt_name, version) DO UPDATE SET
   template = EXCLUDED.template,
