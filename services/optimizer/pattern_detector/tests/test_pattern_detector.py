@@ -1,16 +1,43 @@
 """Unit tests for the pattern_detector daemon.
 
 compute_cluster_stats is pure and fully testable without DB.
+_fetch_compound_inchikeys and _emit_pattern_detected use AsyncMock DB connections.
 """
 from __future__ import annotations
+
+import json
+from contextlib import asynccontextmanager
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
 from services.optimizer.pattern_detector.main import (
+    _emit_pattern_detected,
+    _fetch_compound_inchikeys,
     compute_cluster_stats,
     _CV_THRESHOLD,
     _MIN_CLUSTER_SIZE,
 )
+
+
+# ---------------------------------------------------------------------------
+# Async DB helper — fake connection factory
+# ---------------------------------------------------------------------------
+
+
+def _make_conn(fetchall_return=None):
+    """Return a minimal AsyncMock connection that stubs cursor().execute/fetchall."""
+    cur = AsyncMock()
+    cur.execute = AsyncMock()
+    cur.fetchall = AsyncMock(return_value=fetchall_return or [])
+
+    @asynccontextmanager
+    async def _cursor_ctx():
+        yield cur
+
+    conn = MagicMock()
+    conn.cursor = _cursor_ctx
+    return conn, cur
 
 
 def test_returns_none_for_too_few_values():
@@ -78,3 +105,105 @@ def test_min_cluster_size_constant():
 
 def test_cv_threshold_constant():
     assert 0 < _CV_THRESHOLD < 1.0
+
+
+# ---------------------------------------------------------------------------
+# _fetch_compound_inchikeys
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_fetch_compound_inchikeys_returns_list():
+    rows = [{"subject_id_value": "AAAA"}, {"subject_id_value": "BBBB"}]
+    conn, cur = _make_conn(fetchall_return=rows)
+    result = await _fetch_compound_inchikeys(conn, "boiling_point")
+    assert result == ["AAAA", "BBBB"]
+    cur.execute.assert_awaited_once()
+
+
+@pytest.mark.asyncio
+async def test_fetch_compound_inchikeys_filters_none():
+    rows = [{"subject_id_value": "AAAA"}, {"subject_id_value": None}, {"subject_id_value": "CCCC"}]
+    conn, _ = _make_conn(fetchall_return=rows)
+    result = await _fetch_compound_inchikeys(conn, "melting_point")
+    assert result == ["AAAA", "CCCC"]
+
+
+@pytest.mark.asyncio
+async def test_fetch_compound_inchikeys_empty_table():
+    conn, _ = _make_conn(fetchall_return=[])
+    result = await _fetch_compound_inchikeys(conn, "solubility")
+    assert result == []
+
+
+@pytest.mark.asyncio
+async def test_fetch_compound_inchikeys_tuple_rows():
+    rows = [("IK1",), ("IK2",)]
+    conn, _ = _make_conn(fetchall_return=rows)
+    result = await _fetch_compound_inchikeys(conn, "logp")
+    assert result == ["IK1", "IK2"]
+
+
+# ---------------------------------------------------------------------------
+# _emit_pattern_detected
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_emit_pattern_detected_includes_inchikeys():
+    inchikeys = ["INCHIKEYAAA", "INCHIKEYBBB"]
+
+    # Two separate cursors: one for _fetch_compound_inchikeys, one for the INSERT
+    fetch_cur = AsyncMock()
+    fetch_cur.execute = AsyncMock()
+    fetch_cur.fetchall = AsyncMock(return_value=[{"subject_id_value": k} for k in inchikeys])
+
+    insert_cur = AsyncMock()
+    insert_cur.execute = AsyncMock()
+
+    call_count = 0
+
+    @asynccontextmanager
+    async def _cursor_ctx():
+        nonlocal call_count
+        call_count += 1
+        yield fetch_cur if call_count == 1 else insert_cur
+
+    conn = MagicMock()
+    conn.cursor = _cursor_ctx
+
+    await _emit_pattern_detected(conn, "boiling_point", {"count": 5, "mean": 100.0})
+
+    insert_args = insert_cur.execute.call_args[0]
+    # execute(sql, (json_string,)) — params is the second positional arg
+    payload = json.loads(insert_args[1][0])
+    assert payload["predicate"] == "boiling_point"
+    assert payload["compound_inchikeys"] == inchikeys
+    assert "cluster" in payload
+
+
+@pytest.mark.asyncio
+async def test_emit_pattern_detected_empty_inchikeys():
+    fetch_cur = AsyncMock()
+    fetch_cur.execute = AsyncMock()
+    fetch_cur.fetchall = AsyncMock(return_value=[])
+
+    insert_cur = AsyncMock()
+    insert_cur.execute = AsyncMock()
+
+    call_count = 0
+
+    @asynccontextmanager
+    async def _cursor_ctx():
+        nonlocal call_count
+        call_count += 1
+        yield fetch_cur if call_count == 1 else insert_cur
+
+    conn = MagicMock()
+    conn.cursor = _cursor_ctx
+
+    await _emit_pattern_detected(conn, "solubility", {"count": 6, "mean": 0.5})
+
+    insert_args = insert_cur.execute.call_args[0]
+    payload = json.loads(insert_args[1][0])
+    assert payload["compound_inchikeys"] == []
