@@ -857,6 +857,8 @@ Default directions: `min_resolution → maximize`, `runtime_min → minimize`, `
 
 **Tool ID:** `fetch_lims_result`
 
+> **Status: pending registration.** This tool file exists but is not yet wired into `dependencies.ts` and will not appear in the agent's live tool list. It is documented here for completeness; it becomes active once registered.
+
 **Description:** Fetch a single LIMS test result from STARLIMS by result ID. Returns full analytical result detail including method, value, unit, and analyst. Use after `query_lims_results` to retrieve a specific result.
 
 **Annotations:** none specified (Phase F.2 builtin)

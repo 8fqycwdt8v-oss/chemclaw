@@ -11,7 +11,7 @@ Comprehensive reference for all tools, hooks, skills, and MCP service endpoints 
 | [builtin-tools-a-l.md](builtin-tools-a-l.md) | 52 agent builtins — `add_forged_tool_test` → `list_synthesis_campaigns` |
 | [builtin-tools-m-z.md](builtin-tools-m-z.md) | 55 agent builtins — `manage_plan` → `workflow_pause_resume` |
 | [builtin-tools-qm.md](builtin-tools-qm.md) | 6 QM builtins + 3 workflow execution tools (cross-referenced in m-z) |
-| [hooks.md](hooks.md) | 23 lifecycle hooks — pre_tool guards, post_tool observers, telemetry |
+| [hooks.md](hooks.md) | 29 lifecycle hooks — pre_tool guards, post_tool observers, telemetry |
 | [skills.md](skills.md) | 23 domain skills — retrosynthesis, optimization, QM pipelines, research |
 | [mcp-services.md](mcp-services.md) | 15+ MCP services — cheminformatics, QM, KG, prediction, analytics |
 | [shared-types.md](shared-types.md) | Shared Zod schemas — ELN entities, QM request/response, campaign types, KG confidence tiers |
@@ -28,20 +28,20 @@ The agent's tool surface has four layers:
 │  ├── Builtin Tools (~107 tools, TypeScript wrappers)         │
 │  ├── Forged Tools (user-defined, stored in DB + skill_library│
 │  ├── Skills (domain behavior packs, 23 registered)           │
-│  └── Lifecycle Hooks (23 hooks, 16 phases)                   │
+│  └── Lifecycle Hooks (29 hooks, 16 phases)                   │
 └──────────────────────────────────────────────────────────────┘
                           │
               MCP Bearer Token Auth (HS256)
                           │
 ┌──────────────────────────────────────────────────────────────┐
 │  MCP Tool Services (Python, stateless FastAPI microservices)  │
-│  ├── mcp-rdkit        (port varies)  — cheminformatics        │
-│  ├── mcp-drfp         (port varies)  — reaction fingerprints  │
+│  ├── mcp-rdkit        (port 8001)    — cheminformatics        │
+│  ├── mcp-drfp         (port 8002)    — reaction fingerprints  │
 │  ├── mcp-chemprop     (port 8009)    — yield/property ML      │
-│  ├── mcp-xtb          (port varies)  — QM via xTB/CREST       │
+│  ├── mcp-xtb          (port 8010)    — QM via xTB/CREST       │
 │  ├── mcp-askcos       (port 8007)    — retrosynthesis          │
 │  ├── mcp-aizynth      (port 8008)    — retrosynthesis          │
-│  ├── mcp-kg           (port varies)  — knowledge graph         │
+│  ├── mcp-kg           (port 8003)    — knowledge graph         │
 │  ├── mcp-applicability-domain        — AD assessment           │
 │  └── ... (10+ additional services)                            │
 └──────────────────────────────────────────────────────────────┘

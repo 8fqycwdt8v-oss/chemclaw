@@ -702,25 +702,26 @@ Queries instrument run records from SciY with keyset pagination ordered by measu
 
 **File:** `query_kg.ts` | **Annotation:** `readOnly: true`
 
-Queries the bi-temporal knowledge graph at an optional point in time. Returns facts matching the given subject/predicate/object pattern. Fact IDs returned are tracked by the `anti-fabrication` post_tool hook for use in subsequent `propose_hypothesis` calls.
+Queries the bi-temporal knowledge graph for facts incident to an entity. Returns all edges whose subject or object matches the entity reference, filtered by optional predicate and direction. Fact IDs returned are tracked by the `anti-fabrication` post_tool hook for use in subsequent `propose_hypothesis` calls.
 
 #### Input
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `subject` | `string` | No | Filter by subject entity |
-| `predicate` | `string` | No | Filter by predicate/relationship type |
-| `object` | `string` | No | Filter by object value |
-| `at_time` | `string (ISO 8601)` | No | Query the KG at this historical timestamp (default: now) |
-| `group_id` | `string` | No | Restrict to a specific KG group |
-| `limit` | `number (int, max 200)` | No | Maximum facts to return (default 50) |
+| `entity` | `EntityRef` | **Yes** | Entity to query: `{ label: string (CamelCase, ≤80), id_property: string (snake_case, ≤40), id_value: string (≤4000) }` |
+| `predicate` | `string` | No | Filter by predicate type (UPPER_SNAKE_CASE, max 80) |
+| `direction` | `"in" \| "out" \| "both"` | No | Traversal direction (default: `"both"`) |
+| `at_time` | `string (ISO-8601 with offset)` | No | Query KG at this historical timestamp; omit for current state |
+| `include_invalidated` | `boolean` | No | Include invalidated facts (default: `false`) |
+| `group_id` | `string` | No | Restrict to a specific tenant KG group (server default: `"__system__"`) |
 
 #### Output
 
 | Field | Type | Description |
 |---|---|---|
-| `facts` | `KgFact[]` | Matching facts with provenance |
-| `at_time` | `string` | The effective query timestamp |
+| `facts` | `KgFact[]` | Matching facts with full provenance, confidence tier/score, and bi-temporal bounds |
+
+Each `KgFact` contains: `fact_id (UUID)`, `subject (EntityRef)`, `predicate`, `object (EntityRef)`, `edge_properties (record)`, `confidence_tier` (one of `expert_validated | multi_source_llm | single_source_llm | expert_disputed | invalidated`), `confidence_score (number)`, `t_valid_from`, `t_valid_to (nullable)`, `recorded_at`, `provenance { source_type, source_id }`.
 
 #### Behavior notes
 
@@ -734,22 +735,22 @@ Queries the bi-temporal knowledge graph at an optional point in time. Returns fa
 
 **File:** `query_kg_at_time.ts` | **Annotation:** `readOnly: true`
 
-Identical to `query_kg` except that `at_time` is required, making the temporal snapshot semantics explicit. Use when the agent needs to reason about historical KG state.
+Time-travel KG query: identical to `query_kg` except that `at_time` is required, making the temporal snapshot semantics explicit. Use when the agent needs to reason about historical KG state.
 
 #### Input
 
 | Field | Type | Required | Description |
 |---|---|---|---|
-| `subject` | `string` | No | Filter by subject entity |
-| `predicate` | `string` | No | Filter by predicate/relationship type |
-| `object` | `string` | No | Filter by object value |
-| `at_time` | `string (ISO 8601)` | **Yes** | Historical timestamp for the snapshot |
-| `group_id` | `string` | No | Restrict to a specific KG group |
-| `limit` | `number (int, max 200)` | No | Maximum facts to return (default 50) |
+| `entity` | `EntityRef` | **Yes** | Entity to query: `{ label, id_property, id_value }` |
+| `at_time` | `string (ISO-8601 with offset)` | **Yes** | Historical timestamp for the KG snapshot |
+| `predicate` | `string` | No | Filter by predicate type (UPPER_SNAKE_CASE, max 80) |
+| `direction` | `"in" \| "out" \| "both"` | No | Traversal direction (default: `"both"`) |
+| `include_invalidated` | `boolean` | No | Include facts invalidated by `at_time` (default: `false`) |
+| `group_id` | `string` | No | Restrict to a specific tenant KG group |
 
 #### Output
 
-Same as `query_kg`.
+Same as `query_kg` — `{ facts: KgFact[] }`.
 
 #### Behavior notes
 
@@ -760,6 +761,8 @@ Same as `query_kg`.
 ### query_lims_results
 
 **File:** `query_lims_results.ts` | **No annotations specified**
+
+> **Status: pending registration.** This tool file exists but is not yet wired into `dependencies.ts` and will not appear in the agent's live tool list. It is documented here for completeness; it becomes active once registered.
 
 Queries STARLIMS for analytical test results matching filter criteria. Automatically constructs a `Citation` per result referencing the LIMS record.
 
@@ -1301,6 +1304,8 @@ Each `SolventScore` includes `solvent`, a `scores` object keyed by framework nam
 ### screen_admet
 
 **File:** `screen_admet.ts` | **No annotations specified**
+
+> **Status: pending registration.** This tool file exists but is not yet wired into `dependencies.ts` and will not appear in the agent's live tool list. The backing `mcp-admetlab` service (port 8011) has also been removed from `docker-compose.yml`. Documented here for reference; do not call this tool in the current deployment.
 
 Screens compounds for ADMET (Absorption, Distribution, Metabolism, Excretion, and Toxicity) properties using ADMETlab. Evaluates 119 endpoints across all five ADMET categories.
 
@@ -1894,6 +1899,8 @@ Writes content to a file within the agent's sandboxed filesystem (`AGENT_FS_ROOT
 ### fetch_lims_result
 
 **File:** `fetch_lims_result.ts` | **No annotations specified**
+
+> **Status: pending registration.** This tool file exists but is not yet wired into `dependencies.ts` and will not appear in the agent's live tool list. It is documented here for completeness; it becomes active once registered.
 
 Fetches a single STARLIMS test result by its unique ID. Uses the native `fetch` API with a 20-second abort timeout and builds a structured citation for the returned record.
 

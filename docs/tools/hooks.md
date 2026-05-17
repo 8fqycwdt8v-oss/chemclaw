@@ -1,12 +1,12 @@
 # ChemClaw Lifecycle Hooks Reference
 
-This document covers all 23 built-in lifecycle hooks registered in the agent harness. Hooks are registered at startup by matching a YAML file in `hooks/` to a `BUILTIN_REGISTRARS` entry in `services/agent-claw/src/core/hook-loader.ts`.
+This document covers the built-in lifecycle hooks registered in the agent harness (`MIN_EXPECTED_HOOKS = 29`; 31 YAML files in `hooks/` with 2 conditionally-registered). Hooks are registered at startup by matching a YAML file in `hooks/` to a `BUILTIN_REGISTRARS` entry in `services/agent-claw/src/core/hook-loader.ts`.
 
 **Decision aggregation:** `deny > defer > ask > allow`. A hook returning `permissionDecision: "deny"` short-circuits subsequent hooks for that phase.
 
 **Timeout:** Each hook has a 60-second per-call timeout (overridable via `timeout_ms:` in the YAML). A timed-out hook logs a warning and returns `{}` — it never blocks the harness.
 
-**Adding a hook:** See [CLAUDE.md](../../CLAUDE.md) "Adding a hook" section. Short version: implementation in `hooks/<name>.ts`, YAML at `hooks/<name>.yaml`, entry in `BUILTIN_REGISTRARS`, bump `MIN_EXPECTED_HOOKS`.
+**Adding a hook:** See [CLAUDE.md](../../CLAUDE.md) "Adding a hook" section. Short version: implementation in `services/agent-claw/src/core/hooks/<name>.ts`, YAML at `hooks/<name>.yaml`, entry in `BUILTIN_REGISTRARS`, bump `MIN_EXPECTED_HOOKS`.
 
 **Note:** `budget-guard` is an exception — it throws `BudgetExceededError` rather than returning `deny`, which the harness catches and converts to a 402 response.
 
