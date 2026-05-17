@@ -186,12 +186,35 @@ async def _was_recently_emitted(
     return row is not None
 
 
+async def _fetch_compound_inchikeys(
+    conn: psycopg.AsyncConnection[dict[str, Any]], predicate: str
+) -> list[str]:
+    """Return distinct InChIKeys of Compound subjects for a predicate (≤ 50)."""
+    async with conn.cursor() as cur:
+        await cur.execute(
+            """
+            SELECT DISTINCT subject_id_value
+            FROM facts
+            WHERE predicate = %s AND subject_label = 'Compound' AND valid_to IS NULL
+            LIMIT 50
+            """,
+            (predicate,),
+        )
+        rows = await cur.fetchall()
+    return [
+        (r.get("subject_id_value") if isinstance(r, dict) else r[0])
+        for r in rows
+        if (r.get("subject_id_value") if isinstance(r, dict) else r[0])
+    ]
+
+
 async def _emit_pattern_detected(
     conn: psycopg.AsyncConnection[dict[str, Any]],
     predicate: str,
     stats: dict[str, Any],
 ) -> None:
-    payload = {"predicate": predicate, "cluster": stats}
+    inchikeys = await _fetch_compound_inchikeys(conn, predicate)
+    payload = {"predicate": predicate, "cluster": stats, "compound_inchikeys": inchikeys}
     async with conn.cursor() as cur:
         await cur.execute(
             "INSERT INTO ingestion_events (event_type, payload) "

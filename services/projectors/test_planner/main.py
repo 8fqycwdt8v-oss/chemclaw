@@ -6,7 +6,7 @@ Subscribes to `hypothesis_proposed` events. For each hypothesis:
      LLM spend for this call is negligible; the budget guard is mainly for the
      downstream compute (QM, BO, HTE) the test will trigger.
   2. Fetch the hypothesis fact from `facts`.
-  3. Load the `test_planner.design_experiment` prompt from prompt_registry.
+  3. Load the `kg.test_planning` prompt from prompt_registry.
   4. Call LiteLLM. Response: JSON with
        {
          "campaign_name": "<string>",
@@ -158,7 +158,8 @@ async def _fetch_hypothesis_fact(
             "SELECT id::text AS id, subject_label, subject_id_value, predicate, "
             "       object_value, project_id::text AS project_id, confidence, "
             "       derivation_class "
-            "FROM facts WHERE id = %s::uuid AND derivation_class = 'HYPOTHESIZED'",
+            "FROM facts WHERE id = %s::uuid AND derivation_class = 'HYPOTHESIZED'"
+            " AND valid_to IS NULL",
             (fact_id,),
         )
         return await cur.fetchone()
@@ -169,7 +170,7 @@ async def _load_prompt(conn: psycopg.AsyncConnection[dict[str, Any]]) -> str:
         await cur.execute(
             "SELECT template FROM prompt_registry "
             "WHERE prompt_name = %s AND active ORDER BY version DESC LIMIT 1",
-            ("test_planner.design_experiment",),
+            ("kg.test_planning",),
         )
         row = await cur.fetchone()
     if row is not None:
