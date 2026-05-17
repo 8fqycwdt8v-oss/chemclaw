@@ -52,6 +52,8 @@ import { registerWikiHumanBlockGuardHook } from "./hooks/wiki-human-block-guard.
 import { registerSourceCacheHook } from "./hooks/source-cache.js";
 import { registerToolInvocationEmitterHook } from "./hooks/tool-invocation-emitter.js";
 import { registerComputeResultWriterHook } from "./hooks/compute-result-writer.js";
+import { registerConclusionBufferHook } from "./hooks/conclusion-buffer.js";
+import { registerConclusionExtractorHook } from "./hooks/conclusion-extractor.js";
 import { isFeatureEnabled } from "../config/flags.js";
 import { registerCompactWindowHook } from "./hooks/compact-window.js";
 import { registerApplySkillsHook } from "./hooks/apply-skills.js";
@@ -260,6 +262,17 @@ const BUILTIN_REGISTRARS = new Map<string, BuiltinRegistrar>([
   ["task-created-telemetry", (lc) => { registerTaskCreatedHook(lc); }],
   ["task-completed-telemetry", (lc) => { registerTaskCompletedHook(lc); }],
   ["post-compact-telemetry", (lc) => { registerPostCompactHook(lc); }],
+  // Phase 6 — Universal Knowledge Accumulation: agent-internal ABSTRACTED
+  // fact extraction. The buffer hook (post_tool) accumulates chemistry tool
+  // outputs in ctx.scratchpad; the extractor hook (post_turn) calls the LLM
+  // to derive cross-tool ABSTRACTED facts and writes them to `facts`.
+  // Both are feature-gated by kg.conclusion_extraction.enabled (default false)
+  // via the YAML condition block, so neither is called unless an admin opts in.
+  ["kg-conclusion-buffer", (lc) => { registerConclusionBufferHook(lc); }],
+  [
+    "kg-conclusion-extractor",
+    (lc, deps) => { registerConclusionExtractorHook(lc, { pool: deps.pool, llm: deps.llm }); },
+  ],
   // E2B per-session sandbox cache cleanup. Closes any sandbox cached on
   // the session scratchpad by acquireSessionSandbox; no-op when no
   // sandbox client is wired (forged tools / run_program disabled).

@@ -20,6 +20,11 @@
 // post_tool now has 6 handlers).
 // Tranche 9 added compute-result-writer on post_tool (28 total;
 // post_tool now has 7 handlers).
+// Phase 6 added kg-conclusion-buffer (post_tool) and kg-conclusion-extractor
+// (post_turn) — both carry condition: default: false so both are SKIPPED in
+// the test context (evaluateCondition falls through to default=false). The
+// registered count therefore stays at 28; the BUILTIN_REGISTRARS entries are
+// covered by the "no missing registrar" assertion in the first test.
 //
 // This test is intentionally read-only against the on-disk `hooks/` directory
 // (the canonical source of truth). It locks in the invariant that adding a

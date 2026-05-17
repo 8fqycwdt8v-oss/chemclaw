@@ -109,9 +109,10 @@ INSERT INTO ingestion_event_catalog (event_type, description, emitted_by, consum
   ('anomaly_observed',
    'Universal Knowledge Accumulation Phase 3. Emitted by investigation_scorer '
    'when a fact''s z-score anomaly metric exceeds 0.70. Carries fact_id + '
-   'anomaly_score. Routes to hypothesis_former for HYPOTHESIZED fact generation.',
+   'anomaly_score. Routes to hypothesis_former for HYPOTHESIZED fact generation '
+   'and wiki_pages for compound-page dirty-marking (Phase 7).',
    'services/projectors/investigation_scorer/main.py',
-   ARRAY['hypothesis_former']),
+   ARRAY['hypothesis_former', 'wiki_pages']),
   ('investigation_requested',
    'Universal Knowledge Accumulation Phase 3. Emitted by investigation_scorer '
    'when composite score >= score_threshold_sync (default 0.70). Triggers sync '
@@ -121,9 +122,10 @@ INSERT INTO ingestion_event_catalog (event_type, description, emitted_by, consum
   ('pattern_detected',
    'Universal Knowledge Accumulation Phase 4. Emitted by pattern_detector daemon '
    'when a predicate''s numeric population shows significant spread (CV > 0.15). '
-   'Carries cluster summary (predicate, count, mean, stdev, quartiles).',
+   'Carries cluster summary (predicate, count, mean, stdev, quartiles). '
+   'Routes to hypothesis_former and wiki_pages (compound dirty-marking, Phase 7).',
    'services/optimizer/pattern_detector/main.py',
-   ARRAY['hypothesis_former'])
+   ARRAY['hypothesis_former', 'wiki_pages'])
 ON CONFLICT (event_type) DO UPDATE SET
   description = EXCLUDED.description,
   emitted_by  = EXCLUDED.emitted_by,

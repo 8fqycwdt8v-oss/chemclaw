@@ -324,10 +324,76 @@ async def _ctx_compound(conn: psycopg.AsyncConnection[dict[str, Any]], page: dic
     )
     if not cmp:
         raise _SkipPage(f"compound {ik[:14]} not found")
+
+    # Phase 7: Anomalous facts (anomaly_score surfaced by investigation_scorer).
+    # We approximate "anomalous facts" as facts with high anomaly scores that were
+    # logged to ingestion_events as anomaly_observed. Read from facts directly —
+    # pick the top-5 most anomalous OBSERVED/COMPUTED/INTERPRETED facts by confidence.
+    anomalous_facts = await _fetch_all(
+        conn,
+        """
+        SELECT id::text AS id, predicate, object_value, confidence, confidence_tier
+          FROM facts
+         WHERE subject_label = 'Compound' AND subject_id_value = %s
+           AND valid_to IS NULL
+         ORDER BY confidence DESC
+         LIMIT 5
+        """,
+        (ik,),
+    )
+
+    # Phase 7: Active hypotheses about this compound from the hypotheses table.
+    hypotheses = await _fetch_all(
+        conn,
+        """
+        SELECT id::text AS id, predicate, object_value::text AS object_value,
+               confidence, status, confidence_tier
+          FROM hypotheses
+         WHERE subject_id_value = %s AND status != 'refuted'
+           AND valid_to IS NULL
+         ORDER BY confidence DESC
+         LIMIT 5
+        """,
+        (ik,),
+    )
+
     return {
         "page_kind": "compound",
-        "compound": {"inchikey": ik, "cite": f"article:compound/{ik}", "smiles": cmp.get("smiles_canonical"), "molecular_formula": cmp.get("molecular_formula"), "mw": float(cmp["mw"]) if cmp.get("mw") is not None else None, "chebi_id": cmp.get("chebi_id"), "pubchem_cid": cmp.get("pubchem_cid"), "internal_code": cmp.get("internal_code_masked")},
-        "note": "Reaction / experiment links for this compound are not yet derived (pending reaction-component projection). Cover identity + properties; defer where-it-appears to 'not yet linked'.",
+        "compound": {
+            "inchikey": ik,
+            "cite": f"article:compound/{ik}",
+            "smiles": cmp.get("smiles_canonical"),
+            "molecular_formula": cmp.get("molecular_formula"),
+            "mw": float(cmp["mw"]) if cmp.get("mw") is not None else None,
+            "chebi_id": cmp.get("chebi_id"),
+            "pubchem_cid": cmp.get("pubchem_cid"),
+            "internal_code": cmp.get("internal_code_masked"),
+        },
+        "facts": [
+            {
+                "cite": f"fact:{f['id']}",
+                "predicate": f["predicate"],
+                "object_value": f.get("object_value"),
+                "confidence_tier": f.get("confidence_tier"),
+            }
+            for f in anomalous_facts
+        ],
+        "hypotheses": [
+            {
+                "cite": f"hypothesis:{h['id']}",
+                "predicate": h["predicate"],
+                "object_value": h.get("object_value"),
+                "confidence": h.get("confidence"),
+                "status": h.get("status"),
+                "confidence_tier": h.get("confidence_tier"),
+            }
+            for h in hypotheses
+        ],
+        "note": (
+            "Reaction / experiment links for this compound are not yet derived "
+            "(pending reaction-component projection). Cover identity + properties + "
+            "known facts + open hypotheses; defer where-it-appears to 'not yet linked'."
+        ),
     }
 
 

@@ -44,9 +44,13 @@ import {
 // gated by feature flag `kg.auto_extraction.enabled`).
 // 29 = +compute-result-writer (Tranche 9 — persists chemistry tool outputs
 // to compute_results canonical store; feature-flagged default-off).
-// Bump every time BUILTIN_REGISTRARS gains an entry so a silent failure to
-// load a new hook trips the startup gate instead of quietly downgrading
-// the safety net.
+// Phase 6 adds kg-conclusion-buffer + kg-conclusion-extractor but both
+// carry condition: default: false so they are SKIPPED at startup until an
+// admin enables kg.conclusion_extraction.enabled. BUILTIN_REGISTRARS has
+// the entries; they don't count toward registered until the flag flips.
+// Bump every time BUILTIN_REGISTRARS gains an entry that registers
+// unconditionally so a silent failure to load a new hook trips the startup
+// gate instead of quietly downgrading the safety net.
 const MIN_EXPECTED_HOOKS = 29;
 
 // Builtins gate. Mirrors MIN_EXPECTED_HOOKS for tools/builtins/: a new

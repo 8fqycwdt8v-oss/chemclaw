@@ -25,6 +25,8 @@ canonical row, which we read to derive the affected entity):
   * synthesis_campaign_created     → campaign/<uuid> (stub) + project/<internal_id>
   * synthesis_campaign_state_changed → campaign/<uuid> + project/<internal_id>
   * fact_invalidated               → every page citing fact_id (stale_citation)
+  * anomaly_observed               → compound/<inchikey> (if subject_label='Compound')
+  * pattern_detected               → compound/<inchikey> (if compound_inchikey in pattern payload)
 
 Idempotency: `_touch_page` is INSERT ... ON CONFLICT (slug) DO UPDATE — a
 fresh insert happens once per slug, every later event hits the conflict path
@@ -75,6 +77,8 @@ class WikiPagesProjector(BaseProjector):
         "synthesis_campaign_created",
         "synthesis_campaign_state_changed",
         "fact_invalidated",
+        "anomaly_observed",
+        "pattern_detected",
     )
 
     async def handle(
@@ -102,6 +106,10 @@ class WikiPagesProjector(BaseProjector):
                 await self._handle_campaign(conn, event_id, source_row_id, event_type)
             elif event_type == "fact_invalidated":
                 await self._handle_fact_invalidated(conn, event_id, payload)
+            elif event_type == "anomaly_observed":
+                await self._handle_anomaly_observed(conn, event_id, payload)
+            elif event_type == "pattern_detected":
+                await self._handle_pattern_detected(conn, event_id, payload)
             await conn.commit()
 
     # ----- per-event handlers --------------------------------------------
@@ -220,6 +228,71 @@ class WikiPagesProjector(BaseProjector):
             reason=event_type,
         )
         await self._touch_project_page(conn, row["project_id"], row["internal_id"], row["project_name"], event_type)
+
+    async def _handle_anomaly_observed(
+        self, conn: psycopg.AsyncConnection[dict[str, Any]], event_id: str, payload: dict[str, Any]
+    ) -> None:
+        """Mark the compound wiki page dirty when an anomaly is detected.
+
+        The investigation_scorer emits `anomaly_observed` with payload:
+          {fact_id, predicate, anomaly_score, reason_codes}
+        We look up the fact to get subject_label + subject_id_value.
+        Only Compound subjects have a compound/<inchikey> wiki page.
+        """
+        fact_id = payload.get("fact_id")
+        if not fact_id or not isinstance(fact_id, str):
+            return
+        async with conn.cursor() as cur:
+            await cur.execute(
+                "SELECT subject_label, subject_id_value, project_id::text AS project_id "
+                "FROM facts WHERE id = %s::uuid",
+                (fact_id,),
+            )
+            row = await cur.fetchone()
+        if not row:
+            log.debug("event %s: fact %s not found for anomaly_observed; skipping", event_id, fact_id[:8])
+            return
+        if row.get("subject_label") != "Compound":
+            return
+        inchikey = str(row.get("subject_id_value") or "")
+        if not inchikey:
+            return
+        await self._touch_page(
+            conn,
+            slug=f"compound/{inchikey}",
+            kind="compound",
+            title=f"Compound {inchikey[:14]}",
+            entity_ref={"label": "Compound", "id_property": "inchikey", "id_value": inchikey},
+            nce_project_id=row.get("project_id"),
+            reason=f"anomaly_observed:{fact_id[:8]}",
+        )
+
+    async def _handle_pattern_detected(
+        self, conn: psycopg.AsyncConnection[dict[str, Any]], event_id: str, payload: dict[str, Any]
+    ) -> None:
+        """Mark compound wiki pages dirty when a pattern is detected.
+
+        The pattern_detector daemon emits `pattern_detected` with payload
+        including optional `compound_inchikeys: list[str]` for compound-level
+        patterns. Marks each listed compound's page dirty.
+        """
+        inchikeys = payload.get("compound_inchikeys") or []
+        if not isinstance(inchikeys, list):
+            return
+        pattern_id = payload.get("pattern_id") or ""
+        reason = f"pattern_detected:{str(pattern_id)[:8]}"
+        for ik in inchikeys:
+            if not isinstance(ik, str) or not ik:
+                continue
+            await self._touch_page(
+                conn,
+                slug=f"compound/{ik}",
+                kind="compound",
+                title=f"Compound {ik[:14]}",
+                entity_ref={"label": "Compound", "id_property": "inchikey", "id_value": ik},
+                nce_project_id=None,
+                reason=reason,
+            )
 
     async def _handle_fact_invalidated(
         self, conn: psycopg.AsyncConnection[dict[str, Any]], event_id: str, payload: dict[str, Any]
