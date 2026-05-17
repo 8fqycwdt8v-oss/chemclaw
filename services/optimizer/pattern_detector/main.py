@@ -29,7 +29,7 @@ import math
 import statistics
 import time
 from datetime import datetime, timezone
-from typing import Any
+from typing import Any, cast
 
 import psycopg
 from psycopg.rows import dict_row
@@ -202,7 +202,7 @@ async def _fetch_compound_inchikeys(
         )
         rows = await cur.fetchall()
     return [
-        (r.get("subject_id_value") if isinstance(r, dict) else r[0])
+        cast(str, r.get("subject_id_value") if isinstance(r, dict) else r[0])
         for r in rows
         if (r.get("subject_id_value") if isinstance(r, dict) else r[0])
     ]

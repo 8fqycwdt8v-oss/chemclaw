@@ -123,6 +123,7 @@ async def _fetch_peer_facts(
             "SELECT id::text AS id, object_value, unit, confidence, derivation_class "
             "FROM facts "
             "WHERE predicate = %s AND subject_label = %s AND id != %s::uuid "
+            "  AND valid_to IS NULL "
             "ORDER BY confidence DESC LIMIT %s",
             (predicate, subject_label, exclude_id, _CONTEXT_PEER_LIMIT),
         )
@@ -138,7 +139,7 @@ async def _fetch_subject_facts(
         await cur.execute(
             "SELECT id::text AS id, predicate, object_value, unit, confidence "
             "FROM facts "
-            "WHERE subject_id_value = %s AND id != %s::uuid "
+            "WHERE subject_id_value = %s AND id != %s::uuid AND valid_to IS NULL "
             "ORDER BY confidence DESC LIMIT %s",
             (subject_id_value, exclude_id, _CONTEXT_SUBJECT_LIMIT),
         )
