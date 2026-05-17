@@ -94,17 +94,19 @@ async def test_ctx_compound_includes_facts_section():
 async def test_ctx_compound_includes_hypotheses_section():
     cmp = {"inchikey": "CCCC", "smiles_canonical": None, "molecular_formula": None,
             "mw": None, "chebi_id": None, "pubchem_cid": None, "internal_code_masked": None}
+    # Hypothesized-tier entries come from the facts table (derivation_class='HYPOTHESIZED');
+    # the hypotheses table does not have subject_id_value / predicate / object_value columns.
     hypotheses = [
-        {"id": "h1", "predicate": "mechanism_involves_pi_stacking", "object_value": '{"value": true}',
-         "confidence": 0.55, "status": "open", "confidence_tier": "MEDIUM"},
+        {"id": "h1", "predicate": "mechanism_involves_pi_stacking", "object_value": {"value": True},
+         "confidence": 0.55, "confidence_tier": "medium"},
     ]
     conn = _mock_conn(cmp, facts=[], hypotheses=hypotheses)
     ctx = await _ctx_compound(conn, _page("CCCC"))
     assert "hypotheses" in ctx
     assert len(ctx["hypotheses"]) == 1
     assert ctx["hypotheses"][0]["predicate"] == "mechanism_involves_pi_stacking"
-    assert ctx["hypotheses"][0]["cite"] == "hypothesis:h1"
-    assert ctx["hypotheses"][0]["status"] == "open"
+    assert ctx["hypotheses"][0]["cite"] == "fact:h1"
+    assert ctx["hypotheses"][0]["confidence_tier"] == "medium"
 
 
 @pytest.mark.asyncio

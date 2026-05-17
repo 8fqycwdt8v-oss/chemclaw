@@ -130,9 +130,11 @@ describe("kg-conclusion-extractor", () => {
     await lc.dispatch("post_turn", makePayload(ctx));
     const factArgs = mockQuery.mock.calls[0][1] as unknown[];
     // params: factId, projectId, subjectLabel, subjectIdValue, predicate,
-    //         objectValue, unit, confidence (index 7), tier
+    //         objectValue, unit, confidence (index 7), tier (index 8)
     const confidence = factArgs[7] as number;
+    const tier = factArgs[8] as string;
     expect(confidence).toBe(0.70);
+    expect(tier).toBe("high"); // 0.70 >= 0.65 threshold
   });
 
   it("skips drafts missing predicate, subject_label, or subject_id_value", async () => {

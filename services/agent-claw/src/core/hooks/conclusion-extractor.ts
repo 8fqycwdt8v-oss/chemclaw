@@ -72,10 +72,12 @@ interface FactDraft {
 }
 
 function confidenceTier(c: number): string {
-  if (c >= 0.80) return "HIGH";
-  if (c >= 0.60) return "MEDIUM";
-  if (c >= 0.30) return "LOW";
-  return "SPECULATIVE";
+  // Mirrors the canonical thresholds in fact_extractor/_common.py:confidence_tier().
+  // "foundational" (>= 0.85) is unreachable here since MAX_ABSTRACTED_CONFIDENCE = 0.70.
+  if (c >= 0.65) return "high";
+  if (c >= 0.40) return "medium";
+  if (c >= 0.20) return "low";
+  return "exploratory";
 }
 
 export function registerConclusionExtractorHook(

@@ -342,14 +342,18 @@ async def _ctx_compound(conn: psycopg.AsyncConnection[dict[str, Any]], page: dic
         (ik,),
     )
 
-    # Phase 7: Active hypotheses about this compound from the hypotheses table.
+    # Phase 7: HYPOTHESIZED-tier facts for this compound.
+    # These live in the facts table (derivation_class='HYPOTHESIZED'), not in
+    # the hypotheses table (which stores project-level free-text hypotheses
+    # without subject_id_value). Compound-specific hypothesized claims are
+    # HYPOTHESIZED facts written by hypothesis_former / interpreter.
     hypotheses = await _fetch_all(
         conn,
         """
-        SELECT id::text AS id, predicate, object_value::text AS object_value,
-               confidence, status, confidence_tier
-          FROM hypotheses
-         WHERE subject_id_value = %s AND status != 'refuted'
+        SELECT id::text AS id, predicate, object_value, confidence, confidence_tier
+          FROM facts
+         WHERE subject_label = 'Compound' AND subject_id_value = %s
+           AND derivation_class = 'HYPOTHESIZED'
            AND valid_to IS NULL
          ORDER BY confidence DESC
          LIMIT 5
@@ -380,11 +384,10 @@ async def _ctx_compound(conn: psycopg.AsyncConnection[dict[str, Any]], page: dic
         ],
         "hypotheses": [
             {
-                "cite": f"hypothesis:{h['id']}",
+                "cite": f"fact:{h['id']}",
                 "predicate": h["predicate"],
                 "object_value": h.get("object_value"),
                 "confidence": h.get("confidence"),
-                "status": h.get("status"),
                 "confidence_tier": h.get("confidence_tier"),
             }
             for h in hypotheses
