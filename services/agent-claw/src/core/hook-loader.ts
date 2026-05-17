@@ -480,7 +480,7 @@ async function evaluateCondition(condition: HookCondition): Promise<boolean> {
         {},
         null,
       );
-      if (v !== null) return Boolean(v);
+      if (v !== null) return v;
     } catch {
       // singleton not initialised in unit tests — fall through
     }
