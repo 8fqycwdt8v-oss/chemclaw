@@ -8,7 +8,7 @@ Subscribes to `anomaly_observed` and `pattern_detected` events. For each:
   3. Gather context:
      - anomaly_observed: fetch the anomalous fact + 10 peer facts for context.
      - pattern_detected: use the cluster summary directly from payload.
-  4. Load the `hypothesis.form` prompt from prompt_registry (built-in fallback).
+  4. Load the `kg.hypothesis_formation` prompt from prompt_registry (built-in fallback).
   5. Call LiteLLM. Response: JSON list of
        {predicate, subject_label, subject_id_value, hypothesis_text,
         confidence, supporting_fact_ids?}
@@ -136,12 +136,14 @@ async def _count_active_hypotheses(
         if project_id:
             await cur.execute(
                 "SELECT count(*) AS n FROM facts "
-                "WHERE derivation_class = 'HYPOTHESIZED' AND project_id = %s::uuid",
+                "WHERE derivation_class = 'HYPOTHESIZED' AND project_id = %s::uuid"
+                " AND valid_to IS NULL",
                 (project_id,),
             )
         else:
             await cur.execute(
-                "SELECT count(*) AS n FROM facts WHERE derivation_class = 'HYPOTHESIZED'"
+                "SELECT count(*) AS n FROM facts"
+                " WHERE derivation_class = 'HYPOTHESIZED' AND valid_to IS NULL"
             )
         row = await cur.fetchone()
     return int((row.get("n") if isinstance(row, dict) else row[0]) or 0)
@@ -154,7 +156,7 @@ async def _fetch_fact(
         await cur.execute(
             "SELECT id::text AS id, subject_label, subject_id_value, predicate, "
             "       object_value, unit, project_id::text AS project_id, confidence "
-            "FROM facts WHERE id = %s::uuid",
+            "FROM facts WHERE id = %s::uuid AND valid_to IS NULL",
             (fact_id,),
         )
         return await cur.fetchone()
@@ -170,6 +172,7 @@ async def _fetch_peer_facts(
         await cur.execute(
             "SELECT id::text AS id, subject_id_value, object_value, unit, confidence "
             "FROM facts WHERE predicate = %s AND subject_label = %s AND id != %s::uuid "
+            "  AND valid_to IS NULL "
             "ORDER BY confidence DESC LIMIT %s",
             (predicate, subject_label, exclude_id, _MAX_CONTEXT_PEER_FACTS),
         )
@@ -181,7 +184,7 @@ async def _load_prompt(conn: psycopg.AsyncConnection[dict[str, Any]]) -> str:
         await cur.execute(
             "SELECT template FROM prompt_registry "
             "WHERE prompt_name = %s AND active ORDER BY version DESC LIMIT 1",
-            ("hypothesis.form",),
+            ("kg.hypothesis_formation",),
         )
         row = await cur.fetchone()
     if row is not None:

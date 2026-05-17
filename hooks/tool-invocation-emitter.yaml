@@ -31,4 +31,5 @@ description: >
 # behaviour off-by-default even after the YAML goes live.
 condition:
   setting_key: kg.auto_extraction.enabled
+  env_var: KG_AUTO_EXTRACTION_ENABLED
   default: false

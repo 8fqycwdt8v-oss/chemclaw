@@ -2,7 +2,7 @@
 --
 -- RLS policies for agent-hook writes to facts and ingestion_events.
 --
--- Two hooks run inside withUserContext (chemclaw_app, NOBYPASSRLS):
+-- Three agent hooks run as chemclaw_app (NOBYPASSRLS):
 --
 --   1. kg-conclusion-extractor (Phase 6): INSERTs ABSTRACTED facts with
 --      extractor_name='kg-conclusion-extractor', source_table='agent_turns',
@@ -11,6 +11,10 @@
 --   2. source-cache (Phase 0): emits source_fact_observed events to
 --      ingestion_events. The original RLS file (41_event_log_rls.sql) was
 --      written before source-cache.ts existed; this migration closes the gap.
+--
+--   3. tool-invocation-emitter (Phase 0): emits tool_invocation_complete events
+--      via deps.pool.query() directly (no withUserContext). Requires the INSERT
+--      policy to cover this event_type.
 --
 -- Design posture:
 --   * facts INSERT policy is tightly scoped to the specific extractor_name
@@ -64,7 +68,7 @@ CREATE POLICY ingestion_events_app_hook_insert ON ingestion_events
   FOR INSERT
   TO chemclaw_app
   WITH CHECK (
-    event_type IN ('extracted_fact', 'source_fact_observed')
+    event_type IN ('extracted_fact', 'source_fact_observed', 'tool_invocation_complete')
   );
 
 -- ────────────────────────────────────────────────────────────────────────────

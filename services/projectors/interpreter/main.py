@@ -6,7 +6,7 @@ Subscribes to `investigation_requested` events. For each event:
   2. Budget-gate: check investigation_budget_usage for today's LLM spend.
   3. Gather KG context: peer facts for the same predicate + subject, plus
      nearby facts (same subject, any predicate, top-5 by confidence).
-  4. Load the `fact_interpretation.derive` prompt from prompt_registry
+  4. Load the `kg.fact_interpretation` prompt from prompt_registry
      (built-in fallback if missing).
   5. Call LiteLLM. Response: JSON list of
        {predicate, object_value, unit?, confidence, reasoning}
@@ -123,6 +123,7 @@ async def _fetch_peer_facts(
             "SELECT id::text AS id, object_value, unit, confidence, derivation_class "
             "FROM facts "
             "WHERE predicate = %s AND subject_label = %s AND id != %s::uuid "
+            "  AND valid_to IS NULL "
             "ORDER BY confidence DESC LIMIT %s",
             (predicate, subject_label, exclude_id, _CONTEXT_PEER_LIMIT),
         )
@@ -138,7 +139,7 @@ async def _fetch_subject_facts(
         await cur.execute(
             "SELECT id::text AS id, predicate, object_value, unit, confidence "
             "FROM facts "
-            "WHERE subject_id_value = %s AND id != %s::uuid "
+            "WHERE subject_id_value = %s AND id != %s::uuid AND valid_to IS NULL "
             "ORDER BY confidence DESC LIMIT %s",
             (subject_id_value, exclude_id, _CONTEXT_SUBJECT_LIMIT),
         )
@@ -150,7 +151,7 @@ async def _load_prompt(conn: psycopg.AsyncConnection[dict[str, Any]]) -> str:
         await cur.execute(
             "SELECT template FROM prompt_registry "
             "WHERE prompt_name = %s AND active ORDER BY version DESC LIMIT 1",
-            ("fact_interpretation.derive",),
+            ("kg.fact_interpretation",),
         )
         row = await cur.fetchone()
     if row is not None:

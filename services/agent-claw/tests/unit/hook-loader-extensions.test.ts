@@ -12,6 +12,7 @@ import { join } from "node:path";
 import { Lifecycle } from "../../src/core/lifecycle.js";
 import { loadHooks } from "../../src/core/hook-loader.js";
 import type { HookDeps } from "../../src/core/hook-loader.js";
+import { ConfigRegistry, setConfigRegistry } from "../../src/config/registry.js";
 
 let tmpDir: string;
 
@@ -184,5 +185,127 @@ timeout_ms: 30000
     expect(result.warnings.some(s => s.includes("timeout_ms"))).toBe(true);
     // And the registered hook still uses the 60s default.
     expect(lifecycle.hookTimeouts("post_turn")).toEqual([60_000]);
+  });
+});
+
+describe("evaluateCondition: setting_key → env_var fallthrough", () => {
+  // These tests exercise the fix from PR #208:
+  // When setting_key is present but the ConfigRegistry returns null (key not
+  // found), execution must fall through to env_var rather than treating null
+  // as "false". A stub registry ensures null is returned without needing a DB.
+
+  let savedEnv: string | undefined;
+
+  beforeEach(() => {
+    savedEnv = process.env.EVAL_COND_TEST_FLAG;
+    mkdirSync(join(tmpDir, "scripts"), { recursive: true });
+    writeFileSync(join(tmpDir, "scripts", "h.mjs"), "export default async () => ({});");
+  });
+
+  afterEach(() => {
+    if (savedEnv === undefined) {
+      delete process.env.EVAL_COND_TEST_FLAG;
+    } else {
+      process.env.EVAL_COND_TEST_FLAG = savedEnv;
+    }
+    // Reset singleton so unrelated tests aren't affected.
+    setConfigRegistry(null as unknown as ConfigRegistry);
+  });
+
+  function makeNullRegistry(): ConfigRegistry {
+    // A stub ConfigRegistry whose get() always resolves to the defaultValue.
+    // Since we pass null as defaultValue, this simulates "key not in DB".
+    return {
+      get: async (_key: string, _ctx: object, defaultValue: unknown) => defaultValue,
+      getBoolean: async (_k: string, _c: object, d: boolean) => d,
+      getNumber: async (_k: string, _c: object, d: number) => d,
+      getString: async (_k: string, _c: object, d: string) => d,
+      invalidate: () => {},
+    } as unknown as ConfigRegistry;
+  }
+
+  it("registers hook when setting_key returns null and env_var is true", async () => {
+    setConfigRegistry(makeNullRegistry());
+    process.env.EVAL_COND_TEST_FLAG = "true";
+
+    writeYaml("cond-hook", `
+name: cond-hook
+lifecycle: post_turn
+script: scripts/h.mjs
+condition:
+  setting_key: some.unknown.setting
+  env_var: EVAL_COND_TEST_FLAG
+  default: false
+`);
+
+    const lifecycle = new Lifecycle();
+    const result = await loadHooks(lifecycle, fakeDeps, tmpDir);
+    expect(result.registered).toBe(1);
+  });
+
+  it("skips hook when setting_key returns null and env_var is false", async () => {
+    setConfigRegistry(makeNullRegistry());
+    process.env.EVAL_COND_TEST_FLAG = "false";
+
+    writeYaml("cond-hook", `
+name: cond-hook
+lifecycle: post_turn
+script: scripts/h.mjs
+condition:
+  setting_key: some.unknown.setting
+  env_var: EVAL_COND_TEST_FLAG
+  default: true
+`);
+
+    const lifecycle = new Lifecycle();
+    const result = await loadHooks(lifecycle, fakeDeps, tmpDir);
+    expect(result.registered).toBe(0);
+  });
+
+  it("uses default when setting_key returns null and env_var is absent", async () => {
+    setConfigRegistry(makeNullRegistry());
+    delete process.env.EVAL_COND_TEST_FLAG;
+
+    writeYaml("cond-hook", `
+name: cond-hook
+lifecycle: post_turn
+script: scripts/h.mjs
+condition:
+  setting_key: some.unknown.setting
+  env_var: EVAL_COND_TEST_FLAG
+  default: true
+`);
+
+    const lifecycle = new Lifecycle();
+    const result = await loadHooks(lifecycle, fakeDeps, tmpDir);
+    expect(result.registered).toBe(1);
+  });
+
+  it("registers hook when setting_key returns true regardless of env_var", async () => {
+    // Verify the setting_key path itself: when get() returns true, env_var
+    // must NOT override it.
+    const trueRegistry = {
+      get: async (_k: string, _c: object, _d: unknown) => true,
+      getBoolean: async (_k: string, _c: object, _d: boolean) => true,
+      getNumber: async (_k: string, _c: object, d: number) => d,
+      getString: async (_k: string, _c: object, d: string) => d,
+      invalidate: () => {},
+    } as unknown as ConfigRegistry;
+    setConfigRegistry(trueRegistry);
+    process.env.EVAL_COND_TEST_FLAG = "false";
+
+    writeYaml("cond-hook", `
+name: cond-hook
+lifecycle: post_turn
+script: scripts/h.mjs
+condition:
+  setting_key: some.enabled.setting
+  env_var: EVAL_COND_TEST_FLAG
+  default: false
+`);
+
+    const lifecycle = new Lifecycle();
+    const result = await loadHooks(lifecycle, fakeDeps, tmpDir);
+    expect(result.registered).toBe(1);
   });
 });

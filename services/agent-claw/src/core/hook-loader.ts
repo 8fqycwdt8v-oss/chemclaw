@@ -471,12 +471,16 @@ async function evaluateCondition(condition: HookCondition): Promise<boolean> {
   if (condition.setting_key) {
     try {
       const { getConfigRegistry } = await import("../config/registry.js");
-      const v = await getConfigRegistry().getBoolean(
+      // Use null as sentinel so a missing key falls through to env_var.
+      // feature_flags keys (e.g. kg.auto_extraction.enabled) are not in
+      // config_settings; getBoolean with a non-null default would return
+      // that default and swallow the env_var fallback.
+      const v = await getConfigRegistry().get<boolean | null>(
         condition.setting_key,
         {},
-        condition.default ?? true,
+        null,
       );
-      return v;
+      if (v !== null) return v;
     } catch {
       // singleton not initialised in unit tests — fall through
     }
